@@ -1,0 +1,33 @@
+crypto-radar/
+│
+├── backend/
+│   ├── app/
+│   │   ├── api/
+│   │   ├── core/
+│   │   ├── models/
+│   │   ├── services/
+│   │   ├── strategies/
+│   │   └── main.py
+│   │
+│   ├── requirements.txt
+│   └── Dockerfile
+│
+├── frontend/
+│   ├── components/
+│   ├── pages/
+│   ├── store/
+│   └── styles/
+│
+├── infra/
+│   ├── docker-compose.yml
+│
+├── docs/   ← ВАЖНО (контекст для Codex)
+│   ├── product.md
+│   ├── architecture.md
+│   ├── strategies.md
+│   ├── db_schema.md
+│   ├── scoring.md
+│   ├── journal.md
+│   └── tasks.md
+│
+└── README.md

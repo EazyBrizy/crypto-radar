@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from app.api.v1.router import api_router
 from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
-from app.services.scanner_runner import ScannerRunner
+from app.workers.signal_worker import ScannerRunner
 
 load_dotenv()
 

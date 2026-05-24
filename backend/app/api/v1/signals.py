@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status
 
-from app.models.schemas import RadarSignal
+from app.schemas.signal import RadarSignal
 from app.services.signal_service import signal_service
 
 router = APIRouter(prefix="/signals", tags=["signals"])

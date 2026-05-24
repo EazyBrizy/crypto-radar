@@ -28,8 +28,11 @@ backend/
   app/
     api/v1/              FastAPI routes
     core/                конфигурация и будущие инфраструктурные helpers
-    models/              Pydantic-модели
-    services/            scanner, market data, feature, strategy и signal services
+    exchanges/           exchange adapters: base, bybit
+    schemas/             Pydantic-схемы API и внутренних сообщений
+    services/            бизнес-сервисы и scanner orchestration
+    strategies/          strategy interfaces и текущая breakout-логика
+    workers/             фоновые workers: signal worker
     main.py              FastAPI entrypoint
 docs/                    архитектура и продуктовые документы
 infra/                   локальная инфраструктура

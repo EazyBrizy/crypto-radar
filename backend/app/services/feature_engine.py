@@ -3,7 +3,7 @@ import statistics
 from collections import defaultdict, deque
 from typing import Deque, Dict, Iterator, Optional, Set
 
-from app.models.schemas import Features, MarketData
+from app.schemas.market import Features, MarketData
 
 logger = logging.getLogger(__name__)
 

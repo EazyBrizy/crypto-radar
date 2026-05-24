@@ -1,7 +1,8 @@
 import logging
 from typing import Dict, List, Literal, Optional, Tuple
 
-from app.models.schemas import Features, StrategySignal
+from app.schemas.market import Features
+from app.schemas.signal import StrategySignal
 
 logger = logging.getLogger(__name__)
 
@@ -69,14 +70,6 @@ class StrategyEngine:
 
         reject_reason = self._filter_reject_reason(features)
         if reject_reason is not None:
-        #    logger.info(
-        #        "Signal rejected for %s (filters): %s "
-        #        "[volume_thr=%.4f price_thr=%.6f]",
-        #        features.symbol,
-        #        reject_reason,
-        #        volume_threshold,
-        #        price_threshold,
-        #    )
             self._last_price_change[features.symbol] = features.price_change_1m
             return []
 

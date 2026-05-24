@@ -2,10 +2,11 @@ import logging
 from collections.abc import AsyncIterator
 from typing import List, Optional
 
-from app.models.schemas import MarketData, StrategySignal
-from app.services.bybit_market_data import BybitMarketDataService
+from app.exchanges.bybit import BybitAdapter
+from app.schemas.market import MarketData
+from app.schemas.signal import StrategySignal
 from app.services.feature_engine import FeatureEngine
-from app.services.strategy_engine import StrategyEngine
+from app.strategies.breakout import StrategyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class MarketScanner:
 
     def __init__(self, symbols: Optional[List[str]] = None) -> None:
         self._symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
-        self._market = BybitMarketDataService(self._symbols)
+        self._market = BybitAdapter(self._symbols)
         self._feature_engine = FeatureEngine()
         self._strategy_engine = StrategyEngine()
 

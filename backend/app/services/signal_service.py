@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-from app.models.schemas import RadarSignal, StrategySignal
+from app.schemas.signal import RadarSignal, StrategySignal
 
 MAX_STORED_SIGNALS = 200
 

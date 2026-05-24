@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.models.schemas import RadarResponse
+from app.schemas.signal import RadarResponse
 from app.services.signal_service import signal_service
 
 router = APIRouter(prefix="/radar", tags=["radar"])

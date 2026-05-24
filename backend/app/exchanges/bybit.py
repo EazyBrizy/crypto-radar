@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import websockets
 
-from app.models.schemas import MarketData
+from app.schemas.market import MarketData
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ RECONNECT_DELAY_SEC = 5.0
 HEARTBEAT_INTERVAL_SEC = 20.0
 
 
-class BybitMarketDataService:
+class BybitAdapter:
     """Собирает публичный поток сделок Bybit linear через WebSocket."""
 
     def __init__(
@@ -32,6 +32,12 @@ class BybitMarketDataService:
         ]
         self._symbols = list(dict.fromkeys(normalized))
         self._reconnect_delay = reconnect_delay
+
+    async def get_symbols(self) -> list[str]:
+        return list(self._symbols)
+
+    def stream_trades(self, symbols: list[str]) -> AsyncIterator[MarketData]:
+        return self.listen()
 
     def _topics(self) -> List[str]:
         return [f"publicTrade.{symbol}" for symbol in self._symbols]
@@ -75,7 +81,7 @@ class BybitMarketDataService:
         if op == "subscribe":
             if payload.get("success") is False:
                 logger.error(
-                    "Bybit subscribe failed: %s — check symbol exists on linear perpetuals",
+                    "Bybit subscribe failed: %s - check symbol exists on linear perpetuals",
                     payload.get("ret_msg", payload),
                 )
             return []

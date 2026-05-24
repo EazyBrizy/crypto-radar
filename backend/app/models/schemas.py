@@ -1,3 +1,4 @@
+from datetime import datetime
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 
@@ -43,6 +44,44 @@ class StrategySignal(BaseModel):
     direction: Literal["LONG", "SHORT"]
     confidence: float = Field(..., ge=0, le=1)
     timestamp: int
+
+
+# =========================
+# 3.1. RADAR SIGNAL
+# =========================
+
+SignalDirection = Literal["long", "short"]
+SignalUrgency = Literal["low", "medium", "high"]
+SignalStatus = Literal["active", "confirmed", "rejected", "expired"]
+
+
+class RadarSignal(BaseModel):
+    id: str
+    symbol: str
+    exchange: str
+    strategy: str
+    direction: SignalDirection
+    confidence: float = Field(..., ge=0, le=1)
+    risk_reward: Optional[float] = Field(default=None, ge=0)
+    urgency: SignalUrgency = "medium"
+    status: SignalStatus = "active"
+
+    entry_min: Optional[float] = None
+    entry_max: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit_1: Optional[float] = None
+    take_profit_2: Optional[float] = None
+
+    explanation: List[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    expires_at: Optional[datetime] = None
+    confirmed_at: Optional[datetime] = None
+    rejected_at: Optional[datetime] = None
+
+
+class RadarResponse(BaseModel):
+    signals: List[RadarSignal]
 
 
 # =========================

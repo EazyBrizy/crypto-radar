@@ -1,11 +1,22 @@
 import asyncio
 import logging
 
+from fastapi import FastAPI
+
+from app.api.v1.router import api_router
 from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
 
 logging.basicConfig(level=logging.INFO)
 
 TICK_LIMIT = 5000
+
+app = FastAPI(title="Crypto Radar API")
+app.include_router(api_router)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 async def main() -> None:
@@ -26,4 +37,5 @@ async def main() -> None:
             break
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

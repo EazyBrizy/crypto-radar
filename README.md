@@ -42,11 +42,13 @@ frontend/                заготовка под Next.js frontend
 
 ```powershell
 cd backend
-python -m venv .venv
+python -m venv --clear .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 Если команда `python` недоступна в `PATH`, используй путь к установленному Python.
+
+Флаг `--clear` важен, если окружение `.venv` уже существовало. Он очищает старые пакеты и защищает от ситуации, когда внутри окружения остаются бинарные зависимости от другой версии Python.
 
 Если ты запускаешь команды из корня проекта, путь к `requirements.txt` должен быть полным:
 

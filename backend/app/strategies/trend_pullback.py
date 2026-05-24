@@ -40,7 +40,6 @@ class TrendPullbackContinuationStrategy:
                 risks=risks,
                 entry=features.close,
                 stop_loss=stop_loss,
-                timeframe="stream",
             )
         ]
 

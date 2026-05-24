@@ -14,6 +14,7 @@ class MarketData(BaseModel):
 class Features(BaseModel):
     exchange: str = "bybit"
     symbol: str
+    timeframe: str = "stream"
     timestamp: int
 
     price: float

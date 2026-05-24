@@ -53,6 +53,8 @@ Trend Score
 Market:
 - price stream
 - volume
+- OHLCV candles by `exchange/symbol/timeframe`
+- timeframes: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`
 
 Derived:
 - EMA 20/50/200
@@ -75,6 +77,8 @@ Derivatives:
 ```
 
 Derivatives поля пока могут быть `None`, но стратегия должна быть готова использовать их позже.
+
+Сигналы MVP должны строиться от свечной серии, а не от одиночного тика. Тик обновляет OHLCV-свечу в `CandleService`, затем `FeatureEngine` считает derived-поля по серии свечей, после чего `StrategyEngine` запускает три MVP-стратегии.
 
 ## Strategy 1: Trend Pullback Continuation
 

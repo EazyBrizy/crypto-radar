@@ -50,7 +50,6 @@ class VolatilitySqueezeBreakoutStrategy:
                 risks=risks,
                 entry=entry,
                 stop_loss=stop_loss,
-                timeframe="stream",
             )
         ]
 

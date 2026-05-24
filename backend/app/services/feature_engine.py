@@ -1,8 +1,9 @@
 import logging
 import statistics
 from collections import defaultdict, deque
-from typing import Deque, Dict, Iterator, List, Optional, Set
+from typing import Deque, Dict, Iterable, Iterator, List, Optional, Set
 
+from app.schemas.candle import OHLCVCandle
 from app.schemas.market import Features, MarketData
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,6 @@ EMA_LONG = 200
 RSI_LOOKBACK = 14
 ATR_LOOKBACK = 14
 DONCHIAN_LOOKBACK = 20
-PSEUDO_CANDLE_LOOKBACK = 5
 ONE_MINUTE_MS = 60_000
 VOLUME_EPSILON = 1e-8
 VOLUME_SPIKE_MAX = 20.0
@@ -25,7 +25,7 @@ MIN_VOLUME = 0.001
 
 
 class FeatureEngine:
-    """Строит Features из потока MarketData через буферы сделок по символам."""
+    """Строит derived Features из OHLCV-свечей и сохраняет tick-fallback для ранних этапов."""
 
     def __init__(self) -> None:
         self._buffers: Dict[str, Deque[MarketData]] = defaultdict(
@@ -102,29 +102,18 @@ class FeatureEngine:
 
         return (data.price - past_trade.price) / past_trade.price
 
-    def _volatility(self, symbol: str, buffer: Deque[MarketData]) -> float:
-        if len(buffer) < PRICE_LOOKBACK:
+    def _volatility(self, symbol: str, values: Iterable[float]) -> float:
+        prices = list(values)
+        if len(prices) < PRICE_LOOKBACK:
             if symbol not in self._volatility_maturity_logged:
                 self._volatility_maturity_logged.add(symbol)
                 logger.info("Buffer too small for volatility")
             return 0.0
 
-        start = len(buffer) - PRICE_LOOKBACK
-        min_price = buffer[start].price
-        max_price = min_price
-
-        for index in range(start + 1, len(buffer)):
-            price = buffer[index].price
-            if price < min_price:
-                min_price = price
-            elif price > max_price:
-                max_price = price
-
-        if min_price == max_price:
+        window = prices[-PRICE_LOOKBACK:]
+        if len(set(window)) <= 1:
             return 0.0
-
-        prices = [buffer[index].price for index in range(start, len(buffer))]
-        return statistics.stdev(prices)
+        return statistics.stdev(window)
 
     @staticmethod
     def _ema(values: List[float], period: int) -> Optional[float]:
@@ -166,7 +155,32 @@ class FeatureEngine:
         return 100 - (100 / (1 + relative_strength))
 
     @staticmethod
-    def _atr(values: List[float], period: int = ATR_LOOKBACK) -> Optional[float]:
+    def _true_ranges(candles: List[OHLCVCandle]) -> List[float]:
+        ranges: List[float] = []
+        for previous, current in zip(candles[:-1], candles[1:]):
+            ranges.append(
+                max(
+                    current.high - current.low,
+                    abs(current.high - previous.close),
+                    abs(current.low - previous.close),
+                )
+            )
+        return ranges
+
+    @staticmethod
+    def _atr_from_candles(
+        candles: List[OHLCVCandle],
+        period: int = ATR_LOOKBACK,
+    ) -> Optional[float]:
+        if len(candles) <= period:
+            return None
+        true_ranges = FeatureEngine._true_ranges(candles)
+        if len(true_ranges) < period:
+            return None
+        return sum(true_ranges[-period:]) / period
+
+    @staticmethod
+    def _atr_from_values(values: List[float], period: int = ATR_LOOKBACK) -> Optional[float]:
         if len(values) <= period:
             return None
         ranges = [
@@ -176,11 +190,11 @@ class FeatureEngine:
         return sum(ranges) / period
 
     @staticmethod
-    def _atr_increasing(values: List[float]) -> bool:
-        if len(values) <= ATR_LOOKBACK * 2:
+    def _atr_increasing(candles: List[OHLCVCandle]) -> bool:
+        if len(candles) <= ATR_LOOKBACK * 2:
             return False
-        current = FeatureEngine._atr(values, ATR_LOOKBACK)
-        previous = FeatureEngine._atr(values[: -ATR_LOOKBACK // 2], ATR_LOOKBACK)
+        current = FeatureEngine._atr_from_candles(candles, ATR_LOOKBACK)
+        previous = FeatureEngine._atr_from_candles(candles[: -ATR_LOOKBACK // 2], ATR_LOOKBACK)
         return bool(current is not None and previous is not None and current > previous)
 
     @staticmethod
@@ -237,26 +251,91 @@ class FeatureEngine:
         return bool(current is not None and previous is not None and current > previous)
 
     @staticmethod
-    def _wick_ratios(values: List[float]) -> tuple[float, float, bool, bool]:
-        if not values:
-            return 0.0, 0.0, False, False
-
-        window = values[-PSEUDO_CANDLE_LOOKBACK:]
-        open_price = window[0]
-        close_price = window[-1]
-        high_price = max(window)
-        low_price = min(window)
-        candle_range = high_price - low_price
+    def _wick_ratios(candle: OHLCVCandle) -> tuple[float, float, bool, bool]:
+        candle_range = candle.high - candle.low
         if candle_range == 0:
             return 0.0, 0.0, False, False
 
-        upper_wick = high_price - max(open_price, close_price)
-        lower_wick = min(open_price, close_price) - low_price
+        upper_wick = candle.high - max(candle.open, candle.close)
+        lower_wick = min(candle.open, candle.close) - candle.low
         return (
             upper_wick / candle_range,
             lower_wick / candle_range,
-            close_price > open_price,
-            close_price < open_price,
+            candle.close > candle.open,
+            candle.close < candle.open,
+        )
+
+    def process_candles(self, candles: List[OHLCVCandle]) -> Optional[Features]:
+        if not candles:
+            return None
+
+        ordered = sorted(candles, key=lambda candle: candle.open_time)
+        latest = ordered[-1]
+        closes = [candle.close for candle in ordered]
+        volumes = [candle.volume for candle in ordered]
+        previous_candles = ordered[:-1]
+        previous_closes = closes[:-1]
+        volume_ma_20 = self._sma(volumes, VOLUME_LOOKBACK) or latest.volume
+        volume_spike = latest.volume / (volume_ma_20 + VOLUME_EPSILON)
+        volume_spike = min(volume_spike, VOLUME_SPIKE_MAX)
+        upper_wick_ratio, lower_wick_ratio, candle_bullish, candle_bearish = (
+            self._wick_ratios(latest)
+        )
+
+        donchian_high = (
+            max(candle.high for candle in previous_candles[-DONCHIAN_LOOKBACK:])
+            if len(previous_candles) >= DONCHIAN_LOOKBACK
+            else None
+        )
+        donchian_low = (
+            min(candle.low for candle in previous_candles[-DONCHIAN_LOOKBACK:])
+            if len(previous_candles) >= DONCHIAN_LOOKBACK
+            else None
+        )
+        previous_close = previous_closes[-1] if previous_closes else latest.open
+        price_change = (
+            (latest.close - previous_close) / previous_close
+            if previous_close
+            else 0.0
+        )
+
+        return Features(
+            exchange=latest.exchange,
+            symbol=latest.symbol,
+            timeframe=latest.timeframe,
+            timestamp=latest.close_time,
+            price=latest.close,
+            open=latest.open,
+            high=latest.high,
+            low=latest.low,
+            close=latest.close,
+            price_change_1m=price_change,
+            volume=latest.volume,
+            volume_spike=volume_spike,
+            volume_ma_20=volume_ma_20,
+            volatility=self._volatility(latest.symbol, closes),
+            history_length=len(ordered),
+            ema_20=self._ema(closes, EMA_SHORT),
+            ema_50=self._ema(closes, EMA_MID),
+            ema_200=self._ema(closes, EMA_LONG),
+            sma_20=self._sma(closes, PRICE_LOOKBACK),
+            rsi_14=self._rsi(closes, RSI_LOOKBACK),
+            atr_14=self._atr_from_candles(ordered, ATR_LOOKBACK),
+            adx=self._adx_proxy(closes),
+            adx_rising=self._adx_rising(closes),
+            bb_width=self._bb_width(closes, PRICE_LOOKBACK),
+            bb_width_percentile=self._bb_width_percentile(closes),
+            donchian_high_20=donchian_high,
+            donchian_low_20=donchian_low,
+            swing_high=donchian_high,
+            swing_low=donchian_low,
+            candle_bullish=candle_bullish,
+            candle_bearish=candle_bearish,
+            upper_wick_ratio=upper_wick_ratio,
+            lower_wick_ratio=lower_wick_ratio,
+            atr_increasing=self._atr_increasing(ordered),
+            oi_change=None,
+            funding_rate=None,
         )
 
     async def process(self, data: MarketData) -> Features:
@@ -266,8 +345,7 @@ class FeatureEngine:
             history = list(buffer)
             values = [trade.price for trade in history] + [data.price]
             volumes = [trade.volume for trade in history] + [data.volume]
-            previous_values = [trade.price for trade in history]
-            recent_window = values[-PSEUDO_CANDLE_LOOKBACK:]
+            recent_window = values[-5:]
 
             volume_ma_20 = self._sma(volumes, VOLUME_LOOKBACK) or data.volume
             ema_20 = self._ema(values, EMA_SHORT)
@@ -275,14 +353,24 @@ class FeatureEngine:
             ema_200 = self._ema(values, EMA_LONG)
             sma_20 = self._sma(values, PRICE_LOOKBACK)
             rsi_14 = self._rsi(values, RSI_LOOKBACK)
-            atr_14 = self._atr(values, ATR_LOOKBACK)
+            atr_14 = self._atr_from_values(values, ATR_LOOKBACK)
             bb_width = self._bb_width(values, PRICE_LOOKBACK)
             bb_width_percentile = self._bb_width_percentile(values)
             adx = self._adx_proxy(values)
-            upper_wick_ratio, lower_wick_ratio, candle_bullish, candle_bearish = (
-                self._wick_ratios(values)
-            )
 
+            pseudo_open = recent_window[0]
+            pseudo_close = data.price
+            pseudo_high = max(recent_window)
+            pseudo_low = min(recent_window)
+            candle_range = pseudo_high - pseudo_low
+            if candle_range:
+                upper_wick_ratio = (pseudo_high - max(pseudo_open, pseudo_close)) / candle_range
+                lower_wick_ratio = (min(pseudo_open, pseudo_close) - pseudo_low) / candle_range
+            else:
+                upper_wick_ratio = 0.0
+                lower_wick_ratio = 0.0
+
+            previous_values = values[:-1]
             donchian_high = (
                 max(previous_values[-DONCHIAN_LOOKBACK:])
                 if len(previous_values) >= DONCHIAN_LOOKBACK
@@ -305,17 +393,18 @@ class FeatureEngine:
             features = Features(
                 exchange=data.exchange,
                 symbol=data.symbol,
+                timeframe="stream",
                 timestamp=data.timestamp,
                 price=data.price,
-                open=recent_window[0],
-                high=max(recent_window),
-                low=min(recent_window),
+                open=pseudo_open,
+                high=pseudo_high,
+                low=pseudo_low,
                 close=data.price,
                 price_change_1m=self._price_change_1m(data, buffer),
                 volume=data.volume,
                 volume_spike=self._volume_spike(data, buffer),
                 volume_ma_20=volume_ma_20,
-                volatility=self._volatility(data.symbol, buffer),
+                volatility=self._volatility(data.symbol, values),
                 history_length=len(values),
                 ema_20=ema_20,
                 ema_50=ema_50,
@@ -331,11 +420,11 @@ class FeatureEngine:
                 donchian_low_20=donchian_low,
                 swing_high=donchian_high,
                 swing_low=donchian_low,
-                candle_bullish=candle_bullish,
-                candle_bearish=candle_bearish,
+                candle_bullish=pseudo_close > pseudo_open,
+                candle_bearish=pseudo_close < pseudo_open,
                 upper_wick_ratio=upper_wick_ratio,
                 lower_wick_ratio=lower_wick_ratio,
-                atr_increasing=self._atr_increasing(values),
+                atr_increasing=False,
                 oi_change=None,
                 funding_rate=None,
             )

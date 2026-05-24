@@ -36,7 +36,7 @@ def build_signal(
     stop_loss: Optional[float] = None,
     take_profit_1: Optional[float] = None,
     take_profit_2: Optional[float] = None,
-    timeframe: str = "stream",
+    timeframe: Optional[str] = None,
 ) -> StrategySignal:
     entry_price = entry if entry is not None else features.close
     atr = features.atr_14 or max(abs(features.close) * 0.002, 1e-8)
@@ -73,7 +73,7 @@ def build_signal(
         confidence=confidence_from_score(score),
         timestamp=features.timestamp,
         score=score,
-        timeframe=timeframe,
+        timeframe=timeframe or features.timeframe,
         entry_min=_round_price(entry_min),
         entry_max=_round_price(entry_max),
         stop_loss=_round_price(stop_loss),

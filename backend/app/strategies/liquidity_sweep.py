@@ -58,7 +58,6 @@ class LiquiditySweepReversalStrategy:
                 stop_loss=stop_loss,
                 take_profit_1=take_profit_1,
                 take_profit_2=take_profit_2,
-                timeframe="stream",
             )
         ]
 

@@ -47,14 +47,26 @@ class MarketScanner:
         return adapters
 
     async def process_tick(self, data: MarketData) -> List[StrategySignal]:
-        self._candle_store.update_from_tick(data)
-        features = await self._feature_engine.process(data)
-        signals = await self._strategy_engine.generate_signals(features)
+        updated_candles = self._candle_store.update_from_tick(data)
+        signals: list[StrategySignal] = []
+        for candle in updated_candles:
+            candle_series = self._candle_store.list_candles(
+                exchange=candle.exchange,
+                symbol=candle.symbol,
+                timeframe=candle.timeframe,
+                include_open=True,
+                limit=250,
+            )
+            features = self._feature_engine.process_candles(candle_series)
+            if features is None:
+                continue
+            signals.extend(await self._strategy_engine.generate_signals(features))
+
         if signals:
             for signal in signals:
                 print(
                     f"signal {signal.exchange} {signal.symbol} {signal.strategy} "
-                    f"{signal.direction} score={signal.score}"
+                    f"{signal.direction} {signal.timeframe} score={signal.score}"
                 )
         return signals
 

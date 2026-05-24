@@ -64,9 +64,8 @@ class ScannerRunner:
                 radar_signal = self._store.add_strategy_signal(
                     signal,
                     explanation=[
-                        f"Сигнал получен из realtime-потока {signal.exchange}",
-                        f"Стратегия: {signal.strategy}",
-                        f"Confidence: {signal.confidence:.2f}",
+                        f"Сигнал рассчитан по свечам {signal.exchange} {signal.timeframe}",
+                        *signal.explanation,
                     ],
                 )
                 self._processed_signals += 1

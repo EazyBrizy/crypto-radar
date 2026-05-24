@@ -191,7 +191,21 @@ cd backend
 .venv\Scripts\python.exe app\main.py
 ```
 
-Он подключается к Bybit WebSocket, обрабатывает тики и выводит найденные сигналы в консоль.
+Он подключается к Bybit WebSocket, строит OHLCV-свечи, считает derived-индикаторы по свечным сериям и выводит найденные сигналы в консоль.
+
+## Как сейчас связаны свечи и сигналы
+
+Поток данных работает так:
+
+```text
+Bybit trade stream
+  -> CandleService: OHLCV по exchange/symbol/timeframe
+  -> FeatureEngine: EMA, RSI, ATR, Donchian, BB width, volume spike, wick ratios
+  -> StrategyEngine: Trend Pullback, Squeeze Breakout, Liquidity Sweep
+  -> SignalService: /api/v1/radar и /api/v1/signals
+```
+
+Каждый сигнал теперь получает `exchange`, `symbol` и реальный `timeframe` из свечной серии. Если в `/api/v1/radar` пока пусто, это нормально: стратегиям нужна история свечей. Например, `Trend Pullback Continuation` ждёт до 200 свечей, `Squeeze Breakout` - около 60, `Liquidity Sweep` - около 30.
 
 ## Переменные окружения
 

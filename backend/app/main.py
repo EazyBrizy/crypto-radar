@@ -1,22 +1,57 @@
 import asyncio
 import logging
+import os
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from app.api.v1.router import api_router
 from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
+from app.services.scanner_runner import ScannerRunner
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 
 TICK_LIMIT = 5000
 
-app = FastAPI(title="Crypto Radar API")
+
+def _scanner_enabled() -> bool:
+    raw_value = os.getenv("CRYPTO_RADAR_SCANNER_ENABLED", "true")
+    return raw_value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    runner = ScannerRunner()
+    app.state.scanner_runner = runner
+
+    if _scanner_enabled():
+        runner.start()
+    else:
+        logging.info("Scanner runner disabled by CRYPTO_RADAR_SCANNER_ENABLED")
+
+    try:
+        yield
+    finally:
+        await runner.stop()
+
+
+app = FastAPI(title="Crypto Radar API", lifespan=lifespan)
 app.include_router(api_router)
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    runner = getattr(app.state, "scanner_runner", None)
+    return {
+        "status": "ok",
+        "scanner_enabled": _scanner_enabled(),
+        "scanner_running": bool(runner and runner.is_running),
+        "processed_signals": runner.processed_signals if runner else 0,
+    }
 
 
 async def main() -> None:

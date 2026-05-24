@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from app.models.schemas import RadarSignal, StrategySignal
 
+MAX_STORED_SIGNALS = 200
+
 
 class SignalService:
     """Хранит radar-сигналы для MVP 1.
@@ -34,6 +36,7 @@ class SignalService:
 
     def add_signal(self, signal: RadarSignal) -> RadarSignal:
         self._signals[signal.id] = signal
+        self._trim_signals()
         return signal
 
     def add_strategy_signal(
@@ -56,6 +59,22 @@ class SignalService:
             updated_at=now,
         )
         return self.add_signal(radar_signal)
+
+    def _trim_signals(self) -> None:
+        if len(self._signals) <= MAX_STORED_SIGNALS:
+            return
+
+        sorted_signals = sorted(
+            self._signals.values(),
+            key=lambda signal: signal.created_at,
+            reverse=True,
+        )
+        keep_ids = {signal.id for signal in sorted_signals[:MAX_STORED_SIGNALS]}
+        self._signals = {
+            signal_id: signal
+            for signal_id, signal in self._signals.items()
+            if signal_id in keep_ids
+        }
 
     def confirm_signal(self, signal_id: str) -> Optional[RadarSignal]:
         signal = self._signals.get(signal_id)

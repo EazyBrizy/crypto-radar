@@ -19,7 +19,7 @@ HEARTBEAT_INTERVAL_SEC = 20.0
 
 
 class BybitMarketDataService:
-    """Collects public trade stream data from Bybit linear WebSocket."""
+    """Собирает публичный поток сделок Bybit linear через WebSocket."""
 
     def __init__(
         self,

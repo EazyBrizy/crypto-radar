@@ -6,10 +6,10 @@ from app.models.schemas import RadarSignal, StrategySignal
 
 
 class SignalService:
-    """Stores radar signals for MVP 1.
+    """Хранит radar-сигналы для MVP 1.
 
-    This is intentionally in-memory for the first API slice. The service boundary
-    lets us replace it with Redis/PostgreSQL without changing API handlers.
+    На первом API-срезе хранилище намеренно in-memory. Граница сервиса
+    позволит заменить его на Redis/PostgreSQL без изменения API handlers.
     """
 
     def __init__(self) -> None:

@@ -1,71 +1,71 @@
 # Crypto Radar
 
-Crypto Radar is an MVP project for realtime crypto market scanning and manual signal review.
+Crypto Radar - MVP-проект для realtime-сканирования крипторынка и ручной работы с торговыми сигналами.
 
-Current focus: **MVP 1 - Radar + Manual Signals**.
+Текущий фокус: **MVP 1 - Radar + Manual Signals**.
 
-## What is implemented
+## Что уже сделано
 
-- Bybit public WebSocket market data collector.
-- Feature pipeline for price, volume spike, 1m price change, and volatility.
-- Strategy engine with early signal generation logic.
-- FastAPI backend entrypoint.
-- MVP signal API routes:
+- Коллектор публичных рыночных данных Bybit через WebSocket.
+- Feature pipeline для цены, всплеска объема, изменения цены за 1 минуту и волатильности.
+- Strategy engine с ранней логикой генерации сигналов.
+- FastAPI entrypoint для backend.
+- API routes для MVP-сигналов:
   - `GET /api/v1/radar`
   - `GET /api/v1/signals`
   - `GET /api/v1/signals/{signal_id}`
   - `POST /api/v1/signals/{signal_id}/confirm`
   - `POST /api/v1/signals/{signal_id}/reject`
-- In-memory `SignalService` for active/manual signals.
-- Architecture blueprint in `docs/architectureproject.md`.
+- In-memory `SignalService` для активных и ручных сигналов.
+- Архитектурный blueprint: `docs/architectureproject.md`.
 
-Note: scanner-generated signals are not yet automatically persisted into the API store. The API currently exposes the MVP contract and in-memory signal workflow.
+Важно: сигналы, которые генерирует scanner, пока не сохраняются автоматически в API store. Сейчас API фиксирует MVP-контракт и ручной workflow работы с сигналами.
 
-## Project structure
+## Структура проекта
 
 ```text
 backend/
   app/
     api/v1/              FastAPI routes
-    core/                config and future infrastructure helpers
-    models/              Pydantic models
-    services/            scanner, market data, feature, strategy, signal services
-    main.py              FastAPI app entrypoint
-docs/                    architecture and product docs
-infra/                   local infrastructure configs
-frontend/                reserved for Next.js frontend
+    core/                конфигурация и будущие инфраструктурные helpers
+    models/              Pydantic-модели
+    services/            scanner, market data, feature, strategy и signal services
+    main.py              FastAPI entrypoint
+docs/                    архитектура и продуктовые документы
+infra/                   локальная инфраструктура
+frontend/                заготовка под Next.js frontend
 ```
 
-## Local setup
+## Локальная установка
 
-From the project root:
+Из корня проекта:
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r backend\requirements.txt
 ```
 
-If `python` is not available in PATH, use your installed Python executable instead.
+Если команда `python` недоступна в `PATH`, используй путь к установленному Python.
 
-## Run the API
+## Запуск API
 
 ```powershell
 .venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload
 ```
 
-The API will be available at:
+API будет доступен по адресу:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Interactive docs:
+Интерактивная документация FastAPI:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
-## Check endpoints
+## Проверка endpoint
 
 Health check:
 
@@ -79,48 +79,48 @@ Radar feed:
 curl http://127.0.0.1:8000/api/v1/radar
 ```
 
-All signals:
+Все сигналы:
 
 ```powershell
 curl http://127.0.0.1:8000/api/v1/signals
 ```
 
-Signal detail:
+Детали сигнала:
 
 ```powershell
 curl http://127.0.0.1:8000/api/v1/signals/sig_test
 ```
 
-Confirm signal:
+Подтвердить сигнал:
 
 ```powershell
 curl -X POST http://127.0.0.1:8000/api/v1/signals/sig_test/confirm
 ```
 
-Reject signal:
+Отклонить сигнал:
 
 ```powershell
 curl -X POST http://127.0.0.1:8000/api/v1/signals/sig_test/reject
 ```
 
-For now, unknown signal ids return `404 Signal not found`.
+Пока неизвестные `signal_id` возвращают `404` с сообщением `Сигнал не найден`.
 
-## Run the scanner manually
+## Ручной запуск scanner
 
-The old CLI scanner entrypoint is still available:
+Старый CLI entrypoint scanner пока оставлен:
 
 ```powershell
 .venv\Scripts\python.exe backend\app\main.py
 ```
 
-It connects to Bybit WebSocket, processes ticks, and prints detected signals to the console.
+Он подключается к Bybit WebSocket, обрабатывает тики и выводит найденные сигналы в консоль.
 
-## Environment
+## Переменные окружения
 
-Create a local `.env` file from the safe example:
+Создай локальный `.env` из безопасного примера:
 
 ```powershell
 copy .env.example .env
 ```
 
-Do not commit real API keys. `.env` is ignored by git.
+Не коммить реальные API-ключи. Файл `.env` игнорируется git.

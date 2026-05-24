@@ -14,7 +14,7 @@ CONFIDENCE_MAX = 0.9
 
 
 class StrategyEngine:
-    """Generates trading signals from computed features."""
+    """Генерирует торговые сигналы на основе рассчитанных признаков."""
 
     def __init__(self) -> None:
         self._last_price_change: Dict[str, float] = {}

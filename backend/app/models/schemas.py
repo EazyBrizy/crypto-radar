@@ -4,7 +4,7 @@ from typing import Optional, List, Literal
 
 
 # =========================
-# 1. MARKET DATA
+# 1. РЫНОЧНЫЕ ДАННЫЕ
 # =========================
 
 class MarketData(BaseModel):
@@ -15,7 +15,7 @@ class MarketData(BaseModel):
 
 
 # =========================
-# 2. FEATURES
+# 2. ПРИЗНАКИ
 # =========================
 
 class Features(BaseModel):
@@ -35,7 +35,7 @@ class Features(BaseModel):
 
 
 # =========================
-# 3. STRATEGY SIGNAL
+# 3. СТРАТЕГИЧЕСКИЙ СИГНАЛ
 # =========================
 
 class StrategySignal(BaseModel):
@@ -47,7 +47,7 @@ class StrategySignal(BaseModel):
 
 
 # =========================
-# 3.1. RADAR SIGNAL
+# 3.1. СИГНАЛ RADAR
 # =========================
 
 SignalDirection = Literal["long", "short"]
@@ -85,7 +85,7 @@ class RadarResponse(BaseModel):
 
 
 # =========================
-# 4. SCORED SIGNAL
+# 4. СИГНАЛ С ОЦЕНКОЙ
 # =========================
 
 class ScoredSignal(BaseModel):
@@ -100,7 +100,7 @@ class ScoredSignal(BaseModel):
 
 
 # =========================
-# 5. EXECUTION CONFIG
+# 5. КОНФИГУРАЦИЯ ИСПОЛНЕНИЯ
 # =========================
 
 class ExecutionConfig(BaseModel):
@@ -110,7 +110,7 @@ class ExecutionConfig(BaseModel):
 
 
 # =========================
-# 6. EXECUTION RESULT
+# 6. РЕЗУЛЬТАТ ИСПОЛНЕНИЯ
 # =========================
 
 class ExecutionResult(BaseModel):
@@ -125,7 +125,7 @@ class ExecutionResult(BaseModel):
 
 
 # =========================
-# 7. TRADE
+# 7. СДЕЛКА
 # =========================
 
 class Trade(BaseModel):
@@ -142,7 +142,7 @@ class Trade(BaseModel):
 
 
 # =========================
-# 8. TRADE ANALYSIS
+# 8. АНАЛИЗ СДЕЛКИ
 # =========================
 
 class TradeAnalysis(BaseModel):
@@ -152,7 +152,7 @@ class TradeAnalysis(BaseModel):
 
 
 # =========================
-# 9. API RESPONSES
+# 9. API-ОТВЕТЫ
 # =========================
 
 class SignalResponse(BaseModel):

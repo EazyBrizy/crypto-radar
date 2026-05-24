@@ -18,7 +18,7 @@ MIN_VOLUME = 0.001
 
 
 class FeatureEngine:
-    """Derives Features from a stream of MarketData using per-symbol trade buffers."""
+    """Строит Features из потока MarketData через буферы сделок по символам."""
 
     def __init__(self) -> None:
         self._buffers: Dict[str, Deque[MarketData]] = defaultdict(

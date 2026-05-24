@@ -17,7 +17,7 @@ async def get_signal(signal_id: str) -> RadarSignal:
     if signal is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Signal not found",
+            detail="Сигнал не найден",
         )
     return signal
 
@@ -28,7 +28,7 @@ async def confirm_signal(signal_id: str) -> RadarSignal:
     if signal is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Signal not found",
+            detail="Сигнал не найден",
         )
     return signal
 
@@ -39,6 +39,6 @@ async def reject_signal(signal_id: str) -> RadarSignal:
     if signal is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Signal not found",
+            detail="Сигнал не найден",
         )
     return signal

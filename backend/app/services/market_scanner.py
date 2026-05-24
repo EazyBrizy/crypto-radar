@@ -19,7 +19,7 @@ DEFAULT_SYMBOLS = [
 
 
 class MarketScanner:
-    """Runs MarketData → Features → StrategySignal pipeline for multiple symbols."""
+    """Запускает pipeline MarketData -> Features -> StrategySignal для нескольких символов."""
 
     def __init__(self, symbols: Optional[List[str]] = None) -> None:
         self._symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)

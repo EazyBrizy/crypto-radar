@@ -8,6 +8,7 @@ from app.schemas.market import MarketData
 from app.schemas.signal import StrategySignal
 from app.services.candle_service import CandleService, candle_service
 from app.services.feature_engine import FeatureEngine
+from app.services.trade_service import trade_service
 from app.strategies.engine import StrategyEngine
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class MarketScanner:
         return adapters
 
     async def process_tick(self, data: MarketData) -> List[StrategySignal]:
+        trade_service.update_market_price(data.exchange, data.symbol, data.price)
         updated_candles = self._candle_store.update_from_tick(data)
         signals: list[StrategySignal] = []
         for candle in updated_candles:

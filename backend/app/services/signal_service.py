@@ -87,7 +87,13 @@ class SignalService:
             if signal_id in keep_ids
         }
 
-    def confirm_signal(self, signal_id: str) -> Optional[RadarSignal]:
+    def confirm_signal(
+        self,
+        signal_id: str,
+        trade_id: Optional[str] = None,
+        mode: str = "virtual",
+        note: Optional[str] = None,
+    ) -> Optional[RadarSignal]:
         signal = self._signals.get(signal_id)
         if signal is None:
             return None
@@ -98,12 +104,19 @@ class SignalService:
                 "status": "confirmed",
                 "updated_at": now,
                 "confirmed_at": now,
+                "decision_mode": mode,
+                "decision_note": note,
+                "confirmed_trade_id": trade_id,
             }
         )
         self._signals[signal_id] = updated
         return updated
 
-    def reject_signal(self, signal_id: str) -> Optional[RadarSignal]:
+    def reject_signal(
+        self,
+        signal_id: str,
+        note: Optional[str] = None,
+    ) -> Optional[RadarSignal]:
         signal = self._signals.get(signal_id)
         if signal is None:
             return None
@@ -114,6 +127,7 @@ class SignalService:
                 "status": "rejected",
                 "updated_at": now,
                 "rejected_at": now,
+                "decision_note": note,
             }
         )
         self._signals[signal_id] = updated

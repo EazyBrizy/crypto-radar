@@ -56,6 +56,9 @@ class RadarSignal(BaseModel):
     expires_at: Optional[datetime] = None
     confirmed_at: Optional[datetime] = None
     rejected_at: Optional[datetime] = None
+    decision_mode: Optional[Literal["virtual", "real"]] = None
+    decision_note: Optional[str] = None
+    confirmed_trade_id: Optional[str] = None
 
 
 class RadarResponse(BaseModel):

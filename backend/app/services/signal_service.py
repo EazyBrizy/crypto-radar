@@ -46,6 +46,7 @@ class SignalService:
         explanation: Optional[List[str]] = None,
     ) -> RadarSignal:
         now = datetime.now(timezone.utc)
+        score = signal.score or int(signal.confidence * 100)
         radar_signal = RadarSignal(
             id=f"sig_{uuid4().hex[:12]}",
             symbol=signal.symbol,
@@ -53,8 +54,18 @@ class SignalService:
             strategy=signal.strategy,
             direction=signal.direction.lower(),
             confidence=signal.confidence,
-            urgency="medium",
-            explanation=explanation or [],
+            status="active" if score >= 70 else "watchlist",
+            score=score,
+            timeframe=signal.timeframe,
+            urgency=signal.urgency,
+            entry_min=signal.entry_min,
+            entry_max=signal.entry_max,
+            stop_loss=signal.stop_loss,
+            take_profit_1=signal.take_profit_1,
+            take_profit_2=signal.take_profit_2,
+            risk_reward=signal.risk_reward,
+            explanation=explanation or signal.explanation,
+            risks=signal.risks,
             created_at=now,
             updated_at=now,
         )

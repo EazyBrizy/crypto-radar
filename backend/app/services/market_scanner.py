@@ -6,7 +6,7 @@ from app.exchanges.bybit import BybitAdapter
 from app.schemas.market import MarketData
 from app.schemas.signal import StrategySignal
 from app.services.feature_engine import FeatureEngine
-from app.strategies.breakout import StrategyEngine
+from app.strategies.engine import StrategyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class MarketScanner:
             for signal in signals:
                 print(
                     f"signal {signal.symbol} {signal.strategy} "
-                    f"{signal.direction} confidence={signal.confidence:.2f}"
+                    f"{signal.direction} score={signal.score}"
                 )
         return signals
 

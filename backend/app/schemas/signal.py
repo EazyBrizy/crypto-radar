@@ -10,11 +10,23 @@ class StrategySignal(BaseModel):
     direction: Literal["LONG", "SHORT"]
     confidence: float = Field(..., ge=0, le=1)
     timestamp: int
+    score: int = Field(default=0, ge=0, le=100)
+    timeframe: str = "stream"
+
+    entry_min: Optional[float] = None
+    entry_max: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit_1: Optional[float] = None
+    take_profit_2: Optional[float] = None
+    risk_reward: Optional[float] = Field(default=None, ge=0)
+    urgency: Literal["low", "medium", "high"] = "medium"
+    explanation: List[str] = Field(default_factory=list)
+    risks: List[str] = Field(default_factory=list)
 
 
 SignalDirection = Literal["long", "short"]
 SignalUrgency = Literal["low", "medium", "high"]
-SignalStatus = Literal["active", "confirmed", "rejected", "expired"]
+SignalStatus = Literal["active", "watchlist", "confirmed", "rejected", "expired", "invalidated"]
 
 
 class RadarSignal(BaseModel):
@@ -27,6 +39,8 @@ class RadarSignal(BaseModel):
     risk_reward: Optional[float] = Field(default=None, ge=0)
     urgency: SignalUrgency = "medium"
     status: SignalStatus = "active"
+    score: int = Field(default=0, ge=0, le=100)
+    timeframe: str = "stream"
 
     entry_min: Optional[float] = None
     entry_max: Optional[float] = None
@@ -35,6 +49,7 @@ class RadarSignal(BaseModel):
     take_profit_2: Optional[float] = None
 
     explanation: List[str] = Field(default_factory=list)
+    risks: List[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     expires_at: Optional[datetime] = None

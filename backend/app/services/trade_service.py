@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Optional
 from uuid import uuid4
 
 from app.schemas.signal import RadarSignal
@@ -8,8 +8,10 @@ from app.schemas.trade import (
     CloseVirtualTradeRequest,
     ManualConfirmRequest,
     TradeResult,
+    TradeJournalEntry,
     VirtualTrade,
 )
+from app.services.trade_repository import InMemoryTradeRepository, TradeRepository
 
 MAX_STORED_TRADES = 500
 
@@ -21,24 +23,56 @@ class TradeService:
     из architectureproject.md и позволит вынести данные в PostgreSQL.
     """
 
-    def __init__(self) -> None:
-        self._virtual_trades: Dict[str, VirtualTrade] = {}
-        self._trade_by_signal: Dict[str, str] = {}
+    def __init__(
+        self,
+        repository: TradeRepository | None = None,
+    ) -> None:
+        self._repository = repository or InMemoryTradeRepository()
+        self._trade_by_signal: dict[str, str] = {}
 
     def list_virtual_trades(
         self,
         status: Optional[str] = None,
         signal_id: Optional[str] = None,
     ) -> list[VirtualTrade]:
-        trades = list(self._virtual_trades.values())
-        if status is not None:
-            trades = [trade for trade in trades if trade.status == status]
-        if signal_id is not None:
-            trades = [trade for trade in trades if trade.signal_id == signal_id]
-        return sorted(trades, key=lambda trade: trade.opened_at, reverse=True)
+        return self._repository.list_virtual_trades(
+            status=status,
+            signal_id=signal_id,
+        )
 
     def get_virtual_trade(self, trade_id: str) -> Optional[VirtualTrade]:
-        return self._virtual_trades.get(trade_id)
+        return self._repository.get_virtual_trade(trade_id)
+
+    def list_real_trades(
+        self,
+        status: Optional[str] = None,
+        signal_id: Optional[str] = None,
+    ) -> list[TradeJournalEntry]:
+        return [
+            TradeJournalEntry.model_validate(trade.model_dump())
+            for trade in self._repository.list_real_trades(
+                status=status,
+                signal_id=signal_id,
+            )
+        ]
+
+    def get_real_trade(self, trade_id: str) -> Optional[TradeJournalEntry]:
+        trade = self._repository.get_real_trade(trade_id)
+        if trade is None:
+            return None
+        return TradeJournalEntry.model_validate(trade.model_dump())
+
+    def list_trade_journal(
+        self,
+        mode: Optional[str] = None,
+        status: Optional[str] = None,
+        signal_id: Optional[str] = None,
+    ) -> list[TradeJournalEntry]:
+        return self._repository.list_journal(
+            mode=mode,
+            status=status,
+            signal_id=signal_id,
+        )
 
     def get_virtual_trade_by_signal(self, signal_id: str) -> Optional[VirtualTrade]:
         trade_id = self._trade_by_signal.get(signal_id)
@@ -56,7 +90,7 @@ class TradeService:
             return existing
         open_user_positions = [
             trade
-            for trade in self._virtual_trades.values()
+            for trade in self._repository.list_virtual_trades(status="open")
             if trade.user_id == request.user_id and trade.status == "open"
         ]
         if len(open_user_positions) >= request.max_open_positions:
@@ -111,7 +145,7 @@ class TradeService:
             opened_at=now,
             updated_at=now,
         )
-        self._virtual_trades[trade.id] = trade
+        self._repository.save_virtual_trade(trade)
         self._trade_by_signal[signal.id] = trade.id
         self._trim_trades()
         return trade
@@ -134,7 +168,7 @@ class TradeService:
         price: float,
     ) -> list[VirtualTrade]:
         updated: list[VirtualTrade] = []
-        for trade in list(self._virtual_trades.values()):
+        for trade in self._repository.list_virtual_trades(status="open"):
             if trade.status != "open":
                 continue
             if trade.exchange != exchange or trade.symbol != symbol:
@@ -158,7 +192,7 @@ class TradeService:
                 "updated_at": datetime.now(timezone.utc),
             }
         )
-        self._virtual_trades[trade.id] = updated
+        self._repository.save_virtual_trade(updated)
         return updated
 
     def _close_target(
@@ -214,24 +248,17 @@ class TradeService:
                 "closed_at": now,
             }
         )
-        self._virtual_trades[trade.id] = updated
+        self._repository.save_virtual_trade(updated)
         return updated
 
     def _trim_trades(self) -> None:
-        if len(self._virtual_trades) <= MAX_STORED_TRADES:
+        virtual_trades = self._repository.list_virtual_trades()
+        if len(virtual_trades) <= MAX_STORED_TRADES:
             return
 
-        sorted_trades = sorted(
-            self._virtual_trades.values(),
-            key=lambda trade: trade.opened_at,
-            reverse=True,
-        )
-        keep_ids = {trade.id for trade in sorted_trades[:MAX_STORED_TRADES]}
-        self._virtual_trades = {
-            trade_id: trade
-            for trade_id, trade in self._virtual_trades.items()
-            if trade_id in keep_ids
-        }
+        keep_ids = {trade.id for trade in virtual_trades[:MAX_STORED_TRADES]}
+        for trade in virtual_trades[MAX_STORED_TRADES:]:
+            self._repository.delete_virtual_trade(trade.id)
         self._trade_by_signal = {
             signal_id: trade_id
             for signal_id, trade_id in self._trade_by_signal.items()

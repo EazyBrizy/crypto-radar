@@ -92,6 +92,56 @@ class VirtualTradeResponse(BaseModel):
     trades: list[VirtualTrade]
 
 
+class TradeJournalEntry(BaseModel):
+    id: str
+    user_id: str
+    signal_id: Optional[str] = None
+    mode: ExecutionMode
+
+    exchange: str
+    symbol: str
+    strategy: str
+    timeframe: str
+    side: TradeSide
+
+    entry_price: float
+    current_price: float
+    exit_price: Optional[float] = None
+    size_usd: float
+    quantity: float
+    leverage: int
+    risk_percent: float
+
+    stop_loss: float
+    take_profit: list[float] = Field(default_factory=list)
+    fees: float = 0.0
+    slippage_bps: float = 0.0
+
+    status: TradeStatus
+    result: Optional[TradeResult] = None
+    close_reason: Optional[CloseReason] = None
+    pnl: Optional[float] = None
+    pnl_percent: Optional[float] = None
+    mfe: float = 0.0
+    mae: float = 0.0
+
+    screenshots: list[str] = Field(default_factory=list)
+    ai_review: Optional[str] = None
+
+    opened_at: datetime
+    updated_at: datetime
+    closed_at: Optional[datetime] = None
+
+
+class RealTrade(TradeJournalEntry):
+    mode: Literal["real"] = "real"
+    exchange_order_id: Optional[str] = None
+
+
+class TradeJournalResponse(BaseModel):
+    trades: list[TradeJournalEntry]
+
+
 class ExecutionConfig(BaseModel):
     risk_per_trade: float
     leverage: int

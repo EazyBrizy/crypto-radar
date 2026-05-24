@@ -1,6 +1,6 @@
 # Database Schema
 
-## trades
+## trade_journal
 
 - id
 - user_id
@@ -32,6 +32,15 @@
 - created_at
 - updated_at
 - closed_at
+- screenshots
+- ai_review
+
+`mode` разделяет два журнала:
+
+- `virtual` - виртуальные сделки внутри приложения.
+- `real` - будущие реальные сделки, синхронизированные через биржевые адаптеры.
+
+В коде подготовлены SQLAlchemy-модель `TradeJournalRecord` и `SqlAlchemyTradeRepository`. Текущий MVP использует `InMemoryTradeRepository`, но `TradeService` уже работает через repository boundary, поэтому PostgreSQL-реализация сможет заменить in-memory слой без изменения API.
 
 ## signals
 

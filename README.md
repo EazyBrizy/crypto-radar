@@ -38,19 +38,27 @@ frontend/                заготовка под Next.js frontend
 
 ## Локальная установка
 
-Из корня проекта:
+Рекомендуемый вариант: создать виртуальное окружение внутри папки `backend`.
 
 ```powershell
+cd backend
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 Если команда `python` недоступна в `PATH`, используй путь к установленному Python.
 
+Если ты запускаешь команды из корня проекта, путь к `requirements.txt` должен быть полным:
+
+```powershell
+backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+```
+
 ## Запуск API
 
 ```powershell
-.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload
+cd backend
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
 API будет доступен по адресу:
@@ -110,7 +118,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/signals/sig_test/reject
 Старый CLI entrypoint scanner пока оставлен:
 
 ```powershell
-.venv\Scripts\python.exe backend\app\main.py
+cd backend
+.venv\Scripts\python.exe app\main.py
 ```
 
 Он подключается к Bybit WebSocket, обрабатывает тики и выводит найденные сигналы в консоль.

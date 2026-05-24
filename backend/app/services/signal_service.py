@@ -42,7 +42,7 @@ class SignalService:
     def add_strategy_signal(
         self,
         signal: StrategySignal,
-        exchange: str = "bybit",
+        exchange: str | None = None,
         explanation: Optional[List[str]] = None,
     ) -> RadarSignal:
         now = datetime.now(timezone.utc)
@@ -50,7 +50,7 @@ class SignalService:
         radar_signal = RadarSignal(
             id=f"sig_{uuid4().hex[:12]}",
             symbol=signal.symbol,
-            exchange=exchange,
+            exchange=exchange or signal.exchange,
             strategy=signal.strategy,
             direction=signal.direction.lower(),
             confidence=signal.confidence,

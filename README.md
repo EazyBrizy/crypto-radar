@@ -104,6 +104,58 @@ Radar feed:
 curl http://127.0.0.1:8000/api/v1/radar
 ```
 
+## Проверка OHLCV-свечей и выбора рынка
+
+Поддерживаемые биржи, пары и таймфреймы:
+
+```powershell
+curl http://127.0.0.1:8000/api/v1/exchanges
+```
+
+Текущая конфигурация Radar:
+
+```powershell
+curl http://127.0.0.1:8000/api/v1/radar/config
+```
+
+Выбрать конкретные пары и таймфреймы:
+
+```powershell
+curl -X PUT http://127.0.0.1:8000/api/v1/radar/config `
+  -H "Content-Type: application/json" `
+  -d "{\"exchanges\":[\"bybit\"],\"symbols\":[\"BTCUSDT\",\"ETHUSDT\"],\"use_all_symbols\":false,\"timeframes\":[\"1m\",\"15m\",\"1h\"]}"
+```
+
+Использовать все доступные пары поддерживаемых бирж:
+
+```powershell
+curl -X PUT http://127.0.0.1:8000/api/v1/radar/config `
+  -H "Content-Type: application/json" `
+  -d "{\"exchanges\":[\"bybit\"],\"symbols\":[],\"use_all_symbols\":true,\"timeframes\":[\"1m\",\"5m\",\"15m\",\"1h\",\"4h\",\"1d\"]}"
+```
+
+При `use_all_symbols=true` Bybit symbols берутся из публичного `instruments-info`. Если Bybit REST временно недоступен, приложение использует fallback MVP-список.
+
+Проверить свечи по всем символам:
+
+```powershell
+curl "http://127.0.0.1:8000/api/v1/candles?exchange=bybit&timeframe=1m&limit=20"
+```
+
+Проверить свечи по конкретной паре:
+
+```powershell
+curl "http://127.0.0.1:8000/api/v1/candles?exchange=bybit&symbol=BTCUSDT&timeframe=15m&limit=20"
+```
+
+Доступные таймфреймы:
+
+```text
+1m, 5m, 15m, 1h, 4h, 1d
+```
+
+Важно: свечи строятся из realtime trade stream с момента запуска приложения. Сразу после старта исторических свечей еще нет, поэтому подожди 10-30 секунд и повтори запрос.
+
 Все сигналы:
 
 ```powershell

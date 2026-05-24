@@ -261,7 +261,8 @@ class FeatureEngine:
 
     async def process(self, data: MarketData) -> Features:
         try:
-            buffer = self._buffers[data.symbol]
+            buffer_key = f"{data.exchange}:{data.symbol}"
+            buffer = self._buffers[buffer_key]
             history = list(buffer)
             values = [trade.price for trade in history] + [data.price]
             volumes = [trade.volume for trade in history] + [data.volume]
@@ -293,11 +294,16 @@ class FeatureEngine:
                 else None
             )
 
-            if data.symbol not in self._initialized_symbols:
-                self._initialized_symbols.add(data.symbol)
-                logger.info("Feature buffer initialized for symbol %s", data.symbol)
+            if buffer_key not in self._initialized_symbols:
+                self._initialized_symbols.add(buffer_key)
+                logger.info(
+                    "Feature buffer initialized for %s %s",
+                    data.exchange,
+                    data.symbol,
+                )
 
             features = Features(
+                exchange=data.exchange,
                 symbol=data.symbol,
                 timestamp=data.timestamp,
                 price=data.price,

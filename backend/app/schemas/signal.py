@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class StrategySignal(BaseModel):
+    exchange: str = "bybit"
     symbol: str
     strategy: str
     direction: Literal["LONG", "SHORT"]

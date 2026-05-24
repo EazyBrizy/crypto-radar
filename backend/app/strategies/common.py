@@ -66,6 +66,7 @@ def build_signal(
     risk_reward = abs(take_profit_2 - entry_price) / risk
 
     return StrategySignal(
+        exchange=features.exchange,
         symbol=features.symbol,
         strategy=strategy,
         direction=direction,

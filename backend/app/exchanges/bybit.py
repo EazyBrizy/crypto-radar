@@ -2,6 +2,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import urllib.parse
+import urllib.request
 from collections.abc import AsyncIterator
 from typing import List, Optional
 
@@ -12,10 +14,53 @@ from app.schemas.market import MarketData
 logger = logging.getLogger(__name__)
 
 BYBIT_WS_URL = "wss://stream.bybit.com/v5/public/linear"
+BYBIT_INSTRUMENTS_URL = "https://api.bybit.com/v5/market/instruments-info"
 DEFAULT_SYMBOLS = ("DOGEUSDT",)
 LINEAR_SYMBOL_ALIASES = {"PEPEUSDT": "1000PEPEUSDT"}
 RECONNECT_DELAY_SEC = 5.0
 HEARTBEAT_INTERVAL_SEC = 20.0
+
+
+def fetch_bybit_linear_symbols() -> list[str]:
+    symbols: list[str] = []
+    cursor = ""
+
+    while True:
+        params = {
+            "category": "linear",
+            "limit": "1000",
+        }
+        if cursor:
+            params["cursor"] = cursor
+        url = f"{BYBIT_INSTRUMENTS_URL}?{urllib.parse.urlencode(params)}"
+
+        with urllib.request.urlopen(url, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        result = payload.get("result", {})
+        instruments = result.get("list", [])
+        if not isinstance(instruments, list):
+            break
+
+        for instrument in instruments:
+            if not isinstance(instrument, dict):
+                continue
+            symbol = instrument.get("symbol")
+            quote_coin = instrument.get("quoteCoin")
+            status = instrument.get("status")
+            if (
+                isinstance(symbol, str)
+                and symbol.endswith("USDT")
+                and quote_coin == "USDT"
+                and status == "Trading"
+            ):
+                symbols.append(symbol)
+
+        cursor = result.get("nextPageCursor") or ""
+        if not cursor:
+            break
+
+    return list(dict.fromkeys(symbols))
 
 
 class BybitAdapter:
@@ -61,6 +106,7 @@ class BybitAdapter:
     def _build_market_data(self, trade: dict) -> Optional[MarketData]:
         try:
             return MarketData(
+                exchange="bybit",
                 symbol=trade["s"],
                 price=float(trade["p"]),
                 volume=float(trade["v"]),

@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 
 class MarketData(BaseModel):
+    exchange: str = "bybit"
     symbol: str
     price: float
     volume: float
@@ -11,6 +12,7 @@ class MarketData(BaseModel):
 
 
 class Features(BaseModel):
+    exchange: str = "bybit"
     symbol: str
     timestamp: int
 

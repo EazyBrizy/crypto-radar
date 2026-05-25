@@ -84,6 +84,39 @@ http://127.0.0.1:8000
 http://127.0.0.1:8000/docs
 ```
 
+## Запуск frontend
+
+Frontend находится в папке `frontend` и реализован как базовый React/Vite интерфейс по `docs/frontend.md`.
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Если текущий PowerShell не видит `npm` сразу после установки Node.js, используй полный путь:
+
+```powershell
+cd frontend
+& "C:\Program Files\nodejs\npm.cmd" install
+& "C:\Program Files\nodejs\npm.cmd" run dev
+```
+
+После запуска открой:
+
+```text
+http://127.0.0.1:5173
+```
+
+Frontend ожидает backend на `http://127.0.0.1:8000`. Для локальной разработки в backend включен CORS для `localhost`/`127.0.0.1` портов `5173`, `5500` и `8080`.
+
+Если backend будет на другом адресе:
+
+```powershell
+$env:VITE_API_BASE_URL="http://127.0.0.1:8000"
+npm run dev
+```
+
 При запуске API по умолчанию стартует фоновый scanner, который слушает Bybit WebSocket и сохраняет найденные сигналы в `SignalService`. Эти сигналы появляются в `/api/v1/radar`.
 
 Чтобы временно запустить API без подключения к Bybit, добавь в `.env`:

@@ -15,6 +15,7 @@ TIMEFRAME_MS: dict[Timeframe, int] = {
 MAX_CANDLES_PER_SERIES = 500
 
 SeriesKey = Tuple[str, str, Timeframe]
+CandleKey = Tuple[str, str, Timeframe, int]
 
 
 class CandleService:
@@ -39,6 +40,34 @@ class CandleService:
     def configure_timeframes(self, timeframes: Iterable[Timeframe]) -> None:
         self._timeframes = list(dict.fromkeys(timeframes))
 
+    def seed_history(self, candles: Iterable[OHLCVCandle]) -> int:
+        seeded = 0
+        grouped: dict[SeriesKey, list[OHLCVCandle]] = defaultdict(list)
+        for candle in candles:
+            key: SeriesKey = (candle.exchange, candle.symbol, candle.timeframe)
+            grouped[key].append(candle.model_copy(update={"is_closed": True}))
+
+        for key, series in grouped.items():
+            ordered = sorted(series, key=lambda candle: candle.open_time)
+            current = self._current.get(key)
+            if current is not None:
+                ordered = [
+                    candle
+                    for candle in ordered
+                    if candle.open_time != current.open_time
+                ]
+            merged = {
+                candle.open_time: candle
+                for candle in list(self._history.get(key, [])) + ordered
+            }
+            final_series = sorted(merged.values(), key=lambda candle: candle.open_time)[
+                -self._max_candles :
+            ]
+            self._history[key].clear()
+            self._history[key].extend(final_series)
+            seeded += len(ordered[-self._max_candles :])
+        return seeded
+
     def update_from_tick(self, tick: MarketData) -> list[OHLCVCandle]:
         updated: list[OHLCVCandle] = []
         for timeframe in self._timeframes:
@@ -53,7 +82,7 @@ class CandleService:
         include_open: bool = True,
         limit: int = 100,
     ) -> list[OHLCVCandle]:
-        candles: list[OHLCVCandle] = []
+        candles_by_key: dict[CandleKey, OHLCVCandle] = {}
 
         keys = set(self._history.keys()) | set(self._current.keys())
         for key in keys:
@@ -65,11 +94,15 @@ class CandleService:
             if timeframe is not None and key_timeframe != timeframe:
                 continue
 
-            candles.extend(self._history.get(key, []))
+            for candle in self._history.get(key, []):
+                candles_by_key[_candle_key(candle)] = candle
             if include_open and key in self._current:
-                candles.append(self._current[key])
+                current = self._current[key]
+                candles_by_key[_candle_key(current)] = current
 
-        return sorted(candles, key=lambda candle: candle.open_time)[-limit:]
+        return sorted(candles_by_key.values(), key=lambda candle: candle.open_time)[
+            -limit:
+        ]
 
     def _update_timeframe(
         self,
@@ -130,3 +163,7 @@ class CandleService:
 
 
 candle_service = CandleService()
+
+
+def _candle_key(candle: OHLCVCandle) -> CandleKey:
+    return (candle.exchange, candle.symbol, candle.timeframe, candle.open_time)

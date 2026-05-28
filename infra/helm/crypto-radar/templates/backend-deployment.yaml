@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "crypto-radar.name" . }}-backend
+  labels:
+    {{- include "crypto-radar.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "crypto-radar.name" . }}-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "crypto-radar.name" . }}-backend
+    spec:
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.backend.port }}
+          env:
+            - name: DATABASE_URL
+              value: {{ .Values.backend.env.databaseUrl | quote }}
+            - name: REDIS_URL
+              value: {{ .Values.backend.env.redisUrl | quote }}
+            - name: NATS_URL
+              value: {{ .Values.backend.env.natsUrl | quote }}
+            - name: CLICKHOUSE_HOST
+              value: {{ .Values.backend.env.clickhouseHost | quote }}
+            - name: CLICKHOUSE_DATABASE
+              value: {{ .Values.backend.env.clickhouseDatabase | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.backend.env.otelExporterOtlpEndpoint | quote }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.backend.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.backend.port }}
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

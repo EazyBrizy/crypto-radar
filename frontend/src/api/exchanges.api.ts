@@ -1,0 +1,69 @@
+import type { ExchangeCatalog, ExchangeConnection, ExchangeConnectionDraft } from "@/features/server-state/types";
+import { openApiClient, request } from "./client";
+import { normalizeExchangeCatalog, normalizeExchangeConnection } from "./mappers";
+
+export const exchangesApi = {
+  async catalog(): Promise<ExchangeCatalog> {
+    const catalog = await request(() => openApiClient.GET("/api/v1/exchanges"));
+    return normalizeExchangeCatalog(catalog);
+  },
+  async connections(): Promise<ExchangeConnection[]> {
+    const response = await request(() =>
+      openApiClient.GET("/api/v1/exchanges/connections", {
+        params: { query: { user_id: "demo_user" } }
+      })
+    );
+    return response.map(normalizeExchangeConnection);
+  },
+  async createConnection(draft: ExchangeConnectionDraft): Promise<ExchangeConnection> {
+    return normalizeExchangeConnection(
+      await request(() =>
+        openApiClient.POST("/api/v1/exchanges/connections", {
+          body: {
+            user_id: "demo_user",
+            exchange_code: draft.exchange_code,
+            label: draft.label,
+            account_type: draft.account_type ?? "spot",
+            api_key: draft.api_key ?? null,
+            api_secret: draft.api_secret ?? null,
+            api_passphrase: draft.api_passphrase ?? null,
+            permissions: draft.permissions ?? {},
+            metadata: draft.metadata ?? {}
+          }
+        })
+      )
+    );
+  },
+  async updateConnection(connectionId: string, patch: Partial<ExchangeConnectionDraft> & { status?: string }): Promise<ExchangeConnection> {
+    return normalizeExchangeConnection(
+      await request(() =>
+        openApiClient.PATCH("/api/v1/exchanges/connections/{connection_id}", {
+          params: { path: { connection_id: connectionId } },
+          body: patch
+        })
+      )
+    );
+  },
+  async deleteConnection(connectionId: string): Promise<void> {
+    const result = await openApiClient.DELETE("/api/v1/exchanges/connections/{connection_id}", {
+      params: { path: { connection_id: connectionId } }
+    });
+    if (result.error || !result.response.ok) {
+      throw new Error(`Exchange connection delete failed: ${result.response.status}`);
+    }
+  },
+  async testConnection(connectionId: string) {
+    return request(() =>
+      openApiClient.POST("/api/v1/exchanges/connections/{connection_id}/test", {
+        params: { path: { connection_id: connectionId } }
+      })
+    );
+  },
+  async syncConnection(connectionId: string) {
+    return request(() =>
+      openApiClient.POST("/api/v1/exchanges/connections/{connection_id}/sync", {
+        params: { path: { connection_id: connectionId } }
+      })
+    );
+  }
+};

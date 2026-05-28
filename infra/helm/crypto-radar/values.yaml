@@ -1,0 +1,26 @@
+backend:
+  image:
+    repository: crypto-radar-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 2
+  port: 8000
+  env:
+    databaseUrl: postgresql://crypto_radar:crypto_radar@postgres:5432/crypto_radar
+    redisUrl: redis://redis:6379/0
+    natsUrl: nats://nats:4222
+    clickhouseHost: clickhouse
+    clickhouseDatabase: crypto_radar
+    otelExporterOtlpEndpoint: http://otel-collector:4317
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi

@@ -1,10 +1,38 @@
-from typing import Optional, Protocol
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Optional, Protocol
+from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, joinedload, object_session, sessionmaker
 
-from app.models.trade import TradeJournalRecord
-from app.schemas.trade import RealTrade, TradeJournalEntry, VirtualTrade
+from app.core.database import SessionLocal
+from app.models.audit import AuditLog
+from app.models.external_exchange import ExternalExchangeTrade
+from app.models.market import MarketAsset, MarketPair
+from app.models.outbox import OutboxEvent
+from app.models.portfolio import (
+    Order,
+    OrderFill,
+    Portfolio,
+    PortfolioBalance,
+    PortfolioBalanceLedger,
+    Position,
+)
+from app.models.signal import TradingSignal
+from app.models.user import AppUser
+from app.repositories.signal_repository import (
+    SIGNAL_CONFIRMED_EVENT,
+    SignalWriteResult,
+    _analytics_event,
+    _get_signal_record,
+    _persist_signal_event,
+    _record_to_radar_signal,
+)
+from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
+from app.services.bootstrap_service import DEMO_USERNAME, INITIAL_VIRTUAL_BALANCE
+from app.models.strategy import StrategyVersion
 
 
 class TradeRepository(Protocol):
@@ -46,53 +74,288 @@ class TradeRepository(Protocol):
         ...
 
 
-class InMemoryTradeRepository:
-    """Временный repository для MVP, повторяет будущий контракт PostgreSQL."""
+@dataclass(frozen=True)
+class VirtualTradePersistenceEvent:
+    event_type: str
+    trade: VirtualTrade
+    user_id: UUID
+    portfolio_id: UUID
+    order_id: UUID
+    position_id: UUID
+    signal_id: UUID | None
+    fee: Decimal | None = None
 
-    def __init__(self) -> None:
-        self._virtual_trades: dict[str, VirtualTrade] = {}
-        self._real_trades: dict[str, RealTrade] = {}
+
+@dataclass(frozen=True)
+class VirtualTradeConfirmationResult:
+    signal_result: SignalWriteResult
+    trade: VirtualTrade
+    events: list[VirtualTradePersistenceEvent] = field(default_factory=list)
+
+
+class PostgresVirtualTradeRepository:
+    """PostgreSQL source of truth for virtual trading."""
+
+    def __init__(self, session_factory: sessionmaker[Session] = SessionLocal) -> None:
+        self._session_factory = session_factory
+        self._events: list[VirtualTradePersistenceEvent] = []
 
     def save_virtual_trade(self, trade: VirtualTrade) -> VirtualTrade:
-        self._virtual_trades[trade.id] = trade
-        return trade
+        with self._session_factory() as session:
+            position = _get_position_by_trade_id(session, trade.id)
+            if position is None:
+                signal = _get_signal_record(session, trade.signal_id)
+                if signal is None:
+                    raise ValueError("Signal is not found for virtual trade")
+                user = _resolve_user(session, trade.user_id)
+                portfolio = _resolve_virtual_portfolio(session, user)
+                quote_asset = _quote_asset(signal)
+                balance = _resolve_balance(session, portfolio, quote_asset)
+                persisted_trade, event = self._create_open_trade(
+                    session=session,
+                    signal=signal,
+                    user=user,
+                    portfolio=portfolio,
+                    balance=balance,
+                    quote_asset=quote_asset,
+                    trade=trade,
+                    idempotency_key=f"virtual-open:{signal.id}",
+                    confirm_signal=False,
+                    request=None,
+                )
+                session.commit()
+                self._events.append(event)
+                return persisted_trade
+
+            if trade.status == "closed" and position.status == "open":
+                updated, event = self._close_position(session, position, trade)
+                session.commit()
+                self._events.append(event)
+                return updated
+
+            updated = self._update_position_snapshot(session, position, trade)
+            session.commit()
+            return updated
+
+    def confirm_signal_with_trade(
+        self,
+        signal_id: str,
+        request: ManualConfirmRequest,
+        trade: VirtualTrade,
+    ) -> VirtualTradeConfirmationResult:
+        with self._session_factory() as session:
+            signal = _get_signal_record(session, signal_id)
+            if signal is None:
+                raise ValueError("Signal is not found")
+            if signal.status in {"expired", "invalidated", "closed"}:
+                raise ValueError("Signal cannot be confirmed in current status")
+
+            user = _resolve_user(session, request.user_id)
+            existing_position = session.scalars(
+                _position_select()
+                .where(
+                    Position.user_id == user.id,
+                    Position.signal_id == signal.id,
+                    Position.mode == "virtual",
+                )
+                .order_by(Position.opened_at.desc())
+                .limit(1)
+            ).one_or_none()
+            if existing_position is not None:
+                existing_trade = _position_to_virtual_trade(existing_position)
+                if signal.status != "confirmed":
+                    signal_result = self._confirm_signal_record(
+                        session=session,
+                        signal=signal,
+                        trade_id=existing_trade.id,
+                        request=request,
+                        now=datetime.now(timezone.utc),
+                    )
+                    _add_virtual_trade_audit(
+                        session=session,
+                        user=user,
+                        position_id=existing_position.id,
+                        action="virtual_trade.confirm_existing",
+                        payload={"trade": existing_trade.model_dump(mode="json")},
+                    )
+                    session.commit()
+                    return VirtualTradeConfirmationResult(signal_result, existing_trade, [])
+
+                signal_result = _signal_result_for_confirmed(signal, existing_trade.id)
+                session.commit()
+                return VirtualTradeConfirmationResult(signal_result, existing_trade, [])
+
+            idempotency_key = f"virtual-confirm:{signal.id}"
+            existing_order = _get_order_by_idempotency(session, user.id, idempotency_key)
+            if existing_order is not None:
+                position = _position_from_order_metadata(session, existing_order)
+                if position is None:
+                    raise ValueError("Existing virtual order has no position metadata")
+                existing_trade = _position_to_virtual_trade(position)
+                if signal.status != "confirmed":
+                    signal_result = self._confirm_signal_record(
+                        session=session,
+                        signal=signal,
+                        trade_id=existing_trade.id,
+                        request=request,
+                        now=datetime.now(timezone.utc),
+                    )
+                    _add_virtual_trade_audit(
+                        session=session,
+                        user=user,
+                        position_id=position.id,
+                        action="virtual_trade.confirm_idempotent",
+                        payload={"trade": existing_trade.model_dump(mode="json")},
+                    )
+                    session.commit()
+                    return VirtualTradeConfirmationResult(signal_result, existing_trade, [])
+
+                signal_result = _signal_result_for_confirmed(signal, existing_trade.id)
+                session.commit()
+                return VirtualTradeConfirmationResult(signal_result, existing_trade, [])
+
+            portfolio = _resolve_virtual_portfolio(session, user)
+            quote_asset = _quote_asset(signal)
+            balance = _resolve_balance(session, portfolio, quote_asset)
+            open_positions = _count_open_positions(session, user.id)
+            if open_positions >= request.max_open_positions:
+                raise ValueError("Достигнут лимит открытых виртуальных позиций")
+
+            persisted_trade, event = self._create_open_trade(
+                session=session,
+                signal=signal,
+                user=user,
+                portfolio=portfolio,
+                balance=balance,
+                quote_asset=quote_asset,
+                trade=trade,
+                idempotency_key=idempotency_key,
+                confirm_signal=True,
+                request=request,
+            )
+            signal_result = self._confirm_signal_record(
+                session=session,
+                signal=signal,
+                trade_id=persisted_trade.id,
+                request=request,
+                now=persisted_trade.opened_at,
+            )
+            session.commit()
+            self._events.append(event)
+            return VirtualTradeConfirmationResult(signal_result, persisted_trade, [event])
+
+    def get_virtual_account(self, user_id: str = "demo_user") -> VirtualAccount:
+        with self._session_factory() as session:
+            user = _resolve_user(session, user_id)
+            portfolio = _resolve_virtual_portfolio(session, user)
+            quote_asset = _resolve_asset(session, portfolio.base_currency)
+            balance = _resolve_balance(session, portfolio, quote_asset)
+            open_positions = session.scalars(
+                _position_select().where(
+                    Position.user_id == user.id,
+                    Position.mode == "virtual",
+                    Position.status == "open",
+                )
+            ).all()
+            closed_positions = session.scalars(
+                _position_select().where(
+                    Position.user_id == user.id,
+                    Position.mode == "virtual",
+                    Position.status == "closed",
+                )
+            ).all()
+            unrealized_pnl = sum(
+                _gross_pnl(_position_to_virtual_trade(position), _position_current_price(position))
+                for position in open_positions
+            )
+            wins = losses = breakeven = 0
+            realized_pnl = Decimal("0")
+            for position in closed_positions:
+                pnl = position.realized_pnl or Decimal("0")
+                realized_pnl += pnl
+                if pnl > 0:
+                    wins += 1
+                elif pnl < 0:
+                    losses += 1
+                else:
+                    breakeven += 1
+            updated_at = max(
+                [balance.updated_at]
+                + [position.updated_at for position in open_positions]
+                + [position.updated_at for position in closed_positions],
+            )
+            starting_balance = _starting_balance(session, portfolio, quote_asset)
+            return VirtualAccount(
+                user_id=user_id,
+                starting_balance=float(starting_balance),
+                balance=float(balance.available),
+                equity=float(balance.available + balance.locked + _decimal(unrealized_pnl)),
+                realized_pnl=float(realized_pnl),
+                unrealized_pnl=float(unrealized_pnl),
+                open_positions=len(open_positions),
+                closed_trades=len(closed_positions),
+                wins=wins,
+                losses=losses,
+                breakeven=breakeven,
+                updated_at=updated_at,
+            )
 
     def get_virtual_trade(self, trade_id: str) -> Optional[VirtualTrade]:
-        return self._virtual_trades.get(trade_id)
+        with self._session_factory() as session:
+            position = _get_position_by_trade_id(session, trade_id)
+            return _position_to_virtual_trade(position) if position is not None else None
 
     def list_virtual_trades(
         self,
         status: Optional[str] = None,
         signal_id: Optional[str] = None,
     ) -> list[VirtualTrade]:
-        trades = list(self._virtual_trades.values())
-        if status is not None:
-            trades = [trade for trade in trades if trade.status == status]
-        if signal_id is not None:
-            trades = [trade for trade in trades if trade.signal_id == signal_id]
-        return sorted(trades, key=lambda trade: trade.opened_at, reverse=True)
+        with self._session_factory() as session:
+            statement = _position_select().where(Position.mode == "virtual")
+            if status is not None:
+                db_status = "open" if status == "open" else "closed"
+                statement = statement.where(Position.status == db_status)
+            if signal_id is not None:
+                signal_uuid = _parse_uuid(signal_id)
+                if signal_uuid is None:
+                    return []
+                statement = statement.where(Position.signal_id == signal_uuid)
+            statement = statement.order_by(Position.opened_at.desc())
+            return [_position_to_virtual_trade(position) for position in session.scalars(statement).all()]
 
     def delete_virtual_trade(self, trade_id: str) -> None:
-        self._virtual_trades.pop(trade_id, None)
+        raise NotImplementedError("PostgreSQL virtual trades are append-only")
 
     def save_real_trade(self, trade: RealTrade) -> RealTrade:
-        self._real_trades[trade.id] = trade
-        return trade
+        raise NotImplementedError("Real trade sync uses external_exchange_trades")
 
     def get_real_trade(self, trade_id: str) -> Optional[RealTrade]:
-        return self._real_trades.get(trade_id)
+        trade_uuid = _parse_uuid(trade_id)
+        if trade_uuid is None:
+            return None
+        with self._session_factory() as session:
+            trade = session.scalars(
+                _external_trade_select().where(ExternalExchangeTrade.id == trade_uuid)
+            ).one_or_none()
+            return _external_trade_to_real_trade(trade) if trade is not None else None
 
     def list_real_trades(
         self,
         status: Optional[str] = None,
         signal_id: Optional[str] = None,
     ) -> list[RealTrade]:
-        trades = list(self._real_trades.values())
-        if status is not None:
-            trades = [trade for trade in trades if trade.status == status]
         if signal_id is not None:
-            trades = [trade for trade in trades if trade.signal_id == signal_id]
-        return sorted(trades, key=lambda trade: trade.opened_at, reverse=True)
+            return []
+        if status is not None and status != "closed":
+            return []
+        with self._session_factory() as session:
+            trades = session.scalars(
+                _external_trade_select().order_by(
+                    ExternalExchangeTrade.traded_at.desc(),
+                    ExternalExchangeTrade.imported_at.desc(),
+                )
+            ).all()
+            return [_external_trade_to_real_trade(trade) for trade in trades]
 
     def list_journal(
         self,
@@ -103,7 +366,7 @@ class InMemoryTradeRepository:
         trades: list[TradeJournalEntry] = []
         if mode in {None, "virtual"}:
             trades.extend(
-                self._to_journal_entry(trade)
+                TradeJournalEntry.model_validate(trade.model_dump())
                 for trade in self.list_virtual_trades(status=status, signal_id=signal_id)
             )
         if mode in {None, "real"}:
@@ -113,167 +376,719 @@ class InMemoryTradeRepository:
             )
         return sorted(trades, key=lambda trade: trade.opened_at, reverse=True)
 
-    @staticmethod
-    def _to_journal_entry(trade: VirtualTrade) -> TradeJournalEntry:
-        return TradeJournalEntry.model_validate(trade.model_dump())
+    def consume_events(self) -> list[VirtualTradePersistenceEvent]:
+        events = self._events
+        self._events = []
+        return events
 
-
-class SqlAlchemyTradeRepository:
-    """PostgreSQL-ready repository для будущей постоянной записи журнала."""
-
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
-        self._session_factory = session_factory
-
-    def save_virtual_trade(self, trade: VirtualTrade) -> VirtualTrade:
-        self._upsert_record(TradeJournalEntry.model_validate(trade.model_dump()))
-        return trade
-
-    def get_virtual_trade(self, trade_id: str) -> Optional[VirtualTrade]:
-        record = self._get_record(trade_id, mode="virtual")
-        if record is None:
-            return None
-        return VirtualTrade.model_validate(self._record_to_dict(record))
-
-    def list_virtual_trades(
+    def _create_open_trade(
         self,
-        status: Optional[str] = None,
-        signal_id: Optional[str] = None,
-    ) -> list[VirtualTrade]:
-        return [
-            VirtualTrade.model_validate(self._record_to_dict(record))
-            for record in self._list_records(
-                mode="virtual",
-                status=status,
-                signal_id=signal_id,
-            )
-        ]
+        *,
+        session: Session,
+        signal: TradingSignal,
+        user: AppUser,
+        portfolio: Portfolio,
+        balance: PortfolioBalance,
+        quote_asset: MarketAsset,
+        trade: VirtualTrade,
+        idempotency_key: str,
+        confirm_signal: bool,
+        request: ManualConfirmRequest | None,
+    ) -> tuple[VirtualTrade, VirtualTradePersistenceEvent]:
+        risk_amount = _decimal(trade.risk_amount)
+        if balance.available < risk_amount:
+            raise ValueError("Недостаточно доступного виртуального баланса")
 
-    def delete_virtual_trade(self, trade_id: str) -> None:
-        with self._session_factory() as session:
-            record = session.get(TradeJournalRecord, trade_id)
-            if record is not None and record.mode == "virtual":
-                session.delete(record)
-                session.commit()
+        now = trade.opened_at
+        order_status = "partially_filled" if trade.execution_status == "partially_filled" else "filled"
+        requested_quantity = _decimal((trade.requested_size_usd or trade.size_usd) / trade.entry_price)
+        order = Order(
+            user_id=user.id,
+            portfolio_id=portfolio.id,
+            signal_id=signal.id,
+            exchange_id=signal.exchange_id,
+            pair_id=signal.pair_id,
+            mode="virtual",
+            side="buy" if trade.side == "long" else "sell",
+            order_type="market",
+            status=order_status,
+            quantity=requested_quantity,
+            price=_decimal(trade.entry_price),
+            idempotency_key=idempotency_key,
+            metadata_={
+                "role": "entry",
+                "external_user_id": trade.user_id,
+                "virtual_trade": trade.model_dump(mode="json"),
+                "virtual_execution": trade.execution.model_dump(mode="json") if trade.execution is not None else None,
+                "confirm_signal": confirm_signal,
+            },
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(order)
+        session.flush()
 
-    def save_real_trade(self, trade: RealTrade) -> RealTrade:
-        self._upsert_record(TradeJournalEntry.model_validate(trade.model_dump()))
-        return trade
+        fill = OrderFill(
+            order_id=order.id,
+            price=_decimal(trade.entry_price),
+            quantity=_decimal(trade.quantity),
+            fee_amount=_decimal(trade.fees),
+            fee_asset_id=quote_asset.id,
+            liquidity="simulated",
+            source_event_id=f"virtual-entry:{signal.id}",
+            filled_at=now,
+        )
+        session.add(fill)
 
-    def get_real_trade(self, trade_id: str) -> Optional[RealTrade]:
-        record = self._get_record(trade_id, mode="real")
-        if record is None:
-            return None
-        data = self._record_to_dict(record)
-        return RealTrade.model_validate(data)
+        position = Position(
+            user_id=user.id,
+            portfolio_id=portfolio.id,
+            signal_id=signal.id,
+            pair_id=signal.pair_id,
+            mode="virtual",
+            side=trade.side,
+            status="open",
+            quantity=_decimal(trade.quantity),
+            entry_avg_price=_decimal(trade.entry_price),
+            stop_loss=_decimal(trade.stop_loss),
+            take_profit=trade.take_profit,
+            opened_at=now,
+            realized_pnl=Decimal("0"),
+            fees_total=_decimal(trade.fees),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(position)
+        session.flush()
 
-    def list_real_trades(
-        self,
-        status: Optional[str] = None,
-        signal_id: Optional[str] = None,
-    ) -> list[RealTrade]:
-        return [
-            RealTrade.model_validate(self._record_to_dict(record))
-            for record in self._list_records(
-                mode="real",
-                status=status,
-                signal_id=signal_id,
-            )
-        ]
-
-    def list_journal(
-        self,
-        mode: Optional[str] = None,
-        status: Optional[str] = None,
-        signal_id: Optional[str] = None,
-    ) -> list[TradeJournalEntry]:
-        return [
-            TradeJournalEntry.model_validate(self._record_to_dict(record))
-            for record in self._list_records(
-                mode=mode,
-                status=status,
-                signal_id=signal_id,
-            )
-        ]
-
-    def _upsert_record(self, trade: TradeJournalEntry) -> None:
-        with self._session_factory() as session:
-            record = session.get(TradeJournalRecord, trade.id)
-            data = trade.model_dump()
-            if record is None:
-                session.add(TradeJournalRecord(**data))
-            else:
-                for key, value in data.items():
-                    setattr(record, key, value)
-            session.commit()
-
-    def _get_record(
-        self,
-        trade_id: str,
-        mode: Optional[str] = None,
-    ) -> Optional[TradeJournalRecord]:
-        with self._session_factory() as session:
-            record = session.get(TradeJournalRecord, trade_id)
-            if record is None:
-                return None
-            if mode is not None and record.mode != mode:
-                return None
-            session.expunge(record)
-            return record
-
-    def _list_records(
-        self,
-        mode: Optional[str] = None,
-        status: Optional[str] = None,
-        signal_id: Optional[str] = None,
-    ) -> list[TradeJournalRecord]:
-        statement = select(TradeJournalRecord)
-        if mode is not None:
-            statement = statement.where(TradeJournalRecord.mode == mode)
-        if status is not None:
-            statement = statement.where(TradeJournalRecord.status == status)
-        if signal_id is not None:
-            statement = statement.where(TradeJournalRecord.signal_id == signal_id)
-        statement = statement.order_by(TradeJournalRecord.opened_at.desc())
-
-        with self._session_factory() as session:
-            records = list(session.scalars(statement).all())
-            for record in records:
-                session.expunge(record)
-            return records
-
-    @staticmethod
-    def _record_to_dict(record: TradeJournalRecord) -> dict[str, object]:
-        return {
-            "id": record.id,
-            "user_id": record.user_id,
-            "signal_id": record.signal_id,
-            "mode": record.mode,
-            "exchange": record.exchange,
-            "symbol": record.symbol,
-            "strategy": record.strategy,
-            "timeframe": record.timeframe,
-            "side": record.side,
-            "entry_price": record.entry_price,
-            "current_price": record.current_price,
-            "exit_price": record.exit_price,
-            "size_usd": record.size_usd,
-            "quantity": record.quantity,
-            "leverage": record.leverage,
-            "risk_percent": record.risk_percent,
-            "stop_loss": record.stop_loss,
-            "take_profit": record.take_profit,
-            "fees": record.fees,
-            "slippage_bps": record.slippage_bps,
-            "status": record.status,
-            "result": record.result,
-            "close_reason": record.close_reason,
-            "pnl": record.pnl,
-            "pnl_percent": record.pnl_percent,
-            "mfe": record.mfe,
-            "mae": record.mae,
-            "screenshots": record.screenshots,
-            "ai_review": record.ai_review,
-            "opened_at": record.opened_at,
-            "updated_at": record.updated_at,
-            "closed_at": record.closed_at,
+        persisted_trade = trade.model_copy(update={"id": str(position.id)})
+        order.metadata_ = {
+            **(order.metadata_ or {}),
+            "position_id": str(position.id),
+            "virtual_trade": persisted_trade.model_dump(mode="json"),
+            "virtual_execution": persisted_trade.execution.model_dump(mode="json") if persisted_trade.execution is not None else None,
         }
+        _reserve_risk_balance(
+            session=session,
+            balance=balance,
+            portfolio=portfolio,
+            asset=quote_asset,
+            risk_amount=risk_amount,
+            position_id=position.id,
+            now=now,
+        )
+        _add_virtual_trade_outbox(session, position.id, "virtual_trade.opened", persisted_trade)
+        _add_virtual_trade_audit(
+            session=session,
+            user=user,
+            position_id=position.id,
+            action="virtual_trade.opened",
+            payload={
+                "trade": persisted_trade.model_dump(mode="json"),
+                "order_id": str(order.id),
+                "portfolio_id": str(portfolio.id),
+                "request": request.model_dump(mode="json") if request is not None else None,
+            },
+        )
+        event = VirtualTradePersistenceEvent(
+            event_type="virtual_trade.opened",
+            trade=persisted_trade,
+            user_id=user.id,
+            portfolio_id=portfolio.id,
+            order_id=order.id,
+            position_id=position.id,
+            signal_id=signal.id,
+            fee=_decimal(trade.fees),
+        )
+        return persisted_trade, event
+
+    def _close_position(
+        self,
+        session: Session,
+        position: Position,
+        trade: VirtualTrade,
+    ) -> tuple[VirtualTrade, VirtualTradePersistenceEvent]:
+        now = trade.closed_at or datetime.now(timezone.utc)
+        quote_asset = position.pair.quote_asset
+        entry_order = _entry_order_for_position(session, position)
+        if entry_order is None:
+            raise ValueError("Entry order is not found for virtual position")
+        close_order = _get_order_by_idempotency(
+            session,
+            position.user_id,
+            f"virtual-close:{position.id}",
+        )
+        if close_order is None:
+            close_order = Order(
+                user_id=position.user_id,
+                portfolio_id=position.portfolio_id,
+                signal_id=position.signal_id,
+                exchange_id=position.pair.exchange_id,
+                pair_id=position.pair_id,
+                mode="virtual",
+                side="sell" if position.side == "long" else "buy",
+                order_type="market",
+                status="filled",
+                quantity=position.quantity,
+                price=_decimal(trade.exit_price or trade.current_price),
+                idempotency_key=f"virtual-close:{position.id}",
+                metadata_={
+                    "role": "exit",
+                    "position_id": str(position.id),
+                    "close_reason": trade.close_reason,
+                    "virtual_trade": trade.model_dump(mode="json"),
+                    "virtual_execution": trade.execution.model_dump(mode="json") if trade.execution is not None else None,
+                },
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(close_order)
+            session.flush()
+            session.add(
+                OrderFill(
+                    order_id=close_order.id,
+                    price=_decimal(trade.exit_price or trade.current_price),
+                    quantity=position.quantity,
+                    fee_amount=max(_decimal(trade.fees) - (position.fees_total or Decimal("0")), Decimal("0")),
+                    fee_asset_id=quote_asset.id,
+                    liquidity="simulated",
+                    source_event_id=f"virtual-exit:{position.id}",
+                    filled_at=now,
+                )
+            )
+
+        position.status = "closed"
+        position.exit_avg_price = _decimal(trade.exit_price or trade.current_price)
+        position.closed_at = now
+        position.realized_pnl = _decimal(trade.pnl or 0)
+        position.fees_total = _decimal(trade.fees)
+        position.updated_at = now
+        entry_order.metadata_ = {
+            **(entry_order.metadata_ or {}),
+            "virtual_trade": trade.model_dump(mode="json"),
+            "virtual_execution": trade.execution.model_dump(mode="json") if trade.execution is not None else None,
+            "current_price": trade.current_price,
+            "mfe": trade.mfe,
+            "mae": trade.mae,
+            "close_reason": trade.close_reason,
+            "pnl_percent": trade.pnl_percent,
+        }
+        balance = _resolve_balance(session, position.portfolio, quote_asset)
+        _release_risk_balance(
+            session=session,
+            balance=balance,
+            portfolio=position.portfolio,
+            asset=quote_asset,
+            risk_amount=_snapshot_decimal(entry_order, "risk_amount", Decimal("0")),
+            pnl=_decimal(trade.pnl or 0),
+            position_id=position.id,
+            now=now,
+        )
+        _add_virtual_trade_outbox(session, position.id, "virtual_trade.closed", trade)
+        _add_virtual_trade_audit(
+            session=session,
+            user=position.user,
+            position_id=position.id,
+            action="virtual_trade.closed",
+            payload={
+                "trade": trade.model_dump(mode="json"),
+                "order_id": str(close_order.id),
+                "portfolio_id": str(position.portfolio_id),
+            },
+        )
+        event = VirtualTradePersistenceEvent(
+            event_type="virtual_trade.closed",
+            trade=trade,
+            user_id=position.user_id,
+            portfolio_id=position.portfolio_id,
+            order_id=close_order.id,
+            position_id=position.id,
+            signal_id=position.signal_id,
+            fee=_decimal(trade.fees),
+        )
+        return trade, event
+
+    def _update_position_snapshot(
+        self,
+        session: Session,
+        position: Position,
+        trade: VirtualTrade,
+    ) -> VirtualTrade:
+        entry_order = _entry_order_for_position(session, position)
+        if entry_order is None:
+            return _position_to_virtual_trade(position)
+        entry_order.metadata_ = {
+            **(entry_order.metadata_ or {}),
+            "virtual_trade": trade.model_dump(mode="json"),
+            "virtual_execution": trade.execution.model_dump(mode="json") if trade.execution is not None else None,
+            "current_price": trade.current_price,
+            "mfe": trade.mfe,
+            "mae": trade.mae,
+        }
+        position.updated_at = trade.updated_at
+        return trade
+
+    @staticmethod
+    def _confirm_signal_record(
+        *,
+        session: Session,
+        signal: TradingSignal,
+        trade_id: str,
+        request: ManualConfirmRequest,
+        now: datetime,
+    ) -> SignalWriteResult:
+        old_status = signal.status
+        signal.status = "confirmed"
+        signal.updated_at = now
+        snapshot = dict(signal.features_snapshot or {})
+        snapshot["decision"] = {
+            "confirmed_trade_id": trade_id,
+            "decision_mode": request.mode,
+            "decision_note": "Пользователь подтвердил сигнал в virtual mode",
+        }
+        signal.features_snapshot = snapshot
+        return _persist_signal_event(
+            session,
+            signal,
+            SIGNAL_CONFIRMED_EVENT,
+            old_status=old_status,
+            now=now,
+        )
+
+
+def _external_trade_select():
+    return select(ExternalExchangeTrade).options(
+        joinedload(ExternalExchangeTrade.pair).joinedload(MarketPair.exchange),
+        joinedload(ExternalExchangeTrade.fee_asset),
+    )
+
+
+def _external_trade_to_real_trade(trade: ExternalExchangeTrade) -> RealTrade:
+    metadata = trade.metadata_ or {}
+    price = float(trade.price)
+    quantity = float(trade.quantity)
+    size_usd = price * quantity
+    take_profit = metadata.get("take_profit")
+    screenshots = metadata.get("screenshots")
+    return RealTrade(
+        id=str(trade.id),
+        user_id=str(trade.user_id),
+        signal_id=metadata.get("signal_id"),
+        exchange=trade.pair.exchange.code,
+        symbol=trade.pair.symbol,
+        strategy=str(metadata.get("strategy") or "external_import"),
+        timeframe=str(metadata.get("timeframe") or "trade"),
+        side=_external_trade_side(trade.side),
+        entry_price=price,
+        current_price=price,
+        exit_price=price,
+        size_usd=size_usd,
+        quantity=quantity,
+        leverage=int(metadata.get("leverage") or 1),
+        risk_percent=float(metadata.get("risk_percent") or 0),
+        risk_amount=float(metadata.get("risk_amount") or 0),
+        risk_reward=float(metadata.get("risk_reward") or 0),
+        stop_loss=float(metadata.get("stop_loss") or 0),
+        take_profit=[float(value) for value in take_profit] if isinstance(take_profit, list) else [],
+        fees=float(trade.fee_amount or 0),
+        slippage_bps=float(metadata.get("slippage_bps") or 0),
+        status="closed",
+        result=_optional_value(metadata.get("result"), {"win", "loss", "breakeven"}),
+        close_reason=_optional_value(metadata.get("close_reason"), {"take_profit", "stop_loss", "manual_close", "cancelled"}),
+        pnl=float(metadata["pnl"]) if metadata.get("pnl") is not None else None,
+        pnl_percent=float(metadata["pnl_percent"]) if metadata.get("pnl_percent") is not None else None,
+        mfe=float(metadata.get("mfe") or 0),
+        mae=float(metadata.get("mae") or 0),
+        screenshots=screenshots if isinstance(screenshots, list) else [],
+        ai_review=metadata.get("ai_review"),
+        opened_at=trade.traded_at,
+        updated_at=trade.imported_at,
+        closed_at=trade.traded_at,
+        exchange_order_id=trade.exchange_order_id,
+    )
+
+
+def _external_trade_side(side: str) -> str:
+    return "short" if side.lower() == "sell" else "long"
+
+
+def _optional_value(value: Any, allowed: set[str]) -> str | None:
+    if isinstance(value, str) and value in allowed:
+        return value
+    return None
+
+
+def _position_select():
+    return select(Position).options(
+        joinedload(Position.user),
+        joinedload(Position.portfolio),
+        joinedload(Position.pair).joinedload(MarketPair.exchange),
+        joinedload(Position.pair).joinedload(MarketPair.quote_asset),
+        joinedload(Position.signal)
+        .joinedload(TradingSignal.strategy_version)
+        .joinedload(StrategyVersion.strategy),
+    )
+
+
+def _resolve_user(session: Session, user_id: str) -> AppUser:
+    user_uuid = _parse_uuid(user_id)
+    if user_uuid is not None:
+        user = session.get(AppUser, user_uuid)
+        if user is not None:
+            return user
+
+    user = session.scalars(
+        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
+    ).one_or_none()
+    if user is not None:
+        return user
+
+    if user_id == "demo_user":
+        user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).one_or_none()
+        if user is not None:
+            return user
+
+    raise ValueError(f"User is not seeded: {user_id}")
+
+
+def _resolve_virtual_portfolio(session: Session, user: AppUser) -> Portfolio:
+    portfolio = session.scalars(
+        select(Portfolio).where(
+            Portfolio.user_id == user.id,
+            Portfolio.type == "virtual",
+            Portfolio.status == "active",
+        )
+        .order_by(Portfolio.created_at.asc())
+        .limit(1)
+    ).one_or_none()
+    if portfolio is not None:
+        return portfolio
+
+    portfolio = Portfolio(
+        user_id=user.id,
+        type="virtual",
+        name="Default Virtual Portfolio",
+        base_currency="USDT",
+        status="active",
+    )
+    session.add(portfolio)
+    session.flush()
+    return portfolio
+
+
+def _resolve_asset(session: Session, symbol: str) -> MarketAsset:
+    asset = session.scalars(select(MarketAsset).where(MarketAsset.symbol == symbol.upper())).one_or_none()
+    if asset is None:
+        raise ValueError(f"Asset is not seeded: {symbol}")
+    return asset
+
+
+def _quote_asset(signal: TradingSignal) -> MarketAsset:
+    return signal.pair.quote_asset
+
+
+def _resolve_balance(
+    session: Session,
+    portfolio: Portfolio,
+    asset: MarketAsset,
+) -> PortfolioBalance:
+    balance = session.scalars(
+        select(PortfolioBalance)
+        .where(
+            PortfolioBalance.portfolio_id == portfolio.id,
+            PortfolioBalance.asset_id == asset.id,
+        )
+        .with_for_update()
+    ).one_or_none()
+    if balance is not None:
+        return balance
+
+    balance = PortfolioBalance(
+        portfolio_id=portfolio.id,
+        asset_id=asset.id,
+        available=INITIAL_VIRTUAL_BALANCE,
+        locked=Decimal("0"),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.add(balance)
+    session.flush()
+    return balance
+
+
+def _starting_balance(
+    session: Session,
+    portfolio: Portfolio,
+    asset: MarketAsset,
+) -> Decimal:
+    value = session.scalar(
+        select(func.coalesce(func.sum(PortfolioBalanceLedger.delta_available), 0)).where(
+            PortfolioBalanceLedger.portfolio_id == portfolio.id,
+            PortfolioBalanceLedger.asset_id == asset.id,
+            PortfolioBalanceLedger.reason == "bootstrap_initial_balance",
+        )
+    )
+    return _decimal(value or INITIAL_VIRTUAL_BALANCE)
+
+
+def _count_open_positions(session: Session, user_id: UUID) -> int:
+    return int(
+        session.scalar(
+            select(func.count()).select_from(Position).where(
+                Position.user_id == user_id,
+                Position.mode == "virtual",
+                Position.status == "open",
+            )
+        )
+        or 0
+    )
+
+
+def _get_order_by_idempotency(
+    session: Session,
+    user_id: UUID,
+    idempotency_key: str,
+) -> Order | None:
+    return session.scalars(
+        select(Order).where(Order.user_id == user_id, Order.idempotency_key == idempotency_key)
+    ).one_or_none()
+
+
+def _position_from_order_metadata(session: Session, order: Order) -> Position | None:
+    position_id = (order.metadata_ or {}).get("position_id")
+    if not position_id:
+        return None
+    return _get_position_by_trade_id(session, str(position_id))
+
+
+def _get_position_by_trade_id(session: Session, trade_id: str) -> Position | None:
+    position_uuid = _parse_uuid(trade_id)
+    if position_uuid is None:
+        return None
+    return session.scalars(_position_select().where(Position.id == position_uuid)).one_or_none()
+
+
+def _entry_order_for_position(session: Session, position: Position) -> Order | None:
+    order = session.scalars(
+        select(Order).where(
+            Order.user_id == position.user_id,
+            Order.signal_id == position.signal_id,
+            Order.mode == "virtual",
+            Order.idempotency_key == f"virtual-confirm:{position.signal_id}",
+        )
+    ).one_or_none()
+    if order is not None:
+        return order
+    return session.scalars(
+        select(Order).where(
+            Order.user_id == position.user_id,
+            Order.signal_id == position.signal_id,
+            Order.mode == "virtual",
+            Order.idempotency_key == f"virtual-open:{position.signal_id}",
+        )
+    ).one_or_none()
+
+
+def _reserve_risk_balance(
+    *,
+    session: Session,
+    balance: PortfolioBalance,
+    portfolio: Portfolio,
+    asset: MarketAsset,
+    risk_amount: Decimal,
+    position_id: UUID,
+    now: datetime,
+) -> None:
+    balance.available -= risk_amount
+    balance.locked += risk_amount
+    balance.updated_at = now
+    session.add(
+        PortfolioBalanceLedger(
+            portfolio_id=portfolio.id,
+            asset_id=asset.id,
+            delta_available=-risk_amount,
+            delta_locked=risk_amount,
+            reason="virtual_trade_opened",
+            ref_type="position",
+            ref_id=position_id,
+            created_at=now,
+        )
+    )
+
+
+def _release_risk_balance(
+    *,
+    session: Session,
+    balance: PortfolioBalance,
+    portfolio: Portfolio,
+    asset: MarketAsset,
+    risk_amount: Decimal,
+    pnl: Decimal,
+    position_id: UUID,
+    now: datetime,
+) -> None:
+    balance.available += risk_amount + pnl
+    balance.locked -= risk_amount
+    balance.updated_at = now
+    session.add(
+        PortfolioBalanceLedger(
+            portfolio_id=portfolio.id,
+            asset_id=asset.id,
+            delta_available=risk_amount + pnl,
+            delta_locked=-risk_amount,
+            reason="virtual_trade_closed",
+            ref_type="position",
+            ref_id=position_id,
+            created_at=now,
+        )
+    )
+
+
+def _add_virtual_trade_outbox(
+    session: Session,
+    position_id: UUID,
+    event_type: str,
+    trade: VirtualTrade,
+) -> None:
+    session.add(
+        OutboxEvent(
+            aggregate_type="virtual_trade",
+            aggregate_id=position_id,
+            event_type=event_type,
+            payload={"trade": trade.model_dump(mode="json")},
+            status="pending",
+            attempts=0,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+
+
+def _add_virtual_trade_audit(
+    *,
+    session: Session,
+    user: AppUser,
+    position_id: UUID,
+    action: str,
+    payload: dict[str, Any],
+) -> None:
+    session.add(
+        AuditLog(
+            user_id=user.id,
+            action=action,
+            entity_type="virtual_trade",
+            entity_id=position_id,
+            payload=payload,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+
+
+def _position_to_virtual_trade(position: Position) -> VirtualTrade:
+    session = object_session(position)
+    entry_order = _entry_order_for_position(session, position) if session is not None else None
+    metadata = entry_order.metadata_ if entry_order is not None else {}
+    snapshot = metadata.get("virtual_trade", {}) if isinstance(metadata, dict) else {}
+    entry_price = float(position.entry_avg_price)
+    quantity = float(position.quantity)
+    size_usd = entry_price * quantity
+    pnl = float(position.realized_pnl or 0) if position.status == "closed" else None
+    pnl_percent = snapshot.get("pnl_percent")
+    if pnl_percent is None and pnl is not None and size_usd:
+        pnl_percent = pnl / size_usd * 100
+    return VirtualTrade(
+        id=str(position.id),
+        user_id=snapshot.get("user_id") or (position.user.username or str(position.user_id)),
+        signal_id=str(position.signal_id),
+        exchange=position.pair.exchange.code,
+        symbol=position.pair.symbol,
+        strategy=position.signal.strategy_version.strategy.code if position.signal else snapshot.get("strategy", "unknown"),
+        timeframe=position.signal.timeframe if position.signal else snapshot.get("timeframe", "unknown"),
+        side=position.side,
+        entry_price=entry_price,
+        current_price=float(snapshot.get("current_price") or position.exit_avg_price or position.entry_avg_price),
+        exit_price=float(position.exit_avg_price) if position.exit_avg_price is not None else None,
+        size_usd=float(snapshot.get("size_usd") or size_usd),
+        quantity=quantity,
+        leverage=int(snapshot.get("leverage") or 1),
+        risk_percent=float(snapshot.get("risk_percent") or 0),
+        risk_amount=float(snapshot.get("risk_amount") or 0),
+        risk_reward=float(snapshot.get("risk_reward") or 3),
+        stop_loss=float(position.stop_loss or 0),
+        take_profit=[float(value) for value in (position.take_profit or [])],
+        fees=float(position.fees_total or snapshot.get("fees") or 0),
+        slippage_bps=float(snapshot.get("slippage_bps") or 0),
+        simulation_mode=snapshot.get("simulation_mode") or (snapshot.get("execution") or {}).get("mode") or "passive",
+        execution_status=snapshot.get("execution_status") or (snapshot.get("execution") or {}).get("status") or "filled",
+        requested_size_usd=(
+            float(snapshot["requested_size_usd"])
+            if snapshot.get("requested_size_usd") is not None
+            else None
+        ),
+        filled_size_usd=(
+            float(snapshot["filled_size_usd"])
+            if snapshot.get("filled_size_usd") is not None
+            else None
+        ),
+        unfilled_size_usd=float(snapshot.get("unfilled_size_usd") or 0),
+        execution=snapshot.get("execution"),
+        status="open" if position.status == "open" else "closed",
+        result=_trade_result(position.realized_pnl) if position.status == "closed" else None,
+        close_reason=snapshot.get("close_reason"),
+        pnl=pnl,
+        pnl_percent=float(pnl_percent) if pnl_percent is not None else None,
+        mfe=float(snapshot.get("mfe") or 0),
+        mae=float(snapshot.get("mae") or 0),
+        screenshots=snapshot.get("screenshots") or [],
+        ai_review=snapshot.get("ai_review"),
+        opened_at=position.opened_at,
+        updated_at=position.updated_at,
+        closed_at=position.closed_at,
+    )
+
+
+def _signal_result_for_confirmed(signal: TradingSignal, trade_id: str) -> SignalWriteResult:
+    now = datetime.now(timezone.utc)
+    return SignalWriteResult(
+        signal=_record_to_radar_signal(signal),
+        created=False,
+        event_type=SIGNAL_CONFIRMED_EVENT,
+        analytics_event=_analytics_event(signal, SIGNAL_CONFIRMED_EVENT, now),
+    )
+
+
+def _snapshot_decimal(order: Order, key: str, default: Decimal) -> Decimal:
+    snapshot = (order.metadata_ or {}).get("virtual_trade", {})
+    return _decimal(snapshot.get(key, default))
+
+
+def _position_current_price(position: Position) -> float:
+    trade = _position_to_virtual_trade(position)
+    return trade.current_price
+
+
+def _gross_pnl(trade: VirtualTrade, price: float) -> float:
+    if trade.side == "long":
+        return (price - trade.entry_price) * trade.quantity
+    return (trade.entry_price - price) * trade.quantity
+
+
+def _trade_result(pnl: Decimal | None) -> str:
+    if pnl is None or pnl == 0:
+        return "breakeven"
+    return "win" if pnl > 0 else "loss"
+
+
+def _decimal(value: Any) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def _parse_uuid(value: str | UUID | None) -> UUID | None:
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(value)
+    except ValueError:
+        return None

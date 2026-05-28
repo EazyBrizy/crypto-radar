@@ -1,0 +1,12 @@
+node_modules
+.next
+out
+dist
+coverage
+playwright-report
+test-results
+next-dev.*.log
+*.log
+.env
+.env.*
+!.env.example

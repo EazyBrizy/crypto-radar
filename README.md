@@ -305,3 +305,12 @@ copy .env.example .env
 ```
 
 Не коммить реальные API-ключи. Файл `.env` игнорируется git.
+
+
+## Запуск одним скриптом весь проект
+
+cd C:\Users\gvenv\Desktop\crypto-radar
+
+.\scripts\dev.ps1
+или 
+powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1

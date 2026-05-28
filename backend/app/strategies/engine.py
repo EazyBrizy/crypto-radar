@@ -1,3 +1,4 @@
+import asyncio
 from typing import List
 
 from app.schemas.market import Features
@@ -17,8 +18,17 @@ class StrategyEngine:
             LiquiditySweepReversalStrategy(),
         ]
 
+    @property
+    def strategy_count(self) -> int:
+        return len(self._strategies)
+
+    @property
+    def strategy_names(self) -> list[str]:
+        return [strategy.name for strategy in self._strategies]
+
     async def generate_signals(self, features: Features) -> List[StrategySignal]:
         signals: List[StrategySignal] = []
         for strategy in self._strategies:
             signals.extend(await strategy.evaluate(features))
+            await asyncio.sleep(0)
         return sorted(signals, key=lambda signal: signal.score, reverse=True)

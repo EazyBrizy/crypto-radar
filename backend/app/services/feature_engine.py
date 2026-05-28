@@ -107,7 +107,7 @@ class FeatureEngine:
         if len(prices) < PRICE_LOOKBACK:
             if symbol not in self._volatility_maturity_logged:
                 self._volatility_maturity_logged.add(symbol)
-                logger.info("Buffer too small for volatility")
+                logger.debug("Buffer too small for volatility; warming up %s", symbol)
             return 0.0
 
         window = prices[-PRICE_LOOKBACK:]

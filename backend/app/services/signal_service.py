@@ -1,137 +1,188 @@
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
-from uuid import uuid4
+import json
+import logging
+from typing import Any, Protocol
 
+from app.core.clickhouse_client import get_clickhouse_client
+from app.core.redis_client import get_redis_client
+from app.repositories.signal_repository import (
+    PostgresSignalRepository,
+    SignalRepository,
+    SignalWriteResult,
+)
 from app.schemas.signal import RadarSignal, StrategySignal
 
-MAX_STORED_SIGNALS = 200
+logger = logging.getLogger(__name__)
+
+
+class SignalAnalyticsWriter(Protocol):
+    def write_event(self, event: dict[str, Any]) -> None:
+        ...
+
+
+class SignalHotStore(Protocol):
+    def write_signal(self, result: SignalWriteResult) -> None:
+        ...
+
+
+class ClickHouseSignalAnalyticsWriter:
+    _columns = [
+        "signal_id",
+        "signal_key",
+        "event_type",
+        "exchange",
+        "symbol",
+        "timeframe",
+        "strategy_code",
+        "strategy_version",
+        "direction",
+        "confidence",
+        "score",
+        "entry_price",
+        "stop_loss",
+        "features_json",
+        "event_ts",
+        "ingest_ts",
+    ]
+
+    def write_event(self, event: dict[str, Any]) -> None:
+        row = []
+        for column in self._columns:
+            value = event[column]
+            if column == "features_json" and not isinstance(value, str):
+                value = json.dumps(value, ensure_ascii=False, default=str)
+            row.append(value)
+        get_clickhouse_client().insert(
+            "analytics.signal_events",
+            [row],
+            column_names=self._columns,
+        )
+
+
+class RedisSignalHotStore:
+    _ttl_seconds = 3600
+    _max_latest_items = 200
+
+    def write_signal(self, result: SignalWriteResult) -> None:
+        signal = result.signal
+        score = float(signal.score)
+        payload = signal.model_dump_json()
+        client = get_redis_client()
+        latest_keys = [
+            "signals:latest",
+            f"signals:latest:{signal.strategy}",
+            f"signals:latest:{signal.exchange}:{signal.symbol}",
+        ]
+        with client.pipeline() as pipe:
+            pipe.setex(f"signal:{signal.id}", self._ttl_seconds, payload)
+            for key in latest_keys:
+                pipe.zadd(key, {signal.id: score})
+                pipe.zremrangebyrank(key, 0, -self._max_latest_items - 1)
+            pipe.execute()
+
+        channel = "pubsub:signals:new" if result.created else "pubsub:signals:update"
+        client.publish(channel, payload)
+
+
+class NullSignalAnalyticsWriter:
+    def write_event(self, event: dict[str, Any]) -> None:
+        return None
+
+
+class NullSignalHotStore:
+    def write_signal(self, result: SignalWriteResult) -> None:
+        return None
 
 
 class SignalService:
-    """Хранит radar-сигналы для MVP 1.
+    def __init__(
+        self,
+        repository: SignalRepository | None = None,
+        analytics_writer: SignalAnalyticsWriter | None = None,
+        hot_store: SignalHotStore | None = None,
+    ) -> None:
+        self._repository = repository or PostgresSignalRepository()
+        self._analytics_writer = analytics_writer or ClickHouseSignalAnalyticsWriter()
+        self._hot_store = hot_store or RedisSignalHotStore()
 
-    На первом API-срезе хранилище намеренно in-memory. Граница сервиса
-    позволит заменить его на Redis/PostgreSQL без изменения API handlers.
-    """
+    def list_signals(self) -> list[RadarSignal]:
+        return self._repository.list_signals()
 
-    def __init__(self) -> None:
-        self._signals: Dict[str, RadarSignal] = {}
+    def list_active_signals(self) -> list[RadarSignal]:
+        return self._repository.list_active_signals()
 
-    def list_signals(self) -> List[RadarSignal]:
-        return sorted(
-            self._signals.values(),
-            key=lambda signal: signal.created_at,
-            reverse=True,
-        )
-
-    def list_active_signals(self) -> List[RadarSignal]:
-        return [
-            signal
-            for signal in self.list_signals()
-            if signal.status == "active"
-        ]
-
-    def get_signal(self, signal_id: str) -> Optional[RadarSignal]:
-        return self._signals.get(signal_id)
+    def get_signal(self, signal_id: str) -> RadarSignal | None:
+        return self._repository.get_signal(signal_id)
 
     def add_signal(self, signal: RadarSignal) -> RadarSignal:
-        self._signals[signal.id] = signal
-        self._trim_signals()
-        return signal
+        result = self._repository.add_signal(signal)
+        self._after_write(result)
+        return result.signal
 
     def add_strategy_signal(
         self,
         signal: StrategySignal,
         exchange: str | None = None,
-        explanation: Optional[List[str]] = None,
+        explanation: list[str] | None = None,
     ) -> RadarSignal:
-        now = datetime.now(timezone.utc)
-        score = signal.score or int(signal.confidence * 100)
-        radar_signal = RadarSignal(
-            id=f"sig_{uuid4().hex[:12]}",
-            symbol=signal.symbol,
-            exchange=exchange or signal.exchange,
-            strategy=signal.strategy,
-            direction=signal.direction.lower(),
-            confidence=signal.confidence,
-            status="active" if score >= 70 else "watchlist",
-            score=score,
-            timeframe=signal.timeframe,
-            urgency=signal.urgency,
-            entry_min=signal.entry_min,
-            entry_max=signal.entry_max,
-            stop_loss=signal.stop_loss,
-            take_profit_1=signal.take_profit_1,
-            take_profit_2=signal.take_profit_2,
-            risk_reward=signal.risk_reward,
-            explanation=explanation or signal.explanation,
-            risks=signal.risks,
-            created_at=now,
-            updated_at=now,
+        radar_signal, _ = self.upsert_strategy_signal(
+            signal,
+            exchange=exchange,
+            explanation=explanation,
         )
-        return self.add_signal(radar_signal)
+        return radar_signal
 
-    def _trim_signals(self) -> None:
-        if len(self._signals) <= MAX_STORED_SIGNALS:
-            return
-
-        sorted_signals = sorted(
-            self._signals.values(),
-            key=lambda signal: signal.created_at,
-            reverse=True,
+    def upsert_strategy_signal(
+        self,
+        signal: StrategySignal,
+        exchange: str | None = None,
+        explanation: list[str] | None = None,
+    ) -> tuple[RadarSignal, bool]:
+        result = self._repository.upsert_strategy_signal(
+            signal,
+            exchange=exchange,
+            explanation=explanation,
         )
-        keep_ids = {signal.id for signal in sorted_signals[:MAX_STORED_SIGNALS]}
-        self._signals = {
-            signal_id: signal
-            for signal_id, signal in self._signals.items()
-            if signal_id in keep_ids
-        }
+        self._after_write(result)
+        return result.signal, result.created
 
     def confirm_signal(
         self,
         signal_id: str,
-        trade_id: Optional[str] = None,
+        trade_id: str | None = None,
         mode: str = "virtual",
-        note: Optional[str] = None,
-    ) -> Optional[RadarSignal]:
-        signal = self._signals.get(signal_id)
-        if signal is None:
-            return None
-
-        now = datetime.now(timezone.utc)
-        updated = signal.model_copy(
-            update={
-                "status": "confirmed",
-                "updated_at": now,
-                "confirmed_at": now,
-                "decision_mode": mode,
-                "decision_note": note,
-                "confirmed_trade_id": trade_id,
-            }
+        note: str | None = None,
+    ) -> RadarSignal | None:
+        result = self._repository.confirm_signal(
+            signal_id,
+            trade_id=trade_id,
+            mode=mode,
+            note=note,
         )
-        self._signals[signal_id] = updated
-        return updated
+        if result is None:
+            return None
+        self._after_write(result)
+        return result.signal
 
     def reject_signal(
         self,
         signal_id: str,
-        note: Optional[str] = None,
-    ) -> Optional[RadarSignal]:
-        signal = self._signals.get(signal_id)
-        if signal is None:
+        note: str | None = None,
+    ) -> RadarSignal | None:
+        result = self._repository.reject_signal(signal_id, note=note)
+        if result is None:
             return None
+        self._after_write(result)
+        return result.signal
 
-        now = datetime.now(timezone.utc)
-        updated = signal.model_copy(
-            update={
-                "status": "rejected",
-                "updated_at": now,
-                "rejected_at": now,
-                "decision_note": note,
-            }
-        )
-        self._signals[signal_id] = updated
-        return updated
+    def _after_write(self, result: SignalWriteResult) -> None:
+        try:
+            self._analytics_writer.write_event(result.analytics_event)
+        except Exception as exc:
+            logger.warning("ClickHouse signal analytics write failed: %s", exc)
+        try:
+            self._hot_store.write_signal(result)
+        except Exception as exc:
+            logger.warning("Redis signal hot write failed: %s", exc)
 
 
 signal_service = SignalService()

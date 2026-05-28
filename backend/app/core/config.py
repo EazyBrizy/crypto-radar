@@ -1,15 +1,28 @@
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    binance_api_key: str
-    binance_secret: str
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    bybit_api_key: str
-    bybit_secret: str
+    binance_api_key: str = ""
+    binance_secret: str = ""
 
-    class Config:
-        env_file = ".env"
+    bybit_api_key: str = ""
+    bybit_secret: str = ""
+
+    database_url: str = "postgresql://crypto_radar:crypto_radar@localhost:5432/crypto_radar"
+    redis_url: str = "redis://localhost:6379/0"
+    nats_url: str = "nats://localhost:4222"
+
+    clickhouse_host: str = "localhost"
+    clickhouse_port: int = 8123
+    clickhouse_database: str = "crypto_radar"
+    clickhouse_user: str = "crypto_radar"
+    clickhouse_password: str = "crypto_radar"
+
+    otel_service_name: str = "crypto-radar-backend"
+    otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+    prometheus_metrics_enabled: bool = True
 
 
 settings = Settings()

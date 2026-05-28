@@ -9,7 +9,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
+from app.core.clickhouse_client import close_clickhouse_client
+from app.core.database import dispose_database_engine
+from app.core.health import get_storage_health
+from app.core.redis_client import close_redis_client
 from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
+from app.services.realtime_gateway import realtime_gateway
 from app.workers.signal_worker import ScannerRunner
 
 load_dotenv()
@@ -27,9 +32,13 @@ def _scanner_enabled() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     runner = ScannerRunner()
+    scanner_autostart_enabled = _scanner_enabled()
     app.state.scanner_runner = runner
+    app.state.scanner_autostart_enabled = scanner_autostart_enabled
 
-    if _scanner_enabled():
+    realtime_gateway.start_broker_bridge()
+
+    if scanner_autostart_enabled:
         runner.start()
     else:
         logging.info("Scanner runner disabled by CRYPTO_RADAR_SCANNER_ENABLED")
@@ -38,6 +47,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await runner.stop()
+        await realtime_gateway.stop_broker_bridge()
+        close_clickhouse_client()
+        close_redis_client()
+        dispose_database_engine()
 
 
 app = FastAPI(title="Crypto Radar API", lifespan=lifespan)
@@ -48,6 +61,8 @@ app.add_middleware(
         "http://localhost:5500",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
         "http://127.0.0.1:8080",
         "http://localhost:8080",
     ],
@@ -61,11 +76,22 @@ app.include_router(api_router)
 @app.get("/health")
 async def health() -> dict[str, object]:
     runner = getattr(app.state, "scanner_runner", None)
+    scanner_status = runner.scanner_status if runner else {}
+    storage_health = await asyncio.to_thread(get_storage_health)
     return {
-        "status": "ok",
-        "scanner_enabled": _scanner_enabled(),
+        "status": "ok" if storage_health["status"] == "ok" else "degraded",
+        "scanner_enabled": runner is not None,
         "scanner_running": bool(runner and runner.is_running),
+        "scanner_stopping": bool(runner and runner.is_stopping),
         "processed_signals": runner.processed_signals if runner else 0,
+        "ticks_processed": scanner_status.get("ticks_processed", 0),
+        "features_built": scanner_status.get("features_built", 0),
+        "strategy_evaluations": scanner_status.get("strategy_evaluations", 0),
+        "signals_found": scanner_status.get("signals_found", 0),
+        "candles_seeded": scanner_status.get("candles_seeded", 0),
+        "last_symbol": scanner_status.get("last_symbol"),
+        "last_price": scanner_status.get("last_price"),
+        "storage": storage_health,
     }
 
 

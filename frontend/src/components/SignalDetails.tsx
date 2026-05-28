@@ -1,17 +1,42 @@
-import { CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert, XCircle } from "lucide-react";
+"use client";
+
+import dynamic from "next/dynamic";
+import { useState } from "react";
+import { BarChart3, CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert, XCircle } from "lucide-react";
 
 import { Badge } from "./Badge";
-import type { RadarSignal } from "../types";
+import type { ExecutionGateStatus, ImpactRisk, RadarSignal, VirtualExecutionReport } from "../types";
 import { entryZone, formatPrice, riskLabel } from "../utils";
+
+const LazySignalDetailsChart = dynamic(
+  () => import("@/components/charts/SignalDetailsChart").then((module) => module.SignalDetailsChart),
+  {
+    loading: () => <div className="chart-panel chart-panel-loading">Loading chart...</div>,
+    ssr: false
+  }
+);
 
 interface SignalDetailsProps {
   signal: RadarSignal | null;
   onPaperTrade: (signal: RadarSignal) => void;
   onReject: (signal: RadarSignal) => void;
   busy: boolean;
+  executionPreview: VirtualExecutionReport | null;
+  executionPreviewLoading?: boolean;
+  tradingActionsDisabled?: boolean;
 }
 
-export function SignalDetails({ signal, onPaperTrade, onReject, busy }: SignalDetailsProps) {
+export function SignalDetails({
+  signal,
+  onPaperTrade,
+  onReject,
+  busy,
+  executionPreview,
+  executionPreviewLoading = false,
+  tradingActionsDisabled = false
+}: SignalDetailsProps) {
+  const [chartOpen, setChartOpen] = useState(false);
+
   if (!signal) {
     return (
       <section className="details-empty">
@@ -23,6 +48,8 @@ export function SignalDetails({ signal, onPaperTrade, onReject, busy }: SignalDe
   }
 
   const isLong = signal.direction === "long";
+  const actionsDisabled = busy || tradingActionsDisabled;
+  const breakdown = signal.score_breakdown;
   const reasons = signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."];
 
   return (
@@ -52,14 +79,33 @@ export function SignalDetails({ signal, onPaperTrade, onReject, busy }: SignalDe
         <div><span>Risk / Reward</span><strong>1 : {signal.risk_reward?.toFixed(2) ?? "-"}</strong></div>
       </div>
 
+      <ExecutionQualityBlock
+        signal={signal}
+        execution={executionPreview}
+        loading={executionPreviewLoading}
+      />
+
+      <div className="detail-actions">
+        <button className="secondary-action" onClick={() => setChartOpen((open) => !open)} type="button">
+          <BarChart3 size={17} /> {chartOpen ? "Hide Chart" : "Show Chart"}
+        </button>
+      </div>
+
+      {chartOpen ? <LazySignalDetailsChart signal={signal} /> : null}
+
       <div className="confidence-breakdown">
         <div className="section-title">
           <ShieldAlert size={18} />
           <h3>Confidence Score</h3>
         </div>
-        <ScoreLine label="Trend" value={Math.min(signal.score, 25)} max={25} />
-        <ScoreLine label="Volume" value={Math.min(Math.max(signal.score - 25, 12), 20)} max={20} />
-        <ScoreLine label="Risk/Reward" value={signal.risk_reward ? Math.min(signal.risk_reward * 7, 20) : 8} max={20} />
+        <ScoreLine label="Trend" value={breakdown.trend_score} max={100} />
+        <ScoreLine label="Volume" value={breakdown.volume_score} max={100} />
+        <ScoreLine label="Liquidity" value={breakdown.liquidity_score} max={100} />
+        <ScoreLine label="Orderbook" value={breakdown.orderbook_score} max={100} />
+        <ScoreLine label="Risk/Reward" value={breakdown.risk_reward_score} max={100} />
+        <ScoreLine label="Volatility" value={breakdown.volatility_score} max={100} />
+        <ScoreLine label="Overheat Penalty" value={breakdown.overheat_penalty} max={100} />
+        <ScoreLine label="News/Event Risk" value={breakdown.news_event_risk_penalty} max={100} />
       </div>
 
       <div className="explanation-block">
@@ -87,17 +133,73 @@ export function SignalDetails({ signal, onPaperTrade, onReject, busy }: SignalDe
       ) : null}
 
       <div className="detail-actions">
-        <button className="primary-action" onClick={() => onPaperTrade(signal)} disabled={busy} type="button">
+        <button className="primary-action" onClick={() => onPaperTrade(signal)} disabled={actionsDisabled} type="button">
           <FileCheck2 size={17} /> Paper Trade
         </button>
         <button className="secondary-action" type="button" disabled>
           <ExternalLink size={17} /> Open Exchange
         </button>
-        <button className="danger-action" onClick={() => onReject(signal)} disabled={busy} type="button">
+        <button className="danger-action" onClick={() => onReject(signal)} disabled={actionsDisabled} type="button">
           <XCircle size={17} /> Ignore Signal
         </button>
       </div>
+      {tradingActionsDisabled ? (
+        <p className="form-description">Trading actions disabled until realtime data is current.</p>
+      ) : null}
     </section>
+  );
+}
+
+function ExecutionQualityBlock({
+  signal,
+  execution,
+  loading
+}: {
+  signal: RadarSignal;
+  execution: VirtualExecutionReport | null;
+  loading: boolean;
+}) {
+  const gateStatus = execution?.quality_gate.status ?? scoreGateStatus(signal);
+  const impactRisk = execution?.liquidity.impact_risk ?? scoreImpactRisk(signal);
+  const tone = gateTone(gateStatus, impactRisk);
+  const executionLabel = loading && !execution ? "Checking" : executionQualityLabel(gateStatus, impactRisk);
+  const marketOrder = gateStatus === "blocked" || impactRisk === "high"
+    ? "Not recommended"
+    : gateStatus === "warning"
+      ? "Use smaller size"
+      : "Allowed";
+  const orderType = gateStatus === "blocked" || impactRisk === "high" ? "Limit" : "Market / Limit";
+  const safeSize = execution?.quality_gate.suggested_max_size_usd
+    ?? (execution && execution.quality_gate.status !== "blocked" ? execution.filled_size_usd : null);
+
+  return (
+    <div className="execution-quality-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Execution Quality</h3>
+        <Badge tone={tone}>{executionLabel}</Badge>
+      </div>
+      <div className="execution-quality-grid">
+        <MetricLine label="Expected slippage" value={execution ? `${(execution.entry_slippage_bps / 100).toFixed(2)}%` : "Preview pending"} />
+        <MetricLine label="Market impact" value={impactRiskLabel(impactRisk)} />
+        <MetricLine label="Safe size" value={safeSize == null ? "-" : `$${safeSize.toFixed(0)}`} />
+        <MetricLine label="Order type" value={orderType} />
+        <MetricLine label="Market order" value={marketOrder} />
+        <MetricLine label="Fill" value={execution ? `${Math.round(execution.fill_ratio * 100)}%` : "-"} />
+      </div>
+      {execution?.quality_gate.message ? (
+        <p className="execution-quality-message">{execution.quality_gate.message}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function MetricLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="execution-quality-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -109,6 +211,40 @@ function ScoreLine({ label, value, max }: { label: string; value: number; max: n
       <strong>{Math.round(value)}/{max}</strong>
     </div>
   );
+}
+
+function scoreGateStatus(signal: RadarSignal): ExecutionGateStatus {
+  const liquidity = signal.score_breakdown.liquidity_score;
+  const orderbook = signal.score_breakdown.orderbook_score;
+  if (liquidity < 25 || orderbook < 20) return "blocked";
+  if (liquidity < 45 || orderbook < 40) return "warning";
+  return "passed";
+}
+
+function scoreImpactRisk(signal: RadarSignal): ImpactRisk {
+  const liquidity = signal.score_breakdown.liquidity_score;
+  const orderbook = signal.score_breakdown.orderbook_score;
+  if (liquidity < 35 || orderbook < 30) return "high";
+  if (liquidity < 60 || orderbook < 50) return "medium";
+  return "low";
+}
+
+function executionQualityLabel(status: ExecutionGateStatus, impactRisk: ImpactRisk): string {
+  if (status === "blocked") return "Low";
+  if (status === "warning" || impactRisk !== "low") return "Medium";
+  return "High";
+}
+
+function impactRiskLabel(risk: ImpactRisk): string {
+  if (risk === "high") return "High";
+  if (risk === "medium") return "Medium";
+  return "Low";
+}
+
+function gateTone(status: ExecutionGateStatus, risk: ImpactRisk): "green" | "red" | "yellow" {
+  if (status === "blocked" || risk === "high") return "red";
+  if (status === "warning" || risk === "medium") return "yellow";
+  return "green";
 }
 
 function CheckRow({ done = false, text }: { done?: boolean; text: string }) {

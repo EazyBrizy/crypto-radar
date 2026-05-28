@@ -4,6 +4,18 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class SignalScoreBreakdown(BaseModel):
+    trend_score: int = Field(default=0, ge=0)
+    volume_score: int = Field(default=0, ge=0)
+    liquidity_score: int = Field(default=0, ge=0)
+    orderbook_score: int = Field(default=0, ge=0)
+    risk_reward_score: int = Field(default=0, ge=0)
+    volatility_score: int = Field(default=0, ge=0)
+    overheat_penalty: int = Field(default=0, ge=0)
+    news_event_risk_penalty: int = Field(default=0, ge=0)
+    total: int = Field(default=0, ge=0, le=100)
+
+
 class StrategySignal(BaseModel):
     exchange: str = "bybit"
     symbol: str
@@ -23,11 +35,24 @@ class StrategySignal(BaseModel):
     urgency: Literal["low", "medium", "high"] = "medium"
     explanation: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
+    score_breakdown: SignalScoreBreakdown = Field(
+        default_factory=lambda: SignalScoreBreakdown()
+    )
 
 
 SignalDirection = Literal["long", "short"]
 SignalUrgency = Literal["low", "medium", "high"]
-SignalStatus = Literal["active", "watchlist", "confirmed", "rejected", "expired", "invalidated"]
+SignalStatus = Literal[
+    "new",
+    "active",
+    "watchlist",
+    "confirmed",
+    "rejected",
+    "expired",
+    "invalidated",
+    "closed",
+    "entry_touched",
+]
 
 
 class RadarSignal(BaseModel):
@@ -51,6 +76,7 @@ class RadarSignal(BaseModel):
 
     explanation: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
+    score_breakdown: SignalScoreBreakdown = Field(default_factory=SignalScoreBreakdown)
     created_at: datetime
     updated_at: datetime
     expires_at: Optional[datetime] = None

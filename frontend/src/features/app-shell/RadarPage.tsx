@@ -1,0 +1,121 @@
+import { Filter, RadioTower, RefreshCw } from "lucide-react";
+
+import { Metric } from "@/components/Metric";
+import { SignalDetails } from "@/components/SignalDetails";
+import { SignalFeed } from "@/components/SignalFeed";
+import type { HealthStatus, RadarSignal, RadarStatus, VirtualExecutionReport } from "@/types";
+
+interface RadarPageProps {
+  busy: boolean;
+  filter: "all" | "long" | "short";
+  health: HealthStatus | null;
+  loading: boolean;
+  onFilterChange: (filter: "all" | "long" | "short") => void;
+  onPaperTrade: (signal: RadarSignal) => void;
+  onRefresh: () => void;
+  onReject: (signal: RadarSignal) => void;
+  onSelectSignal: (signal: RadarSignal) => void;
+  radarStatus: RadarStatus | null;
+  selectedSignal: RadarSignal | null;
+  selectedSignalId: string | null;
+  signalIds: string[];
+  signals: RadarSignal[];
+  actionError?: string | null;
+  executionPreview?: VirtualExecutionReport | null;
+  executionPreviewLoading?: boolean;
+  tradingActionsDisabled?: boolean;
+}
+
+export function RadarPage(props: RadarPageProps) {
+  const activeSignals = props.signals.filter((signal) => signal.status === "active").length;
+  const highConfidence = props.signals.filter((signal) => signal.score >= 80).length;
+  const latestSeries = Object.entries(props.radarStatus?.candle_history ?? {})
+    .sort(([, left], [, right]) => right - left)
+    .slice(0, 6);
+
+  return (
+    <div className="page-grid">
+      {props.actionError ? <div className="error-banner">{props.actionError}</div> : null}
+      <section className="feed-panel">
+        <div className="page-head">
+          <div>
+            <span className="muted">Signal First Radar</span>
+            <h1>Market opportunities</h1>
+          </div>
+          <button className="icon-button" onClick={props.onRefresh} type="button" title="Refresh">
+            <RefreshCw size={18} />
+          </button>
+        </div>
+
+        <div className="metrics-grid">
+          <Metric label="Market Status" value={props.health?.scanner_running ? "Live" : "Offline"} hint="scanner" />
+          <Metric label="Active Signals" value={String(activeSignals)} hint="actionable" />
+          <Metric label="High Confidence" value={String(highConfidence)} hint="score 80+" />
+          <Metric label="Ticks" value={String(props.radarStatus?.ticks_processed ?? props.health?.ticks_processed ?? 0)} hint="market data" />
+          <Metric label="Strategy Checks" value={String(props.radarStatus?.strategy_evaluations ?? props.health?.strategy_evaluations ?? 0)} hint="evaluated" />
+          <Metric label="Features" value={String(props.radarStatus?.features_built ?? props.health?.features_built ?? 0)} hint="candles analyzed" />
+        </div>
+
+        <div className="scanner-panel">
+          <div>
+            <span className="muted">Scanner activity</span>
+            <strong>
+              {props.radarStatus?.last_symbol
+                ? `${props.radarStatus.last_exchange ?? ""} ${props.radarStatus.last_symbol} ${props.radarStatus.last_price ?? ""}`
+                : "Waiting for market data"}
+            </strong>
+          </div>
+          <div className="scanner-stats">
+            <span>Signals found: {props.radarStatus?.signals_found ?? props.health?.signals_found ?? 0}</span>
+            <span>Seeded candles: {props.radarStatus?.candles_seeded ?? props.health?.candles_seeded ?? 0}</span>
+            <span>Pairs: {props.radarStatus?.symbols.length ?? 0}</span>
+            <span>Timeframes: {props.radarStatus?.timeframes.join(", ") ?? "1m, 5m, 15m, 1h, 4h, 1d"}</span>
+          </div>
+          <div className="history-grid">
+            {latestSeries.length ? latestSeries.map(([series, candles]) => (
+              <span key={series}>{series}: {candles} candles</span>
+            )) : <span>Candle history is still warming up</span>}
+          </div>
+        </div>
+
+        <div className="filter-row">
+          <Filter size={16} />
+          {(["all", "long", "short"] as const).map((item) => (
+            <button
+              className={props.filter === item ? "filter-chip active" : "filter-chip"}
+              key={item}
+              onClick={() => props.onFilterChange(item)}
+              type="button"
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+
+        <SignalFeed
+          emptyState={
+            <div className="empty-state">
+              <RadioTower size={26} />
+              <strong>No active signals yet</strong>
+              <span>The scanner may still be building candle history, or the market has not produced a valid setup.</span>
+            </div>
+          }
+          loading={props.loading}
+          signalIds={props.signalIds}
+          selectedSignalId={props.selectedSignalId}
+          onSelectSignal={props.onSelectSignal}
+        />
+      </section>
+
+      <SignalDetails
+        signal={props.selectedSignal}
+        onPaperTrade={props.onPaperTrade}
+        onReject={props.onReject}
+        busy={props.busy}
+        executionPreview={props.executionPreview ?? null}
+        executionPreviewLoading={props.executionPreviewLoading ?? false}
+        tradingActionsDisabled={props.tradingActionsDisabled}
+      />
+    </div>
+  );
+}

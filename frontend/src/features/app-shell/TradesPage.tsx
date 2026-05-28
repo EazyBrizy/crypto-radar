@@ -1,0 +1,110 @@
+import dynamic from "next/dynamic";
+import { BarChart3, History, ListFilter } from "lucide-react";
+
+import { Metric } from "@/components/Metric";
+import type { TradeJournalEntry, VirtualAccount } from "@/types";
+
+const LazyTradeJournalTable = dynamic(
+  () => import("@/components/data-table/TradeJournalTable").then((module) => module.TradeJournalTable),
+  { loading: () => <div className="empty-state">Loading table...</div> }
+);
+
+const LazyTradesAnalyticsPanel = dynamic(
+  () => import("./TradesAnalyticsPanel").then((module) => module.TradesAnalyticsPanel),
+  { loading: () => <div className="empty-state">Loading analytics...</div> }
+);
+
+const LazyActiveTradeChart = dynamic(
+  () => import("./ActiveTradeChart").then((module) => module.ActiveTradeChart),
+  { loading: () => <div className="chart-panel chart-panel-loading">Loading chart...</div> }
+);
+
+interface TradesPageProps {
+  activeTab: "active" | "journal" | "analytics";
+  onTabChange: (tab: "active" | "journal" | "analytics") => void;
+  onSelectTrade?: (trade: TradeJournalEntry) => void;
+  account?: VirtualAccount | null;
+  selectedTrade?: TradeJournalEntry | null;
+  selectedTradeId?: string | null;
+  trades: TradeJournalEntry[];
+}
+
+export function TradesPage({
+  activeTab,
+  account,
+  onSelectTrade,
+  onTabChange,
+  selectedTrade = null,
+  selectedTradeId = null,
+  trades
+}: TradesPageProps) {
+  const activeTrade = selectedTrade ?? trades.find((trade) => trade.status === "open") ?? null;
+  const openPositions = account?.open_positions ?? (activeTrade ? 1 : 0);
+
+  return (
+    <section className="wide-panel">
+      <div className="page-head">
+        <div>
+          <span className="muted">Trades</span>
+          <h1>Trades and journal</h1>
+        </div>
+      </div>
+
+      <div className="tab-row">
+        <button className={activeTab === "active" ? "tab active" : "tab"} onClick={() => onTabChange("active")} type="button">
+          <ListFilter size={16} /> Active
+        </button>
+        <button className={activeTab === "journal" ? "tab active" : "tab"} onClick={() => onTabChange("journal")} type="button">
+          <History size={16} /> Journal
+        </button>
+        <button className={activeTab === "analytics" ? "tab active" : "tab"} onClick={() => onTabChange("analytics")} type="button">
+          <BarChart3 size={16} /> Analytics
+        </button>
+      </div>
+
+      <div className="virtual-account-strip">
+        <Metric
+          hint={`Risk ${formatUsd(account?.risk_per_trade ?? 10)} per trade`}
+          label="Balance"
+          value={formatUsd(account?.balance ?? 100)}
+        />
+        <Metric
+          hint={`Unrealized ${formatSignedUsd(account?.unrealized_pnl ?? 0)}`}
+          label="Equity"
+          value={formatUsd(account?.equity ?? account?.balance ?? 100)}
+        />
+        <Metric
+          hint={`${account?.wins ?? 0}W / ${account?.losses ?? 0}L / ${account?.breakeven ?? 0}BE`}
+          label="Realized PnL"
+          value={formatSignedUsd(account?.realized_pnl ?? 0)}
+        />
+        <Metric
+          hint={`RR 1:${account?.risk_reward ?? 3}`}
+          label="Open positions"
+          value={`${openPositions}`}
+        />
+      </div>
+
+      {activeTab === "active" && activeTrade ? <LazyActiveTradeChart trade={activeTrade} /> : null}
+
+      {activeTab === "analytics" ? (
+        <LazyTradesAnalyticsPanel trades={trades} />
+      ) : (
+        <LazyTradeJournalTable
+          emptyLabel={activeTab === "active" ? "No active trades" : "Journal is empty"}
+          onSelectTrade={activeTab === "active" ? onSelectTrade : undefined}
+          selectedTradeId={activeTab === "active" ? activeTrade?.id ?? selectedTradeId : null}
+          trades={trades}
+        />
+      )}
+    </section>
+  );
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+function formatSignedUsd(value: number): string {
+  return `${value >= 0 ? "+" : "-"}$${Math.abs(value).toFixed(2)}`;
+}

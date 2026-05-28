@@ -1,8 +1,13 @@
 from typing import List, Literal, Optional
 
 from app.schemas.market import Features
-from app.schemas.signal import StrategySignal
-from app.strategies.common import WATCHLIST_SCORE, build_signal, has_minimum_market_data
+from app.schemas.signal import SignalScoreBreakdown, StrategySignal
+from app.strategies.common import (
+    WATCHLIST_SCORE,
+    build_signal,
+    has_minimum_market_data,
+    score_breakdown,
+)
 
 STRATEGY_NAME = "volatility_squeeze_breakout"
 
@@ -27,9 +32,7 @@ class VolatilitySqueezeBreakoutStrategy:
         if direction is None:
             return []
 
-        score, reasons, risks = self._score(features, direction)
-        if score < WATCHLIST_SCORE:
-            return []
+        scoring, reasons, risks = self._score(features, direction)
 
         entry = features.close
         atr = features.atr_14 or 0
@@ -40,18 +43,19 @@ class VolatilitySqueezeBreakoutStrategy:
             breakout_level = features.donchian_low_20 or entry
             stop_loss = breakout_level + atr
 
-        return [
-            build_signal(
-                features=features,
-                strategy=self.name,
-                direction=direction,
-                score=score,
-                reasons=reasons,
-                risks=risks,
-                entry=entry,
-                stop_loss=stop_loss,
-            )
-        ]
+        signal = build_signal(
+            features=features,
+            strategy=self.name,
+            direction=direction,
+            scoring=scoring,
+            reasons=reasons,
+            risks=risks,
+            entry=entry,
+            stop_loss=stop_loss,
+        )
+        if signal.score < WATCHLIST_SCORE:
+            return []
+        return [signal]
 
     def _direction(self, features: Features) -> Optional[Literal["LONG", "SHORT"]]:
         if (
@@ -70,8 +74,11 @@ class VolatilitySqueezeBreakoutStrategy:
         self,
         features: Features,
         direction: Literal["LONG", "SHORT"],
-    ) -> tuple[int, list[str], list[str]]:
-        score = 0
+    ) -> tuple[SignalScoreBreakdown, list[str], list[str]]:
+        trend_score = 0
+        volume_score = 0
+        volatility_score = 0
+        overheat_penalty = 0
         reasons: list[str] = []
         risks: list[str] = []
 
@@ -79,22 +86,22 @@ class VolatilitySqueezeBreakoutStrategy:
             features.bb_width_percentile is not None
             and features.bb_width_percentile < 20
         ):
-            score += 40
+            volatility_score += 15
             reasons.append("Волатильность сжата: BB width percentile ниже 20")
 
         if direction == "LONG" and features.donchian_high_20 is not None:
-            score += 25
+            trend_score += 25
             reasons.append("Цена закрылась выше Donchian high 20")
         if direction == "SHORT" and features.donchian_low_20 is not None:
-            score += 25
+            trend_score += 25
             reasons.append("Цена закрылась ниже Donchian low 20")
 
         if features.volume_spike > 1.5:
-            score += 20
+            volume_score += 20
             reasons.append(f"Объем выше среднего: {features.volume_spike:.2f}x")
 
         if features.atr_increasing:
-            score += 15
+            volatility_score += 15
             reasons.append("ATR расширяется после сжатия")
 
         if direction == "LONG":
@@ -102,16 +109,25 @@ class VolatilitySqueezeBreakoutStrategy:
                 reasons.append(f"RSI {features.rsi_14:.1f}, импульс без перегрева")
             elif features.rsi_14 is not None and features.rsi_14 > 75:
                 risks.append("RSI выше 75: риск позднего входа")
-                score -= 10
+                overheat_penalty += 10
         else:
             if features.rsi_14 is not None and 30 <= features.rsi_14 <= 45:
                 reasons.append(f"RSI {features.rsi_14:.1f}, шорт-импульс без перегрева")
             elif features.rsi_14 is not None and features.rsi_14 < 25:
                 risks.append("RSI ниже 25: риск входа после сильного движения")
-                score -= 10
+                overheat_penalty += 10
 
         if features.atr_14 is not None and abs(features.close - features.open) > features.atr_14 * 2.5:
             risks.append("Тело текущего движения больше 2.5 ATR")
-            score -= 15
+            overheat_penalty += 15
 
-        return max(0, min(100, score)), reasons, risks
+        return (
+            score_breakdown(
+                trend_score=trend_score,
+                volume_score=volume_score,
+                volatility_score=volatility_score,
+                overheat_penalty=overheat_penalty,
+            ),
+            reasons,
+            risks,
+        )

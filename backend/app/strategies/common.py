@@ -1,7 +1,7 @@
 from typing import Literal, Optional
 
 from app.schemas.market import Features
-from app.schemas.signal import StrategySignal
+from app.schemas.signal import SignalScoreBreakdown, StrategySignal
 
 ACTIONABLE_SCORE = 70
 WATCHLIST_SCORE = 60
@@ -25,13 +25,79 @@ def confidence_from_score(score: int) -> float:
     return min(1.0, max(0.0, score / 100))
 
 
+def risk_reward_score(risk_reward: float) -> int:
+    if risk_reward >= 3:
+        return 15
+    if risk_reward >= 2:
+        return 12
+    if risk_reward >= 1.5:
+        return 8
+    if risk_reward >= 1:
+        return 5
+    return 0
+
+
+def score_from_breakdown(breakdown: SignalScoreBreakdown) -> int:
+    positive = (
+        breakdown.trend_score
+        + breakdown.volume_score
+        + breakdown.liquidity_score
+        + breakdown.orderbook_score
+        + breakdown.risk_reward_score
+        + breakdown.volatility_score
+    )
+    penalties = breakdown.overheat_penalty + breakdown.news_event_risk_penalty
+    return max(0, min(100, positive - penalties))
+
+
+def score_breakdown(
+    *,
+    trend_score: int = 0,
+    volume_score: int = 0,
+    liquidity_score: int = 0,
+    orderbook_score: int = 0,
+    risk_reward_score: int = 0,
+    volatility_score: int = 0,
+    overheat_penalty: int = 0,
+    news_event_risk_penalty: int = 0,
+) -> SignalScoreBreakdown:
+    breakdown = SignalScoreBreakdown(
+        trend_score=trend_score,
+        volume_score=volume_score,
+        liquidity_score=liquidity_score,
+        orderbook_score=orderbook_score,
+        risk_reward_score=risk_reward_score,
+        volatility_score=volatility_score,
+        overheat_penalty=overheat_penalty,
+        news_event_risk_penalty=news_event_risk_penalty,
+    )
+    return breakdown.model_copy(update={"total": score_from_breakdown(breakdown)})
+
+
+def legacy_score_breakdown(score: int) -> SignalScoreBreakdown:
+    remaining = max(0, min(100, score))
+    values: dict[str, int] = {}
+    for field, cap in (
+        ("trend_score", 25),
+        ("volume_score", 20),
+        ("liquidity_score", 15),
+        ("orderbook_score", 10),
+        ("risk_reward_score", 15),
+        ("volatility_score", 15),
+    ):
+        values[field] = min(remaining, cap)
+        remaining -= values[field]
+    return score_breakdown(**values)
+
+
 def build_signal(
     features: Features,
     strategy: str,
     direction: Literal["LONG", "SHORT"],
-    score: int,
     reasons: list[str],
     risks: Optional[list[str]] = None,
+    score: Optional[int] = None,
+    scoring: Optional[SignalScoreBreakdown] = None,
     entry: Optional[float] = None,
     stop_loss: Optional[float] = None,
     take_profit_1: Optional[float] = None,
@@ -64,6 +130,14 @@ def build_signal(
     entry_min = entry_price - entry_padding
     entry_max = entry_price + entry_padding
     risk_reward = abs(take_profit_2 - entry_price) / risk
+    if scoring is None:
+        scoring = legacy_score_breakdown(score or 0)
+    if scoring.risk_reward_score == 0:
+        scoring = scoring.model_copy(
+            update={"risk_reward_score": risk_reward_score(risk_reward)}
+        )
+    score = score_from_breakdown(scoring)
+    scoring = scoring.model_copy(update={"total": score})
 
     return StrategySignal(
         exchange=features.exchange,
@@ -83,6 +157,7 @@ def build_signal(
         urgency=urgency_from_score(score),
         explanation=reasons,
         risks=risks or [],
+        score_breakdown=scoring,
     )
 
 

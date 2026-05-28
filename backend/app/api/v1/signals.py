@@ -31,6 +31,11 @@ async def list_active_signals() -> list[RadarSignal]:
     return signal_service.list_active_signals()
 
 
+@router.get("/open", response_model=list[RadarSignal])
+async def list_open_signals() -> list[RadarSignal]:
+    return signal_service.list_open_signals()
+
+
 @router.get("/{signal_id}", response_model=RadarSignal)
 async def get_signal(signal_id: str) -> RadarSignal:
     signal = signal_service.get_signal(signal_id)

@@ -171,6 +171,7 @@ function ExecutionQualityBlock({
   const orderType = gateStatus === "blocked" || impactRisk === "high" ? "Limit" : "Market / Limit";
   const safeSize = execution?.quality_gate.suggested_max_size_usd
     ?? (execution && execution.quality_gate.status !== "blocked" ? execution.filled_size_usd : null);
+  const simulatedPath = execution?.simulated_path ?? null;
 
   return (
     <div className="execution-quality-block">
@@ -186,6 +187,8 @@ function ExecutionQualityBlock({
         <MetricLine label="Order type" value={orderType} />
         <MetricLine label="Market order" value={marketOrder} />
         <MetricLine label="Fill" value={execution ? `${Math.round(execution.fill_ratio * 100)}%` : "-"} />
+        <MetricLine label="Post-impact" value={simulatedPath ? formatExecutionPrice(simulatedPath.post_trade_price) : "-"} />
+        <MetricLine label="Decay 60s" value={simulatedPath ? formatExecutionPrice(simulatedPath.simulated_candle.close) : "-"} />
       </div>
       {execution?.quality_gate.message ? (
         <p className="execution-quality-message">{execution.quality_gate.message}</p>
@@ -201,6 +204,12 @@ function MetricLine({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function formatExecutionPrice(price: number): string {
+  if (Math.abs(price) >= 1000) return price.toFixed(0);
+  if (Math.abs(price) >= 1) return price.toFixed(2);
+  return price.toPrecision(4);
 }
 
 function ScoreLine({ label, value, max }: { label: string; value: number; max: number }) {

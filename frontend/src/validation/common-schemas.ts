@@ -121,6 +121,30 @@ export const VirtualExecutionReportSchema = z.object({
     suggested_max_size_usd: z.number().nullable().optional(),
     message: z.string().nullable().optional()
   }).default(DEFAULT_EXECUTION_QUALITY_GATE),
+  simulated_path: z.object({
+    model: z.literal("exponential_decay").default("exponential_decay"),
+    reference_price: z.number(),
+    entry_price: z.number(),
+    post_trade_price: z.number(),
+    initial_impact_delta: z.number(),
+    decay_lambda: z.number(),
+    decay_horizon_seconds: z.number().default(60),
+    points: z.array(z.object({
+      offset_seconds: z.number(),
+      real_price: z.number(),
+      impact_delta: z.number(),
+      effective_price: z.number(),
+      impact_remaining_percent: z.number()
+    })).default([]),
+    simulated_candle: z.object({
+      start_offset_seconds: z.number().default(0),
+      end_offset_seconds: z.number().default(60),
+      open: z.number(),
+      high: z.number(),
+      low: z.number(),
+      close: z.number()
+    })
+  }).nullable().optional(),
   rejected_reason: z.string().nullable().optional(),
   notes: z.array(z.string()).default([])
 });

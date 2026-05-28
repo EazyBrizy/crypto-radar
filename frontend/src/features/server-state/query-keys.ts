@@ -105,6 +105,7 @@ export const serverStateKeys = {
     all: () => [...serverStateKeys.all, "signals"] as const,
     history: (filters?: SignalHistoryFilters) => [...serverStateKeys.signals.all(), "history", normalizeSignalFilters(filters)] as const,
     active: () => [...serverStateKeys.signals.all(), "active"] as const,
+    open: () => [...serverStateKeys.signals.all(), "open"] as const,
     executionPreview: (signalId: string) => [...serverStateKeys.signals.all(), "execution-preview", signalId] as const
   },
   journal: {
@@ -126,7 +127,7 @@ export const queryKeys = {
   health: serverStateKeys.health(),
   radar: serverStateKeys.radar.dashboard(),
   radarStatus: serverStateKeys.radar.status(),
-  signals: serverStateKeys.signals.active(),
+  signals: serverStateKeys.signals.open(),
   trades: serverStateKeys.journal.history(),
   config: serverStateKeys.settings.radar()
 };

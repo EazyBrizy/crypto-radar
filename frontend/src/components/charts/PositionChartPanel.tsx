@@ -8,6 +8,7 @@ import {
   mergePositionOverlays,
   signalToChartOverlay,
   tradeToChartOverlay,
+  tradeToSimulatedImpactOverlay,
   volumeToChartData
 } from "@/components/charts/chart-overlays";
 import type { OhlcvCandle, RadarSignal, TradeJournalEntry } from "@/types";
@@ -30,6 +31,11 @@ export function PositionChartPanel({
 }: PositionChartPanelProps) {
   const chartCandles = useMemo(() => candlesToChartData(candles), [candles]);
   const chartVolume = useMemo(() => volumeToChartData(candles), [candles]);
+  const impactOverlay = useMemo(() => (trade ? tradeToSimulatedImpactOverlay(trade) : null), [trade]);
+  const lineOverlays = useMemo(
+    () => (impactOverlay ? [...emaOverlays, impactOverlay] : emaOverlays),
+    [emaOverlays, impactOverlay]
+  );
   const markerTime = chartCandles[chartCandles.length - 1]?.time;
   const overlay = useMemo(
     () =>
@@ -43,7 +49,7 @@ export function PositionChartPanel({
   return (
     <ChartPanel
       candles={chartCandles}
-      emaOverlays={emaOverlays}
+      emaOverlays={lineOverlays}
       height={height}
       markers={overlay.markers}
       priceLines={overlay.priceLines}

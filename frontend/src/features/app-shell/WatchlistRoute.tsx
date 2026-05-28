@@ -4,16 +4,16 @@ import { useEffect, useMemo } from "react";
 
 import { WatchlistPage } from "@/features/app-shell/WatchlistPage";
 import {
-  useActiveSignalsQuery,
   useAddWatchlistPairMutation,
   useMarketPairsQuery,
+  useOpenSignalsQuery,
   useRemoveWatchlistPairMutation,
   useWatchlistQuery
 } from "@/hooks/use-radar-queries";
 import { useSignalStore } from "@/stores/signal-store";
 
 export function WatchlistRoute() {
-  const activeSignalsQuery = useActiveSignalsQuery();
+  const openSignalsQuery = useOpenSignalsQuery();
   const watchlistQuery = useWatchlistQuery();
   const marketPairsQuery = useMarketPairsQuery();
   const addPairMutation = useAddWatchlistPairMutation();
@@ -23,8 +23,8 @@ export function WatchlistRoute() {
   const replaceSignals = useSignalStore((state) => state.replaceSignals);
 
   useEffect(() => {
-    if (activeSignalsQuery.data) replaceSignals(activeSignalsQuery.data);
-  }, [activeSignalsQuery.data, replaceSignals]);
+    if (openSignalsQuery.data) replaceSignals(openSignalsQuery.data);
+  }, [openSignalsQuery.data, replaceSignals]);
 
   const signals = useMemo(
     () => signalIds.map((signalId) => signalsById[signalId]).filter(Boolean),

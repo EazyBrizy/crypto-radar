@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -32,10 +33,12 @@ async function fetchSchemaFromServer(baseUrl) {
 
 function exportSchemaFromFastApiApp() {
   const pythonCandidates = [
+    process.env.CRYPTO_RADAR_BACKEND_PYTHON,
     resolve(frontendDir, "../.venv/Scripts/python.exe"),
     resolve(frontendDir, "../backend/.venv/Scripts/python.exe"),
+    resolve(os.homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe"),
     "python"
-  ];
+  ].filter(Boolean);
 
   const command = [
     "import json",
@@ -46,6 +49,13 @@ function exportSchemaFromFastApiApp() {
   for (const python of pythonCandidates) {
     const result = spawnSync(python, ["-c", command], {
       cwd: backendDir,
+      env: {
+        ...process.env,
+        PYTHONPATH: [
+          resolve(backendDir, ".venv/Lib/site-packages"),
+          backendDir,
+        ].join(process.platform === "win32" ? ";" : ":"),
+      },
       encoding: "utf8"
     });
 

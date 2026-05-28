@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation";
 
 import { RadarPage } from "@/features/app-shell/RadarPage";
 import {
-  useActiveSignalsQuery,
   useConfirmVirtualMutation,
   useHealthQuery,
+  useOpenSignalsQuery,
   useRadarStatusQuery,
   useRejectSignalMutation,
   useSignalExecutionPreviewQuery
@@ -31,13 +31,13 @@ export function RadarRoute() {
 
   const healthQuery = useHealthQuery();
   const radarStatusQuery = useRadarStatusQuery();
-  const activeSignalsQuery = useActiveSignalsQuery();
+  const openSignalsQuery = useOpenSignalsQuery();
   const confirmVirtualMutation = useConfirmVirtualMutation();
   const rejectSignalMutation = useRejectSignalMutation();
 
   useEffect(() => {
-    if (activeSignalsQuery.data) replaceSignals(activeSignalsQuery.data);
-  }, [activeSignalsQuery.data, replaceSignals]);
+    if (openSignalsQuery.data) replaceSignals(openSignalsQuery.data);
+  }, [openSignalsQuery.data, replaceSignals]);
 
   const signals = useMemo(
     () => signalIds.map((signalId) => signalsById[signalId]).filter(Boolean),
@@ -55,16 +55,16 @@ export function RadarRoute() {
   const executionPreviewQuery = useSignalExecutionPreviewQuery(selectedSignal?.id ?? null, {
     enabled: Boolean(selectedSignal) && !tradingActionsDisabled
   });
-  const loading = [healthQuery, radarStatusQuery, activeSignalsQuery].some((query) => query.isLoading);
+  const loading = [healthQuery, radarStatusQuery, openSignalsQuery].some((query) => query.isLoading);
   const busy = confirmVirtualMutation.isPending || rejectSignalMutation.isPending || tradingActionsDisabled;
 
   const refreshData = useCallback(async () => {
     await Promise.all([
       healthQuery.refetch(),
       radarStatusQuery.refetch(),
-      activeSignalsQuery.refetch()
+      openSignalsQuery.refetch()
     ]);
-  }, [activeSignalsQuery, healthQuery, radarStatusQuery]);
+  }, [healthQuery, openSignalsQuery, radarStatusQuery]);
 
   const handleSelectSignal = useCallback((signal: RadarSignal) => {
     setActionError(null);

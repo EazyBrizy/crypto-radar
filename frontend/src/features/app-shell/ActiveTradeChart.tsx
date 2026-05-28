@@ -30,6 +30,7 @@ export function ActiveTradeChart({ trade }: ActiveTradeChartProps) {
   );
 
   const takeProfit = trade.take_profit[trade.take_profit.length - 1] ?? null;
+  const simulatedPath = trade.execution?.simulated_path ?? null;
 
   return (
     <div className="active-trade-panel">
@@ -69,6 +70,20 @@ export function ActiveTradeChart({ trade }: ActiveTradeChartProps) {
           <span>Execution</span>
           <strong>{formatExecutionSummary(trade)}</strong>
         </div>
+        {simulatedPath ? (
+          <>
+            <div>
+              <Activity size={15} />
+              <span>Post-impact</span>
+              <strong>{formatPrice(simulatedPath.post_trade_price)}</strong>
+            </div>
+            <div>
+              <Gauge size={15} />
+              <span>Decay 60s</span>
+              <strong>{formatPrice(simulatedPath.simulated_candle.close)}</strong>
+            </div>
+          </>
+        ) : null}
       </div>
 
       {candlesQuery.data?.candles.length ? (

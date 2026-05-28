@@ -29,7 +29,8 @@ import type {
   VirtualAccount,
   VirtualExecutionReport,
   VirtualExecutionStatus,
-  VirtualSimulationMode
+  VirtualSimulationMode,
+  VirtualSimulatedPositionPath
 } from "@/types";
 import type { OhlcvCandleDto, RadarConfigDto, RadarSignalDto, TradeJournalEntryDto } from "./generated/schemas";
 
@@ -152,8 +153,41 @@ export function normalizeExecutionReport(value: unknown): VirtualExecutionReport
     book_price_after: value.book_price_after == null ? null : Number(value.book_price_after),
     liquidity: normalizeLiquidityMetrics(liquidity),
     quality_gate: normalizeQualityGate(value.quality_gate),
+    simulated_path: normalizeSimulatedPath(value.simulated_path),
     rejected_reason: value.rejected_reason == null ? null : String(value.rejected_reason),
     notes: Array.isArray(value.notes) ? value.notes.map(String) : []
+  };
+}
+
+function normalizeSimulatedPath(value: unknown): VirtualSimulatedPositionPath | null {
+  if (!isRecord(value)) return null;
+  const candle = isRecord(value.simulated_candle) ? value.simulated_candle : null;
+  if (candle === null) return null;
+  return {
+    model: "exponential_decay",
+    reference_price: Number(value.reference_price ?? 0),
+    entry_price: Number(value.entry_price ?? 0),
+    post_trade_price: Number(value.post_trade_price ?? 0),
+    initial_impact_delta: Number(value.initial_impact_delta ?? 0),
+    decay_lambda: Number(value.decay_lambda ?? 0),
+    decay_horizon_seconds: Number(value.decay_horizon_seconds ?? 60),
+    points: Array.isArray(value.points)
+      ? value.points.filter(isRecord).map((point) => ({
+          offset_seconds: Number(point.offset_seconds ?? 0),
+          real_price: Number(point.real_price ?? 0),
+          impact_delta: Number(point.impact_delta ?? 0),
+          effective_price: Number(point.effective_price ?? 0),
+          impact_remaining_percent: Number(point.impact_remaining_percent ?? 0)
+        }))
+      : [],
+    simulated_candle: {
+      start_offset_seconds: Number(candle.start_offset_seconds ?? 0),
+      end_offset_seconds: Number(candle.end_offset_seconds ?? 60),
+      open: Number(candle.open ?? 0),
+      high: Number(candle.high ?? 0),
+      low: Number(candle.low ?? 0),
+      close: Number(candle.close ?? 0)
+    }
   };
 }
 

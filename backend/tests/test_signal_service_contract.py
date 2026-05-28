@@ -17,6 +17,9 @@ class FakeSignalRepository:
     def list_active_signals(self, limit: int = 200) -> list[RadarSignal]:
         return [self.result.signal] if self.result.signal.status == "active" else []
 
+    def list_open_signals(self, limit: int = 200) -> list[RadarSignal]:
+        return [self.result.signal] if self.result.signal.status in {"new", "active"} else []
+
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         return self.result.signal if signal_id == self.result.signal.id else None
 

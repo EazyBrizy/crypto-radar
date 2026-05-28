@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Iterable
 
 from app.schemas.signal import RadarSignal
@@ -10,8 +11,11 @@ from app.schemas.trade import (
     LiquidityMetrics,
     ManualConfirmRequest,
     OrderBookLevel,
+    VirtualImpactCandle,
+    VirtualImpactPathPoint,
     VirtualExecutionReport,
     VirtualMarketSnapshot,
+    VirtualSimulatedPositionPath,
     VirtualSimulationMode,
 )
 
@@ -218,6 +222,14 @@ class VirtualExecutionEngine:
             best_ask_before=best_ask,
             book_price_after=walk.book_price_after,
             liquidity=metrics,
+            simulated_path=_simulated_position_path(
+                reference_price=reference_price,
+                average_price=walk.average_price,
+                book_price_after=walk.book_price_after,
+                market_impact_percent=walk.market_impact_percent,
+                buy_side=buy_side,
+                metrics=metrics,
+            ),
             notes=notes,
         )
 
@@ -284,6 +296,14 @@ class VirtualExecutionEngine:
             best_bid_before=best_bid,
             best_ask_before=best_ask,
             liquidity=metrics,
+            simulated_path=_simulated_position_path(
+                reference_price=reference_price,
+                average_price=average_price,
+                book_price_after=None,
+                market_impact_percent=market_impact_percent,
+                buy_side=buy_side,
+                metrics=metrics,
+            ),
             notes=notes,
         )
 
@@ -738,3 +758,100 @@ def _exit_slippage_bps(
     elif metrics.impact_risk == "medium":
         exit_slippage_bps *= 1.1
     return min(exit_slippage_bps, max_virtual_slippage_bps * 1.5)
+
+
+def _simulated_position_path(
+    *,
+    reference_price: float,
+    average_price: float | None,
+    book_price_after: float | None,
+    market_impact_percent: float,
+    buy_side: bool,
+    metrics: LiquidityMetrics,
+) -> VirtualSimulatedPositionPath | None:
+    if average_price is None or reference_price <= 0:
+        return None
+
+    post_trade_price = _post_trade_price(
+        reference_price=reference_price,
+        average_price=average_price,
+        book_price_after=book_price_after,
+        market_impact_percent=market_impact_percent,
+        buy_side=buy_side,
+    )
+    initial_impact_delta = post_trade_price - reference_price
+    if abs(initial_impact_delta) <= reference_price * 0.000001:
+        return None
+
+    decay_lambda = _impact_decay_lambda(metrics)
+    offsets = [0.0, 10.0, 30.0, 60.0]
+    points = [
+        _path_point(
+            offset_seconds=offset,
+            real_price=reference_price,
+            initial_impact_delta=initial_impact_delta,
+            decay_lambda=decay_lambda,
+        )
+        for offset in offsets
+    ]
+    candle_prices = [average_price, *[point.effective_price for point in points]]
+    simulated_candle = VirtualImpactCandle(
+        start_offset_seconds=0.0,
+        end_offset_seconds=60.0,
+        open=average_price,
+        high=max(candle_prices),
+        low=min(candle_prices),
+        close=points[-1].effective_price,
+    )
+    return VirtualSimulatedPositionPath(
+        reference_price=reference_price,
+        entry_price=average_price,
+        post_trade_price=post_trade_price,
+        initial_impact_delta=initial_impact_delta,
+        decay_lambda=decay_lambda,
+        decay_horizon_seconds=60.0,
+        points=points,
+        simulated_candle=simulated_candle,
+    )
+
+
+def _post_trade_price(
+    *,
+    reference_price: float,
+    average_price: float,
+    book_price_after: float | None,
+    market_impact_percent: float,
+    buy_side: bool,
+) -> float:
+    impact_delta = reference_price * market_impact_percent / 100
+    estimated_impact_price = reference_price + impact_delta if buy_side else reference_price - impact_delta
+    candidates = [reference_price, average_price, estimated_impact_price]
+    if book_price_after is not None:
+        candidates.append(book_price_after)
+    return max(candidates) if buy_side else min(candidates)
+
+
+def _path_point(
+    *,
+    offset_seconds: float,
+    real_price: float,
+    initial_impact_delta: float,
+    decay_lambda: float,
+) -> VirtualImpactPathPoint:
+    decay_multiplier = math.exp(-decay_lambda * offset_seconds)
+    impact_delta = initial_impact_delta * decay_multiplier
+    return VirtualImpactPathPoint(
+        offset_seconds=offset_seconds,
+        real_price=real_price,
+        impact_delta=impact_delta,
+        effective_price=max(real_price + impact_delta, 0.00000001),
+        impact_remaining_percent=decay_multiplier * 100,
+    )
+
+
+def _impact_decay_lambda(metrics: LiquidityMetrics) -> float:
+    if metrics.impact_risk == "high":
+        return 0.018
+    if metrics.impact_risk == "medium":
+        return 0.04
+    return 0.09

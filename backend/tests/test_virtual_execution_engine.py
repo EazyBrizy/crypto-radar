@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.schemas.signal import RadarSignal
@@ -88,6 +88,11 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertGreater(report.entry_slippage_bps, 0)
         self.assertGreater(report.market_impact_percent, 0)
         self.assertGreater(report.liquidity.spread_percent, 0)
+        self.assertIsNotNone(report.simulated_path)
+        assert report.simulated_path is not None
+        self.assertGreater(report.simulated_path.post_trade_price, report.average_price or 0)
+        self.assertGreater(report.simulated_path.points[0].effective_price, report.simulated_path.points[-1].effective_price)
+        self.assertGreater(report.simulated_path.points[-1].effective_price, report.reference_price)
 
     def test_impact_aware_entry_can_partially_fill_available_liquidity(self) -> None:
         report = VirtualExecutionEngine().simulate_entry(
@@ -165,6 +170,35 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertAlmostEqual(trade.filled_size_usd or 0.0, 500.0)
         self.assertAlmostEqual(trade.unfilled_size_usd, 500.0)
         self.assertIsNotNone(trade.execution)
+        assert trade.execution is not None
+        self.assertIsNotNone(trade.execution.simulated_path)
+
+    def test_trade_service_marks_private_impact_price_without_mutating_market_price(self) -> None:
+        repository = EphemeralTradeRepository()
+        service = TradeService(repository=repository)
+        trade = service.open_virtual_trade(
+            _signal(),
+            ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                size_usd=1_000.0,
+                market_snapshot=_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+        )
+        assert trade.execution is not None
+        assert trade.execution.simulated_path is not None
+        old_trade = trade.model_copy(
+            update={"opened_at": datetime.now(timezone.utc) - timedelta(seconds=60)}
+        )
+        repository.save_virtual_trade(old_trade)
+
+        updated = service.update_market_price("bybit", "LOWCAPUSDT", 100.0)[0]
+
+        self.assertGreater(updated.current_price, 100.0)
+        self.assertLess(
+            updated.current_price - 100.0,
+            trade.execution.simulated_path.initial_impact_delta,
+        )
 
     def test_trade_service_previews_execution_without_persisting_trade(self) -> None:
         repository = EphemeralTradeRepository()

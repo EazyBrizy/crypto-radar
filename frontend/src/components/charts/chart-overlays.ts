@@ -81,6 +81,24 @@ export function tradeToChartOverlay(trade: TradeJournalEntry, markerTime?: Time)
   };
 }
 
+export function tradeToSimulatedImpactOverlay(trade: TradeJournalEntry): ChartLineOverlay | null {
+  const simulatedPath = trade.execution?.simulated_path;
+  if (!simulatedPath || simulatedPath.points.length === 0) return null;
+  const openedAt = Date.parse(trade.opened_at);
+  if (Number.isNaN(openedAt)) return null;
+  const data = simulatedPath.points.map((point) => ({
+    time: toChartTime(openedAt + point.offset_seconds * 1000),
+    value: point.effective_price
+  }));
+
+  return {
+    id: `impact-path-${trade.id}`,
+    color: "#f97316",
+    title: "Private impact",
+    data
+  };
+}
+
 export function mergePositionOverlays(...overlays: PositionChartOverlay[]): PositionChartOverlay {
   return {
     markers: overlays.flatMap((overlay) => overlay.markers),

@@ -197,9 +197,9 @@ function routeStandardEvent(
 }
 
 function applySignalSnapshot(queryClient: QueryClient, signals: RadarSignal[]) {
-  const activeSignals = signals.filter(isActiveFeedSignal);
-  useSignalStore.getState().replaceSignals(activeSignals);
-  queryClient.setQueryData(queryKeys.signals, activeSignals);
+  const openSignals = signals.filter(isOpenFeedSignal);
+  useSignalStore.getState().replaceSignals(openSignals);
+  queryClient.setQueryData(queryKeys.signals, openSignals);
   queryClient.setQueryData(serverStateKeys.signals.history(), signals);
   queryClient.setQueryData<RadarResponse>(queryKeys.radar, { signals });
 }
@@ -208,11 +208,11 @@ function applySignalCreated(queryClient: QueryClient, signal: RadarSignal) {
   useSignalStore.getState().addSignal(signal);
 
   queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, (current = []) => {
-    return isActiveFeedSignal(signal) ? insertSignalToTop(current, signal) : current.filter((item) => item.id !== signal.id);
+    return isOpenFeedSignal(signal) ? insertSignalToTop(current, signal) : current.filter((item) => item.id !== signal.id);
   });
   queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), (current = []) => insertSignalToTop(current, signal));
   queryClient.setQueryData<RadarResponse>(queryKeys.radar, (current) => ({
-    signals: isActiveFeedSignal(signal)
+    signals: isOpenFeedSignal(signal)
       ? insertSignalToTop(current?.signals ?? [], signal)
       : (current?.signals ?? []).filter((item) => item.id !== signal.id)
   }));
@@ -326,8 +326,8 @@ function isSignalEvent(message: RealtimeMessage): message is Extract<RealtimeMes
   return message.type === "signal.created" || message.type === "signal.updated" || message.type === "signals.created" || message.type === "signals.updated";
 }
 
-function isActiveFeedSignal(signal: RadarSignal): boolean {
-  return signal.status === "active" || signal.status === "entry_touched";
+function isOpenFeedSignal(signal: RadarSignal): boolean {
+  return signal.status === "new" || signal.status === "active" || signal.status === "entry_touched";
 }
 
 function patchBySignalId(items: RadarSignal[], signalId: string, patch: SignalPatch): RadarSignal[] {

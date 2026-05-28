@@ -67,6 +67,35 @@ class ExecutionQualityGate(BaseModel):
     message: Optional[str] = None
 
 
+class VirtualImpactPathPoint(BaseModel):
+    offset_seconds: float = Field(..., ge=0)
+    real_price: float = Field(..., gt=0)
+    impact_delta: float
+    effective_price: float = Field(..., gt=0)
+    impact_remaining_percent: float = Field(..., ge=0, le=100)
+
+
+class VirtualImpactCandle(BaseModel):
+    start_offset_seconds: float = Field(default=0.0, ge=0)
+    end_offset_seconds: float = Field(default=60.0, gt=0)
+    open: float = Field(..., gt=0)
+    high: float = Field(..., gt=0)
+    low: float = Field(..., gt=0)
+    close: float = Field(..., gt=0)
+
+
+class VirtualSimulatedPositionPath(BaseModel):
+    model: Literal["exponential_decay"] = "exponential_decay"
+    reference_price: float = Field(..., gt=0)
+    entry_price: float = Field(..., gt=0)
+    post_trade_price: float = Field(..., gt=0)
+    initial_impact_delta: float
+    decay_lambda: float = Field(..., gt=0)
+    decay_horizon_seconds: float = Field(default=60.0, gt=0)
+    points: list[VirtualImpactPathPoint] = Field(default_factory=list)
+    simulated_candle: VirtualImpactCandle
+
+
 class VirtualExecutionReport(BaseModel):
     mode: VirtualSimulationMode = "passive"
     status: VirtualExecutionStatus = "filled"
@@ -84,6 +113,7 @@ class VirtualExecutionReport(BaseModel):
     book_price_after: Optional[float] = Field(default=None, gt=0)
     liquidity: LiquidityMetrics = Field(default_factory=LiquidityMetrics)
     quality_gate: ExecutionQualityGate = Field(default_factory=ExecutionQualityGate)
+    simulated_path: Optional[VirtualSimulatedPositionPath] = None
     rejected_reason: Optional[str] = None
     notes: list[str] = Field(default_factory=list)
 

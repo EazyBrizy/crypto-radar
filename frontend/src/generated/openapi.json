@@ -109,16 +109,6 @@
               }
             }
           },
-          "501": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AIExplanationNotReadyResponse"
-                }
-              }
-            },
-            "description": "Not Implemented"
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -128,6 +118,16 @@
                 }
               }
             }
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIExplanationNotReadyResponse"
+                }
+              }
+            },
+            "description": "Not Implemented"
           }
         }
       }
@@ -160,22 +160,22 @@
               }
             }
           },
-          "501": {
-            "description": "Not Implemented",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BacktestNotReadyResponse"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not Implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestNotReadyResponse"
                 }
               }
             }
@@ -345,22 +345,22 @@
               }
             }
           },
-          "501": {
-            "description": "Not Implemented",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BillingProviderNotReadyResponse"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not Implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProviderNotReadyResponse"
                 }
               }
             }
@@ -396,22 +396,22 @@
               }
             }
           },
-          "501": {
-            "description": "Not Implemented",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BillingProviderNotReadyResponse"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not Implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProviderNotReadyResponse"
                 }
               }
             }
@@ -465,16 +465,6 @@
               }
             }
           },
-          "501": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BillingProviderNotReadyResponse"
-                }
-              }
-            },
-            "description": "Not Implemented"
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -484,6 +474,16 @@
                 }
               }
             }
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProviderNotReadyResponse"
+                }
+              }
+            },
+            "description": "Not Implemented"
           }
         }
       }
@@ -909,16 +909,6 @@
               }
             }
           },
-          "501": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RealTradeImportNotReadyResponse"
-                }
-              }
-            },
-            "description": "Not Implemented"
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -928,6 +918,16 @@
                 }
               }
             }
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealTradeImportNotReadyResponse"
+                }
+              }
+            },
+            "description": "Not Implemented"
           }
         }
       }
@@ -1518,6 +1518,31 @@
         }
       }
     },
+    "/api/v1/signals/open": {
+      "get": {
+        "tags": [
+          "signals"
+        ],
+        "summary": "List Open Signals",
+        "operationId": "list_open_signals_api_v1_signals_open_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RadarSignal"
+                  },
+                  "type": "array",
+                  "title": "Response List Open Signals Api V1 Signals Open Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/signals/{signal_id}": {
       "get": {
         "tags": [
@@ -1977,22 +2002,22 @@
               }
             }
           },
-          "501": {
-            "description": "Not Implemented",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RealTradeImportNotReadyResponse"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not Implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealTradeImportNotReadyResponse"
                 }
               }
             }
@@ -3609,7 +3634,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "string",
@@ -3623,7 +3648,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "string",
@@ -3637,7 +3662,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "string",
@@ -4084,7 +4109,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -4428,7 +4453,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -4740,69 +4765,69 @@
         "properties": {
           "spread_percent": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Spread Percent",
-            "default": 0.0
+            "default": 0
           },
           "orderbook_depth_0_1_percent_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Orderbook Depth 0 1 Percent Usd",
-            "default": 0.0
+            "default": 0
           },
           "orderbook_depth_0_5_percent_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Orderbook Depth 0 5 Percent Usd",
-            "default": 0.0
+            "default": 0
           },
           "orderbook_depth_1_percent_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Orderbook Depth 1 Percent Usd",
-            "default": 0.0
+            "default": 0
           },
           "volume_1m_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Volume 1M Usd",
-            "default": 0.0
+            "default": 0
           },
           "volume_5m_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Volume 5M Usd",
-            "default": 0.0
+            "default": 0
           },
           "volume_15m_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Volume 15M Usd",
-            "default": 0.0
+            "default": 0
           },
           "average_trade_size_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Average Trade Size Usd",
-            "default": 0.0
+            "default": 0
           },
           "volatility_1m_percent": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Volatility 1M Percent",
-            "default": 0.0
+            "default": 0
           },
           "liquidity_score": {
             "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
+            "maximum": 100,
+            "minimum": 0,
             "title": "Liquidity Score",
             "default": 0
           },
           "impact_score": {
             "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
+            "maximum": 100,
+            "minimum": 0,
             "title": "Impact Score",
             "default": 0
           },
@@ -4838,21 +4863,21 @@
           },
           "account_balance": {
             "type": "number",
-            "exclusiveMinimum": 0.0,
+            "exclusiveMinimum": 0,
             "title": "Account Balance",
-            "default": 100.0
+            "default": 100
           },
           "risk_percent": {
             "type": "number",
-            "maximum": 100.0,
-            "exclusiveMinimum": 0.0,
+            "maximum": 100,
+            "exclusiveMinimum": 0,
             "title": "Risk Percent",
-            "default": 10.0
+            "default": 10
           },
           "leverage": {
             "type": "integer",
-            "maximum": 100.0,
-            "minimum": 1.0,
+            "maximum": 100,
+            "minimum": 1,
             "title": "Leverage",
             "default": 1
           },
@@ -4860,7 +4885,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -4871,16 +4896,16 @@
           "fee_rate": {
             "type": "number",
             "maximum": 0.01,
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Fee Rate",
-            "default": 0.0
+            "default": 0
           },
           "slippage_bps": {
             "type": "number",
-            "maximum": 100.0,
-            "minimum": 0.0,
+            "maximum": 100,
+            "minimum": 0,
             "title": "Slippage Bps",
-            "default": 0.0
+            "default": 0
           },
           "simulation_mode": {
             "type": "string",
@@ -4894,10 +4919,10 @@
           },
           "max_virtual_slippage_bps": {
             "type": "number",
-            "maximum": 2000.0,
-            "minimum": 0.0,
+            "maximum": 2000,
+            "minimum": 0,
             "title": "Max Virtual Slippage Bps",
-            "default": 150.0
+            "default": 150
           },
           "allow_partial_fill": {
             "type": "boolean",
@@ -4906,8 +4931,8 @@
           },
           "min_fill_ratio": {
             "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
+            "maximum": 1,
+            "minimum": 0,
             "title": "Min Fill Ratio",
             "default": 0.25
           },
@@ -4923,8 +4948,8 @@
           },
           "max_open_positions": {
             "type": "integer",
-            "maximum": 100.0,
-            "minimum": 1.0,
+            "maximum": 100,
+            "minimum": 1,
             "title": "Max Open Positions",
             "default": 3
           }
@@ -5321,14 +5346,14 @@
         "properties": {
           "price": {
             "type": "number",
-            "exclusiveMinimum": 0.0,
+            "exclusiveMinimum": 0,
             "title": "Price"
           },
           "quantity": {
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -5340,7 +5365,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -5506,15 +5531,15 @@
           },
           "confidence": {
             "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
+            "maximum": 1,
+            "minimum": 0,
             "title": "Confidence"
           },
           "risk_reward": {
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -5550,8 +5575,8 @@
           },
           "score": {
             "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
+            "maximum": 100,
+            "minimum": 0,
             "title": "Score",
             "default": 0
           },
@@ -5935,14 +5960,14 @@
         "properties": {
           "price": {
             "type": "number",
-            "exclusiveMinimum": 0.0,
+            "exclusiveMinimum": 0,
             "title": "Price"
           },
           "quantity": {
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -5954,7 +5979,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -6068,56 +6093,56 @@
         "properties": {
           "trend_score": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Trend Score",
             "default": 0
           },
           "volume_score": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Volume Score",
             "default": 0
           },
           "liquidity_score": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Liquidity Score",
             "default": 0
           },
           "orderbook_score": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Orderbook Score",
             "default": 0
           },
           "risk_reward_score": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Risk Reward Score",
             "default": 0
           },
           "volatility_score": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Volatility Score",
             "default": 0
           },
           "overheat_penalty": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Overheat Penalty",
             "default": 0
           },
           "news_event_risk_penalty": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "News Event Risk Penalty",
             "default": 0
           },
           "total": {
             "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
+            "maximum": 100,
+            "minimum": 0,
             "title": "Total",
             "default": 0
           }
@@ -6216,12 +6241,12 @@
           "risk_amount": {
             "type": "number",
             "title": "Risk Amount",
-            "default": 0.0
+            "default": 0
           },
           "risk_reward": {
             "type": "number",
             "title": "Risk Reward",
-            "default": 3.0
+            "default": 3
           },
           "stop_loss": {
             "type": "number",
@@ -6237,12 +6262,12 @@
           "fees": {
             "type": "number",
             "title": "Fees",
-            "default": 0.0
+            "default": 0
           },
           "slippage_bps": {
             "type": "number",
             "title": "Slippage Bps",
-            "default": 0.0
+            "default": 0
           },
           "simulation_mode": {
             "type": "string",
@@ -6267,7 +6292,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -6279,7 +6304,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -6289,9 +6314,9 @@
           },
           "unfilled_size_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Unfilled Size Usd",
-            "default": 0.0
+            "default": 0
           },
           "execution": {
             "anyOf": [
@@ -6370,12 +6395,12 @@
           "mfe": {
             "type": "number",
             "title": "Mfe",
-            "default": 0.0
+            "default": 0
           },
           "mae": {
             "type": "number",
             "title": "Mae",
-            "default": 0.0
+            "default": 0
           },
           "screenshots": {
             "items": {
@@ -6633,37 +6658,37 @@
           "starting_balance": {
             "type": "number",
             "title": "Starting Balance",
-            "default": 100.0
+            "default": 100
           },
           "balance": {
             "type": "number",
             "title": "Balance",
-            "default": 100.0
+            "default": 100
           },
           "equity": {
             "type": "number",
             "title": "Equity",
-            "default": 100.0
+            "default": 100
           },
           "realized_pnl": {
             "type": "number",
             "title": "Realized Pnl",
-            "default": 0.0
+            "default": 0
           },
           "unrealized_pnl": {
             "type": "number",
             "title": "Unrealized Pnl",
-            "default": 0.0
+            "default": 0
           },
           "risk_per_trade": {
             "type": "number",
             "title": "Risk Per Trade",
-            "default": 10.0
+            "default": 10
           },
           "risk_reward": {
             "type": "number",
             "title": "Risk Reward",
-            "default": 3.0
+            "default": 3
           },
           "open_positions": {
             "type": "integer",
@@ -6725,40 +6750,40 @@
           },
           "requested_size_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Requested Size Usd",
-            "default": 0.0
+            "default": 0
           },
           "filled_size_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Filled Size Usd",
-            "default": 0.0
+            "default": 0
           },
           "unfilled_size_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Unfilled Size Usd",
-            "default": 0.0
+            "default": 0
           },
           "fill_ratio": {
             "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
+            "maximum": 1,
+            "minimum": 0,
             "title": "Fill Ratio",
-            "default": 1.0
+            "default": 1
           },
           "reference_price": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Reference Price",
-            "default": 0.0
+            "default": 0
           },
           "average_price": {
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -6768,27 +6793,27 @@
           },
           "entry_slippage_bps": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Entry Slippage Bps",
-            "default": 0.0
+            "default": 0
           },
           "exit_slippage_bps": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Exit Slippage Bps",
-            "default": 0.0
+            "default": 0
           },
           "market_impact_percent": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Market Impact Percent",
-            "default": 0.0
+            "default": 0
           },
           "best_bid_before": {
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -6800,7 +6825,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -6812,7 +6837,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -6825,6 +6850,16 @@
           },
           "quality_gate": {
             "$ref": "#/components/schemas/ExecutionQualityGate"
+          },
+          "simulated_path": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VirtualSimulatedPositionPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "rejected_reason": {
             "anyOf": [
@@ -6848,13 +6883,95 @@
         "type": "object",
         "title": "VirtualExecutionReport"
       },
+      "VirtualImpactCandle": {
+        "properties": {
+          "start_offset_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Start Offset Seconds",
+            "default": 0
+          },
+          "end_offset_seconds": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "End Offset Seconds",
+            "default": 60
+          },
+          "open": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Open"
+          },
+          "high": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "High"
+          },
+          "low": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Low"
+          },
+          "close": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Close"
+          }
+        },
+        "type": "object",
+        "required": [
+          "open",
+          "high",
+          "low",
+          "close"
+        ],
+        "title": "VirtualImpactCandle"
+      },
+      "VirtualImpactPathPoint": {
+        "properties": {
+          "offset_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Offset Seconds"
+          },
+          "real_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Real Price"
+          },
+          "impact_delta": {
+            "type": "number",
+            "title": "Impact Delta"
+          },
+          "effective_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Effective Price"
+          },
+          "impact_remaining_percent": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Impact Remaining Percent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "offset_seconds",
+          "real_price",
+          "impact_delta",
+          "effective_price",
+          "impact_remaining_percent"
+        ],
+        "title": "VirtualImpactPathPoint"
+      },
       "VirtualMarketSnapshot": {
         "properties": {
           "best_bid": {
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -6866,7 +6983,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0.0
+                "exclusiveMinimum": 0
               },
               {
                 "type": "null"
@@ -6899,7 +7016,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -6911,7 +7028,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -6923,7 +7040,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -6935,7 +7052,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -6947,7 +7064,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -6958,6 +7075,66 @@
         },
         "type": "object",
         "title": "VirtualMarketSnapshot"
+      },
+      "VirtualSimulatedPositionPath": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "exponential_decay",
+            "title": "Model",
+            "default": "exponential_decay"
+          },
+          "reference_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Reference Price"
+          },
+          "entry_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Entry Price"
+          },
+          "post_trade_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Post Trade Price"
+          },
+          "initial_impact_delta": {
+            "type": "number",
+            "title": "Initial Impact Delta"
+          },
+          "decay_lambda": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Decay Lambda"
+          },
+          "decay_horizon_seconds": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Decay Horizon Seconds",
+            "default": 60
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/VirtualImpactPathPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "simulated_candle": {
+            "$ref": "#/components/schemas/VirtualImpactCandle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reference_price",
+          "entry_price",
+          "post_trade_price",
+          "initial_impact_delta",
+          "decay_lambda",
+          "simulated_candle"
+        ],
+        "title": "VirtualSimulatedPositionPath"
       },
       "VirtualTrade": {
         "properties": {
@@ -7041,12 +7218,12 @@
           "risk_amount": {
             "type": "number",
             "title": "Risk Amount",
-            "default": 0.0
+            "default": 0
           },
           "risk_reward": {
             "type": "number",
             "title": "Risk Reward",
-            "default": 3.0
+            "default": 3
           },
           "stop_loss": {
             "type": "number",
@@ -7062,12 +7239,12 @@
           "fees": {
             "type": "number",
             "title": "Fees",
-            "default": 0.0
+            "default": 0
           },
           "slippage_bps": {
             "type": "number",
             "title": "Slippage Bps",
-            "default": 0.0
+            "default": 0
           },
           "simulation_mode": {
             "type": "string",
@@ -7092,7 +7269,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -7104,7 +7281,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -7114,9 +7291,9 @@
           },
           "unfilled_size_usd": {
             "type": "number",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Unfilled Size Usd",
-            "default": 0.0
+            "default": 0
           },
           "execution": {
             "anyOf": [
@@ -7196,12 +7373,12 @@
           "mfe": {
             "type": "number",
             "title": "Mfe",
-            "default": 0.0
+            "default": 0
           },
           "mae": {
             "type": "number",
             "title": "Mae",
-            "default": 0.0
+            "default": 0
           },
           "opened_at": {
             "type": "string",

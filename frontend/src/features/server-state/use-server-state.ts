@@ -29,7 +29,16 @@ export function useHealthQuery() {
 export function useRadarQuery() {
   return useQuery({
     queryKey: serverStateKeys.radar.dashboard(),
-    queryFn: async () => ({ signals: await api.activeSignals() }),
+    queryFn: api.radar,
+    refetchInterval: serverStatePolicy.reconciliationIntervalMs,
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
+export function useOpenSignalsQuery() {
+  return useQuery({
+    queryKey: serverStateKeys.signals.open(),
+    queryFn: api.openSignals,
     refetchInterval: serverStatePolicy.reconciliationIntervalMs,
     staleTime: serverStatePolicy.realtimeStaleTimeMs
   });
@@ -424,7 +433,9 @@ export function useStopScannerMutation() {
 }
 
 export function applySignalSnapshot(queryClient: QueryClient, signals: RadarSignal[]) {
-  queryClient.setQueryData(queryKeys.signals, signals.filter((signal) => signal.status === "active"));
+  queryClient.setQueryData(queryKeys.signals, signals.filter(isOpenFeedSignal));
+  queryClient.setQueryData(serverStateKeys.signals.open(), signals.filter(isOpenFeedSignal));
+  queryClient.setQueryData(serverStateKeys.signals.active(), signals.filter((signal) => signal.status === "active"));
   queryClient.setQueryData(serverStateKeys.signals.history(), signals);
   queryClient.setQueryData<RadarResponse>(queryKeys.radar, { signals });
 }
@@ -449,4 +460,8 @@ function filterSignals(signals: RadarSignal[], filters?: SignalHistoryFilters): 
     const symbolMatches = !filters?.symbol || signal.symbol === filters.symbol;
     return statusMatches && symbolMatches;
   });
+}
+
+function isOpenFeedSignal(signal: RadarSignal): boolean {
+  return signal.status === "new" || signal.status === "active" || signal.status === "entry_touched";
 }

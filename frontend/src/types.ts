@@ -101,6 +101,35 @@ export interface ExecutionQualityGate {
   message: string | null;
 }
 
+export interface VirtualImpactPathPoint {
+  offset_seconds: number;
+  real_price: number;
+  impact_delta: number;
+  effective_price: number;
+  impact_remaining_percent: number;
+}
+
+export interface VirtualImpactCandle {
+  start_offset_seconds: number;
+  end_offset_seconds: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export interface VirtualSimulatedPositionPath {
+  model: "exponential_decay";
+  reference_price: number;
+  entry_price: number;
+  post_trade_price: number;
+  initial_impact_delta: number;
+  decay_lambda: number;
+  decay_horizon_seconds: number;
+  points: VirtualImpactPathPoint[];
+  simulated_candle: VirtualImpactCandle;
+}
+
 export interface VirtualExecutionReport {
   mode: VirtualSimulationMode;
   status: VirtualExecutionStatus;
@@ -118,6 +147,7 @@ export interface VirtualExecutionReport {
   book_price_after: number | null;
   liquidity: LiquidityMetrics;
   quality_gate: ExecutionQualityGate;
+  simulated_path: VirtualSimulatedPositionPath | null;
   rejected_reason: string | null;
   notes: string[];
 }

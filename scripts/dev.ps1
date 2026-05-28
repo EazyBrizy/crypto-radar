@@ -168,6 +168,7 @@ function Start-ManagedProcess {
     if ($null -eq $processEnvironment) {
         $processEnvironment = $startInfo.EnvironmentVariables
     }
+    Normalize-PathEnvironment -Environment $processEnvironment
 
     foreach ($key in $Environment.Keys) {
         $processEnvironment[$key] = [string]$Environment[$key]
@@ -210,6 +211,29 @@ function Start-ManagedProcess {
         Process = $process
         Events = @($stdoutEvent, $stderrEvent)
     }
+}
+
+function Normalize-PathEnvironment {
+    param($Environment)
+
+    $pathKeys = @($Environment.Keys | Where-Object { [string]$_ -ieq "PATH" })
+    if ($pathKeys.Count -le 1) {
+        return
+    }
+
+    $preferredKey = ($pathKeys | Where-Object { [string]$_ -ceq "Path" } | Select-Object -First 1)
+    if (-not $preferredKey) {
+        $preferredKey = $pathKeys[0]
+    }
+    $preferredValue = [string]$Environment[$preferredKey]
+
+    foreach ($pathKey in $pathKeys) {
+        if ([string]$pathKey -cne [string]$preferredKey) {
+            [void]$Environment.Remove($pathKey)
+        }
+    }
+
+    $Environment[$preferredKey] = $preferredValue
 }
 
 if (Test-PythonExecutable -Path $BackendVenvPython) {

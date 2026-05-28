@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import json
 import logging
+import math
 from typing import Any, Protocol
 from typing import Optional
 from uuid import uuid4
@@ -414,22 +415,29 @@ class TradeService:
             if trade.exchange != exchange or trade.symbol != symbol:
                 continue
 
-            updated_trade = self._mark_price(trade, price)
-            close_target = self._close_target(updated_trade, price)
+            now = datetime.now(timezone.utc)
+            simulated_price = self._private_simulated_price(trade, price, now)
+            updated_trade = self._mark_price(trade, simulated_price, now)
+            close_target = self._close_target(updated_trade, simulated_price)
             if close_target is not None:
                 exit_price, reason = close_target
                 updated_trade = self._close_trade(updated_trade, exit_price, reason)
             updated.append(updated_trade)
         return updated
 
-    def _mark_price(self, trade: VirtualTrade, price: float) -> VirtualTrade:
+    def _mark_price(
+        self,
+        trade: VirtualTrade,
+        price: float,
+        now: datetime | None = None,
+    ) -> VirtualTrade:
         unrealized = self._gross_pnl(trade, price)
         updated = trade.model_copy(
             update={
                 "current_price": price,
                 "mfe": max(trade.mfe, unrealized),
                 "mae": min(trade.mae, unrealized),
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": now or datetime.now(timezone.utc),
             }
         )
         self._repository.save_virtual_trade(updated)
@@ -604,6 +612,23 @@ class TradeService:
         if reason == "stop_loss" and trade.execution.mode == "impact_aware":
             return exit_slippage_bps * 1.1
         return exit_slippage_bps
+
+    @staticmethod
+    def _private_simulated_price(
+        trade: VirtualTrade,
+        real_price: float,
+        now: datetime,
+    ) -> float:
+        simulated_path = trade.execution.simulated_path if trade.execution else None
+        if simulated_path is None:
+            return real_price
+
+        elapsed_seconds = max((now - trade.opened_at).total_seconds(), 0.0)
+        residual_impact = (
+            simulated_path.initial_impact_delta
+            * math.exp(-simulated_path.decay_lambda * elapsed_seconds)
+        )
+        return max(real_price + residual_impact, 0.00000001)
 
     @staticmethod
     def _stop_matches_side(entry_price: float, stop_loss: float, side: str) -> bool:

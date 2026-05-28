@@ -28,6 +28,7 @@ export const api = {
   candles: candlesApi.list,
   signals: signalsApi.list,
   activeSignals: signalsApi.active,
+  openSignals: signalsApi.open,
   historicalSignals: signalsApi.historical,
   confirmVirtual: signalsApi.confirmVirtual,
   executionPreview: signalsApi.executionPreview,

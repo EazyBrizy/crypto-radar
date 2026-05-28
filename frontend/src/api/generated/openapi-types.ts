@@ -504,6 +504,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/signals/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Open Signals */
+        get: operations["list_open_signals_api_v1_signals_open_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/signals/{signal_id}": {
         parameters: {
             query?: never;
@@ -2592,10 +2609,45 @@ export interface components {
             book_price_after?: number | null;
             liquidity?: components["schemas"]["LiquidityMetrics"];
             quality_gate?: components["schemas"]["ExecutionQualityGate"];
+            simulated_path?: components["schemas"]["VirtualSimulatedPositionPath"] | null;
             /** Rejected Reason */
             rejected_reason?: string | null;
             /** Notes */
             notes?: string[];
+        };
+        /** VirtualImpactCandle */
+        VirtualImpactCandle: {
+            /**
+             * Start Offset Seconds
+             * @default 0
+             */
+            start_offset_seconds: number;
+            /**
+             * End Offset Seconds
+             * @default 60
+             */
+            end_offset_seconds: number;
+            /** Open */
+            open: number;
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Close */
+            close: number;
+        };
+        /** VirtualImpactPathPoint */
+        VirtualImpactPathPoint: {
+            /** Offset Seconds */
+            offset_seconds: number;
+            /** Real Price */
+            real_price: number;
+            /** Impact Delta */
+            impact_delta: number;
+            /** Effective Price */
+            effective_price: number;
+            /** Impact Remaining Percent */
+            impact_remaining_percent: number;
         };
         /** VirtualMarketSnapshot */
         VirtualMarketSnapshot: {
@@ -2619,6 +2671,33 @@ export interface components {
             average_trade_size_usd?: number | null;
             /** Volatility 1M Percent */
             volatility_1m_percent?: number | null;
+        };
+        /** VirtualSimulatedPositionPath */
+        VirtualSimulatedPositionPath: {
+            /**
+             * Model
+             * @default exponential_decay
+             * @constant
+             */
+            model: "exponential_decay";
+            /** Reference Price */
+            reference_price: number;
+            /** Entry Price */
+            entry_price: number;
+            /** Post Trade Price */
+            post_trade_price: number;
+            /** Initial Impact Delta */
+            initial_impact_delta: number;
+            /** Decay Lambda */
+            decay_lambda: number;
+            /**
+             * Decay Horizon Seconds
+             * @default 60
+             */
+            decay_horizon_seconds: number;
+            /** Points */
+            points?: components["schemas"]["VirtualImpactPathPoint"][];
+            simulated_candle: components["schemas"]["VirtualImpactCandle"];
         };
         /** VirtualTrade */
         VirtualTrade: {
@@ -3913,6 +3992,26 @@ export interface operations {
         };
     };
     list_active_signals_api_v1_signals_active_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RadarSignal"][];
+                };
+            };
+        };
+    };
+    list_open_signals_api_v1_signals_open_get: {
         parameters: {
             query?: never;
             header?: never;

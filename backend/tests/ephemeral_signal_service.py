@@ -23,6 +23,13 @@ class EphemeralSignalRepository:
     def list_active_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
         return [signal for signal in self.list_signals(limit) if signal.status == "active"]
 
+    def list_open_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
+        return [
+            signal
+            for signal in self.list_signals(limit)
+            if signal.status in {"new", "active"}
+        ]
+
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         return self._signals.get(signal_id)
 

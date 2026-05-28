@@ -11,6 +11,10 @@ export const signalsApi = {
     const response = await request(() => openApiClient.GET("/api/v1/signals/active"));
     return response.map(normalizeSignal);
   },
+  async open(): Promise<RadarSignal[]> {
+    const response = await request(() => openApiClient.GET("/api/v1/signals/open"));
+    return response.map(normalizeSignal);
+  },
   async historical(): Promise<RadarSignal[]> {
     return signalsApi.list();
   },

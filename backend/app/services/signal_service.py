@@ -110,6 +110,16 @@ class SignalService:
     def list_active_signals(self) -> list[RadarSignal]:
         return self._repository.list_active_signals()
 
+    def list_open_signals(self) -> list[RadarSignal]:
+        list_open = getattr(self._repository, "list_open_signals", None)
+        if list_open is not None:
+            return list_open()
+        return [
+            signal
+            for signal in self._repository.list_signals()
+            if signal.status in {"new", "active"}
+        ]
+
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         return self._repository.get_signal(signal_id)
 

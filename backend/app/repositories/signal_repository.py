@@ -43,6 +43,9 @@ class SignalRepository(Protocol):
     def list_active_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
         ...
 
+    def list_open_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
+        ...
+
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         ...
 
@@ -92,6 +95,16 @@ class PostgresSignalRepository:
             records = session.scalars(
                 _signal_select()
                 .where(TradingSignal.status == "active")
+                .order_by(TradingSignal.detected_at.desc())
+                .limit(limit)
+            ).all()
+            return [_record_to_radar_signal(record) for record in records]
+
+    def list_open_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
+        with self._session_factory() as session:
+            records = session.scalars(
+                _signal_select()
+                .where(TradingSignal.status.in_(OPEN_SIGNAL_STATUSES))
                 .order_by(TradingSignal.detected_at.desc())
                 .limit(limit)
             ).all()

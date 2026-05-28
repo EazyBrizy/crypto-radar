@@ -70,6 +70,11 @@ export function ActiveTradeChart({ trade }: ActiveTradeChartProps) {
           <span>Execution</span>
           <strong>{formatExecutionSummary(trade)}</strong>
         </div>
+        <div>
+          <Gauge size={15} />
+          <span>Model</span>
+          <strong>{trade.execution?.simulation_tier.toUpperCase() ?? "MVP"}</strong>
+        </div>
         {simulatedPath ? (
           <>
             <div>

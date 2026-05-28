@@ -17,6 +17,7 @@ export const SignalStatusSchema = z.enum([
 export const TradeModeSchema = z.enum(["virtual", "real"]);
 export const TradeStatusSchema = z.enum(["open", "closed", "cancelled"]);
 export const VirtualSimulationModeSchema = z.enum(["passive", "impact_aware"]);
+export const VirtualSimulationTierSchema = z.enum(["mvp", "advanced", "pro"]);
 export const VirtualExecutionStatusSchema = z.enum(["filled", "partially_filled", "rejected_virtual_execution"]);
 export const ImpactRiskSchema = z.enum(["low", "medium", "high"]);
 export const ExecutionGateStatusSchema = z.enum(["passed", "warning", "blocked"]);
@@ -99,6 +100,9 @@ export const LiquidityMetricsSchema = z.object({
 
 export const VirtualExecutionReportSchema = z.object({
   mode: VirtualSimulationModeSchema.default("passive"),
+  simulation_tier: VirtualSimulationTierSchema.default("mvp"),
+  active_capabilities: z.array(z.string()).default([]),
+  planned_capabilities: z.array(z.string()).default([]),
   status: VirtualExecutionStatusSchema.default("filled"),
   requested_size_usd: z.number().default(0),
   filled_size_usd: z.number().default(0),

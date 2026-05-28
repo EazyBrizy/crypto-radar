@@ -61,6 +61,7 @@ export const api = {
   testExchangeConnection: exchangesApi.testConnection,
   syncExchangeConnection: exchangesApi.syncConnection,
   userProfile: settingsApi.userProfile,
+  updateUserSettings: settingsApi.updateUserSettings,
   subscriptionStatus: settingsApi.subscriptionStatus,
   billingPlans: billingApi.plans,
   billingSubscription: billingApi.subscription,

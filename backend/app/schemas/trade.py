@@ -12,6 +12,8 @@ TradeResult = Literal["win", "loss", "breakeven"]
 CloseReason = Literal["take_profit", "stop_loss", "manual_close", "cancelled"]
 SimulationMode = Literal["auto", "passive", "impact_aware"]
 VirtualSimulationMode = Literal["passive", "impact_aware"]
+VirtualSimulationTier = Literal["mvp", "advanced", "pro"]
+VirtualSimulationCapabilityStatus = Literal["active", "planned", "stub"]
 VirtualExecutionStatus = Literal["filled", "partially_filled", "rejected_virtual_execution"]
 ImpactRisk = Literal["low", "medium", "high"]
 ExecutionGateStatus = Literal["passed", "warning", "blocked"]
@@ -67,6 +69,22 @@ class ExecutionQualityGate(BaseModel):
     message: Optional[str] = None
 
 
+class VirtualSimulationCapability(BaseModel):
+    code: str
+    name: str
+    tier: VirtualSimulationTier
+    status: VirtualSimulationCapabilityStatus
+    description: str
+
+
+class VirtualSimulationModelInfo(BaseModel):
+    current_tier: VirtualSimulationTier = "advanced"
+    active_capabilities: list[VirtualSimulationCapability] = Field(default_factory=list)
+    planned_capabilities: list[VirtualSimulationCapability] = Field(default_factory=list)
+    data_boundary: str
+    notes: list[str] = Field(default_factory=list)
+
+
 class VirtualImpactPathPoint(BaseModel):
     offset_seconds: float = Field(..., ge=0)
     real_price: float = Field(..., gt=0)
@@ -98,6 +116,9 @@ class VirtualSimulatedPositionPath(BaseModel):
 
 class VirtualExecutionReport(BaseModel):
     mode: VirtualSimulationMode = "passive"
+    simulation_tier: VirtualSimulationTier = "mvp"
+    active_capabilities: list[str] = Field(default_factory=list)
+    planned_capabilities: list[str] = Field(default_factory=list)
     status: VirtualExecutionStatus = "filled"
     requested_size_usd: float = Field(default=0.0, ge=0)
     filled_size_usd: float = Field(default=0.0, ge=0)

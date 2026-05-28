@@ -708,6 +708,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/trades/virtual/simulation-model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Virtual Simulation Model */
+        get: operations["get_virtual_simulation_model_api_v1_trades_virtual_simulation_model_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/trades/virtual/{trade_id}": {
         parameters: {
             query?: never;
@@ -774,6 +791,23 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Current User Settings */
+        patch: operations["update_current_user_settings_api_v1_users_me_settings_patch"];
         trace?: never;
     };
     "/api/v1/market-pairs": {
@@ -2459,6 +2493,11 @@ export interface components {
              */
             updated_at: string;
         };
+        /** UserSettingsPatchRequest */
+        UserSettingsPatchRequest: {
+            /** Virtual Simulation Level */
+            virtual_simulation_level?: ("mvp" | "advanced" | "pro") | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -2553,6 +2592,16 @@ export interface components {
              * @enum {string}
              */
             mode: "passive" | "impact_aware";
+            /**
+             * Simulation Tier
+             * @default mvp
+             * @enum {string}
+             */
+            simulation_tier: "mvp" | "advanced" | "pro";
+            /** Active Capabilities */
+            active_capabilities?: string[];
+            /** Planned Capabilities */
+            planned_capabilities?: string[];
             /**
              * Status
              * @default filled
@@ -2698,6 +2747,42 @@ export interface components {
             /** Points */
             points?: components["schemas"]["VirtualImpactPathPoint"][];
             simulated_candle: components["schemas"]["VirtualImpactCandle"];
+        };
+        /** VirtualSimulationCapability */
+        VirtualSimulationCapability: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /**
+             * Tier
+             * @enum {string}
+             */
+            tier: "mvp" | "advanced" | "pro";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "planned" | "stub";
+            /** Description */
+            description: string;
+        };
+        /** VirtualSimulationModelInfo */
+        VirtualSimulationModelInfo: {
+            /**
+             * Current Tier
+             * @default advanced
+             * @enum {string}
+             */
+            current_tier: "mvp" | "advanced" | "pro";
+            /** Active Capabilities */
+            active_capabilities?: components["schemas"]["VirtualSimulationCapability"][];
+            /** Planned Capabilities */
+            planned_capabilities?: components["schemas"]["VirtualSimulationCapability"][];
+            /** Data Boundary */
+            data_boundary: string;
+            /** Notes */
+            notes?: string[];
         };
         /** VirtualTrade */
         VirtualTrade: {
@@ -4392,6 +4477,26 @@ export interface operations {
             };
         };
     };
+    get_virtual_simulation_model_api_v1_trades_virtual_simulation_model_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VirtualSimulationModelInfo"];
+                };
+            };
+        };
+    };
     get_virtual_trade_api_v1_trades_virtual__trade_id__get: {
         parameters: {
             query?: never;
@@ -4499,6 +4604,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_current_user_settings_api_v1_users_me_settings_patch: {
+        parameters: {
+            query?: {
+                user_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserSettingsPatchRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

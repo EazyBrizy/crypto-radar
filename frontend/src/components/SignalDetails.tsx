@@ -177,8 +177,13 @@ function ExecutionQualityBlock({
     <div className="execution-quality-block">
       <div className="section-title">
         <ShieldAlert size={18} />
-        <h3>Execution Quality</h3>
+        <h3>Reality Check</h3>
         <Badge tone={tone}>{executionLabel}</Badge>
+      </div>
+      <div className="reality-check-summary">
+        <span>Signal: {signal.score >= 70 ? "good" : "watchlist"}</span>
+        <span>Chart: {signal.score >= 80 ? "strong" : "mixed"}</span>
+        <span>Execution: {executionQualityText(gateStatus, impactRisk).toLowerCase()}</span>
       </div>
       <div className="execution-quality-grid">
         <MetricLine label="Expected slippage" value={execution ? `${(execution.entry_slippage_bps / 100).toFixed(2)}%` : "Preview pending"} />
@@ -189,9 +194,16 @@ function ExecutionQualityBlock({
         <MetricLine label="Fill" value={execution ? `${Math.round(execution.fill_ratio * 100)}%` : "-"} />
         <MetricLine label="Post-impact" value={simulatedPath ? formatExecutionPrice(simulatedPath.post_trade_price) : "-"} />
         <MetricLine label="Decay 60s" value={simulatedPath ? formatExecutionPrice(simulatedPath.simulated_candle.close) : "-"} />
+        <MetricLine label="Model" value={execution ? execution.simulation_tier.toUpperCase() : "MVP"} />
       </div>
       {execution?.quality_gate.message ? (
         <p className="execution-quality-message">{execution.quality_gate.message}</p>
+      ) : null}
+      {execution ? (
+        <div className="reality-check-copy">
+          <p>{realityCheckReason(execution)}</p>
+          <p>{realityCheckRecommendation(execution, orderType)}</p>
+        </div>
       ) : null}
     </div>
   );
@@ -210,6 +222,41 @@ function formatExecutionPrice(price: number): string {
   if (Math.abs(price) >= 1000) return price.toFixed(0);
   if (Math.abs(price) >= 1) return price.toFixed(2);
   return price.toPrecision(4);
+}
+
+function executionQualityText(status: ExecutionGateStatus, impactRisk: ImpactRisk): string {
+  if (status === "blocked") return "Poor";
+  if (status === "warning" || impactRisk !== "low") return "Risky";
+  return "Good";
+}
+
+function realityCheckReason(execution: VirtualExecutionReport): string {
+  const depthOne = execution.liquidity.orderbook_depth_1_percent_usd;
+  const depthRatio = depthOne > 0 ? execution.requested_size_usd / depthOne * 100 : null;
+  const slippagePercent = execution.entry_slippage_bps / 100;
+  const exitSlippagePercent = execution.exit_slippage_bps / 100;
+
+  if (execution.quality_gate.status === "blocked") {
+    const depthText = depthRatio == null ? "current depth" : `${depthRatio.toFixed(0)}% of liquidity inside 1%`;
+    return `Your size would consume ${depthText}. Real entry could be worse by about ${slippagePercent.toFixed(2)}%, and stop execution could add about ${exitSlippagePercent.toFixed(2)}% friction.`;
+  }
+  if (execution.quality_gate.status === "warning" || execution.liquidity.impact_risk !== "low") {
+    return `The setup is tradable, but execution is sensitive: expected entry slippage is ${slippagePercent.toFixed(2)}% and impact risk is ${impactRiskLabel(execution.liquidity.impact_risk)}.`;
+  }
+  return `The requested size fits current liquidity with expected entry slippage around ${slippagePercent.toFixed(2)}%.`;
+}
+
+function realityCheckRecommendation(execution: VirtualExecutionReport, orderType: string): string {
+  const suggestedMax = execution.quality_gate.suggested_max_size_usd;
+  if (execution.quality_gate.status === "blocked") {
+    return suggestedMax == null
+      ? `Recommendation: skip this trade or use a much smaller ${orderType.toLowerCase()} setup.`
+      : `Recommendation: reduce position size to about $${suggestedMax.toFixed(0)}, use a limit order, or skip the trade.`;
+  }
+  if (execution.quality_gate.status === "warning" || execution.liquidity.impact_risk !== "low") {
+    return `Recommendation: prefer ${orderType.toLowerCase()}, reduce size if the book thins out, and avoid chasing a market order.`;
+  }
+  return "Recommendation: execution looks realistic for this virtual size.";
 }
 
 function ScoreLine({ label, value, max }: { label: string; value: number; max: number }) {

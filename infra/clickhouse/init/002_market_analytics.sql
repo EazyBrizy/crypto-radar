@@ -64,6 +64,32 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(snapshot_ts)
 ORDER BY (exchange, symbol, snapshot_ts);
 
+CREATE TABLE IF NOT EXISTS market.liquidity_snapshots
+(
+    exchange LowCardinality(String),
+    symbol LowCardinality(String),
+    snapshot_ts DateTime64(3, 'UTC'),
+    ingest_ts DateTime64(3, 'UTC'),
+    best_bid Nullable(Decimal(38, 18)),
+    best_ask Nullable(Decimal(38, 18)),
+    spread_percent Nullable(Float64),
+    depth_bid_0_1 Nullable(Decimal(38, 18)),
+    depth_ask_0_1 Nullable(Decimal(38, 18)),
+    depth_bid_0_5 Nullable(Decimal(38, 18)),
+    depth_ask_0_5 Nullable(Decimal(38, 18)),
+    depth_bid_1_0 Nullable(Decimal(38, 18)),
+    depth_ask_1_0 Nullable(Decimal(38, 18)),
+    volume_1m Nullable(Decimal(38, 18)),
+    volume_5m Nullable(Decimal(38, 18)),
+    volatility_1m Nullable(Float64),
+    liquidity_score Nullable(Float64),
+    impact_risk LowCardinality(String)
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(snapshot_ts)
+ORDER BY (exchange, symbol, snapshot_ts)
+TTL snapshot_ts + INTERVAL 180 DAY DELETE;
+
 CREATE TABLE IF NOT EXISTS market.ohlcv_1m
 (
     exchange LowCardinality(String),

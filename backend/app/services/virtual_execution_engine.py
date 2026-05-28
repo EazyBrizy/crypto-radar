@@ -18,6 +18,11 @@ from app.schemas.trade import (
     VirtualSimulatedPositionPath,
     VirtualSimulationMode,
 )
+from app.services.virtual_simulation_model import (
+    capability_codes_for_report,
+    planned_capability_codes_for_report,
+    simulation_tier_for_report,
+)
 
 
 class VirtualExecutionRejected(ValueError):
@@ -99,7 +104,7 @@ class VirtualExecutionEngine:
         entry_slippage_bps = max(request.slippage_bps, spread_slippage_bps)
         average_price = _apply_price_slippage(reference_price, buy_side, entry_slippage_bps)
         best_bid, best_ask = _best_prices(snapshot)
-        return VirtualExecutionReport(
+        return _with_simulation_capabilities(VirtualExecutionReport(
             mode="passive",
             status="filled",
             requested_size_usd=requested_size_usd,
@@ -115,7 +120,7 @@ class VirtualExecutionEngine:
             best_ask_before=best_ask,
             liquidity=metrics,
             notes=["Passive simulation: own order impact is assumed negligible."],
-        )
+        ))
 
     def _simulate_impact_aware(
         self,
@@ -206,7 +211,15 @@ class VirtualExecutionEngine:
         if status == "partially_filled":
             notes.append("Only available liquidity inside the allowed slippage band was filled.")
 
-        return VirtualExecutionReport(
+        simulated_path = _simulated_position_path(
+            reference_price=reference_price,
+            average_price=walk.average_price,
+            book_price_after=walk.book_price_after,
+            market_impact_percent=walk.market_impact_percent,
+            buy_side=buy_side,
+            metrics=metrics,
+        )
+        return _with_simulation_capabilities(VirtualExecutionReport(
             mode="impact_aware",
             status=status,
             requested_size_usd=requested_size_usd,
@@ -222,16 +235,9 @@ class VirtualExecutionEngine:
             best_ask_before=best_ask,
             book_price_after=walk.book_price_after,
             liquidity=metrics,
-            simulated_path=_simulated_position_path(
-                reference_price=reference_price,
-                average_price=walk.average_price,
-                book_price_after=walk.book_price_after,
-                market_impact_percent=walk.market_impact_percent,
-                buy_side=buy_side,
-                metrics=metrics,
-            ),
+            simulated_path=simulated_path,
             notes=notes,
-        )
+        ))
 
     def _simulate_from_metrics(
         self,
@@ -281,7 +287,15 @@ class VirtualExecutionEngine:
         if status == "partially_filled":
             notes.append("Depth metrics indicate only a partial virtual fill is available.")
 
-        return VirtualExecutionReport(
+        simulated_path = _simulated_position_path(
+            reference_price=reference_price,
+            average_price=average_price,
+            book_price_after=None,
+            market_impact_percent=market_impact_percent,
+            buy_side=buy_side,
+            metrics=metrics,
+        )
+        return _with_simulation_capabilities(VirtualExecutionReport(
             mode="impact_aware",
             status=status,
             requested_size_usd=requested_size_usd,
@@ -296,16 +310,9 @@ class VirtualExecutionEngine:
             best_bid_before=best_bid,
             best_ask_before=best_ask,
             liquidity=metrics,
-            simulated_path=_simulated_position_path(
-                reference_price=reference_price,
-                average_price=average_price,
-                book_price_after=None,
-                market_impact_percent=market_impact_percent,
-                buy_side=buy_side,
-                metrics=metrics,
-            ),
+            simulated_path=simulated_path,
             notes=notes,
-        )
+        ))
 
     def _rejected_report(
         self,
@@ -319,7 +326,7 @@ class VirtualExecutionEngine:
         best_ask: float | None,
         reason: str,
     ) -> VirtualExecutionReport:
-        report = VirtualExecutionReport(
+        report = _with_simulation_capabilities(VirtualExecutionReport(
             mode=mode,
             status="rejected_virtual_execution",
             requested_size_usd=requested_size_usd,
@@ -336,7 +343,7 @@ class VirtualExecutionEngine:
             liquidity=metrics,
             rejected_reason=reason,
             notes=["Virtual execution rejected before position creation."],
-        )
+        ))
         return report.model_copy(
             update={
                 "quality_gate": ExecutionQualityGate(
@@ -464,6 +471,20 @@ def _execution_levels(snapshot: VirtualMarketSnapshot | None, buy_side: bool) ->
         return []
     levels = snapshot.asks if buy_side else snapshot.bids
     return sorted(levels, key=lambda level: level.price, reverse=not buy_side)
+
+
+def _with_simulation_capabilities(report: VirtualExecutionReport) -> VirtualExecutionReport:
+    has_simulated_path = report.simulated_path is not None
+    return report.model_copy(
+        update={
+            "simulation_tier": simulation_tier_for_report(has_simulated_path=has_simulated_path),
+            "active_capabilities": capability_codes_for_report(
+                impact_aware=report.mode == "impact_aware",
+                has_simulated_path=has_simulated_path,
+            ),
+            "planned_capabilities": planned_capability_codes_for_report(),
+        }
+    )
 
 
 def _quality_gate(report: VirtualExecutionReport) -> ExecutionQualityGate:

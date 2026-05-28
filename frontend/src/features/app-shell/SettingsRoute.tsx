@@ -14,15 +14,18 @@ import {
   useTestAlertRuleMutation,
   useTestExchangeConnectionMutation,
   useUpdateExchangeConnectionMutation,
-  useUpdateAlertRuleMutation
+  useUpdateAlertRuleMutation,
+  useUpdateUserSettingsMutation,
+  useUserProfileQuery
 } from "@/hooks/use-radar-queries";
-import type { AlertRuleDraft, ExchangeConnectionDraft } from "@/features/server-state/types";
+import type { AlertRuleDraft, ExchangeConnectionDraft, VirtualSimulationLevel } from "@/features/server-state/types";
 
 export function SettingsRoute() {
   const configQuery = useRadarConfigQuery();
   const marketPairsQuery = useMarketPairsQuery();
   const alertRulesQuery = useAlertRulesQuery();
   const exchangeConnectionsQuery = useExchangeConnectionsQuery();
+  const userProfileQuery = useUserProfileQuery({ enabled: true });
   const createAlertRuleMutation = useCreateAlertRuleMutation();
   const updateAlertRuleMutation = useUpdateAlertRuleMutation();
   const deleteAlertRuleMutation = useDeleteAlertRuleMutation();
@@ -32,6 +35,7 @@ export function SettingsRoute() {
   const deleteExchangeConnectionMutation = useDeleteExchangeConnectionMutation();
   const testExchangeConnectionMutation = useTestExchangeConnectionMutation();
   const syncExchangeConnectionMutation = useSyncExchangeConnectionMutation();
+  const updateUserSettingsMutation = useUpdateUserSettingsMutation();
 
   return (
     <SettingsPage
@@ -39,6 +43,7 @@ export function SettingsRoute() {
       availablePairs={marketPairsQuery.data ?? []}
       alertRules={alertRulesQuery.data ?? []}
       exchangeConnections={exchangeConnectionsQuery.data ?? []}
+      userProfile={userProfileQuery.data ?? null}
       busy={
         createAlertRuleMutation.isPending ||
         updateAlertRuleMutation.isPending ||
@@ -48,7 +53,8 @@ export function SettingsRoute() {
         updateExchangeConnectionMutation.isPending ||
         deleteExchangeConnectionMutation.isPending ||
         testExchangeConnectionMutation.isPending ||
-        syncExchangeConnectionMutation.isPending
+        syncExchangeConnectionMutation.isPending ||
+        updateUserSettingsMutation.isPending
       }
       onCreateAlert={(draft: AlertRuleDraft) => createAlertRuleMutation.mutateAsync(draft)}
       onToggleAlert={(alertId, isEnabled) =>
@@ -66,6 +72,9 @@ export function SettingsRoute() {
       onDeleteExchangeConnection={(connectionId) => deleteExchangeConnectionMutation.mutateAsync(connectionId)}
       onTestExchangeConnection={(connectionId) => testExchangeConnectionMutation.mutateAsync(connectionId)}
       onSyncExchangeConnection={(connectionId) => syncExchangeConnectionMutation.mutateAsync(connectionId)}
+      onSelectSimulationLevel={(simulationLevel: VirtualSimulationLevel) =>
+        updateUserSettingsMutation.mutateAsync({ virtual_simulation_level: simulationLevel })
+      }
     />
   );
 }

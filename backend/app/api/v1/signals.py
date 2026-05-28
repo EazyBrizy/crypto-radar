@@ -15,8 +15,7 @@ from app.services.realtime_events import (
     trade_activated_event,
 )
 from app.services.signal_service import signal_service
-from app.services.trade_service import trade_service
-from app.services.virtual_execution_engine import VirtualExecutionRejected
+from app.services.virtual_trading import VirtualExecutionRejected, virtual_trading_service
 
 router = APIRouter(prefix="/signals", tags=["signals"])
 
@@ -73,7 +72,7 @@ async def confirm_signal(
         )
 
     try:
-        updated_signal, virtual_trade = trade_service.confirm_signal(signal, request)
+        updated_signal, virtual_trade = virtual_trading_service.confirm_signal(signal, request)
     except VirtualExecutionRejected as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -116,7 +115,7 @@ async def preview_virtual_execution(
             detail="Real execution preview is not implemented yet",
         )
     try:
-        return trade_service.preview_virtual_execution(signal, request)
+        return virtual_trading_service.preview_virtual_execution(signal, request)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

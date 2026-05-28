@@ -90,6 +90,10 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertGreater(report.liquidity.spread_percent, 0)
         self.assertIsNotNone(report.simulated_path)
         assert report.simulated_path is not None
+        self.assertEqual(report.simulation_tier, "advanced")
+        self.assertIn("orderbook_depth_simulation", report.active_capabilities)
+        self.assertIn("impact_decay", report.active_capabilities)
+        self.assertIn("monte_carlo_execution_simulation", report.planned_capabilities)
         self.assertGreater(report.simulated_path.post_trade_price, report.average_price or 0)
         self.assertGreater(report.simulated_path.points[0].effective_price, report.simulated_path.points[-1].effective_price)
         self.assertGreater(report.simulated_path.points[-1].effective_price, report.reference_price)

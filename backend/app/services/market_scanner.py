@@ -23,7 +23,7 @@ from app.services.realtime_events import (
     trade_closed_event,
     trade_updated_event,
 )
-from app.services.trade_service import trade_service
+from app.services.virtual_trading import virtual_trading_service
 from app.strategies.engine import StrategyEngine
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ class MarketScanner:
         self._stats.last_price = data.price
 
         await self._persist_market_tick(data)
-        updated_trades = trade_service.update_market_price(data.exchange, data.symbol, data.price)
+        updated_trades = virtual_trading_service.update_market_price(data.exchange, data.symbol, data.price)
         if updated_trades:
             await self._publish_trade_updates(updated_trades)
         updated_candles = self._candle_store.update_from_tick(data)

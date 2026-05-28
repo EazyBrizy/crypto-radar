@@ -1,4 +1,12 @@
-import type { AlertRule, AlertRuleDraft, MarketPairOption, SubscriptionStatus, UserProfile, Watchlist } from "@/features/server-state/types";
+import type {
+  AlertRule,
+  AlertRuleDraft,
+  MarketPairOption,
+  SubscriptionStatus,
+  UserProfile,
+  VirtualSimulationLevel,
+  Watchlist
+} from "@/features/server-state/types";
 import type { RadarConfig, RadarStatus } from "@/types";
 import { billingApi } from "./billing.api";
 import { openApiClient, request } from "./client";
@@ -114,6 +122,16 @@ export const settingsApi = {
       await request(() =>
         openApiClient.GET("/api/v1/users/me", {
           params: { query: { user_id: "demo_user" } }
+        })
+      )
+    );
+  },
+  async updateUserSettings(patch: { virtual_simulation_level?: VirtualSimulationLevel }): Promise<UserProfile> {
+    return normalizeUserProfile(
+      await request(() =>
+        openApiClient.PATCH("/api/v1/users/me/settings", {
+          params: { query: { user_id: "demo_user" } },
+          body: patch
         })
       )
     );

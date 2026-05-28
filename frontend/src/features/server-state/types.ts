@@ -1,11 +1,23 @@
 export type SubscriptionTier = "free" | "pro" | "team";
 export type SubscriptionState = "active" | "trialing" | "past_due" | "canceled" | "none";
 export type ExchangeConnectionState = "available" | "connected" | "disconnected" | "error";
+export type VirtualSimulationLevel = "mvp" | "advanced" | "pro";
+export type VirtualSimulationLevelStatus = "active" | "stub";
+
+export interface VirtualTradingSettings {
+  simulation_level: VirtualSimulationLevel;
+  simulation_level_status: VirtualSimulationLevelStatus;
+  effective_simulation_level: VirtualSimulationLevel;
+}
 
 export interface UserProfile {
   id: string;
   email: string;
   name: string | null;
+  settings: {
+    virtual_trading: VirtualTradingSettings;
+    [key: string]: unknown;
+  };
   created_at: string;
 }
 

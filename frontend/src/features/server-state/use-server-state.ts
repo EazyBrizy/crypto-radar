@@ -347,6 +347,18 @@ export function useUserProfileQuery(options: PlannedQueryOptions = {}) {
   });
 }
 
+export function useUpdateUserSettingsMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: api.updateUserSettings,
+    onSuccess: async (profile) => {
+      queryClient.setQueryData(serverStateKeys.user.profile(), profile);
+      await queryClient.invalidateQueries({ queryKey: serverStateKeys.user.profile() });
+    }
+  });
+}
+
 export function useSubscriptionStatusQuery(options: PlannedQueryOptions = {}) {
   return useQuery<SubscriptionStatus>({
     queryKey: serverStateKeys.subscription.status(),

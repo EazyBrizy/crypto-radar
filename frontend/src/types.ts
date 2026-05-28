@@ -12,6 +12,7 @@ export type SignalStatus =
 export type TradeMode = "virtual" | "real";
 export type TradeStatus = "open" | "closed" | "cancelled";
 export type VirtualSimulationMode = "passive" | "impact_aware";
+export type VirtualSimulationTier = "mvp" | "advanced" | "pro";
 export type VirtualExecutionStatus = "filled" | "partially_filled" | "rejected_virtual_execution";
 export type ImpactRisk = "low" | "medium" | "high";
 export type ExecutionGateStatus = "passed" | "warning" | "blocked";
@@ -132,6 +133,9 @@ export interface VirtualSimulatedPositionPath {
 
 export interface VirtualExecutionReport {
   mode: VirtualSimulationMode;
+  simulation_tier: VirtualSimulationTier;
+  active_capabilities: string[];
+  planned_capabilities: string[];
   status: VirtualExecutionStatus;
   requested_size_usd: number;
   filled_size_usd: number;

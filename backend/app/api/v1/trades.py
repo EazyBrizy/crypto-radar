@@ -15,6 +15,7 @@ from app.schemas.trade import (
     TradeJournalEntry,
     TradeJournalResponse,
     VirtualAccount,
+    VirtualSimulationModelInfo,
     VirtualTrade,
     VirtualTradeResponse,
 )
@@ -25,7 +26,10 @@ from app.services.realtime_events import (
     trade_closed_event,
 )
 from app.services.real_trade_import_service import RealTradeImportNotReadyError, real_trade_import_service
-from app.services.trade_service import trade_service
+from app.services.virtual_trading import (
+    get_virtual_simulation_model_info,
+    virtual_trading_service,
+)
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -37,12 +41,12 @@ async def list_trade_journal(
     signal_id: Optional[str] = None,
 ) -> TradeJournalResponse:
     return TradeJournalResponse(
-        trades=trade_service.list_trade_journal(
+        trades=virtual_trading_service.list_trade_journal(
             mode=mode,
             status=status_filter,
             signal_id=signal_id,
         ),
-        account=trade_service.get_virtual_account(),
+        account=virtual_trading_service.get_virtual_account(),
     )
 
 
@@ -52,7 +56,7 @@ async def list_virtual_trades(
     signal_id: Optional[str] = None,
 ) -> VirtualTradeResponse:
     return VirtualTradeResponse(
-        trades=trade_service.list_virtual_trades(
+        trades=virtual_trading_service.list_virtual_trades(
             status=status_filter,
             signal_id=signal_id,
         )
@@ -65,7 +69,7 @@ async def list_real_trades(
     signal_id: Optional[str] = None,
 ) -> TradeJournalResponse:
     return TradeJournalResponse(
-        trades=trade_service.list_real_trades(
+        trades=virtual_trading_service.list_real_trades(
             status=status_filter,
             signal_id=signal_id,
         ),
@@ -118,12 +122,17 @@ async def list_external_exchange_trades(
 
 @router.get("/virtual/account", response_model=VirtualAccount)
 async def get_virtual_account() -> VirtualAccount:
-    return trade_service.get_virtual_account()
+    return virtual_trading_service.get_virtual_account()
+
+
+@router.get("/virtual/simulation-model", response_model=VirtualSimulationModelInfo)
+async def get_virtual_simulation_model() -> VirtualSimulationModelInfo:
+    return get_virtual_simulation_model_info()
 
 
 @router.get("/virtual/{trade_id}", response_model=VirtualTrade)
 async def get_virtual_trade(trade_id: str) -> VirtualTrade:
-    trade = trade_service.get_virtual_trade(trade_id)
+    trade = virtual_trading_service.get_virtual_trade(trade_id)
     if trade is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -134,10 +143,10 @@ async def get_virtual_trade(trade_id: str) -> VirtualTrade:
 
 @router.get("/{trade_id}", response_model=TradeJournalEntry)
 async def get_trade_journal_entry(trade_id: str) -> TradeJournalEntry:
-    trade = trade_service.get_virtual_trade(trade_id)
+    trade = virtual_trading_service.get_virtual_trade(trade_id)
     if trade is not None:
         return TradeJournalEntry.model_validate(trade.model_dump())
-    real_trade = trade_service.get_real_trade(trade_id)
+    real_trade = virtual_trading_service.get_real_trade(trade_id)
     if real_trade is not None:
         return real_trade
 
@@ -152,7 +161,7 @@ async def close_virtual_trade(
     trade_id: str,
     request: CloseVirtualTradeRequest,
 ) -> VirtualTrade:
-    trade = trade_service.close_virtual_trade(trade_id, request)
+    trade = virtual_trading_service.close_virtual_trade(trade_id, request)
     if trade is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -1,8 +1,11 @@
 from datetime import datetime
 from typing import Any
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+VirtualSimulationLevel = Literal["mvp", "advanced", "pro"]
 
 
 class UserProfileResponse(BaseModel):
@@ -20,3 +23,7 @@ class UserProfileResponse(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+class UserSettingsPatchRequest(BaseModel):
+    virtual_simulation_level: VirtualSimulationLevel | None = None

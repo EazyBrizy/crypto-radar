@@ -58,6 +58,10 @@ try {
   const health = await getJson(`http://127.0.0.1:${backendPort}/health`);
   const openSignals = await getJson(`http://127.0.0.1:${backendPort}/api/v1/signals/open`);
   const activeSignals = await getJson(`http://127.0.0.1:${backendPort}/api/v1/signals/active`);
+  const simulationModel = await getJson(`http://127.0.0.1:${backendPort}/api/v1/trades/virtual/simulation-model`);
+  if (!Array.isArray(simulationModel.active_capabilities) || !Array.isArray(simulationModel.planned_capabilities)) {
+    throw new Error("Virtual simulation model endpoint did not return capability lists.");
+  }
 
   let previewSummary = "skipped:no-open-signals";
   if (Array.isArray(openSignals) && openSignals.length > 0) {
@@ -114,7 +118,7 @@ try {
 
   const hasSignals = Array.isArray(openSignals) && openSignals.length > 0;
   if (hasSignals) {
-    await page.getByText("Execution Quality", { exact: true }).waitFor({ timeout: 15000 });
+    await page.getByText("Reality Check", { exact: true }).waitFor({ timeout: 15000 });
     await page.getByText("Post-impact", { exact: true }).waitFor({ timeout: 15000 });
   } else {
     await page.getByText("No active signals yet", { exact: true }).waitFor({ timeout: 15000 });
@@ -124,6 +128,9 @@ try {
   const uiText = hasSignals
     ? await page.locator(".execution-quality-block").innerText({ timeout: 5000 })
     : "empty-state";
+  await page.goto(`http://127.0.0.1:${frontendPort}/dashboard/settings`, { waitUntil: "networkidle" });
+  await page.getByText("Simulation", { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByText("Advanced", { exact: true }).waitFor({ timeout: 15000 });
 
   const result = {
     ok: true,
@@ -132,8 +139,10 @@ try {
     storage: health.storage?.status ?? "unknown",
     openSignals: Array.isArray(openSignals) ? openSignals.length : 0,
     activeSignals: Array.isArray(activeSignals) ? activeSignals.length : 0,
+    simulationModel: `${simulationModel.current_tier}:${simulationModel.active_capabilities.length} active`,
     preview: previewSummary,
     ui: uiText.split(/\r?\n/).slice(0, 12).join(" | "),
+    settings: "simulation-options-visible",
     screenshot: screenshotPath,
   };
   console.log(JSON.stringify(result, null, 2));

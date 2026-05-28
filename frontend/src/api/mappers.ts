@@ -30,6 +30,7 @@ import type {
   VirtualExecutionReport,
   VirtualExecutionStatus,
   VirtualSimulationMode,
+  VirtualSimulationTier,
   VirtualSimulatedPositionPath
 } from "@/types";
 import type { OhlcvCandleDto, RadarConfigDto, RadarSignalDto, TradeJournalEntryDto } from "./generated/schemas";
@@ -138,6 +139,9 @@ export function normalizeExecutionReport(value: unknown): VirtualExecutionReport
   const liquidity = isRecord(value.liquidity) ? value.liquidity : {};
   return {
     mode: normalizeSimulationMode(value.mode),
+    simulation_tier: normalizeSimulationTier(value.simulation_tier),
+    active_capabilities: Array.isArray(value.active_capabilities) ? value.active_capabilities.map(String) : [],
+    planned_capabilities: Array.isArray(value.planned_capabilities) ? value.planned_capabilities.map(String) : [],
     status: normalizeExecutionStatus(value.status),
     requested_size_usd: Number(value.requested_size_usd ?? 0),
     filled_size_usd: Number(value.filled_size_usd ?? 0),
@@ -222,6 +226,11 @@ function normalizeQualityGate(value: unknown): ExecutionQualityGate {
 
 function normalizeSimulationMode(value: unknown): VirtualSimulationMode {
   return value === "impact_aware" ? "impact_aware" : "passive";
+}
+
+function normalizeSimulationTier(value: unknown): VirtualSimulationTier {
+  if (value === "advanced" || value === "pro") return value;
+  return "mvp";
 }
 
 function normalizeExecutionStatus(value: unknown): VirtualExecutionStatus {
@@ -415,13 +424,33 @@ export function normalizeSubscriptionStatus(value: unknown): SubscriptionStatus 
 }
 
 export function normalizeUserProfile(value: unknown): UserProfile {
-  const profile = value as Partial<UserProfile>;
+  const profile = isRecord(value) ? value : {};
   return {
     id: String(profile.id ?? ""),
     email: String(profile.email ?? ""),
     name: profile.name == null ? null : String(profile.name),
+    settings: normalizeProfileSettings(profile.settings),
     created_at: String(profile.created_at ?? new Date().toISOString())
   };
+}
+
+function normalizeProfileSettings(value: unknown): UserProfile["settings"] {
+  const settings = isRecord(value) ? { ...value } : {};
+  const virtualTrading = isRecord(settings.virtual_trading) ? settings.virtual_trading : {};
+  const simulationLevel = normalizeVirtualSimulationLevel(virtualTrading.simulation_level);
+  return {
+    ...settings,
+    virtual_trading: {
+      simulation_level: simulationLevel,
+      simulation_level_status: simulationLevel === "mvp" ? "active" : "stub",
+      effective_simulation_level: simulationLevel === "mvp" ? "mvp" : "mvp"
+    }
+  };
+}
+
+function normalizeVirtualSimulationLevel(value: unknown) {
+  if (value === "advanced" || value === "pro") return value;
+  return "mvp";
 }
 
 function normalizeNotificationDelivery(value: unknown): NotificationDelivery {

@@ -477,6 +477,11 @@ def _seed_demo_profile(session: Session, tracker: _SeedTracker, user: AppUser) -
         "settings": {
             "dashboard": {"default_route": "/dashboard/radar"},
             "notifications": {"websocket": True},
+            "virtual_trading": {
+                "simulation_level": "mvp",
+                "simulation_level_status": "active",
+                "effective_simulation_level": "mvp",
+            },
         },
     }
     return _upsert_one(

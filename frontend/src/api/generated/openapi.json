@@ -2196,6 +2196,27 @@
         }
       }
     },
+    "/api/v1/trades/virtual/simulation-model": {
+      "get": {
+        "tags": [
+          "trades"
+        ],
+        "summary": "Get Virtual Simulation Model",
+        "operationId": "get_virtual_simulation_model_api_v1_trades_virtual_simulation_model_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VirtualSimulationModelInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/trades/virtual/{trade_id}": {
       "get": {
         "tags": [
@@ -2351,6 +2372,59 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/settings": {
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Update Current User Settings",
+        "operationId": "update_current_user_settings_api_v1_users_me_settings_patch",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "demo_user",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserSettingsPatchRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -6608,6 +6682,28 @@
         ],
         "title": "UserProfileResponse"
       },
+      "UserSettingsPatchRequest": {
+        "properties": {
+          "virtual_simulation_level": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "mvp",
+                  "advanced",
+                  "pro"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Simulation Level"
+          }
+        },
+        "type": "object",
+        "title": "UserSettingsPatchRequest"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -6737,6 +6833,30 @@
             ],
             "title": "Mode",
             "default": "passive"
+          },
+          "simulation_tier": {
+            "type": "string",
+            "enum": [
+              "mvp",
+              "advanced",
+              "pro"
+            ],
+            "title": "Simulation Tier",
+            "default": "mvp"
+          },
+          "active_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Active Capabilities"
+          },
+          "planned_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Planned Capabilities"
           },
           "status": {
             "type": "string",
@@ -7135,6 +7255,93 @@
           "simulated_candle"
         ],
         "title": "VirtualSimulatedPositionPath"
+      },
+      "VirtualSimulationCapability": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "mvp",
+              "advanced",
+              "pro"
+            ],
+            "title": "Tier"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "planned",
+              "stub"
+            ],
+            "title": "Status"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "tier",
+          "status",
+          "description"
+        ],
+        "title": "VirtualSimulationCapability"
+      },
+      "VirtualSimulationModelInfo": {
+        "properties": {
+          "current_tier": {
+            "type": "string",
+            "enum": [
+              "mvp",
+              "advanced",
+              "pro"
+            ],
+            "title": "Current Tier",
+            "default": "advanced"
+          },
+          "active_capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/VirtualSimulationCapability"
+            },
+            "type": "array",
+            "title": "Active Capabilities"
+          },
+          "planned_capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/VirtualSimulationCapability"
+            },
+            "type": "array",
+            "title": "Planned Capabilities"
+          },
+          "data_boundary": {
+            "type": "string",
+            "title": "Data Boundary"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data_boundary"
+        ],
+        "title": "VirtualSimulationModelInfo"
       },
       "VirtualTrade": {
         "properties": {

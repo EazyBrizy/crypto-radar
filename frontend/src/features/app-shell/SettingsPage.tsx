@@ -1,4 +1,4 @@
-import { Bell, KeyRound, Radio, RefreshCw, Send, Shield, Trash2 } from "lucide-react";
+import { Bell, Gauge, KeyRound, Radio, RefreshCw, Send, Shield, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/Badge";
@@ -7,7 +7,9 @@ import type {
   AlertRuleDraft,
   ExchangeConnection,
   ExchangeConnectionDraft,
-  MarketPairOption
+  MarketPairOption,
+  UserProfile,
+  VirtualSimulationLevel
 } from "@/features/server-state/types";
 import type { RadarConfig } from "@/types";
 
@@ -16,6 +18,7 @@ interface SettingsPageProps {
   availablePairs: MarketPairOption[];
   alertRules: AlertRule[];
   exchangeConnections: ExchangeConnection[];
+  userProfile: UserProfile | null;
   busy: boolean;
   onCreateAlert: (draft: AlertRuleDraft) => Promise<unknown>;
   onToggleAlert: (alertId: string, isEnabled: boolean) => Promise<unknown>;
@@ -26,13 +29,41 @@ interface SettingsPageProps {
   onDeleteExchangeConnection: (connectionId: string) => Promise<unknown>;
   onTestExchangeConnection: (connectionId: string) => Promise<unknown>;
   onSyncExchangeConnection: (connectionId: string) => Promise<unknown>;
+  onSelectSimulationLevel: (simulationLevel: VirtualSimulationLevel) => Promise<unknown>;
 }
+
+const SIMULATION_LEVELS: Array<{
+  value: VirtualSimulationLevel;
+  label: string;
+  caption: string;
+  status: "active" | "stub";
+}> = [
+  {
+    value: "mvp",
+    label: "MVP",
+    caption: "Depth, spread, slippage",
+    status: "active"
+  },
+  {
+    value: "advanced",
+    label: "Advanced",
+    caption: "Queue, fees, liquidity",
+    status: "stub"
+  },
+  {
+    value: "pro",
+    label: "Pro",
+    caption: "Replay, Monte Carlo",
+    status: "stub"
+  }
+];
 
 export function SettingsPage({
   config,
   availablePairs,
   alertRules,
   exchangeConnections,
+  userProfile,
   busy,
   onCreateAlert,
   onToggleAlert,
@@ -42,7 +73,8 @@ export function SettingsPage({
   onToggleExchangeConnection,
   onDeleteExchangeConnection,
   onTestExchangeConnection,
-  onSyncExchangeConnection
+  onSyncExchangeConnection,
+  onSelectSimulationLevel
 }: SettingsPageProps) {
   const [pairId, setPairId] = useState("");
   const [conditionType, setConditionType] = useState("price_above");
@@ -57,6 +89,7 @@ export function SettingsPage({
     () => availablePairs.find((pair) => pair.id === pairId) ?? availablePairs[0] ?? null,
     [availablePairs, pairId]
   );
+  const simulationLevel = userProfile?.settings.virtual_trading.simulation_level ?? "mvp";
 
   async function handleCreateAlert() {
     if (!selectedPair || !targetPrice) return;
@@ -189,6 +222,27 @@ export function SettingsPage({
             <button type="button">Conservative</button>
             <button className="active" type="button">Balanced</button>
             <button type="button">Aggressive</button>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <div className="section-title"><Gauge size={18} /><h3>Simulation</h3></div>
+          <div className="simulation-mode-grid">
+            {SIMULATION_LEVELS.map((level) => (
+              <button
+                className={`simulation-mode-option ${simulationLevel === level.value ? "active" : ""}`}
+                disabled={busy}
+                key={level.value}
+                onClick={() => onSelectSimulationLevel(level.value)}
+                type="button"
+              >
+                <span>
+                  <strong>{level.label}</strong>
+                  <small>{level.caption}</small>
+                </span>
+                <Badge tone={level.status === "active" ? "green" : "yellow"}>{level.status}</Badge>
+              </button>
+            ))}
           </div>
         </div>
 

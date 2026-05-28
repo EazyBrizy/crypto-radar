@@ -3,7 +3,7 @@ from uuid import UUID
 import unittest
 
 from app.api.v1.users import router
-from app.schemas.user import UserProfileResponse
+from app.schemas.user import UserProfileResponse, UserSettingsPatchRequest
 
 
 class UserProfileContractTest(unittest.TestCase):
@@ -33,6 +33,12 @@ class UserProfileContractTest(unittest.TestCase):
         paths = {route.path for route in router.routes}
 
         self.assertIn("/users/me", paths)
+        self.assertIn("/users/me/settings", paths)
+
+    def test_user_settings_patch_accepts_virtual_simulation_level(self) -> None:
+        request = UserSettingsPatchRequest(virtual_simulation_level="advanced")
+
+        self.assertEqual(request.virtual_simulation_level, "advanced")
 
 
 if __name__ == "__main__":

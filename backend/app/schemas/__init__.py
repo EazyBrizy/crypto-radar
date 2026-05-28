@@ -79,10 +79,13 @@ from app.schemas.trade import (
     TradeJournalEntry,
     TradeJournalResponse,
     TradeRequest,
+    VirtualExecutionReport,
+    VirtualSimulationCapability,
+    VirtualSimulationModelInfo,
     VirtualTrade,
     VirtualTradeResponse,
 )
-from app.schemas.user import UserProfileResponse
+from app.schemas.user import UserProfileResponse, UserSettingsPatchRequest
 
 __all__ = [
     "ErrorResponse",
@@ -150,6 +153,10 @@ __all__ = [
     "TradeRequest",
     "Timeframe",
     "UserProfileResponse",
+    "UserSettingsPatchRequest",
+    "VirtualExecutionReport",
+    "VirtualSimulationCapability",
+    "VirtualSimulationModelInfo",
     "VirtualTrade",
     "VirtualTradeLifecycleEvent",
     "VirtualTradeResponse",

@@ -7,6 +7,8 @@ from app.schemas.candle import DEFAULT_TIMEFRAMES
 from app.schemas.exchange_connection import (
     ExchangeConnectionActionResponse,
     ExchangeConnectionCreateRequest,
+    ExchangeFeeRateResponse,
+    ExchangeInstrumentRuleResponse,
     ExchangeConnectionResponse,
     ExchangeConnectionUpdateRequest,
 )
@@ -16,6 +18,7 @@ from app.schemas.external_exchange import (
     RealTradeImportResult,
 )
 from app.services.exchange_connection_service import exchange_connection_service
+from app.services.exchange_instrument_service import exchange_instrument_rule_service
 from app.services.real_trade_import_service import RealTradeImportNotReadyError, real_trade_import_service
 
 router = APIRouter(prefix="/exchanges", tags=["exchanges"])
@@ -84,6 +87,54 @@ async def delete_exchange_connection(connection_id: str) -> Response:
 async def test_exchange_connection(connection_id: str) -> ExchangeConnectionActionResponse:
     try:
         return exchange_connection_service.test_connection(connection_id)
+    except (LookupError, ValueError) as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/connections/{connection_id}/fees", response_model=list[ExchangeFeeRateResponse])
+async def get_exchange_connection_fee_rates(
+    connection_id: str,
+    category: str = "linear",
+    symbol: str | None = None,
+) -> list[ExchangeFeeRateResponse]:
+    try:
+        return exchange_connection_service.get_fee_rates(
+            connection_id,
+            category=category,
+            symbol=symbol,
+        )
+    except (LookupError, ValueError) as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/instrument-rules", response_model=list[ExchangeInstrumentRuleResponse])
+async def list_exchange_instrument_rules(
+    exchange_code: str = "bybit",
+    category: str | None = None,
+    symbol: str | None = None,
+    limit: int = 200,
+) -> list[ExchangeInstrumentRuleResponse]:
+    try:
+        return exchange_instrument_rule_service.list_rules(
+            exchange_code=exchange_code,
+            category=category,
+            symbol=symbol,
+            limit=limit,
+        )
+    except (LookupError, ValueError) as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/bybit/instrument-rules/sync", response_model=list[ExchangeInstrumentRuleResponse])
+async def sync_bybit_instrument_rules(
+    category: str = "linear",
+    symbol: str | None = None,
+) -> list[ExchangeInstrumentRuleResponse]:
+    try:
+        return exchange_instrument_rule_service.sync_bybit_rules(
+            category=category,
+            symbol=symbol,
+        )
     except (LookupError, ValueError) as exc:
         raise _http_error(exc) from exc
 

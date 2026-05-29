@@ -22,6 +22,7 @@ interface SignalDetailsProps {
   onReject: (signal: RadarSignal) => void;
   busy: boolean;
   executionPreview: VirtualExecutionReport | null;
+  executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
   tradingActionsDisabled?: boolean;
 }
@@ -32,6 +33,7 @@ export function SignalDetails({
   onReject,
   busy,
   executionPreview,
+  executionPreviewError = null,
   executionPreviewLoading = false,
   tradingActionsDisabled = false
 }: SignalDetailsProps) {
@@ -48,7 +50,8 @@ export function SignalDetails({
   }
 
   const isLong = signal.direction === "long";
-  const actionsDisabled = busy || tradingActionsDisabled;
+  const riskFailed = executionPreview?.risk_check?.status === "failed";
+  const actionsDisabled = busy || tradingActionsDisabled || riskFailed;
   const breakdown = signal.score_breakdown;
   const reasons = signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."];
 
@@ -82,6 +85,7 @@ export function SignalDetails({
       <ExecutionQualityBlock
         signal={signal}
         execution={executionPreview}
+        error={executionPreviewError}
         loading={executionPreviewLoading}
       />
 
@@ -146,6 +150,9 @@ export function SignalDetails({
       {tradingActionsDisabled ? (
         <p className="form-description">Trading actions disabled until realtime data is current.</p>
       ) : null}
+      {riskFailed ? (
+        <p className="form-description">Entry is blocked by backend risk gate.</p>
+      ) : null}
     </section>
   );
 }
@@ -153,10 +160,12 @@ export function SignalDetails({
 function ExecutionQualityBlock({
   signal,
   execution,
+  error,
   loading
 }: {
   signal: RadarSignal;
   execution: VirtualExecutionReport | null;
+  error: string | null;
   loading: boolean;
 }) {
   const gateStatus = execution?.quality_gate.status ?? scoreGateStatus(signal);
@@ -172,6 +181,15 @@ function ExecutionQualityBlock({
   const safeSize = execution?.quality_gate.suggested_max_size_usd
     ?? (execution && execution.quality_gate.status !== "blocked" ? execution.filled_size_usd : null);
   const simulatedPath = execution?.simulated_path ?? null;
+  const positionSizing = execution?.position_sizing ?? null;
+  const stopLossPlan = execution?.stop_loss_plan ?? null;
+  const takeProfitPlan = execution?.take_profit_plan ?? null;
+  const breakevenPlan = execution?.breakeven_plan ?? null;
+  const trailingStopPlan = execution?.trailing_stop_plan ?? null;
+  const futuresRiskPlan = execution?.futures_risk_plan ?? null;
+  const riskAdjustmentPlan = execution?.risk_adjustment_plan ?? null;
+  const riskCheck = execution?.risk_check ?? null;
+  const riskDecision = execution?.risk_decision ?? null;
 
   return (
     <div className="execution-quality-block">
@@ -186,9 +204,36 @@ function ExecutionQualityBlock({
         <span>Execution: {executionQualityText(gateStatus, impactRisk).toLowerCase()}</span>
       </div>
       <div className="execution-quality-grid">
-        <MetricLine label="Expected slippage" value={execution ? `${(execution.entry_slippage_bps / 100).toFixed(2)}%` : "Preview pending"} />
+        <MetricLine label="Expected slippage" value={execution ? formatCompactPercent(execution.entry_slippage_bps / 100) : error ? "Preview error" : "Preview pending"} />
         <MetricLine label="Market impact" value={impactRiskLabel(impactRisk)} />
         <MetricLine label="Safe size" value={safeSize == null ? "-" : `$${safeSize.toFixed(0)}`} />
+        <MetricLine label="Risk budget" value={positionSizing ? `$${positionSizing.risk_amount.toFixed(2)}` : "-"} />
+        <MetricLine label="Adjusted risk" value={riskAdjustmentPlan ? `${riskAdjustmentPlan.adjusted_risk_percent.toFixed(3)}%` : "-"} />
+        <MetricLine label="Risk gate" value={riskDecision ? riskDecision.status : riskCheck ? riskCheck.status : "-"} />
+        <MetricLine label="Risk size" value={positionSizing ? `$${positionSizing.notional.toFixed(0)}` : "-"} />
+        <MetricLine label="Margin" value={positionSizing ? `$${positionSizing.required_margin.toFixed(0)} @ ${positionSizing.leverage}x` : "-"} />
+        <MetricLine label="Effective risk" value={riskCheck ? `$${riskCheck.effective_risk_amount.toFixed(2)}` : "-"} />
+        <MetricLine label="Daily risk" value={formatRiskUsage(riskCheck?.daily_risk_used_percent, riskCheck?.max_daily_loss_percent)} />
+        <MetricLine label="Account drawdown" value={formatRiskUsage(riskCheck?.account_drawdown_percent, riskCheck?.max_account_drawdown_percent)} />
+        <MetricLine label="Open risk" value={formatRiskUsage(riskCheck?.open_risk_used_percent, riskCheck?.max_open_risk_percent)} />
+        <MetricLine label="Correlated risk" value={formatRiskUsage(riskCheck?.correlated_risk_used_percent, riskCheck?.max_correlated_risk_percent)} />
+        <MetricLine label="Exchange rules" value={riskCheck ? riskCheck.exchange_rule_status : "-"} />
+        <MetricLine label="Market data" value={riskCheck ? riskCheck.market_data_status : "-"} />
+        <MetricLine label="Bid / Ask" value={riskCheck?.best_bid && riskCheck?.best_ask ? `${formatExecutionPrice(riskCheck.best_bid)} / ${formatExecutionPrice(riskCheck.best_ask)}` : "-"} />
+        <MetricLine label="Mark price" value={riskCheck?.mark_price ? formatExecutionPrice(riskCheck.mark_price) : "-"} />
+        <MetricLine label="Spread" value={riskCheck?.spread_bps == null ? "-" : `${riskCheck.spread_bps.toFixed(1)} bps`} />
+        <MetricLine label="Price drift" value={riskCheck?.price_deviation_bps == null ? "-" : `${riskCheck.price_deviation_bps.toFixed(1)} bps`} />
+        <MetricLine label="Book depth" value={riskCheck?.orderbook_depth_usd == null ? "-" : `$${riskCheck.orderbook_depth_usd.toFixed(0)}`} />
+        <MetricLine label="Fee source" value={riskCheck?.fee_rate_source ?? "-"} />
+        <MetricLine label="Taker fee" value={riskCheck?.taker_fee_rate == null ? "-" : `${(riskCheck.taker_fee_rate * 100).toFixed(3)}%`} />
+        <MetricLine label="Funding buffer" value={riskCheck ? `$${riskCheck.funding_buffer_amount.toFixed(2)}` : "-"} />
+        <MetricLine label="Close-only" value={riskCheck?.close_only ? "yes" : "no"} />
+        <MetricLine label="Protection" value={riskCheck ? riskCheck.protection_state.replace("_", " ") : "-"} />
+        <MetricLine label="Planned stop" value={stopLossPlan ? formatExecutionPrice(stopLossPlan.stop_loss_price) : formatPrice(signal.stop_loss)} />
+        <MetricLine label="Exit plan" value={takeProfitPlan ? takeProfitPlan.targets.map((target) => `${target.label} ${target.r_multiple}R`).join(" / ") : "-"} />
+        <MetricLine label="Breakeven" value={breakevenPlan ? `${formatExecutionPrice(breakevenPlan.trigger_price)} -> ${formatExecutionPrice(breakevenPlan.breakeven_stop_price)}` : "-"} />
+        <MetricLine label="Trailing" value={trailingStopPlan?.enabled ? trailingStopPlan.mode.toUpperCase() : "Off"} />
+        <MetricLine label="Futures guard" value={futuresRiskPlan ? futuresRiskPlan.status : "-"} />
         <MetricLine label="Order type" value={orderType} />
         <MetricLine label="Market order" value={marketOrder} />
         <MetricLine label="Fill" value={execution ? `${Math.round(execution.fill_ratio * 100)}%` : "-"} />
@@ -198,6 +243,16 @@ function ExecutionQualityBlock({
       </div>
       {execution?.quality_gate.message ? (
         <p className="execution-quality-message">{execution.quality_gate.message}</p>
+      ) : null}
+      {riskCheck?.blockers.length ? (
+        <ul className="risk-blocker-list">
+          {riskCheck.blockers.map((blocker) => (
+            <li key={blocker}>{blocker}</li>
+          ))}
+        </ul>
+      ) : null}
+      {error && !execution ? (
+        <p className="execution-quality-message">Risk preview unavailable: {error}</p>
       ) : null}
       {execution ? (
         <div className="reality-check-copy">
@@ -224,6 +279,11 @@ function formatExecutionPrice(price: number): string {
   return price.toPrecision(4);
 }
 
+function formatRiskUsage(used?: number | null, limit?: number | null): string {
+  if (used == null || limit == null) return "-";
+  return `${formatCompactPercent(used)} / ${limit <= 0 ? "Off" : formatCompactPercent(limit)}`;
+}
+
 function executionQualityText(status: ExecutionGateStatus, impactRisk: ImpactRisk): string {
   if (status === "blocked") return "Poor";
   if (status === "warning" || impactRisk !== "low") return "Risky";
@@ -237,13 +297,13 @@ function realityCheckReason(execution: VirtualExecutionReport): string {
   const exitSlippagePercent = execution.exit_slippage_bps / 100;
 
   if (execution.quality_gate.status === "blocked") {
-    const depthText = depthRatio == null ? "current depth" : `${depthRatio.toFixed(0)}% of liquidity inside 1%`;
-    return `Your size would consume ${depthText}. Real entry could be worse by about ${slippagePercent.toFixed(2)}%, and stop execution could add about ${exitSlippagePercent.toFixed(2)}% friction.`;
+    const depthText = depthRatio == null ? "current depth" : `${formatCompactPercent(depthRatio)} of liquidity inside 1%`;
+    return `Your size would consume ${depthText}. Real entry could be worse by about ${formatCompactPercent(slippagePercent)}, and stop execution could add about ${formatCompactPercent(exitSlippagePercent)} friction.`;
   }
   if (execution.quality_gate.status === "warning" || execution.liquidity.impact_risk !== "low") {
-    return `The setup is tradable, but execution is sensitive: expected entry slippage is ${slippagePercent.toFixed(2)}% and impact risk is ${impactRiskLabel(execution.liquidity.impact_risk)}.`;
+    return `The setup is tradable, but execution is sensitive: expected entry slippage is ${formatCompactPercent(slippagePercent)} and impact risk is ${impactRiskLabel(execution.liquidity.impact_risk)}.`;
   }
-  return `The requested size fits current liquidity with expected entry slippage around ${slippagePercent.toFixed(2)}%.`;
+  return `The requested size fits current liquidity with expected entry slippage around ${formatCompactPercent(slippagePercent)}.`;
 }
 
 function realityCheckRecommendation(execution: VirtualExecutionReport, orderType: string): string {
@@ -257,6 +317,13 @@ function realityCheckRecommendation(execution: VirtualExecutionReport, orderType
     return `Recommendation: prefer ${orderType.toLowerCase()}, reduce size if the book thins out, and avoid chasing a market order.`;
   }
   return "Recommendation: execution looks realistic for this virtual size.";
+}
+
+function formatCompactPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  if (value > 0 && value < 0.01) return "<0.01%";
+  if (value < 10) return `${value.toFixed(2)}%`;
+  return `${value.toFixed(1)}%`;
 }
 
 function ScoreLine({ label, value, max }: { label: string; value: number; max: number }) {

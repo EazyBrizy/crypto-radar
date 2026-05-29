@@ -75,6 +75,10 @@ export const serverStateKeys = {
     all: () => [...serverStateKeys.all, "settings"] as const,
     radar: () => [...serverStateKeys.settings.all(), "radar"] as const
   },
+  risk: {
+    all: () => [...serverStateKeys.all, "risk"] as const,
+    state: (userId = "me") => [...serverStateKeys.risk.all(), "state", userId] as const
+  },
   watchlist: {
     all: () => [...serverStateKeys.all, "watchlist"] as const,
     current: () => [...serverStateKeys.watchlist.all(), "current"] as const,

@@ -38,7 +38,8 @@ const baseSignal: RadarSignal = {
     total: 84
   },
   created_at: "2026-05-25T10:12:41.231Z",
-  updated_at: "2026-05-25T10:12:41.231Z"
+  updated_at: "2026-05-25T10:12:41.231Z",
+  expires_at: "2099-05-25T11:12:41.231Z"
 };
 
 describe("createRealtimeEventRouter signal feed updates", () => {
@@ -118,6 +119,27 @@ describe("createRealtimeEventRouter signal feed updates", () => {
 
     expect(useSignalStore.getState().signalsById.sig_1.status).toBe("entry_touched");
     expect(useNotificationStore.getState().notifications[0]?.title).toBe("Entry zone touched");
+  });
+
+  it("removes expired signals from the active feed", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.signals, [baseSignal]);
+    useSignalStore.getState().addSignal(baseSignal);
+    const router = createRealtimeEventRouter({ queryClient, onRealtimeEvent: () => undefined });
+
+    router.route({
+      id: "evt_expired",
+      type: "signal.expired",
+      version: 1,
+      timestamp: "2026-05-25T10:12:45.231Z",
+      payload: {
+        signalId: "sig_1",
+        reason: "ttl_expired"
+      }
+    });
+
+    expect(useSignalStore.getState().signalIds).toEqual([]);
+    expect(queryClient.getQueryData<RadarSignal[]>(queryKeys.signals)).toEqual([]);
   });
 
   it("routes persisted notification.created events into the notification store", () => {

@@ -245,6 +245,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/exchanges/connections/{connection_id}/fees": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Exchange Connection Fee Rates */
+        get: operations["get_exchange_connection_fee_rates_api_v1_exchanges_connections__connection_id__fees_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/exchanges/instrument-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Exchange Instrument Rules */
+        get: operations["list_exchange_instrument_rules_api_v1_exchanges_instrument_rules_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/exchanges/bybit/instrument-rules/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync Bybit Instrument Rules */
+        post: operations["sync_bybit_instrument_rules_api_v1_exchanges_bybit_instrument_rules_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/exchanges/connections/{connection_id}/sync": {
         parameters: {
             query?: never;
@@ -470,6 +521,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/risk/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Risk */
+        post: operations["preview_risk_api_v1_risk_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Risk State */
+        get: operations["get_risk_state_api_v1_risk_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/signals": {
         parameters: {
             query?: never;
@@ -640,6 +725,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/trades/real/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm Real Trade */
+        post: operations["confirm_real_trade_api_v1_trades_real_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/trades/real/import": {
         parameters: {
             query?: never;
@@ -753,6 +855,23 @@ export interface paths {
         get: operations["get_trade_journal_entry_api_v1_trades__trade_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trades/{trade_id}/close-market": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close Market Trade */
+        post: operations["close_market_trade_api_v1_trades__trade_id__close_market_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1429,10 +1548,60 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** BreakevenPlan */
+        BreakevenPlan: {
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** Entry Price */
+            entry_price: number;
+            /** Stop Loss Price */
+            stop_loss_price: number;
+            /** Risk Per Unit */
+            risk_per_unit: number;
+            /** Move After R */
+            move_after_r: number;
+            /** Trigger Price */
+            trigger_price: number;
+            /** Breakeven Stop Price */
+            breakeven_stop_price: number;
+            /**
+             * Offset Percent
+             * @default 0
+             */
+            offset_percent: number;
+        };
         /** CandleResponse */
         CandleResponse: {
             /** Candles */
             candles: components["schemas"]["OHLCVCandle"][];
+        };
+        /** CloseMarketTradeRequest */
+        CloseMarketTradeRequest: {
+            /**
+             * Reason
+             * @default manual_close
+             * @enum {string}
+             */
+            reason: "take_profit" | "stop_loss" | "manual_close" | "cancelled";
+        };
+        /** CloseMarketTradeResponse */
+        CloseMarketTradeResponse: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "virtual" | "real";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "closed" | "not_implemented";
+            /** Message */
+            message: string;
+            trade?: components["schemas"]["TradeJournalEntry"] | null;
         };
         /** CloseVirtualTradeRequest */
         CloseVirtualTradeRequest: {
@@ -1558,6 +1727,89 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** ExchangeFeeRateResponse */
+        ExchangeFeeRateResponse: {
+            /**
+             * Connection Id
+             * Format: uuid
+             */
+            connection_id: string;
+            /** Exchange Code */
+            exchange_code: string;
+            /** Account Type */
+            account_type?: string | null;
+            /** Category */
+            category: string;
+            /** Symbol */
+            symbol: string | null;
+            /** Maker Fee Rate */
+            maker_fee_rate: number;
+            /** Taker Fee Rate */
+            taker_fee_rate: number;
+            /** Source */
+            source: string;
+            /**
+             * Fetched At
+             * Format: date-time
+             */
+            fetched_at: string;
+        };
+        /** ExchangeInstrumentRuleResponse */
+        ExchangeInstrumentRuleResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Exchange Id
+             * Format: uuid
+             */
+            exchange_id: string;
+            /** Exchange Code */
+            exchange_code: string;
+            /** Pair Id */
+            pair_id: string | null;
+            /** Symbol */
+            symbol: string;
+            /** Category */
+            category: string;
+            /** Min Order Size */
+            min_order_size?: number | null;
+            /** Max Order Size */
+            max_order_size?: number | null;
+            /** Min Notional */
+            min_notional?: number | null;
+            /** Qty Step */
+            qty_step?: number | null;
+            /** Tick Size */
+            tick_size?: number | null;
+            /** Max Leverage */
+            max_leverage?: number | null;
+            /** Funding Interval Minutes */
+            funding_interval_minutes?: number | null;
+            /** Source */
+            source: string;
+            /**
+             * Fetched At
+             * Format: date-time
+             */
+            fetched_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Age Seconds */
+            age_seconds?: number | null;
+            /** Ttl Seconds */
+            ttl_seconds?: number | null;
+            /**
+             * Is Stale
+             * @default false
+             */
+            is_stale: boolean;
         };
         /** ExecutionQualityGate */
         ExecutionQualityGate: {
@@ -1687,6 +1939,41 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** FuturesRiskPlan */
+        FuturesRiskPlan: {
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "passed" | "blocked" | "unknown";
+            /** Entry Price */
+            entry_price: number;
+            /** Stop Loss Price */
+            stop_loss_price: number;
+            /** Leverage */
+            leverage: number;
+            /** Max Leverage */
+            max_leverage: number;
+            /** Leverage Allowed */
+            leverage_allowed: boolean;
+            /** Liquidation Price */
+            liquidation_price?: number | null;
+            /** Liquidation Buffer Percent */
+            liquidation_buffer_percent?: number | null;
+            /** Min Liquidation Buffer Percent */
+            min_liquidation_buffer_percent: number;
+            /** Liquidation Before Stop */
+            liquidation_before_stop?: boolean | null;
+            /** Message */
+            message: string;
+            /** Warnings */
+            warnings?: string[];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1784,6 +2071,8 @@ export interface components {
              * @default 1
              */
             leverage: number;
+            /** Liquidation Price */
+            liquidation_price?: number | null;
             /** Size Usd */
             size_usd?: number | null;
             /**
@@ -1990,6 +2279,76 @@ export interface components {
             /** Notional Usd */
             notional_usd?: number | null;
         };
+        /** PositionSizingResult */
+        PositionSizingResult: {
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** Account Equity */
+            account_equity: number;
+            /** Risk Per Trade Percent */
+            risk_per_trade_percent: number;
+            /** Risk Amount */
+            risk_amount: number;
+            /** Entry Price */
+            entry_price: number;
+            /** Stop Loss Price */
+            stop_loss_price: number;
+            /** Stop Distance Per Unit */
+            stop_distance_per_unit: number;
+            /**
+             * Estimated Entry Fee Per Unit
+             * @default 0
+             */
+            estimated_entry_fee_per_unit: number;
+            /**
+             * Estimated Exit Fee Per Unit
+             * @default 0
+             */
+            estimated_exit_fee_per_unit: number;
+            /**
+             * Slippage Buffer Per Unit
+             * @default 0
+             */
+            slippage_buffer_per_unit: number;
+            /**
+             * Funding Buffer Per Unit
+             * @default 0
+             */
+            funding_buffer_per_unit: number;
+            /** Effective Risk Per Unit */
+            effective_risk_per_unit: number;
+            /** Position Size Base */
+            position_size_base: number;
+            /** Notional */
+            notional: number;
+            /** Leverage */
+            leverage: number;
+            /** Required Margin */
+            required_margin: number;
+            /**
+             * Fee Rate
+             * @default 0
+             */
+            fee_rate: number;
+            /**
+             * Slippage Bps
+             * @default 0
+             */
+            slippage_bps: number;
+            /**
+             * Include Fees In Risk
+             * @default true
+             */
+            include_fees_in_risk: boolean;
+            /**
+             * Include Slippage In Risk
+             * @default true
+             */
+            include_slippage_in_risk: boolean;
+        };
         /** RadarConfig */
         RadarConfig: {
             /** Exchanges */
@@ -2099,6 +2458,78 @@ export interface components {
             /** Confirmed Trade Id */
             confirmed_trade_id?: string | null;
         };
+        /** RealConfirmRequest */
+        RealConfirmRequest: {
+            /**
+             * Mode
+             * @default real
+             * @constant
+             */
+            mode: "real";
+            /**
+             * User Id
+             * @default demo_user
+             */
+            user_id: string;
+            /**
+             * Account Balance
+             * @default 100
+             */
+            account_balance: number;
+            /**
+             * Risk Percent
+             * @default 10
+             */
+            risk_percent: number;
+            /**
+             * Leverage
+             * @default 1
+             */
+            leverage: number;
+            /** Liquidation Price */
+            liquidation_price?: number | null;
+            /** Size Usd */
+            size_usd?: number | null;
+            /**
+             * Fee Rate
+             * @default 0
+             */
+            fee_rate: number;
+            /**
+             * Slippage Bps
+             * @default 0
+             */
+            slippage_bps: number;
+            /**
+             * Simulation Mode
+             * @default auto
+             * @enum {string}
+             */
+            simulation_mode: "auto" | "passive" | "impact_aware";
+            /**
+             * Max Virtual Slippage Bps
+             * @default 150
+             */
+            max_virtual_slippage_bps: number;
+            /**
+             * Allow Partial Fill
+             * @default true
+             */
+            allow_partial_fill: boolean;
+            /**
+             * Min Fill Ratio
+             * @default 0.25
+             */
+            min_fill_ratio: number;
+            market_snapshot?: components["schemas"]["VirtualMarketSnapshot"] | null;
+            /**
+             * Max Open Positions
+             * @default 3
+             */
+            max_open_positions: number;
+            /** Signal Id */
+            signal_id: string;
+        };
         /** RealExecutionResult */
         RealExecutionResult: {
             /**
@@ -2110,15 +2541,18 @@ export interface components {
             /**
              * Status
              * @default not_implemented
-             * @constant
+             * @enum {string}
              */
-            status: "not_implemented";
+            status: "not_implemented" | "risk_failed";
             /** Exchange */
             exchange: string;
             /** Symbol */
             symbol: string;
             /** Message */
             message: string;
+            risk_decision?: components["schemas"]["RiskDecision"] | null;
+            /** Risk Decision Id */
+            risk_decision_id?: string | null;
         };
         /** RealTradeImportNotReadyResponse */
         RealTradeImportNotReadyResponse: {
@@ -2221,6 +2655,565 @@ export interface components {
             /** Timestamp */
             timestamp?: number | null;
         };
+        /** RiskAdjustmentPlan */
+        RiskAdjustmentPlan: {
+            /**
+             * Instrument Type
+             * @enum {string}
+             */
+            instrument_type: "spot" | "futures" | "virtual";
+            /** Strategy */
+            strategy: string;
+            /** Signal Score */
+            signal_score: number;
+            /** Account Equity */
+            account_equity: number;
+            /** Base Risk Percent */
+            base_risk_percent: number;
+            /** Base Risk Amount */
+            base_risk_amount: number;
+            /** Strategy Risk Multiplier */
+            strategy_risk_multiplier: number;
+            /** Signal Score Multiplier */
+            signal_score_multiplier: number;
+            /**
+             * Volatility Multiplier
+             * @default 1
+             */
+            volatility_multiplier: number;
+            /**
+             * User Mode Multiplier
+             * @default 1
+             */
+            user_mode_multiplier: number;
+            /** Adjusted Risk Percent */
+            adjusted_risk_percent: number;
+            /** Adjusted Risk Amount */
+            adjusted_risk_amount: number;
+            /** Signal Trade Allowed */
+            signal_trade_allowed: boolean;
+            /**
+             * Signal Virtual Only
+             * @default false
+             */
+            signal_virtual_only: boolean;
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** RiskCheckResult */
+        RiskCheckResult: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "passed" | "warning" | "failed";
+            /** Blockers */
+            blockers?: string[];
+            /** Warnings */
+            warnings?: string[];
+            /** Rr */
+            rr?: number | null;
+            /** Min Rr Ratio */
+            min_rr_ratio: number;
+            /** Account Equity */
+            account_equity: number;
+            /** Adjusted Risk Amount */
+            adjusted_risk_amount: number;
+            /** Adjusted Risk Percent */
+            adjusted_risk_percent: number;
+            /**
+             * Effective Risk Amount
+             * @default 0
+             */
+            effective_risk_amount: number;
+            /** Position Notional */
+            position_notional: number;
+            /** Position Size Base */
+            position_size_base: number;
+            /** Required Margin */
+            required_margin: number;
+            /** Available Balance */
+            available_balance?: number | null;
+            /**
+             * Close Only
+             * @default false
+             */
+            close_only: boolean;
+            /**
+             * Real Entries Allowed
+             * @default true
+             */
+            real_entries_allowed: boolean;
+            /**
+             * Virtual Entries Allowed
+             * @default true
+             */
+            virtual_entries_allowed: boolean;
+            /**
+             * Reduce Only Allowed
+             * @default true
+             */
+            reduce_only_allowed: boolean;
+            /**
+             * Protective Orders Allowed
+             * @default true
+             */
+            protective_orders_allowed: boolean;
+            /** Daily Risk Used Percent */
+            daily_risk_used_percent?: number | null;
+            /** Max Daily Loss Percent */
+            max_daily_loss_percent: number;
+            /** Account Drawdown Percent */
+            account_drawdown_percent?: number | null;
+            /** Max Account Drawdown Percent */
+            max_account_drawdown_percent: number;
+            /** Open Risk Used Percent */
+            open_risk_used_percent?: number | null;
+            /** Max Open Risk Percent */
+            max_open_risk_percent: number;
+            /** Correlated Risk Used Percent */
+            correlated_risk_used_percent?: number | null;
+            /** Max Correlated Risk Percent */
+            max_correlated_risk_percent: number;
+            /**
+             * Protection State
+             * @default normal
+             * @enum {string}
+             */
+            protection_state: "normal" | "reduced" | "virtual_only" | "blocked";
+            /**
+             * Exchange Rule Status
+             * @default unknown
+             * @enum {string}
+             */
+            exchange_rule_status: "fresh" | "missing" | "stale" | "unknown";
+            /** Exchange Rule Age Seconds */
+            exchange_rule_age_seconds?: number | null;
+            /** Exchange Rule Ttl Seconds */
+            exchange_rule_ttl_seconds?: number | null;
+            /**
+             * Market Data Status
+             * @default unknown
+             * @enum {string}
+             */
+            market_data_status: "fresh" | "partial" | "missing" | "unknown";
+            /** Best Bid */
+            best_bid?: number | null;
+            /** Best Ask */
+            best_ask?: number | null;
+            /** Mark Price */
+            mark_price?: number | null;
+            /** Funding Rate */
+            funding_rate?: number | null;
+            /**
+             * Funding Buffer Amount
+             * @default 0
+             */
+            funding_buffer_amount: number;
+            /** Fee Rate Source */
+            fee_rate_source?: string | null;
+            /** Maker Fee Rate */
+            maker_fee_rate?: number | null;
+            /** Taker Fee Rate */
+            taker_fee_rate?: number | null;
+            /** Spread Percent */
+            spread_percent?: number | null;
+            /** Spread Bps */
+            spread_bps?: number | null;
+            /**
+             * Max Spread Bps
+             * @default 0
+             */
+            max_spread_bps: number;
+            /**
+             * Slippage Bps
+             * @default 0
+             */
+            slippage_bps: number;
+            /**
+             * Max Slippage Bps
+             * @default 0
+             */
+            max_slippage_bps: number;
+            /** Price Deviation Bps */
+            price_deviation_bps?: number | null;
+            /**
+             * Max Price Deviation Bps
+             * @default 0
+             */
+            max_price_deviation_bps: number;
+            /** Orderbook Depth Usd */
+            orderbook_depth_usd?: number | null;
+            /** Orderbook Can Fill */
+            orderbook_can_fill?: boolean | null;
+            /** Orderbook Liquidity Ratio */
+            orderbook_liquidity_ratio?: number | null;
+            /**
+             * Max Orderbook Liquidity Ratio
+             * @default 1
+             */
+            max_orderbook_liquidity_ratio: number;
+        };
+        /** RiskDecision */
+        RiskDecision: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "virtual" | "real";
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "preview" | "pre_execution" | "post_execution" | "confirm";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "passed" | "warning" | "failed";
+            /** Can Enter */
+            can_enter: boolean;
+            /** Blockers */
+            blockers?: string[];
+            /** Warnings */
+            warnings?: string[];
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+            /**
+             * Instrument Type
+             * @enum {string}
+             */
+            instrument_type: "spot" | "futures" | "virtual";
+            /** Requested Notional */
+            requested_notional?: number | null;
+            risk_adjustment_plan: components["schemas"]["RiskAdjustmentPlan"];
+            position_sizing: components["schemas"]["PositionSizingResult"];
+            checked_position_sizing: components["schemas"]["PositionSizingResult"];
+            risk_check: components["schemas"]["RiskCheckResult"];
+            stop_loss_plan: components["schemas"]["StopLossPlan"];
+            take_profit_plan: components["schemas"]["TakeProfitPlan"];
+            breakeven_plan: components["schemas"]["BreakevenPlan"];
+            trailing_stop_plan: components["schemas"]["TrailingStopPlan"];
+            futures_risk_plan?: components["schemas"]["FuturesRiskPlan"] | null;
+            /** Notes */
+            notes?: string[];
+        };
+        /** RiskManagementPatch */
+        RiskManagementPatch: {
+            /** Risk Profile */
+            risk_profile?: ("conservative" | "balanced" | "aggressive" | "custom") | null;
+            /** Risk Per Trade Percent */
+            risk_per_trade_percent?: number | null;
+            /** Min Rr Ratio */
+            min_rr_ratio?: number | null;
+            /** Max Daily Loss Percent */
+            max_daily_loss_percent?: number | null;
+            /** Max Weekly Loss Percent */
+            max_weekly_loss_percent?: number | null;
+            /** Max Account Drawdown Percent */
+            max_account_drawdown_percent?: number | null;
+            /** Max Open Risk Percent */
+            max_open_risk_percent?: number | null;
+            /** Max Correlated Risk Percent */
+            max_correlated_risk_percent?: number | null;
+            /** Max Spread Bps */
+            max_spread_bps?: number | null;
+            /** Max Slippage Bps */
+            max_slippage_bps?: number | null;
+            /** Max Price Deviation Bps */
+            max_price_deviation_bps?: number | null;
+            /** Max Orderbook Liquidity Ratio */
+            max_orderbook_liquidity_ratio?: number | null;
+            /** Stop Loss Required */
+            stop_loss_required?: boolean | null;
+            /** Take Profit Required */
+            take_profit_required?: boolean | null;
+            /** Stop Loss Mode */
+            stop_loss_mode?: ("fixed_percent" | "atr" | "structure") | null;
+            /** Default Stop Loss Percent */
+            default_stop_loss_percent?: number | null;
+            /** Atr Period */
+            atr_period?: number | null;
+            /** Atr Multiplier */
+            atr_multiplier?: number | null;
+            /** Take Profit Mode */
+            take_profit_mode?: "risk_multiple" | null;
+            /** Tp1 R Multiple */
+            tp1_r_multiple?: number | null;
+            /** Tp2 R Multiple */
+            tp2_r_multiple?: number | null;
+            /** Tp3 R Multiple */
+            tp3_r_multiple?: number | null;
+            /** Partial Take Profit Enabled */
+            partial_take_profit_enabled?: boolean | null;
+            /** Tp1 Close Percent */
+            tp1_close_percent?: number | null;
+            /** Tp2 Close Percent */
+            tp2_close_percent?: number | null;
+            /** Tp3 Close Percent */
+            tp3_close_percent?: number | null;
+            /** Move Sl To Breakeven After R */
+            move_sl_to_breakeven_after_r?: number | null;
+            /** Breakeven Offset Percent */
+            breakeven_offset_percent?: number | null;
+            /** Trailing Stop Enabled */
+            trailing_stop_enabled?: boolean | null;
+            /** Trailing Mode */
+            trailing_mode?: ("atr" | "percent" | "structure") | null;
+            /** Trailing Atr Multiplier */
+            trailing_atr_multiplier?: number | null;
+            /** Trailing Stop Percent */
+            trailing_stop_percent?: number | null;
+            /** Max Leverage */
+            max_leverage?: number | null;
+            /** Min Liquidation Buffer Percent */
+            min_liquidation_buffer_percent?: number | null;
+            /** Liquidation Buffer Required */
+            liquidation_buffer_required?: boolean | null;
+            /** Spot Risk Per Trade Percent */
+            spot_risk_per_trade_percent?: number | null;
+            /** Spot Max Position Size Percent */
+            spot_max_position_size_percent?: number | null;
+            /** Spot Stop Required */
+            spot_stop_required?: boolean | null;
+            /** Futures Risk Per Trade Percent */
+            futures_risk_per_trade_percent?: number | null;
+            /** Futures Max Leverage */
+            futures_max_leverage?: number | null;
+            /** Futures Max Open Risk Percent */
+            futures_max_open_risk_percent?: number | null;
+            /** Futures Liquidation Buffer Required */
+            futures_liquidation_buffer_required?: boolean | null;
+            /** Virtual Risk Mode */
+            virtual_risk_mode?: ("same_as_real" | "custom") | null;
+            /** Virtual Risk Per Trade Percent */
+            virtual_risk_per_trade_percent?: number | null;
+            /** Virtual Starting Balance */
+            virtual_starting_balance?: number | null;
+            /** Virtual Slippage Model */
+            virtual_slippage_model?: ("none" | "fixed_percent" | "spread_based" | "orderbook_based" | "volatility_based") | null;
+            /** Virtual Fee Model */
+            virtual_fee_model?: ("manual" | "exchange_based") | null;
+            /** Virtual Trading Uses Realistic Execution */
+            virtual_trading_uses_realistic_execution?: boolean | null;
+            /** Strategy Risk Multipliers */
+            strategy_risk_multipliers?: {
+                [key: string]: number;
+            } | null;
+            /** Auto Reduce Risk After Losses */
+            auto_reduce_risk_after_losses?: boolean | null;
+            /** Allow Risk Increase After Profit */
+            allow_risk_increase_after_profit?: boolean | null;
+            /** Increase Risk After Profit Streak */
+            increase_risk_after_profit_streak?: boolean | null;
+            /** Max Risk Boost */
+            max_risk_boost?: number | null;
+        };
+        /** RiskPreviewRequest */
+        RiskPreviewRequest: {
+            /** Signal Id */
+            signal_id: string;
+            /**
+             * Mode
+             * @default virtual
+             * @enum {string}
+             */
+            mode: "virtual" | "real";
+            /**
+             * User Id
+             * @default demo_user
+             */
+            user_id: string;
+            /** Instrument Type */
+            instrument_type?: ("spot" | "futures" | "virtual") | null;
+            /**
+             * Leverage
+             * @default 1
+             */
+            leverage: number;
+            /** Liquidation Price */
+            liquidation_price?: number | null;
+            /** Entry Price */
+            entry_price?: number | null;
+            /** Stop Loss Price */
+            stop_loss_price?: number | null;
+            /** Take Profit Price */
+            take_profit_price?: number | null;
+            /** Size Usd */
+            size_usd?: number | null;
+            /**
+             * Account Balance
+             * @default 100
+             */
+            account_balance: number;
+            /**
+             * Risk Percent
+             * @default 10
+             */
+            risk_percent: number;
+            /**
+             * Fee Rate
+             * @default 0
+             */
+            fee_rate: number;
+            /**
+             * Slippage Bps
+             * @default 0
+             */
+            slippage_bps: number;
+            /** Atr Value */
+            atr_value?: number | null;
+        };
+        /** RiskPreviewResponse */
+        RiskPreviewResponse: {
+            decision: components["schemas"]["RiskDecision"];
+            state: components["schemas"]["RiskStateResponse"];
+            /** Risk Decision Id */
+            risk_decision_id?: string | null;
+        };
+        /** RiskStateResponse */
+        RiskStateResponse: {
+            /** User Id */
+            user_id: string;
+            /** Mode */
+            mode?: ("virtual" | "real") | null;
+            /**
+             * Protection State
+             * @default normal
+             * @enum {string}
+             */
+            protection_state: "normal" | "reduced" | "virtual_only" | "blocked";
+            /** Protection Reason */
+            protection_reason?: string | null;
+            /**
+             * Close Only
+             * @default false
+             */
+            close_only: boolean;
+            /**
+             * Real Entries Allowed
+             * @default true
+             */
+            real_entries_allowed: boolean;
+            /**
+             * Virtual Entries Allowed
+             * @default true
+             */
+            virtual_entries_allowed: boolean;
+            /**
+             * Reduce Only Allowed
+             * @default true
+             */
+            reduce_only_allowed: boolean;
+            /**
+             * Protective Orders Allowed
+             * @default true
+             */
+            protective_orders_allowed: boolean;
+            /**
+             * Loss Streak
+             * @default 0
+             */
+            loss_streak: number;
+            /**
+             * Daily Loss Amount
+             * @default 0
+             */
+            daily_loss_amount: number;
+            /**
+             * Weekly Loss Amount
+             * @default 0
+             */
+            weekly_loss_amount: number;
+            /** Daily Window Start */
+            daily_window_start?: string | null;
+            /** Weekly Window Start */
+            weekly_window_start?: string | null;
+            /**
+             * Window Timezone
+             * @default UTC
+             */
+            window_timezone: string;
+            /**
+             * Peak Equity
+             * @default 0
+             */
+            peak_equity: number;
+            /**
+             * Current Equity
+             * @default 0
+             */
+            current_equity: number;
+            /**
+             * Adaptive Multiplier
+             * @default 1
+             */
+            adaptive_multiplier: number;
+            /**
+             * Daily Loss Percent
+             * @default 0
+             */
+            daily_loss_percent: number;
+            /**
+             * Weekly Loss Percent
+             * @default 0
+             */
+            weekly_loss_percent: number;
+            /**
+             * Account Drawdown Percent
+             * @default 0
+             */
+            account_drawdown_percent: number;
+            /**
+             * Max Account Drawdown Percent
+             * @default 0
+             */
+            max_account_drawdown_percent: number;
+            /**
+             * Open Risk Amount
+             * @default 0
+             */
+            open_risk_amount: number;
+            /**
+             * Open Risk Percent
+             * @default 0
+             */
+            open_risk_percent: number;
+            /**
+             * Max Open Risk Percent
+             * @default 0
+             */
+            max_open_risk_percent: number;
+            /**
+             * Correlated Risk Amount
+             * @default 0
+             */
+            correlated_risk_amount: number;
+            /**
+             * Correlated Risk Percent
+             * @default 0
+             */
+            correlated_risk_percent: number;
+            /**
+             * Max Correlated Risk Percent
+             * @default 0
+             */
+            max_correlated_risk_percent: number;
+            /** Correlation Group */
+            correlation_group?: string | null;
+            /**
+             * Exchange Rule Status
+             * @default unknown
+             * @enum {string}
+             */
+            exchange_rule_status: "fresh" | "missing" | "stale" | "unknown";
+            /** Exchange Rule Age Seconds */
+            exchange_rule_age_seconds?: number | null;
+            /** Exchange Rule Ttl Seconds */
+            exchange_rule_ttl_seconds?: number | null;
+        };
         /** SignalAIExplanationGenerateRequest */
         SignalAIExplanationGenerateRequest: {
             /**
@@ -2318,6 +3311,79 @@ export interface components {
              * @default 0
              */
             total: number;
+        };
+        /** StopLossPlan */
+        StopLossPlan: {
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "fixed_percent" | "atr" | "structure";
+            /** Entry Price */
+            entry_price: number;
+            /** Stop Loss Price */
+            stop_loss_price: number;
+            /** Risk Per Unit */
+            risk_per_unit: number;
+            /** Source */
+            source: string;
+            /** Default Stop Loss Percent */
+            default_stop_loss_percent: number;
+            /** Atr Period */
+            atr_period: number;
+            /** Atr Multiplier */
+            atr_multiplier: number;
+            /** Atr Value */
+            atr_value?: number | null;
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** TakeProfitPlan */
+        TakeProfitPlan: {
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "risk_multiple";
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** Entry Price */
+            entry_price: number;
+            /** Stop Loss Price */
+            stop_loss_price: number;
+            /** Risk Per Unit */
+            risk_per_unit: number;
+            /** Partial Take Profit Enabled */
+            partial_take_profit_enabled: boolean;
+            /** Targets */
+            targets?: components["schemas"]["TakeProfitTarget"][];
+        };
+        /** TakeProfitTarget */
+        TakeProfitTarget: {
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "TP1" | "TP2" | "TP3";
+            /** R Multiple */
+            r_multiple: number;
+            /** Price */
+            price: number;
+            /** Close Percent */
+            close_percent: number;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "move_stop_to_breakeven" | "trailing_stop" | "full_close" | "observe";
         };
         /** TradeJournalEntry */
         TradeJournalEntry: {
@@ -2451,6 +3517,44 @@ export interface components {
             trades: components["schemas"]["TradeJournalEntry"][];
             account?: components["schemas"]["VirtualAccount"] | null;
         };
+        /** TrailingStopPlan */
+        TrailingStopPlan: {
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "atr" | "percent" | "structure";
+            /** Entry Price */
+            entry_price: number;
+            /** Current Price */
+            current_price: number;
+            /** Trailing Distance */
+            trailing_distance?: number | null;
+            /** Trailing Stop Price */
+            trailing_stop_price?: number | null;
+            /**
+             * Trailing Percent
+             * @default 0
+             */
+            trailing_percent: number;
+            /** Atr Multiplier */
+            atr_multiplier: number;
+            /** Atr Value */
+            atr_value?: number | null;
+            /** Structure Stop Price */
+            structure_stop_price?: number | null;
+            /** Source */
+            source: string;
+            /** Warnings */
+            warnings?: string[];
+        };
         /** UserProfileResponse */
         UserProfileResponse: {
             /**
@@ -2497,6 +3601,9 @@ export interface components {
         UserSettingsPatchRequest: {
             /** Virtual Simulation Level */
             virtual_simulation_level?: ("mvp" | "advanced" | "pro") | null;
+            /** Risk Profile */
+            risk_profile?: ("conservative" | "balanced" | "aggressive" | "custom") | null;
+            risk_management?: components["schemas"]["RiskManagementPatch"] | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -2658,6 +3765,15 @@ export interface components {
             book_price_after?: number | null;
             liquidity?: components["schemas"]["LiquidityMetrics"];
             quality_gate?: components["schemas"]["ExecutionQualityGate"];
+            risk_adjustment_plan?: components["schemas"]["RiskAdjustmentPlan"] | null;
+            risk_check?: components["schemas"]["RiskCheckResult"] | null;
+            risk_decision?: components["schemas"]["RiskDecision"] | null;
+            position_sizing?: components["schemas"]["PositionSizingResult"] | null;
+            stop_loss_plan?: components["schemas"]["StopLossPlan"] | null;
+            take_profit_plan?: components["schemas"]["TakeProfitPlan"] | null;
+            breakeven_plan?: components["schemas"]["BreakevenPlan"] | null;
+            trailing_stop_plan?: components["schemas"]["TrailingStopPlan"] | null;
+            futures_risk_plan?: components["schemas"]["FuturesRiskPlan"] | null;
             simulated_path?: components["schemas"]["VirtualSimulatedPositionPath"] | null;
             /** Rejected Reason */
             rejected_reason?: string | null;
@@ -3586,6 +4702,106 @@ export interface operations {
             };
         };
     };
+    get_exchange_connection_fee_rates_api_v1_exchanges_connections__connection_id__fees_get: {
+        parameters: {
+            query?: {
+                category?: string;
+                symbol?: string | null;
+            };
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeFeeRateResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_exchange_instrument_rules_api_v1_exchanges_instrument_rules_get: {
+        parameters: {
+            query?: {
+                exchange_code?: string;
+                category?: string | null;
+                symbol?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeInstrumentRuleResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_bybit_instrument_rules_api_v1_exchanges_bybit_instrument_rules_sync_post: {
+        parameters: {
+            query?: {
+                category?: string;
+                symbol?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeInstrumentRuleResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     sync_exchange_connection_trades_api_v1_exchanges_connections__connection_id__sync_post: {
         parameters: {
             query?: never;
@@ -4056,6 +5272,75 @@ export interface operations {
             };
         };
     };
+    preview_risk_api_v1_risk_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RiskPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_risk_state_api_v1_risk_state_get: {
+        parameters: {
+            query?: {
+                user_id?: string;
+                mode?: string | null;
+                exchange?: string | null;
+                symbol?: string | null;
+                side?: string | null;
+                instrument_type?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_signals_api_v1_signals_get: {
         parameters: {
             query?: never;
@@ -4349,6 +5634,39 @@ export interface operations {
             };
         };
     };
+    confirm_real_trade_api_v1_trades_real_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RealConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealExecutionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     import_real_trades_api_v1_trades_real_import_post: {
         parameters: {
             query?: never;
@@ -4546,6 +5864,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TradeJournalEntry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    close_market_trade_api_v1_trades__trade_id__close_market_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trade_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloseMarketTradeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloseMarketTradeResponse"];
                 };
             };
             /** @description Validation Error */

@@ -17,9 +17,35 @@ export function entryZone(signal: RadarSignal): string {
 
 export function signalAge(signal: RadarSignal): string {
   const diffMinutes = Math.max(0, Math.floor((Date.now() - new Date(signal.created_at).getTime()) / 60_000));
-  if (diffMinutes < 1) return "только что";
-  if (diffMinutes < 60) return `${diffMinutes} мин назад`;
-  return `${Math.floor(diffMinutes / 60)} ч назад`;
+  if (diffMinutes < 1) return "just now";
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  return `${Math.floor(diffMinutes / 60)}h ago`;
+}
+
+export function isSignalExpired(signal: RadarSignal, nowMs = Date.now()): boolean {
+  if (signal.status === "expired") return true;
+  if (!signal.expires_at) return false;
+  const expiresAtMs = Date.parse(signal.expires_at);
+  return Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs;
+}
+
+export function isOpenFeedSignal(signal: RadarSignal, nowMs = Date.now()): boolean {
+  return (
+    (signal.status === "new" || signal.status === "active" || signal.status === "entry_touched") &&
+    !isSignalExpired(signal, nowMs)
+  );
+}
+
+export function signalTtlLabel(signal: RadarSignal, nowMs = Date.now()): string {
+  if (!signal.expires_at) return "TTL n/a";
+  const expiresAtMs = Date.parse(signal.expires_at);
+  if (!Number.isFinite(expiresAtMs)) return "TTL n/a";
+  const remainingMinutes = Math.ceil((expiresAtMs - nowMs) / 60_000);
+  if (remainingMinutes <= 0) return "TTL expired";
+  if (remainingMinutes < 60) return `TTL ${remainingMinutes}m`;
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  return minutes ? `TTL ${hours}h ${minutes}m` : `TTL ${hours}h`;
 }
 
 export function riskLabel(signal: RadarSignal): "Low" | "Medium" | "High" | "Speculative" {

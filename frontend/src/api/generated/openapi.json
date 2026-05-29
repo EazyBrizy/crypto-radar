@@ -880,6 +880,230 @@
         }
       }
     },
+    "/api/v1/exchanges/connections/{connection_id}/fees": {
+      "get": {
+        "tags": [
+          "exchanges"
+        ],
+        "summary": "Get Exchange Connection Fee Rates",
+        "operationId": "get_exchange_connection_fee_rates_api_v1_exchanges_connections__connection_id__fees_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "linear",
+              "title": "Category"
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExchangeFeeRateResponse"
+                  },
+                  "title": "Response Get Exchange Connection Fee Rates Api V1 Exchanges Connections  Connection Id  Fees Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/exchanges/instrument-rules": {
+      "get": {
+        "tags": [
+          "exchanges"
+        ],
+        "summary": "List Exchange Instrument Rules",
+        "operationId": "list_exchange_instrument_rules_api_v1_exchanges_instrument_rules_get",
+        "parameters": [
+          {
+            "name": "exchange_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "bybit",
+              "title": "Exchange Code"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExchangeInstrumentRuleResponse"
+                  },
+                  "title": "Response List Exchange Instrument Rules Api V1 Exchanges Instrument Rules Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/exchanges/bybit/instrument-rules/sync": {
+      "post": {
+        "tags": [
+          "exchanges"
+        ],
+        "summary": "Sync Bybit Instrument Rules",
+        "operationId": "sync_bybit_instrument_rules_api_v1_exchanges_bybit_instrument_rules_sync_post",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "linear",
+              "title": "Category"
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExchangeInstrumentRuleResponse"
+                  },
+                  "title": "Response Sync Bybit Instrument Rules Api V1 Exchanges Bybit Instrument Rules Sync Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/exchanges/connections/{connection_id}/sync": {
       "post": {
         "tags": [
@@ -1468,6 +1692,173 @@
         }
       }
     },
+    "/api/v1/risk/preview": {
+      "post": {
+        "tags": [
+          "risk"
+        ],
+        "summary": "Preview Risk",
+        "operationId": "preview_risk_api_v1_risk_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RiskPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskPreviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/risk/state": {
+      "get": {
+        "tags": [
+          "risk"
+        ],
+        "summary": "Get Risk State",
+        "operationId": "get_risk_state_api_v1_risk_state_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "demo_user",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(virtual|real)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exchange"
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "side",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(long|short)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Side"
+            }
+          },
+          {
+            "name": "instrument_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(spot|futures|virtual)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Instrument Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskStateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/signals": {
       "get": {
         "tags": [
@@ -1974,6 +2365,47 @@
         }
       }
     },
+    "/api/v1/trades/real/confirm": {
+      "post": {
+        "tags": [
+          "trades"
+        ],
+        "summary": "Confirm Real Trade",
+        "operationId": "confirm_real_trade_api_v1_trades_real_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RealConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealExecutionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/trades/real/import": {
       "post": {
         "tags": [
@@ -2284,6 +2716,58 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TradeJournalEntry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trades/{trade_id}/close-market": {
+      "post": {
+        "tags": [
+          "trades"
+        ],
+        "summary": "Close Market Trade",
+        "operationId": "close_market_trade_api_v1_trades__trade_id__close_market_post",
+        "parameters": [
+          {
+            "name": "trade_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Trade Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseMarketTradeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloseMarketTradeResponse"
                 }
               }
             }
@@ -4161,6 +4645,65 @@
         ],
         "title": "BillingWebhookRequest"
       },
+      "BreakevenPlan": {
+        "properties": {
+          "side": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side"
+          },
+          "entry_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Entry Price"
+          },
+          "stop_loss_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Stop Loss Price"
+          },
+          "risk_per_unit": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Risk Per Unit"
+          },
+          "move_after_r": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Move After R"
+          },
+          "trigger_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Trigger Price"
+          },
+          "breakeven_stop_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Breakeven Stop Price"
+          },
+          "offset_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Offset Percent",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "side",
+          "entry_price",
+          "stop_loss_price",
+          "risk_per_unit",
+          "move_after_r",
+          "trigger_price",
+          "breakeven_stop_price"
+        ],
+        "title": "BreakevenPlan"
+      },
       "CandleResponse": {
         "properties": {
           "candles": {
@@ -4176,6 +4719,64 @@
           "candles"
         ],
         "title": "CandleResponse"
+      },
+      "CloseMarketTradeRequest": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "take_profit",
+              "stop_loss",
+              "manual_close",
+              "cancelled"
+            ],
+            "title": "Reason",
+            "default": "manual_close"
+          }
+        },
+        "type": "object",
+        "title": "CloseMarketTradeRequest"
+      },
+      "CloseMarketTradeResponse": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "real"
+            ],
+            "title": "Mode"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "closed",
+              "not_implemented"
+            ],
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "trade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradeJournalEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "status",
+          "message"
+        ],
+        "title": "CloseMarketTradeResponse"
       },
       "CloseVirtualTradeRequest": {
         "properties": {
@@ -4489,6 +5090,254 @@
         },
         "type": "object",
         "title": "ExchangeConnectionUpdateRequest"
+      },
+      "ExchangeFeeRateResponse": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "exchange_code": {
+            "type": "string",
+            "title": "Exchange Code"
+          },
+          "account_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Type"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "maker_fee_rate": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Maker Fee Rate"
+          },
+          "taker_fee_rate": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Taker Fee Rate"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fetched At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "exchange_code",
+          "category",
+          "symbol",
+          "maker_fee_rate",
+          "taker_fee_rate",
+          "source",
+          "fetched_at"
+        ],
+        "title": "ExchangeFeeRateResponse"
+      },
+      "ExchangeInstrumentRuleResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "exchange_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Exchange Id"
+          },
+          "exchange_code": {
+            "type": "string",
+            "title": "Exchange Code"
+          },
+          "pair_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pair Id"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "min_order_size": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Order Size"
+          },
+          "max_order_size": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Order Size"
+          },
+          "min_notional": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Notional"
+          },
+          "qty_step": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qty Step"
+          },
+          "tick_size": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tick Size"
+          },
+          "max_leverage": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Leverage"
+          },
+          "funding_interval_minutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funding Interval Minutes"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fetched At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "age_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Seconds"
+          },
+          "ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttl Seconds"
+          },
+          "is_stale": {
+            "type": "boolean",
+            "title": "Is Stale",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "exchange_id",
+          "exchange_code",
+          "pair_id",
+          "symbol",
+          "category",
+          "source",
+          "fetched_at",
+          "updated_at"
+        ],
+        "title": "ExchangeInstrumentRuleResponse"
       },
       "ExecutionQualityGate": {
         "properties": {
@@ -4822,6 +5671,115 @@
         ],
         "title": "ExternalExchangeTradeResponse"
       },
+      "FuturesRiskPlan": {
+        "properties": {
+          "side": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "blocked",
+              "unknown"
+            ],
+            "title": "Status"
+          },
+          "entry_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Entry Price"
+          },
+          "stop_loss_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Stop Loss Price"
+          },
+          "leverage": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Leverage"
+          },
+          "max_leverage": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Max Leverage"
+          },
+          "leverage_allowed": {
+            "type": "boolean",
+            "title": "Leverage Allowed"
+          },
+          "liquidation_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidation Price"
+          },
+          "liquidation_buffer_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidation Buffer Percent"
+          },
+          "min_liquidation_buffer_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Min Liquidation Buffer Percent"
+          },
+          "liquidation_before_stop": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidation Before Stop"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "side",
+          "status",
+          "entry_price",
+          "stop_loss_price",
+          "leverage",
+          "max_leverage",
+          "leverage_allowed",
+          "min_liquidation_buffer_percent",
+          "message"
+        ],
+        "title": "FuturesRiskPlan"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4954,6 +5912,18 @@
             "minimum": 1,
             "title": "Leverage",
             "default": 1
+          },
+          "liquidation_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidation Price"
           },
           "size_usd": {
             "anyOf": [
@@ -5454,6 +6424,135 @@
         ],
         "title": "OrderBookLevel"
       },
+      "PositionSizingResult": {
+        "properties": {
+          "side": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side"
+          },
+          "account_equity": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Account Equity"
+          },
+          "risk_per_trade_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Risk Per Trade Percent"
+          },
+          "risk_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Risk Amount"
+          },
+          "entry_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Entry Price"
+          },
+          "stop_loss_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Stop Loss Price"
+          },
+          "stop_distance_per_unit": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Stop Distance Per Unit"
+          },
+          "estimated_entry_fee_per_unit": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Estimated Entry Fee Per Unit",
+            "default": 0
+          },
+          "estimated_exit_fee_per_unit": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Estimated Exit Fee Per Unit",
+            "default": 0
+          },
+          "slippage_buffer_per_unit": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Slippage Buffer Per Unit",
+            "default": 0
+          },
+          "funding_buffer_per_unit": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Funding Buffer Per Unit",
+            "default": 0
+          },
+          "effective_risk_per_unit": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Effective Risk Per Unit"
+          },
+          "position_size_base": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Position Size Base"
+          },
+          "notional": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Notional"
+          },
+          "leverage": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Leverage"
+          },
+          "required_margin": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Required Margin"
+          },
+          "fee_rate": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Fee Rate",
+            "default": 0
+          },
+          "slippage_bps": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Slippage Bps",
+            "default": 0
+          },
+          "include_fees_in_risk": {
+            "type": "boolean",
+            "title": "Include Fees In Risk",
+            "default": true
+          },
+          "include_slippage_in_risk": {
+            "type": "boolean",
+            "title": "Include Slippage In Risk",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "side",
+          "account_equity",
+          "risk_per_trade_percent",
+          "risk_amount",
+          "entry_price",
+          "stop_loss_price",
+          "stop_distance_per_unit",
+          "effective_risk_per_unit",
+          "position_size_base",
+          "notional",
+          "leverage",
+          "required_margin"
+        ],
+        "title": "PositionSizingResult"
+      },
       "RadarConfig": {
         "properties": {
           "exchanges": {
@@ -5828,6 +6927,135 @@
         ],
         "title": "RadarSignal"
       },
+      "RealConfirmRequest": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "real",
+            "title": "Mode",
+            "default": "real"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "default": "demo_user"
+          },
+          "account_balance": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Account Balance",
+            "default": 100
+          },
+          "risk_percent": {
+            "type": "number",
+            "maximum": 100,
+            "exclusiveMinimum": 0,
+            "title": "Risk Percent",
+            "default": 10
+          },
+          "leverage": {
+            "type": "integer",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Leverage",
+            "default": 1
+          },
+          "liquidation_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidation Price"
+          },
+          "size_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Usd"
+          },
+          "fee_rate": {
+            "type": "number",
+            "maximum": 0.01,
+            "minimum": 0,
+            "title": "Fee Rate",
+            "default": 0
+          },
+          "slippage_bps": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Slippage Bps",
+            "default": 0
+          },
+          "simulation_mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "passive",
+              "impact_aware"
+            ],
+            "title": "Simulation Mode",
+            "default": "auto"
+          },
+          "max_virtual_slippage_bps": {
+            "type": "number",
+            "maximum": 2000,
+            "minimum": 0,
+            "title": "Max Virtual Slippage Bps",
+            "default": 150
+          },
+          "allow_partial_fill": {
+            "type": "boolean",
+            "title": "Allow Partial Fill",
+            "default": true
+          },
+          "min_fill_ratio": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Min Fill Ratio",
+            "default": 0.25
+          },
+          "market_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VirtualMarketSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_open_positions": {
+            "type": "integer",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Max Open Positions",
+            "default": 3
+          },
+          "signal_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Signal Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "signal_id"
+        ],
+        "title": "RealConfirmRequest"
+      },
       "RealExecutionResult": {
         "properties": {
           "mode": {
@@ -5838,7 +7066,10 @@
           },
           "status": {
             "type": "string",
-            "const": "not_implemented",
+            "enum": [
+              "not_implemented",
+              "risk_failed"
+            ],
             "title": "Status",
             "default": "not_implemented"
           },
@@ -5853,6 +7084,27 @@
           "message": {
             "type": "string",
             "title": "Message"
+          },
+          "risk_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "risk_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Decision Id"
           }
         },
         "type": "object",
@@ -6079,6 +7331,1806 @@
         ],
         "title": "RecentTradePrint"
       },
+      "RiskAdjustmentPlan": {
+        "properties": {
+          "instrument_type": {
+            "type": "string",
+            "enum": [
+              "spot",
+              "futures",
+              "virtual"
+            ],
+            "title": "Instrument Type"
+          },
+          "strategy": {
+            "type": "string",
+            "title": "Strategy"
+          },
+          "signal_score": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Signal Score"
+          },
+          "account_equity": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Account Equity"
+          },
+          "base_risk_percent": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Base Risk Percent"
+          },
+          "base_risk_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Base Risk Amount"
+          },
+          "strategy_risk_multiplier": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Strategy Risk Multiplier"
+          },
+          "signal_score_multiplier": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Signal Score Multiplier"
+          },
+          "volatility_multiplier": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Volatility Multiplier",
+            "default": 1
+          },
+          "user_mode_multiplier": {
+            "type": "number",
+            "minimum": 0,
+            "title": "User Mode Multiplier",
+            "default": 1
+          },
+          "adjusted_risk_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Adjusted Risk Percent"
+          },
+          "adjusted_risk_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Adjusted Risk Amount"
+          },
+          "signal_trade_allowed": {
+            "type": "boolean",
+            "title": "Signal Trade Allowed"
+          },
+          "signal_virtual_only": {
+            "type": "boolean",
+            "title": "Signal Virtual Only",
+            "default": false
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "instrument_type",
+          "strategy",
+          "signal_score",
+          "account_equity",
+          "base_risk_percent",
+          "base_risk_amount",
+          "strategy_risk_multiplier",
+          "signal_score_multiplier",
+          "adjusted_risk_percent",
+          "adjusted_risk_amount",
+          "signal_trade_allowed"
+        ],
+        "title": "RiskAdjustmentPlan"
+      },
+      "RiskCheckResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "warning",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blockers"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "rr": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rr"
+          },
+          "min_rr_ratio": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Min Rr Ratio"
+          },
+          "account_equity": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Account Equity"
+          },
+          "adjusted_risk_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Adjusted Risk Amount"
+          },
+          "adjusted_risk_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Adjusted Risk Percent"
+          },
+          "effective_risk_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Effective Risk Amount",
+            "default": 0
+          },
+          "position_notional": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Position Notional"
+          },
+          "position_size_base": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Position Size Base"
+          },
+          "required_margin": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Required Margin"
+          },
+          "available_balance": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available Balance"
+          },
+          "close_only": {
+            "type": "boolean",
+            "title": "Close Only",
+            "default": false
+          },
+          "real_entries_allowed": {
+            "type": "boolean",
+            "title": "Real Entries Allowed",
+            "default": true
+          },
+          "virtual_entries_allowed": {
+            "type": "boolean",
+            "title": "Virtual Entries Allowed",
+            "default": true
+          },
+          "reduce_only_allowed": {
+            "type": "boolean",
+            "title": "Reduce Only Allowed",
+            "default": true
+          },
+          "protective_orders_allowed": {
+            "type": "boolean",
+            "title": "Protective Orders Allowed",
+            "default": true
+          },
+          "daily_risk_used_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Risk Used Percent"
+          },
+          "max_daily_loss_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Daily Loss Percent"
+          },
+          "account_drawdown_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Drawdown Percent"
+          },
+          "max_account_drawdown_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Account Drawdown Percent"
+          },
+          "open_risk_used_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Risk Used Percent"
+          },
+          "max_open_risk_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Open Risk Percent"
+          },
+          "correlated_risk_used_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlated Risk Used Percent"
+          },
+          "max_correlated_risk_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Correlated Risk Percent"
+          },
+          "protection_state": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "reduced",
+              "virtual_only",
+              "blocked"
+            ],
+            "title": "Protection State",
+            "default": "normal"
+          },
+          "exchange_rule_status": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "missing",
+              "stale",
+              "unknown"
+            ],
+            "title": "Exchange Rule Status",
+            "default": "unknown"
+          },
+          "exchange_rule_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange Rule Age Seconds"
+          },
+          "exchange_rule_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange Rule Ttl Seconds"
+          },
+          "market_data_status": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "partial",
+              "missing",
+              "unknown"
+            ],
+            "title": "Market Data Status",
+            "default": "unknown"
+          },
+          "best_bid": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Bid"
+          },
+          "best_ask": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Ask"
+          },
+          "mark_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mark Price"
+          },
+          "funding_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funding Rate"
+          },
+          "funding_buffer_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Funding Buffer Amount",
+            "default": 0
+          },
+          "fee_rate_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Rate Source"
+          },
+          "maker_fee_rate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maker Fee Rate"
+          },
+          "taker_fee_rate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taker Fee Rate"
+          },
+          "spread_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread Percent"
+          },
+          "spread_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread Bps"
+          },
+          "max_spread_bps": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Spread Bps",
+            "default": 0
+          },
+          "slippage_bps": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Slippage Bps",
+            "default": 0
+          },
+          "max_slippage_bps": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Slippage Bps",
+            "default": 0
+          },
+          "price_deviation_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Deviation Bps"
+          },
+          "max_price_deviation_bps": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Price Deviation Bps",
+            "default": 0
+          },
+          "orderbook_depth_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Depth Usd"
+          },
+          "orderbook_can_fill": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Can Fill"
+          },
+          "orderbook_liquidity_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Liquidity Ratio"
+          },
+          "max_orderbook_liquidity_ratio": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Orderbook Liquidity Ratio",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "min_rr_ratio",
+          "account_equity",
+          "adjusted_risk_amount",
+          "adjusted_risk_percent",
+          "position_notional",
+          "position_size_base",
+          "required_margin",
+          "max_daily_loss_percent",
+          "max_account_drawdown_percent",
+          "max_open_risk_percent",
+          "max_correlated_risk_percent"
+        ],
+        "title": "RiskCheckResult"
+      },
+      "RiskDecision": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "real"
+            ],
+            "title": "Mode"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "preview",
+              "pre_execution",
+              "post_execution",
+              "confirm"
+            ],
+            "title": "Stage"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "warning",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "can_enter": {
+            "type": "boolean",
+            "title": "Can Enter"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blockers"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "instrument_type": {
+            "type": "string",
+            "enum": [
+              "spot",
+              "futures",
+              "virtual"
+            ],
+            "title": "Instrument Type"
+          },
+          "requested_notional": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Notional"
+          },
+          "risk_adjustment_plan": {
+            "$ref": "#/components/schemas/RiskAdjustmentPlan"
+          },
+          "position_sizing": {
+            "$ref": "#/components/schemas/PositionSizingResult"
+          },
+          "checked_position_sizing": {
+            "$ref": "#/components/schemas/PositionSizingResult"
+          },
+          "risk_check": {
+            "$ref": "#/components/schemas/RiskCheckResult"
+          },
+          "stop_loss_plan": {
+            "$ref": "#/components/schemas/StopLossPlan"
+          },
+          "take_profit_plan": {
+            "$ref": "#/components/schemas/TakeProfitPlan"
+          },
+          "breakeven_plan": {
+            "$ref": "#/components/schemas/BreakevenPlan"
+          },
+          "trailing_stop_plan": {
+            "$ref": "#/components/schemas/TrailingStopPlan"
+          },
+          "futures_risk_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FuturesRiskPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "stage",
+          "status",
+          "can_enter",
+          "exchange",
+          "symbol",
+          "instrument_type",
+          "risk_adjustment_plan",
+          "position_sizing",
+          "checked_position_sizing",
+          "risk_check",
+          "stop_loss_plan",
+          "take_profit_plan",
+          "breakeven_plan",
+          "trailing_stop_plan"
+        ],
+        "title": "RiskDecision"
+      },
+      "RiskManagementPatch": {
+        "properties": {
+          "risk_profile": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "conservative",
+                  "balanced",
+                  "aggressive",
+                  "custom"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Profile"
+          },
+          "risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Per Trade Percent"
+          },
+          "min_rr_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Rr Ratio"
+          },
+          "max_daily_loss_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 50,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Daily Loss Percent"
+          },
+          "max_weekly_loss_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 80,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Weekly Loss Percent"
+          },
+          "max_account_drawdown_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Account Drawdown Percent"
+          },
+          "max_open_risk_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Open Risk Percent"
+          },
+          "max_correlated_risk_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Correlated Risk Percent"
+          },
+          "max_spread_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10000,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Spread Bps"
+          },
+          "max_slippage_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10000,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Slippage Bps"
+          },
+          "max_price_deviation_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10000,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Price Deviation Bps"
+          },
+          "max_orderbook_liquidity_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Orderbook Liquidity Ratio"
+          },
+          "stop_loss_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss Required"
+          },
+          "take_profit_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Take Profit Required"
+          },
+          "stop_loss_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "fixed_percent",
+                  "atr",
+                  "structure"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss Mode"
+          },
+          "default_stop_loss_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 50,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Stop Loss Percent"
+          },
+          "atr_period": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 200,
+                "minimum": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Atr Period"
+          },
+          "atr_multiplier": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Atr Multiplier"
+          },
+          "take_profit_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "risk_multiple"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Take Profit Mode"
+          },
+          "tp1_r_multiple": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 20,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tp1 R Multiple"
+          },
+          "tp2_r_multiple": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 20,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tp2 R Multiple"
+          },
+          "tp3_r_multiple": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 20,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tp3 R Multiple"
+          },
+          "partial_take_profit_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partial Take Profit Enabled"
+          },
+          "tp1_close_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tp1 Close Percent"
+          },
+          "tp2_close_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tp2 Close Percent"
+          },
+          "tp3_close_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tp3 Close Percent"
+          },
+          "move_sl_to_breakeven_after_r": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 20,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Move Sl To Breakeven After R"
+          },
+          "breakeven_offset_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 5,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Breakeven Offset Percent"
+          },
+          "trailing_stop_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailing Stop Enabled"
+          },
+          "trailing_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "atr",
+                  "percent",
+                  "structure"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailing Mode"
+          },
+          "trailing_atr_multiplier": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailing Atr Multiplier"
+          },
+          "trailing_stop_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 50,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailing Stop Percent"
+          },
+          "max_leverage": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 125,
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Leverage"
+          },
+          "min_liquidation_buffer_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Liquidation Buffer Percent"
+          },
+          "liquidation_buffer_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidation Buffer Required"
+          },
+          "spot_risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spot Risk Per Trade Percent"
+          },
+          "spot_max_position_size_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spot Max Position Size Percent"
+          },
+          "spot_stop_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spot Stop Required"
+          },
+          "futures_risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Futures Risk Per Trade Percent"
+          },
+          "futures_max_leverage": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 125,
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Futures Max Leverage"
+          },
+          "futures_max_open_risk_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Futures Max Open Risk Percent"
+          },
+          "futures_liquidation_buffer_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Futures Liquidation Buffer Required"
+          },
+          "virtual_risk_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "same_as_real",
+                  "custom"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Risk Mode"
+          },
+          "virtual_risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Risk Per Trade Percent"
+          },
+          "virtual_starting_balance": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Starting Balance"
+          },
+          "virtual_slippage_model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "fixed_percent",
+                  "spread_based",
+                  "orderbook_based",
+                  "volatility_based"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Slippage Model"
+          },
+          "virtual_fee_model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "manual",
+                  "exchange_based"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Fee Model"
+          },
+          "virtual_trading_uses_realistic_execution": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Trading Uses Realistic Execution"
+          },
+          "strategy_risk_multipliers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Risk Multipliers"
+          },
+          "auto_reduce_risk_after_losses": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Reduce Risk After Losses"
+          },
+          "allow_risk_increase_after_profit": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Risk Increase After Profit"
+          },
+          "increase_risk_after_profit_streak": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Increase Risk After Profit Streak"
+          },
+          "max_risk_boost": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 5,
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Risk Boost"
+          }
+        },
+        "type": "object",
+        "title": "RiskManagementPatch"
+      },
+      "RiskPreviewRequest": {
+        "properties": {
+          "signal_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Signal Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "real"
+            ],
+            "title": "Mode",
+            "default": "virtual"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "default": "demo_user"
+          },
+          "instrument_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "spot",
+                  "futures",
+                  "virtual"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instrument Type"
+          },
+          "leverage": {
+            "type": "integer",
+            "maximum": 125,
+            "minimum": 1,
+            "title": "Leverage",
+            "default": 1
+          },
+          "liquidation_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidation Price"
+          },
+          "entry_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Price"
+          },
+          "stop_loss_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss Price"
+          },
+          "take_profit_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Take Profit Price"
+          },
+          "size_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Usd"
+          },
+          "account_balance": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Account Balance",
+            "default": 100
+          },
+          "risk_percent": {
+            "type": "number",
+            "maximum": 100,
+            "exclusiveMinimum": 0,
+            "title": "Risk Percent",
+            "default": 10
+          },
+          "fee_rate": {
+            "type": "number",
+            "maximum": 0.01,
+            "minimum": 0,
+            "title": "Fee Rate",
+            "default": 0
+          },
+          "slippage_bps": {
+            "type": "number",
+            "maximum": 2000,
+            "minimum": 0,
+            "title": "Slippage Bps",
+            "default": 0
+          },
+          "atr_value": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Atr Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "signal_id"
+        ],
+        "title": "RiskPreviewRequest"
+      },
+      "RiskPreviewResponse": {
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/RiskDecision"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RiskStateResponse"
+          },
+          "risk_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Decision Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decision",
+          "state"
+        ],
+        "title": "RiskPreviewResponse"
+      },
+      "RiskStateResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "virtual",
+                  "real"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "protection_state": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "reduced",
+              "virtual_only",
+              "blocked"
+            ],
+            "title": "Protection State",
+            "default": "normal"
+          },
+          "protection_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protection Reason"
+          },
+          "close_only": {
+            "type": "boolean",
+            "title": "Close Only",
+            "default": false
+          },
+          "real_entries_allowed": {
+            "type": "boolean",
+            "title": "Real Entries Allowed",
+            "default": true
+          },
+          "virtual_entries_allowed": {
+            "type": "boolean",
+            "title": "Virtual Entries Allowed",
+            "default": true
+          },
+          "reduce_only_allowed": {
+            "type": "boolean",
+            "title": "Reduce Only Allowed",
+            "default": true
+          },
+          "protective_orders_allowed": {
+            "type": "boolean",
+            "title": "Protective Orders Allowed",
+            "default": true
+          },
+          "loss_streak": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Loss Streak",
+            "default": 0
+          },
+          "daily_loss_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Daily Loss Amount",
+            "default": 0
+          },
+          "weekly_loss_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Weekly Loss Amount",
+            "default": 0
+          },
+          "daily_window_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Window Start"
+          },
+          "weekly_window_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Window Start"
+          },
+          "window_timezone": {
+            "type": "string",
+            "title": "Window Timezone",
+            "default": "UTC"
+          },
+          "peak_equity": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Peak Equity",
+            "default": 0
+          },
+          "current_equity": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Current Equity",
+            "default": 0
+          },
+          "adaptive_multiplier": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Adaptive Multiplier",
+            "default": 1
+          },
+          "daily_loss_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Daily Loss Percent",
+            "default": 0
+          },
+          "weekly_loss_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Weekly Loss Percent",
+            "default": 0
+          },
+          "account_drawdown_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Account Drawdown Percent",
+            "default": 0
+          },
+          "max_account_drawdown_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Account Drawdown Percent",
+            "default": 0
+          },
+          "open_risk_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Open Risk Amount",
+            "default": 0
+          },
+          "open_risk_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Open Risk Percent",
+            "default": 0
+          },
+          "max_open_risk_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Open Risk Percent",
+            "default": 0
+          },
+          "correlated_risk_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Correlated Risk Amount",
+            "default": 0
+          },
+          "correlated_risk_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Correlated Risk Percent",
+            "default": 0
+          },
+          "max_correlated_risk_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Max Correlated Risk Percent",
+            "default": 0
+          },
+          "correlation_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation Group"
+          },
+          "exchange_rule_status": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "missing",
+              "stale",
+              "unknown"
+            ],
+            "title": "Exchange Rule Status",
+            "default": "unknown"
+          },
+          "exchange_rule_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange Rule Age Seconds"
+          },
+          "exchange_rule_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange Rule Ttl Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id"
+        ],
+        "title": "RiskStateResponse"
+      },
       "SignalAIExplanationGenerateRequest": {
         "properties": {
           "user_id": {
@@ -6223,6 +9275,194 @@
         },
         "type": "object",
         "title": "SignalScoreBreakdown"
+      },
+      "StopLossPlan": {
+        "properties": {
+          "side": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "fixed_percent",
+              "atr",
+              "structure"
+            ],
+            "title": "Mode"
+          },
+          "entry_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Entry Price"
+          },
+          "stop_loss_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Stop Loss Price"
+          },
+          "risk_per_unit": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Risk Per Unit"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "default_stop_loss_percent": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Default Stop Loss Percent"
+          },
+          "atr_period": {
+            "type": "integer",
+            "minimum": 2,
+            "title": "Atr Period"
+          },
+          "atr_multiplier": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Atr Multiplier"
+          },
+          "atr_value": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Atr Value"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "side",
+          "mode",
+          "entry_price",
+          "stop_loss_price",
+          "risk_per_unit",
+          "source",
+          "default_stop_loss_percent",
+          "atr_period",
+          "atr_multiplier"
+        ],
+        "title": "StopLossPlan"
+      },
+      "TakeProfitPlan": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "risk_multiple",
+            "title": "Mode"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side"
+          },
+          "entry_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Entry Price"
+          },
+          "stop_loss_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Stop Loss Price"
+          },
+          "risk_per_unit": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Risk Per Unit"
+          },
+          "partial_take_profit_enabled": {
+            "type": "boolean",
+            "title": "Partial Take Profit Enabled"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/TakeProfitTarget"
+            },
+            "type": "array",
+            "title": "Targets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "side",
+          "entry_price",
+          "stop_loss_price",
+          "risk_per_unit",
+          "partial_take_profit_enabled"
+        ],
+        "title": "TakeProfitPlan"
+      },
+      "TakeProfitTarget": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "enum": [
+              "TP1",
+              "TP2",
+              "TP3"
+            ],
+            "title": "Label"
+          },
+          "r_multiple": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "R Multiple"
+          },
+          "price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Price"
+          },
+          "close_percent": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Close Percent"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "move_stop_to_breakeven",
+              "trailing_stop",
+              "full_close",
+              "observe"
+            ],
+            "title": "Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "r_multiple",
+          "price",
+          "close_percent",
+          "action"
+        ],
+        "title": "TakeProfitTarget"
       },
       "TradeJournalEntry": {
         "properties": {
@@ -6566,6 +9806,122 @@
         ],
         "title": "TradeJournalResponse"
       },
+      "TrailingStopPlan": {
+        "properties": {
+          "side": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atr",
+              "percent",
+              "structure"
+            ],
+            "title": "Mode"
+          },
+          "entry_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Entry Price"
+          },
+          "current_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Current Price"
+          },
+          "trailing_distance": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailing Distance"
+          },
+          "trailing_stop_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailing Stop Price"
+          },
+          "trailing_percent": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Trailing Percent",
+            "default": 0
+          },
+          "atr_multiplier": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "title": "Atr Multiplier"
+          },
+          "atr_value": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Atr Value"
+          },
+          "structure_stop_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Structure Stop Price"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "side",
+          "enabled",
+          "mode",
+          "entry_price",
+          "current_price",
+          "atr_multiplier",
+          "source"
+        ],
+        "title": "TrailingStopPlan"
+      },
       "UserProfileResponse": {
         "properties": {
           "id": {
@@ -6699,6 +10055,33 @@
               }
             ],
             "title": "Virtual Simulation Level"
+          },
+          "risk_profile": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "conservative",
+                  "balanced",
+                  "aggressive",
+                  "custom"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Profile"
+          },
+          "risk_management": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskManagementPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -6970,6 +10353,96 @@
           },
           "quality_gate": {
             "$ref": "#/components/schemas/ExecutionQualityGate"
+          },
+          "risk_adjustment_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskAdjustmentPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "risk_check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskCheckResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "risk_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "position_sizing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PositionSizingResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stop_loss_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StopLossPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "take_profit_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TakeProfitPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "breakeven_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BreakevenPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trailing_stop_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrailingStopPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "futures_risk_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FuturesRiskPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "simulated_path": {
             "anyOf": [

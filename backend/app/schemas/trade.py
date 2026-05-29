@@ -3,6 +3,17 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.risk import (
+    BreakevenPlan,
+    FuturesRiskPlan,
+    PositionSizingResult,
+    RiskAdjustmentPlan,
+    RiskCheckResult,
+    RiskDecision,
+    StopLossPlan,
+    TakeProfitPlan,
+    TrailingStopPlan,
+)
 from app.schemas.signal import RadarSignal
 
 ExecutionMode = Literal["virtual", "real"]
@@ -10,6 +21,7 @@ TradeSide = Literal["long", "short"]
 TradeStatus = Literal["open", "closed", "cancelled"]
 TradeResult = Literal["win", "loss", "breakeven"]
 CloseReason = Literal["take_profit", "stop_loss", "manual_close", "cancelled"]
+CloseMarketTradeStatus = Literal["closed", "not_implemented"]
 SimulationMode = Literal["auto", "passive", "impact_aware"]
 VirtualSimulationMode = Literal["passive", "impact_aware"]
 VirtualSimulationTier = Literal["mvp", "advanced", "pro"]
@@ -134,6 +146,15 @@ class VirtualExecutionReport(BaseModel):
     book_price_after: Optional[float] = Field(default=None, gt=0)
     liquidity: LiquidityMetrics = Field(default_factory=LiquidityMetrics)
     quality_gate: ExecutionQualityGate = Field(default_factory=ExecutionQualityGate)
+    risk_adjustment_plan: Optional[RiskAdjustmentPlan] = None
+    risk_check: Optional[RiskCheckResult] = None
+    risk_decision: Optional[RiskDecision] = None
+    position_sizing: Optional[PositionSizingResult] = None
+    stop_loss_plan: Optional[StopLossPlan] = None
+    take_profit_plan: Optional[TakeProfitPlan] = None
+    breakeven_plan: Optional[BreakevenPlan] = None
+    trailing_stop_plan: Optional[TrailingStopPlan] = None
+    futures_risk_plan: Optional[FuturesRiskPlan] = None
     simulated_path: Optional[VirtualSimulatedPositionPath] = None
     rejected_reason: Optional[str] = None
     notes: list[str] = Field(default_factory=list)
@@ -145,6 +166,7 @@ class ManualConfirmRequest(BaseModel):
     account_balance: float = Field(default=100.0, gt=0)
     risk_percent: float = Field(default=10.0, gt=0, le=100)
     leverage: int = Field(default=1, ge=1, le=100)
+    liquidation_price: Optional[float] = Field(default=None, gt=0)
     size_usd: Optional[float] = Field(default=None, gt=0)
     fee_rate: float = Field(default=0.0, ge=0, le=0.01)
     slippage_bps: float = Field(default=0.0, ge=0, le=100)
@@ -156,12 +178,21 @@ class ManualConfirmRequest(BaseModel):
     max_open_positions: int = Field(default=3, ge=1, le=100)
 
 
+class RealConfirmRequest(ManualConfirmRequest):
+    signal_id: str = Field(..., min_length=1)
+    mode: Literal["real"] = "real"
+
+
 class ManualRejectRequest(BaseModel):
     reason: Optional[str] = None
 
 
 class CloseVirtualTradeRequest(BaseModel):
     exit_price: Optional[float] = Field(default=None, gt=0)
+    reason: CloseReason = "manual_close"
+
+
+class CloseMarketTradeRequest(BaseModel):
     reason: CloseReason = "manual_close"
 
 
@@ -215,10 +246,12 @@ class VirtualTrade(BaseModel):
 
 class RealExecutionResult(BaseModel):
     mode: Literal["real"] = "real"
-    status: Literal["not_implemented"] = "not_implemented"
+    status: Literal["not_implemented", "risk_failed"] = "not_implemented"
     exchange: str
     symbol: str
     message: str
+    risk_decision: Optional[RiskDecision] = None
+    risk_decision_id: Optional[str] = None
 
 
 class ManualDecisionResponse(BaseModel):
@@ -306,6 +339,13 @@ class VirtualAccount(BaseModel):
 class TradeJournalResponse(BaseModel):
     trades: list[TradeJournalEntry]
     account: Optional[VirtualAccount] = None
+
+
+class CloseMarketTradeResponse(BaseModel):
+    mode: ExecutionMode
+    status: CloseMarketTradeStatus
+    message: str
+    trade: Optional[TradeJournalEntry] = None
 
 
 class ExecutionConfig(BaseModel):

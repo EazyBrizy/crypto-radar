@@ -11,7 +11,11 @@ from app.schemas.external_exchange import (
     RealTradeImportResult,
 )
 from app.schemas.trade import (
+    CloseMarketTradeRequest,
+    CloseMarketTradeResponse,
     CloseVirtualTradeRequest,
+    RealConfirmRequest,
+    RealExecutionResult,
     TradeJournalEntry,
     TradeJournalResponse,
     VirtualAccount,
@@ -19,6 +23,7 @@ from app.schemas.trade import (
     VirtualTrade,
     VirtualTradeResponse,
 )
+from app.services.execution_service import real_execution_service
 from app.services.message_broker import realtime_event_broker
 from app.services.realtime_events import (
     stop_loss_hit_event,
@@ -26,6 +31,7 @@ from app.services.realtime_events import (
     trade_closed_event,
 )
 from app.services.real_trade_import_service import RealTradeImportNotReadyError, real_trade_import_service
+from app.services.signal_service import signal_service
 from app.services.virtual_trading import (
     get_virtual_simulation_model_info,
     virtual_trading_service,
@@ -75,6 +81,29 @@ async def list_real_trades(
         ),
         account=None,
     )
+
+
+@router.post("/real/confirm", response_model=RealExecutionResult)
+async def confirm_real_trade(request: RealConfirmRequest) -> RealExecutionResult:
+    signal = signal_service.get_signal(request.signal_id)
+    if signal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Signal is not found",
+        )
+    try:
+        result = await real_execution_service.place_order(signal, request)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    if result.status == "risk_failed":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=result.model_dump(mode="json"),
+        )
+    return result
 
 
 @router.post(
@@ -156,6 +185,50 @@ async def get_trade_journal_entry(trade_id: str) -> TradeJournalEntry:
     )
 
 
+@router.post("/{trade_id}/close-market", response_model=CloseMarketTradeResponse)
+async def close_market_trade(
+    trade_id: str,
+    request: CloseMarketTradeRequest,
+) -> CloseMarketTradeResponse:
+    virtual_trade = virtual_trading_service.get_virtual_trade(trade_id)
+    if virtual_trade is not None:
+        was_open = virtual_trade.status == "open"
+        closed_trade = virtual_trading_service.close_virtual_trade(
+            trade_id,
+            CloseVirtualTradeRequest(reason=request.reason),
+        )
+        if closed_trade is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Virtual trade is not found",
+            )
+        if was_open:
+            await _publish_virtual_close_events(closed_trade)
+        return CloseMarketTradeResponse(
+            mode="virtual",
+            status="closed",
+            message="Virtual position closed at market with exit fees applied.",
+            trade=TradeJournalEntry.model_validate(closed_trade.model_dump()),
+        )
+
+    real_trade = virtual_trading_service.get_real_trade(trade_id)
+    if real_trade is not None:
+        return CloseMarketTradeResponse(
+            mode="real",
+            status="not_implemented",
+            message=(
+                "Real market close is not connected yet. "
+                "No exchange order was sent and no real trade was changed."
+            ),
+            trade=real_trade,
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Trade is not found",
+    )
+
+
 @router.post("/virtual/{trade_id}/close", response_model=VirtualTrade)
 async def close_virtual_trade(
     trade_id: str,
@@ -167,10 +240,15 @@ async def close_virtual_trade(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Виртуальная сделка не найдена",
         )
-    if trade.status == "closed":
-        await realtime_event_broker.publish(trade_closed_event(trade))
-        if trade.close_reason == "take_profit":
-            await realtime_event_broker.publish(take_profit_hit_event(trade))
-        elif trade.close_reason == "stop_loss":
-            await realtime_event_broker.publish(stop_loss_hit_event(trade))
+    await _publish_virtual_close_events(trade)
     return trade
+
+
+async def _publish_virtual_close_events(trade: VirtualTrade) -> None:
+    if trade.status != "closed":
+        return
+    await realtime_event_broker.publish(trade_closed_event(trade))
+    if trade.close_reason == "take_profit":
+        await realtime_event_broker.publish(take_profit_hit_event(trade))
+    elif trade.close_reason == "stop_loss":
+        await realtime_event_broker.publish(stop_loss_hit_event(trade))

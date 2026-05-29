@@ -8,7 +8,8 @@ import type {
   SubscriptionStatus,
   UserProfile
 } from "@/features/server-state/types";
-import type { HealthStatus, RadarResponse, RadarSignal, RadarStatus, TradeJournalResponse } from "@/types";
+import type { HealthStatus, RadarResponse, RadarSignal, RadarStatus, RiskStateResponse, TradeJournalResponse } from "@/types";
+import { isOpenFeedSignal } from "@/utils";
 import { queryKeys, serverStateKeys, type CandleFilters, type SignalHistoryFilters, type TradeJournalFilters } from "./query-keys";
 import { serverStatePolicy } from "./query-policy";
 
@@ -115,11 +116,36 @@ export function useClosedTradesQuery() {
   });
 }
 
+export function useCloseMarketTradeMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: api.closeMarketTrade,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.journal.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.risk.all() })
+      ]);
+    }
+  });
+}
+
 export function useRadarConfigQuery() {
   return useQuery({
     queryKey: serverStateKeys.settings.radar(),
     queryFn: api.config,
     staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useRiskStateQuery(options: PlannedQueryOptions = {}) {
+  return useQuery<RiskStateResponse>({
+    queryKey: serverStateKeys.risk.state(),
+    queryFn: api.riskState,
+    enabled: options.enabled ?? true,
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
   });
 }
 
@@ -354,7 +380,10 @@ export function useUpdateUserSettingsMutation() {
     mutationFn: api.updateUserSettings,
     onSuccess: async (profile) => {
       queryClient.setQueryData(serverStateKeys.user.profile(), profile);
-      await queryClient.invalidateQueries({ queryKey: serverStateKeys.user.profile() });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.user.profile() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.risk.all() })
+      ]);
     }
   });
 }
@@ -378,7 +407,8 @@ export function useConfirmVirtualMutation() {
         queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
         queryClient.invalidateQueries({ queryKey: serverStateKeys.signals.all() }),
         queryClient.invalidateQueries({ queryKey: serverStateKeys.journal.all() }),
-        queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.all() })
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.risk.all() })
       ]);
     }
   });
@@ -445,11 +475,12 @@ export function useStopScannerMutation() {
 }
 
 export function applySignalSnapshot(queryClient: QueryClient, signals: RadarSignal[]) {
-  queryClient.setQueryData(queryKeys.signals, signals.filter(isOpenFeedSignal));
-  queryClient.setQueryData(serverStateKeys.signals.open(), signals.filter(isOpenFeedSignal));
-  queryClient.setQueryData(serverStateKeys.signals.active(), signals.filter((signal) => signal.status === "active"));
+  const openSignals = signals.filter(isOpenFeedSignal);
+  queryClient.setQueryData(queryKeys.signals, openSignals);
+  queryClient.setQueryData(serverStateKeys.signals.open(), openSignals);
+  queryClient.setQueryData(serverStateKeys.signals.active(), openSignals.filter((signal) => signal.status === "active"));
   queryClient.setQueryData(serverStateKeys.signals.history(), signals);
-  queryClient.setQueryData<RadarResponse>(queryKeys.radar, { signals });
+  queryClient.setQueryData<RadarResponse>(queryKeys.radar, { signals: openSignals });
 }
 
 export function applyTradeSnapshot(queryClient: QueryClient, trades: TradeJournalResponse) {
@@ -472,8 +503,4 @@ function filterSignals(signals: RadarSignal[], filters?: SignalHistoryFilters): 
     const symbolMatches = !filters?.symbol || signal.symbol === filters.symbol;
     return statusMatches && symbolMatches;
   });
-}
-
-function isOpenFeedSignal(signal: RadarSignal): boolean {
-  return signal.status === "new" || signal.status === "active" || signal.status === "entry_touched";
 }

@@ -12,6 +12,7 @@ from app.schemas.trade import (
     VirtualMarketSnapshot,
     VirtualTrade,
 )
+from app.schemas.user import RiskManagementSettings
 from app.services.trade_service import TradeService
 from app.services.virtual_execution_engine import VirtualExecutionEngine
 
@@ -158,12 +159,27 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertIn("$450.00", report.quality_gate.message or "")
 
     def test_trade_service_persists_partial_execution_snapshot(self) -> None:
-        service = TradeService(repository=EphemeralTradeRepository())
+        service = TradeService(
+            repository=EphemeralTradeRepository(),
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(
+                risk_profile="balanced",
+                risk_per_trade_percent=10.0,
+                min_rr_ratio=2.0,
+                max_daily_loss_percent=50.0,
+                max_account_drawdown_percent=90.0,
+                max_open_risk_percent=100.0,
+                stop_loss_mode="fixed_percent",
+                default_stop_loss_percent=0.2,
+                max_leverage=10,
+                futures_max_leverage=10,
+            ),
+        )
         trade = service.open_virtual_trade(
             _signal(),
             ManualConfirmRequest(
                 simulation_mode="impact_aware",
                 size_usd=1_000.0,
+                leverage=10,
                 market_snapshot=_partial_snapshot(),
                 max_virtual_slippage_bps=30,
             ),
@@ -179,12 +195,16 @@ class VirtualExecutionEngineTest(unittest.TestCase):
 
     def test_trade_service_marks_private_impact_price_without_mutating_market_price(self) -> None:
         repository = EphemeralTradeRepository()
-        service = TradeService(repository=repository)
+        service = TradeService(
+            repository=repository,
+            risk_settings_provider=_loose_virtual_risk_settings,
+        )
         trade = service.open_virtual_trade(
             _signal(),
             ManualConfirmRequest(
                 simulation_mode="impact_aware",
-                size_usd=1_000.0,
+                size_usd=300.0,
+                leverage=3,
                 market_snapshot=_snapshot(),
                 max_virtual_slippage_bps=300,
             ),
@@ -222,12 +242,16 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertEqual(repository.list_virtual_trades(), [])
 
     def test_stop_loss_exit_uses_impact_aware_exit_slippage(self) -> None:
-        service = TradeService(repository=EphemeralTradeRepository())
+        service = TradeService(
+            repository=EphemeralTradeRepository(),
+            risk_settings_provider=_loose_virtual_risk_settings,
+        )
         trade = service.open_virtual_trade(
             _signal(stop_loss=95.0),
             ManualConfirmRequest(
                 simulation_mode="impact_aware",
-                size_usd=1_000.0,
+                size_usd=300.0,
+                leverage=3,
                 market_snapshot=_snapshot(),
                 max_virtual_slippage_bps=300,
             ),
@@ -266,6 +290,21 @@ def _signal(stop_loss: float = 90.0) -> RadarSignal:
         risks=[],
         created_at=now,
         updated_at=now,
+    )
+
+
+def _loose_virtual_risk_settings(_user_id: str) -> RiskManagementSettings:
+    return RiskManagementSettings(
+        risk_profile="balanced",
+        risk_per_trade_percent=10.0,
+        min_rr_ratio=2.0,
+        max_daily_loss_percent=50.0,
+        max_account_drawdown_percent=90.0,
+        max_open_risk_percent=100.0,
+        stop_loss_mode="fixed_percent",
+        default_stop_loss_percent=0.2,
+        max_leverage=10,
+        futures_max_leverage=10,
     )
 
 

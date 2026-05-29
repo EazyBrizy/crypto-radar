@@ -6,6 +6,7 @@ import { useNotificationStore } from "@/stores/notification-store";
 import { usePriceStore } from "@/stores/price-store";
 import { useSignalStore, type SignalPatch } from "@/stores/signal-store";
 import type { HealthStatus, RadarResponse, RadarSignal, RadarStatus, SignalStatus, TradeJournalEntry, TradeJournalResponse } from "@/types";
+import { isOpenFeedSignal } from "@/utils";
 import type { NotificationRealtimePayload, RealtimeMessage, StandardRealtimeEvent } from "./event-types";
 
 const MAX_RECENT_EVENT_IDS = 1_000;
@@ -50,8 +51,8 @@ export function createRealtimeEventRouter(options: {
         return;
       }
 
-      if (message.type === "signal.invalidated") {
-        applySignalInvalidated(options.queryClient, message.signalId);
+      if (message.type === "signal.invalidated" || message.type === "signal.expired") {
+        applySignalTerminalStatus(options.queryClient, message.signalId, message.type === "signal.expired" ? "expired" : "invalidated");
         warnIfRealtimeEventExceedsBudget(message.type, startedAt);
         return;
       }
@@ -133,12 +134,13 @@ function routeStandardEvent(
     return;
   }
 
-  if (event.type === "signal.invalidated") {
+  if (event.type === "signal.invalidated" || event.type === "signal.expired") {
+    const status = event.type === "signal.expired" ? "expired" : "invalidated";
     if (event.payload.signal) {
-      applySignalCreated(options.queryClient, { ...event.payload.signal, status: "invalidated" });
+      applySignalCreated(options.queryClient, { ...event.payload.signal, status });
       return;
     }
-    applySignalInvalidated(options.queryClient, event.payload.signalId);
+    applySignalTerminalStatus(options.queryClient, event.payload.signalId, status);
     return;
   }
 
@@ -201,11 +203,15 @@ function applySignalSnapshot(queryClient: QueryClient, signals: RadarSignal[]) {
   useSignalStore.getState().replaceSignals(openSignals);
   queryClient.setQueryData(queryKeys.signals, openSignals);
   queryClient.setQueryData(serverStateKeys.signals.history(), signals);
-  queryClient.setQueryData<RadarResponse>(queryKeys.radar, { signals });
+  queryClient.setQueryData<RadarResponse>(queryKeys.radar, { signals: openSignals });
 }
 
 function applySignalCreated(queryClient: QueryClient, signal: RadarSignal) {
-  useSignalStore.getState().addSignal(signal);
+  if (isOpenFeedSignal(signal)) {
+    useSignalStore.getState().addSignal(signal);
+  } else {
+    useSignalStore.getState().removeSignal(signal.id);
+  }
 
   queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, (current = []) => {
     return isOpenFeedSignal(signal) ? insertSignalToTop(current, signal) : current.filter((item) => item.id !== signal.id);
@@ -223,8 +229,8 @@ function applySignalPatch(queryClient: QueryClient, signalId: string, patch: Sig
   patchSignalInCache(queryClient, signalId, patch);
 }
 
-function applySignalInvalidated(queryClient: QueryClient, signalId: string) {
-  applySignalStatus(queryClient, signalId, "invalidated");
+function applySignalTerminalStatus(queryClient: QueryClient, signalId: string, status: "expired" | "invalidated") {
+  applySignalStatus(queryClient, signalId, status);
 }
 
 function applySignalEntryTouched(queryClient: QueryClient, signalId: string, price: number) {
@@ -305,11 +311,12 @@ function applySignalStatus(queryClient: QueryClient, signalId: string, status: S
 }
 
 function patchSignalInCache(queryClient: QueryClient, signalId: string, patch: SignalPatch) {
-  const patchById = (current: RadarSignal[] = []) => patchBySignalId(current, signalId, patch);
-  queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, patchById);
-  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), patchById);
+  const patchOpenById = (current: RadarSignal[] = []) => patchBySignalId(current, signalId, patch).filter(isOpenFeedSignal);
+  const patchHistoryById = (current: RadarSignal[] = []) => patchBySignalId(current, signalId, patch);
+  queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, patchOpenById);
+  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), patchHistoryById);
   queryClient.setQueryData<RadarResponse>(queryKeys.radar, (current) => ({
-    signals: patchBySignalId(current?.signals ?? [], signalId, patch)
+    signals: patchBySignalId(current?.signals ?? [], signalId, patch).filter(isOpenFeedSignal)
   }));
 }
 
@@ -324,10 +331,6 @@ function applyTradeUpdate(queryClient: QueryClient, trade: TradeJournalEntry) {
 
 function isSignalEvent(message: RealtimeMessage): message is Extract<RealtimeMessage, { signal: RadarSignal }> {
   return message.type === "signal.created" || message.type === "signal.updated" || message.type === "signals.created" || message.type === "signals.updated";
-}
-
-function isOpenFeedSignal(signal: RadarSignal): boolean {
-  return signal.status === "new" || signal.status === "active" || signal.status === "entry_touched";
 }
 
 function patchBySignalId(items: RadarSignal[], signalId: string, patch: SignalPatch): RadarSignal[] {

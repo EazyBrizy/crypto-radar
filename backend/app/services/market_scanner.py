@@ -3,7 +3,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Protocol
 
 from app.exchanges.bybit import BybitAdapter, fetch_bybit_klines
 from app.schemas.candle import OHLCVCandle
@@ -42,6 +42,11 @@ DEFAULT_SYMBOLS = [
 ]
 
 
+class VirtualTradingPriceUpdater(Protocol):
+    def update_market_price(self, exchange: str, symbol: str, price: float) -> list[VirtualTrade]:
+        ...
+
+
 @dataclass
 class ScannerRuntimeStats:
     ticks_processed: int = 0
@@ -69,12 +74,14 @@ class MarketScanner:
         market_persistence: (
             MarketDataPersistenceService | None
         ) = market_data_persistence_service,
+        virtual_trading: VirtualTradingPriceUpdater | None = virtual_trading_service,
     ) -> None:
         self._symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
         self._exchanges = [exchange.lower() for exchange in (exchanges or ["bybit"])]
         self._adapters = self._build_adapters()
         self._candle_store = candle_store
         self._market_persistence = market_persistence
+        self._virtual_trading = virtual_trading
         self._feature_engine = FeatureEngine()
         self._strategy_engine = StrategyEngine()
         self._stats = ScannerRuntimeStats()
@@ -100,7 +107,11 @@ class MarketScanner:
         self._stats.last_price = data.price
 
         await self._persist_market_tick(data)
-        updated_trades = virtual_trading_service.update_market_price(data.exchange, data.symbol, data.price)
+        updated_trades = (
+            self._virtual_trading.update_market_price(data.exchange, data.symbol, data.price)
+            if self._virtual_trading is not None
+            else []
+        )
         if updated_trades:
             await self._publish_trade_updates(updated_trades)
         updated_candles = self._candle_store.update_from_tick(data)

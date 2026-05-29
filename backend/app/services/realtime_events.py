@@ -10,6 +10,7 @@ RealtimeEventType = Literal[
     "signal.created",
     "signal.updated",
     "signal.invalidated",
+    "signal.expired",
     "trade.activated",
     "trade.updated",
     "trade.closed",
@@ -51,6 +52,12 @@ def signal_invalidated_event(signal: RadarSignal, reason: str | None = None) -> 
     payload = _signal_payload(signal)
     payload["reason"] = reason
     return create_realtime_event("signal.invalidated", payload)
+
+
+def signal_expired_event(signal: RadarSignal, reason: str | None = None) -> dict[str, Any]:
+    payload = _signal_payload(signal)
+    payload["reason"] = reason or "ttl_expired"
+    return create_realtime_event("signal.expired", payload)
 
 
 def trade_activated_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any]:

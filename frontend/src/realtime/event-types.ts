@@ -17,6 +17,7 @@ export type RealtimeEventType =
   | "signal.created"
   | "signal.updated"
   | "signal.invalidated"
+  | "signal.expired"
   | "signal.entry_touched"
   | "take_profit.hit"
   | "stop_loss.hit"
@@ -69,6 +70,8 @@ export interface SignalInvalidatedPayload {
   signal?: RadarSignal;
   signalId: string;
 }
+
+export type SignalExpiredPayload = SignalInvalidatedPayload;
 
 export interface TradeRealtimePayload {
   trade: TradeJournalEntry;
@@ -154,6 +157,7 @@ export type StandardRealtimeEvent =
   | RealtimeEventEnvelope<"signal.created", SignalRealtimePayload>
   | RealtimeEventEnvelope<"signal.updated", SignalUpdatedPayload>
   | RealtimeEventEnvelope<"signal.invalidated", SignalInvalidatedPayload>
+  | RealtimeEventEnvelope<"signal.expired", SignalExpiredPayload>
   | RealtimeEventEnvelope<"signal.entry_touched", SignalEntryTouchedPayload>
   | RealtimeEventEnvelope<"take_profit.hit", TradeTargetHitPayload>
   | RealtimeEventEnvelope<"stop_loss.hit", TradeTargetHitPayload>
@@ -170,6 +174,7 @@ export type LegacyRealtimeMessage =
   | { type: "snapshot"; signals: RadarSignal[] }
   | { type: "signal.created" | "signal.updated" | "signals.created" | "signals.updated"; signal: RadarSignal }
   | { type: "signal.invalidated"; signalId: string }
+  | { type: "signal.expired"; signalId: string }
   | { type: "signal.entry_touched"; price: number; signalId: string }
   | { type: "take_profit.hit"; pair: string; price: number; target?: "TP1" | "TP2" | "TP3"; tradeId?: string | null }
   | { type: "stop_loss.hit"; pair: string; price: number; tradeId?: string | null }

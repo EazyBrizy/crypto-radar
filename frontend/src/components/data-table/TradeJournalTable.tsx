@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
+import { CircleStop } from "lucide-react";
 
 import { Badge } from "@/components/Badge";
 import { DataTable } from "@/components/data-table/DataTable";
@@ -9,14 +10,18 @@ import type { TradeJournalEntry } from "@/types";
 import { formatPercent, formatPrice, tradePnlClass } from "@/utils";
 
 interface TradeJournalTableProps {
+  closingTradeId?: string | null;
   emptyLabel?: string;
+  onCloseMarket?: (trade: TradeJournalEntry) => void;
   onSelectTrade?: (trade: TradeJournalEntry) => void;
   selectedTradeId?: string | null;
   trades: TradeJournalEntry[];
 }
 
 export function TradeJournalTable({
+  closingTradeId = null,
   emptyLabel = "No trades",
+  onCloseMarket,
   onSelectTrade,
   selectedTradeId,
   trades
@@ -24,7 +29,8 @@ export function TradeJournalTable({
   const [globalFilter, setGlobalFilter] = useState("");
   const [sorting, setSorting] = useState<SortingState>([{ id: "updated_at", desc: true }]);
   const columns = useMemo<ColumnDef<TradeJournalEntry>[]>(
-    () => [
+    () => {
+      const tableColumns: ColumnDef<TradeJournalEntry>[] = [
       {
         accessorKey: "symbol",
         header: "Pair",
@@ -101,8 +107,42 @@ export function TradeJournalTable({
         header: "Updated",
         cell: ({ row }) => new Date(row.original.updated_at).toLocaleString()
       }
-    ],
-    []
+      ];
+
+      if (onCloseMarket) {
+        tableColumns.unshift({
+          id: "actions",
+          header: "Close",
+          enableSorting: false,
+          cell: ({ row }) => {
+            const trade = row.original;
+            const closing = closingTradeId === trade.id;
+            const disabled = trade.status !== "open" || closing;
+            return (
+              <div className="table-action-cell">
+                <button
+                  aria-label={`Close ${trade.symbol} at market`}
+                  className="icon-button compact table-action-button danger"
+                  disabled={disabled}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (!disabled) onCloseMarket(trade);
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  title={trade.mode === "real" ? "Real close stub" : "Close at market"}
+                  type="button"
+                >
+                  <CircleStop size={16} />
+                </button>
+              </div>
+            );
+          }
+        });
+      }
+
+      return tableColumns;
+    },
+    [closingTradeId, onCloseMarket]
   );
 
   return (

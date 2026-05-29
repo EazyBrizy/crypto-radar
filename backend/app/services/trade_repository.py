@@ -20,6 +20,7 @@ from app.models.portfolio import (
     PortfolioBalanceLedger,
     Position,
 )
+from app.models.risk import PositionRiskSnapshot, RiskDecisionRecord, RiskProtectionState
 from app.models.signal import TradingSignal
 from app.models.user import AppUser
 from app.repositories.signal_repository import (
@@ -33,6 +34,7 @@ from app.repositories.signal_repository import (
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
 from app.services.bootstrap_service import DEMO_USERNAME, INITIAL_VIRTUAL_BALANCE
 from app.models.strategy import StrategyVersion
+from app.services.risk_state import risk_state_service
 
 
 class TradeRepository(Protocol):
@@ -466,8 +468,28 @@ class PostgresVirtualTradeRepository:
             **(order.metadata_ or {}),
             "position_id": str(position.id),
             "virtual_trade": persisted_trade.model_dump(mode="json"),
-            "virtual_execution": persisted_trade.execution.model_dump(mode="json") if persisted_trade.execution is not None else None,
+            "virtual_execution": (
+                persisted_trade.execution.model_dump(mode="json")
+                if persisted_trade.execution is not None
+                else None
+            ),
         }
+        risk_decision = _persist_open_trade_risk_snapshot(
+            session=session,
+            signal=signal,
+            user=user,
+            portfolio=portfolio,
+            order=order,
+            position=position,
+            trade=persisted_trade,
+            request=request,
+            idempotency_key=idempotency_key,
+        )
+        if risk_decision is not None:
+            order.metadata_ = {
+                **(order.metadata_ or {}),
+                "risk_decision_id": str(risk_decision.id),
+            }
         _reserve_risk_balance(
             session=session,
             balance=balance,
@@ -584,6 +606,12 @@ class PostgresVirtualTradeRepository:
             position_id=position.id,
             now=now,
         )
+        risk_state_service.update_after_trade_close(
+            session=session,
+            user=position.user,
+            realized_pnl=_decimal(trade.pnl or 0),
+            current_equity=_decimal(balance.available + balance.locked),
+        )
         _add_virtual_trade_outbox(session, position.id, "virtual_trade.closed", trade)
         _add_virtual_trade_audit(
             session=session,
@@ -654,6 +682,62 @@ class PostgresVirtualTradeRepository:
             old_status=old_status,
             now=now,
         )
+
+
+VIRTUAL_STARTING_BALANCE_REASONS = (
+    "bootstrap_initial_balance",
+    "settings_virtual_starting_balance",
+)
+
+
+def sync_virtual_starting_balance(
+    session: Session,
+    user: AppUser,
+    target_balance: Decimal | float | str,
+) -> None:
+    target = _decimal(target_balance)
+    if target <= 0:
+        raise ValueError("virtual starting balance must be greater than zero")
+
+    portfolio = _resolve_virtual_portfolio(session, user)
+    asset = _resolve_asset(session, portfolio.base_currency)
+    balance = _resolve_balance(session, portfolio, asset)
+    current_starting_balance = _starting_balance(session, portfolio, asset)
+    delta = target - current_starting_balance
+    if delta == 0:
+        return
+
+    if balance.available + delta < 0:
+        raise ValueError("virtual starting balance cannot be lower than current reserved account changes")
+
+    now = datetime.now(timezone.utc)
+    balance.available += delta
+    balance.updated_at = now
+    session.add(
+        PortfolioBalanceLedger(
+            portfolio_id=portfolio.id,
+            asset_id=asset.id,
+            delta_available=delta,
+            delta_locked=Decimal("0"),
+            reason="settings_virtual_starting_balance",
+            ref_type="user_settings",
+            ref_id=user.id,
+            created_at=now,
+        )
+    )
+
+    state = session.get(RiskProtectionState, user.id)
+    if state is not None:
+        equity = max(balance.available + balance.locked, Decimal("0"))
+        state.current_equity = equity
+        state.peak_equity = equity
+        state.daily_loss_amount = Decimal("0")
+        state.weekly_loss_amount = Decimal("0")
+        state.loss_streak = 0
+        state.adaptive_multiplier = Decimal("1")
+        state.state = "normal"
+        state.reason = None
+        state.updated_at = now
 
 
 def _external_trade_select():
@@ -824,7 +908,7 @@ def _starting_balance(
         select(func.coalesce(func.sum(PortfolioBalanceLedger.delta_available), 0)).where(
             PortfolioBalanceLedger.portfolio_id == portfolio.id,
             PortfolioBalanceLedger.asset_id == asset.id,
-            PortfolioBalanceLedger.reason == "bootstrap_initial_balance",
+            PortfolioBalanceLedger.reason.in_(VIRTUAL_STARTING_BALANCE_REASONS),
         )
     )
     return _decimal(value or INITIAL_VIRTUAL_BALANCE)
@@ -926,15 +1010,17 @@ def _release_risk_balance(
     position_id: UUID,
     now: datetime,
 ) -> None:
-    balance.available += risk_amount + pnl
-    balance.locked -= risk_amount
+    released_locked = min(balance.locked, risk_amount)
+    delta_available = released_locked + pnl
+    balance.available += delta_available
+    balance.locked -= released_locked
     balance.updated_at = now
     session.add(
         PortfolioBalanceLedger(
             portfolio_id=portfolio.id,
             asset_id=asset.id,
-            delta_available=risk_amount + pnl,
-            delta_locked=-risk_amount,
+            delta_available=delta_available,
+            delta_locked=-released_locked,
             reason="virtual_trade_closed",
             ref_type="position",
             ref_id=position_id,
@@ -980,6 +1066,89 @@ def _add_virtual_trade_audit(
             created_at=datetime.now(timezone.utc),
         )
     )
+
+
+def _persist_open_trade_risk_snapshot(
+    *,
+    session: Session,
+    signal: TradingSignal,
+    user: AppUser,
+    portfolio: Portfolio,
+    order: Order,
+    position: Position,
+    trade: VirtualTrade,
+    request: ManualConfirmRequest | None,
+    idempotency_key: str,
+) -> RiskDecisionRecord | None:
+    execution = trade.execution
+    if execution is None or execution.risk_decision is None:
+        return None
+
+    decision = execution.risk_decision
+    risk_decision = RiskDecisionRecord(
+        user_id=user.id,
+        signal_id=signal.id,
+        portfolio_id=portfolio.id,
+        order_id=order.id,
+        position_id=position.id,
+        mode=decision.mode,
+        instrument_type=decision.instrument_type,
+        stage=decision.stage,
+        status=decision.status,
+        blockers=decision.blockers,
+        warnings=decision.warnings,
+        input_snapshot={
+            "flow": "virtual_trade.opened",
+            "idempotency_key": idempotency_key,
+            "external_user_id": trade.user_id,
+            "request": request.model_dump(mode="json") if request is not None else None,
+            "signal": {
+                "id": str(signal.id),
+                "exchange_id": str(signal.exchange_id),
+                "pair_id": str(signal.pair_id),
+                "symbol": signal.pair.symbol,
+            },
+            "execution": execution.model_dump(mode="json"),
+        },
+        result_snapshot=decision.model_dump(mode="json"),
+        created_at=trade.opened_at,
+    )
+    session.add(risk_decision)
+    session.flush()
+
+    sizing = decision.checked_position_sizing
+    adjustment = decision.risk_adjustment_plan
+    futures = decision.futures_risk_plan
+    session.add(
+        PositionRiskSnapshot(
+            position_id=position.id,
+            risk_decision_id=risk_decision.id,
+            risk_amount=_decimal(sizing.risk_amount),
+            risk_percent=_decimal(sizing.risk_per_trade_percent),
+            adjusted_risk_amount=_decimal(adjustment.adjusted_risk_amount),
+            rr=_optional_decimal(decision.risk_check.rr),
+            leverage=trade.leverage,
+            margin_mode="isolated" if trade.leverage > 1 else "spot",
+            liquidation_price=(
+                _optional_decimal(futures.liquidation_price)
+                if futures is not None
+                else None
+            ),
+            liquidation_buffer_percent=(
+                _optional_decimal(futures.liquidation_buffer_percent)
+                if futures is not None
+                else None
+            ),
+            correlation_group=_primary_risk_group(signal.pair),
+            strategy_multiplier=_decimal(adjustment.strategy_risk_multiplier),
+            signal_multiplier=_decimal(adjustment.signal_score_multiplier),
+            fee_estimate=_position_fee_estimate(sizing),
+            slippage_estimate=_position_slippage_estimate(sizing),
+            funding_buffer=_position_funding_buffer(sizing),
+            created_at=trade.opened_at,
+        )
+    )
+    return risk_decision
 
 
 def _position_to_virtual_trade(position: Position) -> VirtualTrade:
@@ -1081,6 +1250,39 @@ def _decimal(value: Any) -> Decimal:
     if isinstance(value, Decimal):
         return value
     return Decimal(str(value))
+
+
+def _optional_decimal(value: Any | None) -> Decimal | None:
+    if value is None:
+        return None
+    return _decimal(value)
+
+
+def _position_fee_estimate(sizing: Any) -> Decimal:
+    position_size = _decimal(sizing.position_size_base)
+    fee_per_unit = _decimal(sizing.estimated_entry_fee_per_unit) + _decimal(
+        sizing.estimated_exit_fee_per_unit
+    )
+    return position_size * fee_per_unit
+
+
+def _position_slippage_estimate(sizing: Any) -> Decimal:
+    return _decimal(sizing.position_size_base) * _decimal(sizing.slippage_buffer_per_unit)
+
+
+def _position_funding_buffer(sizing: Any) -> Decimal:
+    return _decimal(sizing.position_size_base) * _decimal(getattr(sizing, "funding_buffer_per_unit", 0))
+
+
+def _primary_risk_group(pair: MarketPair) -> str | None:
+    groups = [
+        group
+        for group in pair.base_asset.risk_groups
+        if group.is_primary
+    ]
+    if not groups:
+        return None
+    return groups[0].group_code
 
 
 def _parse_uuid(value: str | UUID | None) -> UUID | None:

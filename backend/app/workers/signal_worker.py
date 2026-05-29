@@ -111,6 +111,14 @@ class ScannerRunner:
                         *signal.explanation,
                     ],
                 )
+                if radar_signal.status == "expired":
+                    logger.debug(
+                        "Radar signal skipped after TTL expiry: %s %s %s",
+                        radar_signal.id,
+                        radar_signal.symbol,
+                        radar_signal.direction,
+                    )
+                    continue
                 if created:
                     self._processed_signals += 1
                     await realtime_event_broker.publish(signal_created_event(radar_signal))

@@ -1,6 +1,6 @@
 import type { RadarResponse, RadarSignal, VirtualExecutionReport } from "@/types";
 import { openApiClient, request } from "./client";
-import { normalizeExecutionReport, normalizeSignal } from "./mappers";
+import { normalizeRiskPreviewResponse, normalizeSignal, riskPreviewToExecutionReport } from "./mappers";
 
 export const signalsApi = {
   async list(): Promise<RadarSignal[]> {
@@ -31,7 +31,7 @@ export const signalsApi = {
           user_id: "demo_user",
           account_balance: 100,
           risk_percent: 10,
-          leverage: 1,
+          leverage: 3,
           fee_rate: 0,
           slippage_bps: 0,
           simulation_mode: "auto",
@@ -45,27 +45,23 @@ export const signalsApi = {
   },
   async executionPreview(signalId: string): Promise<VirtualExecutionReport> {
     const response = await request(() =>
-      openApiClient.POST("/api/v1/signals/{signal_id}/execution-preview", {
-        params: { path: { signal_id: signalId } },
+      openApiClient.POST("/api/v1/risk/preview", {
         body: {
+          signal_id: signalId,
           mode: "virtual",
           user_id: "demo_user",
+          instrument_type: "futures",
           account_balance: 100,
           risk_percent: 10,
-          leverage: 1,
+          leverage: 3,
           fee_rate: 0,
-          slippage_bps: 0,
-          simulation_mode: "auto",
-          max_virtual_slippage_bps: 150,
-          allow_partial_fill: true,
-          min_fill_ratio: 0.25,
-          max_open_positions: 3
+          slippage_bps: 0
         }
       })
     );
-    const report = normalizeExecutionReport(response);
-    if (!report) throw new Error("API returned an empty execution preview");
-    return report;
+    const preview = normalizeRiskPreviewResponse(response);
+    if (!preview) throw new Error("API returned an empty risk preview");
+    return riskPreviewToExecutionReport(preview);
   },
   async reject(signalId: string) {
     return request(() =>

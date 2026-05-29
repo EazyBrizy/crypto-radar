@@ -166,6 +166,7 @@ class MarketScannerPersistenceIntegrationTest(unittest.IsolatedAsyncioTestCase):
             exchanges=["bybit"],
             candle_store=CandleService(timeframes=["1m"]),
             market_persistence=persistence,
+            virtual_trading=None,
         )
 
         await scanner.process_tick(

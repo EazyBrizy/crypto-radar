@@ -129,6 +129,16 @@ try {
     ? await page.locator(".execution-quality-block").innerText({ timeout: 5000 })
     : "empty-state";
   await page.goto(`http://127.0.0.1:${frontendPort}/dashboard/settings`, { waitUntil: "networkidle" });
+  await page.getByText("Risk management", { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByText("Risk Profile", { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByText("Balanced", { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByText("Daily Stop-Loss", { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByRole("tab", { name: "Trade Rules" }).click();
+  await page.getByText("Strategy multipliers", { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByRole("tab", { name: "Futures Protection" }).click();
+  await page.getByText("Futures protection", { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByRole("tab", { name: "Virtual Trading" }).click();
+  await page.getByText("Virtual execution", { exact: true }).waitFor({ timeout: 15000 });
   await page.getByText("Simulation", { exact: true }).waitFor({ timeout: 15000 });
   await page.getByText("Advanced", { exact: true }).waitFor({ timeout: 15000 });
 
@@ -142,7 +152,7 @@ try {
     simulationModel: `${simulationModel.current_tier}:${simulationModel.active_capabilities.length} active`,
     preview: previewSummary,
     ui: uiText.split(/\r?\n/).slice(0, 12).join(" | "),
-    settings: "simulation-options-visible",
+    settings: "risk-and-simulation-options-visible",
     screenshot: screenshotPath,
   };
   console.log(JSON.stringify(result, null, 2));

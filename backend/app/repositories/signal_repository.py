@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID
@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.market import MarketExchange, MarketPair
 from app.models.outbox import OutboxEvent
@@ -22,6 +23,7 @@ SIGNAL_CREATED_EVENT = "signal.created"
 SIGNAL_UPDATED_EVENT = "signal.updated"
 SIGNAL_CONFIRMED_EVENT = "signal.confirmed"
 SIGNAL_INVALIDATED_EVENT = "signal.invalidated"
+SIGNAL_EXPIRED_EVENT = "signal.expired"
 
 
 class SignalReferenceError(ValueError):
@@ -83,6 +85,9 @@ class PostgresSignalRepository:
 
     def list_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
         with self._session_factory() as session:
+            now = datetime.now(timezone.utc)
+            if _expire_open_signal_records(session, now):
+                session.commit()
             records = session.scalars(
                 _signal_select()
                 .order_by(TradingSignal.detected_at.desc())
@@ -92,9 +97,15 @@ class PostgresSignalRepository:
 
     def list_active_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
         with self._session_factory() as session:
+            now = datetime.now(timezone.utc)
+            if _expire_open_signal_records(session, now):
+                session.commit()
             records = session.scalars(
                 _signal_select()
-                .where(TradingSignal.status == "active")
+                .where(
+                    TradingSignal.status == "active",
+                    _expires_after(now),
+                )
                 .order_by(TradingSignal.detected_at.desc())
                 .limit(limit)
             ).all()
@@ -102,9 +113,15 @@ class PostgresSignalRepository:
 
     def list_open_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
         with self._session_factory() as session:
+            now = datetime.now(timezone.utc)
+            if _expire_open_signal_records(session, now):
+                session.commit()
             records = session.scalars(
                 _signal_select()
-                .where(TradingSignal.status.in_(OPEN_SIGNAL_STATUSES))
+                .where(
+                    TradingSignal.status.in_(OPEN_SIGNAL_STATUSES),
+                    _expires_after(now),
+                )
                 .order_by(TradingSignal.detected_at.desc())
                 .limit(limit)
             ).all()
@@ -112,6 +129,9 @@ class PostgresSignalRepository:
 
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         with self._session_factory() as session:
+            now = datetime.now(timezone.utc)
+            if _expire_open_signal_records(session, now):
+                session.commit()
             record = _get_signal_record(session, signal_id)
             return _record_to_radar_signal(record) if record is not None else None
 
@@ -126,6 +146,9 @@ class PostgresSignalRepository:
             )
             record = _get_signal_record(session, signal.id)
             db_status = _api_status_to_db(signal.status)
+            expires_at = signal.expires_at or _signal_expires_at(signal.created_at)
+            if db_status in OPEN_SIGNAL_STATUSES and expires_at is not None and expires_at <= now:
+                db_status = "expired"
             created = record is None
             event_type = SIGNAL_CREATED_EVENT if created else SIGNAL_UPDATED_EVENT
             if record is None:
@@ -144,7 +167,7 @@ class PostgresSignalRepository:
                     take_profit=_take_profit(signal),
                     risk_reward=_decimal(signal.risk_reward),
                     detected_at=signal.created_at,
-                    expires_at=signal.expires_at,
+                    expires_at=expires_at,
                     features_snapshot=_snapshot_from_signal(signal),
                     explanation="\n".join(signal.explanation) if signal.explanation else None,
                     created_at=signal.created_at,
@@ -153,7 +176,7 @@ class PostgresSignalRepository:
                 session.add(record)
                 session.flush()
             else:
-                _update_record_from_signal(record, signal, db_status)
+                _update_record_from_signal(record, signal, db_status, expires_at=expires_at)
                 record.updated_at = now
 
             result = _persist_signal_event(session, record, event_type, old_status=None, now=now)
@@ -173,12 +196,17 @@ class PostgresSignalRepository:
             score = signal.score or int(signal.confidence * 100)
             db_status = "active" if score >= 70 else "new"
             detected_at = _timestamp_to_datetime(signal.timestamp)
+            expires_at = _signal_expires_at(detected_at)
+            if expires_at is not None and expires_at <= now:
+                db_status = "expired"
             exchange_record, pair, strategy_version = _resolve_references(
                 session,
                 exchange_code=exchange_code,
                 symbol=signal.symbol,
                 strategy_code=signal.strategy,
             )
+            _expire_open_signal_records(session, now)
+            signal_key = _signal_key(signal, exchange_code, detected_at)
             record = session.scalars(
                 _signal_select()
                 .where(
@@ -192,13 +220,17 @@ class PostgresSignalRepository:
                 .order_by(TradingSignal.detected_at.desc())
                 .limit(1)
             ).first()
+            if record is None:
+                record = session.scalars(
+                    _signal_select().where(TradingSignal.signal_key == signal_key)
+                ).one_or_none()
             created = record is None
             old_status = record.status if record is not None else None
             event_type = SIGNAL_CREATED_EVENT if created else SIGNAL_UPDATED_EVENT
             snapshot = _snapshot_from_strategy_signal(signal, explanation=explanation)
             if record is None:
                 record = TradingSignal(
-                    signal_key=_signal_key(signal, exchange_code, detected_at),
+                    signal_key=signal_key,
                     strategy_version_id=strategy_version.id,
                     exchange_id=exchange_record.id,
                     pair_id=pair.id,
@@ -212,7 +244,7 @@ class PostgresSignalRepository:
                     take_profit=_take_profit_from_strategy_signal(signal),
                     risk_reward=_decimal(signal.risk_reward),
                     detected_at=detected_at,
-                    expires_at=None,
+                    expires_at=expires_at,
                     features_snapshot=snapshot,
                     explanation=_explanation_text(explanation or signal.explanation),
                     created_at=now,
@@ -229,6 +261,9 @@ class PostgresSignalRepository:
                 record.take_profit = _take_profit_from_strategy_signal(signal)
                 record.risk_reward = _decimal(signal.risk_reward)
                 record.detected_at = detected_at
+                if record.expires_at is None:
+                    record.expires_at = expires_at
+                _ensure_signal_expiry(record)
                 record.features_snapshot = snapshot
                 record.explanation = _explanation_text(explanation or signal.explanation)
                 record.updated_at = now
@@ -316,6 +351,66 @@ def _get_signal_record(session: Session, signal_id: str) -> TradingSignal | None
         if record is not None:
             return record
     return session.scalars(statement.where(TradingSignal.signal_key == signal_id)).one_or_none()
+
+
+def _expire_open_signal_records(session: Session, now: datetime) -> bool:
+    changed = False
+    records = session.scalars(
+        _signal_select()
+        .where(TradingSignal.status.in_(OPEN_SIGNAL_STATUSES))
+        .order_by(TradingSignal.detected_at.desc())
+    ).all()
+    for record in records:
+        _, expiry_changed = _ensure_signal_expiry(record)
+        changed = changed or expiry_changed
+        if not _record_is_expired(record, now):
+            continue
+        old_status = record.status
+        record.status = "expired"
+        record.updated_at = now
+        _persist_signal_event(
+            session,
+            record,
+            SIGNAL_EXPIRED_EVENT,
+            old_status=old_status,
+            now=now,
+        )
+        changed = True
+    if changed:
+        session.flush()
+    return changed
+
+
+def _ensure_signal_expiry(record: TradingSignal) -> tuple[datetime | None, bool]:
+    started_at = _as_utc(record.created_at or record.detected_at)
+    default_expires_at = _signal_expires_at(started_at)
+    if record.expires_at is not None:
+        expires_at = _as_utc(record.expires_at)
+        if default_expires_at is not None and expires_at > default_expires_at:
+            record.expires_at = default_expires_at
+            return default_expires_at, True
+        return expires_at, False
+    expires_at = default_expires_at
+    if expires_at is None:
+        return None, False
+    record.expires_at = expires_at
+    return expires_at, True
+
+
+def _record_is_expired(record: TradingSignal, now: datetime) -> bool:
+    expires_at, _ = _ensure_signal_expiry(record)
+    return expires_at is not None and _as_utc(expires_at) <= _as_utc(now)
+
+
+def _expires_after(now: datetime):
+    return TradingSignal.expires_at.is_(None) | (TradingSignal.expires_at > now)
+
+
+def _signal_expires_at(detected_at: datetime) -> datetime | None:
+    ttl_seconds = max(0, int(settings.signal_active_ttl_seconds))
+    if ttl_seconds == 0:
+        return None
+    return _as_utc(detected_at) + timedelta(seconds=ttl_seconds)
 
 
 def _resolve_references(
@@ -460,7 +555,13 @@ def _analytics_event(record: TradingSignal, event_type: str, now: datetime) -> d
     }
 
 
-def _update_record_from_signal(record: TradingSignal, signal: RadarSignal, db_status: str) -> None:
+def _update_record_from_signal(
+    record: TradingSignal,
+    signal: RadarSignal,
+    db_status: str,
+    *,
+    expires_at: datetime | None,
+) -> None:
     record.status = db_status
     record.confidence = _decimal(signal.confidence) or Decimal("0")
     record.score = _decimal(signal.score) or Decimal("0")
@@ -468,7 +569,7 @@ def _update_record_from_signal(record: TradingSignal, signal: RadarSignal, db_st
     record.stop_loss = _decimal(signal.stop_loss)
     record.take_profit = _take_profit(signal)
     record.risk_reward = _decimal(signal.risk_reward)
-    record.expires_at = signal.expires_at
+    record.expires_at = expires_at
     record.features_snapshot = _snapshot_from_signal(signal)
     record.explanation = "\n".join(signal.explanation) if signal.explanation else None
 

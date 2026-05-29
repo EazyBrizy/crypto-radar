@@ -126,6 +126,10 @@ export const StandardRealtimeEventSchema = z.discriminatedUnion("type", [
     payload: SignalInvalidatedPayloadSchema
   }),
   EventEnvelopeBaseSchema.extend({
+    type: z.literal("signal.expired"),
+    payload: SignalInvalidatedPayloadSchema
+  }),
+  EventEnvelopeBaseSchema.extend({
     type: z.literal("signal.entry_touched"),
     payload: SignalEntryTouchedPayloadSchema
   }),
@@ -193,6 +197,7 @@ export const LegacyRealtimeMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("signals.created"), signal: RadarSignalSchema }),
   z.object({ type: z.literal("signals.updated"), signal: RadarSignalSchema }),
   z.object({ type: z.literal("signal.invalidated"), signalId: z.string().min(1) }),
+  z.object({ type: z.literal("signal.expired"), signalId: z.string().min(1) }),
   z.object({ type: z.literal("signal.entry_touched"), price: z.number(), signalId: z.string().min(1) }),
   z.object({ type: z.literal("take_profit.hit"), pair: z.string().min(1), price: z.number(), target: z.enum(["TP1", "TP2", "TP3"]).optional(), tradeId: z.string().nullable().optional() }),
   z.object({ type: z.literal("stop_loss.hit"), pair: z.string().min(1), price: z.number(), tradeId: z.string().nullable().optional() }),

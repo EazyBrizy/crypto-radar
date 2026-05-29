@@ -192,6 +192,52 @@ The hot query indexes from the initial access plan are present:
 `idx_positions_user_status`, `idx_external_trades_user_time`,
 `idx_notifications_user_read`, and `idx_outbox_pending`.
 
+## Risk Management Persistence
+
+Risk-management business state is implemented by migration
+`202605280012_create_risk_management_tables`.
+
+- `risk_decisions`: PostgreSQL audit trail for every durable backend risk-gate
+  decision. It stores user/signal/portfolio/order/position links, execution
+  mode, instrument type, stage, status, blockers, warnings, and JSON snapshots
+  of inputs/results.
+- `position_risk_snapshots`: immutable risk state captured when a position is
+  opened: risk amount, adjusted risk, R:R, leverage, margin mode, liquidation
+  fields, correlation group, multipliers, fee estimate, slippage estimate, and
+  funding buffer.
+- `exchange_instrument_rules`: exchange rule cache for min/max order size, min
+  notional, quantity step, tick size, max leverage, funding interval, and the
+  raw exchange payload used to derive those values.
+- `asset_risk_groups`: asset cluster membership for correlated-risk controls.
+  The MVP model supports one primary group per asset while keeping room for
+  additional groups later.
+- `risk_protection_state`: per-user adaptive protection state: normal,
+  reduced, virtual-only, blocked, loss streak, daily/weekly loss, peak equity,
+  current equity, adaptive multiplier, daily/weekly reset window starts, and
+  the timezone used for those windows.
+
+Successful virtual opens currently write a `risk_decisions` record and a
+`position_risk_snapshots` row in the same transaction as the order/position.
+Preview checks, blocked virtual attempts, and real confirm attempts also write
+`risk_decisions` before an entry can proceed. Bybit instrument rules can be
+manually synced and are also refreshed by the FastAPI in-process
+`ExchangeInstrumentRuleSyncRunner`; `fetched_at` powers TTL/stale checks in the
+risk gate. Bybit maker/taker fee-rate cache lives in the active
+`user_exchange_connections.metadata.fee_rates` payload, scoped by user,
+exchange connection/account type, category, and symbol. Bybit
+ticker/orderbook/live position data is collected at decision time and stored in
+the JSON risk snapshots rather than in a dedicated market context table for
+now. Bootstrap seeds the primary `asset_risk_groups` taxonomy for majors, L1,
+L2, meme, DeFi, AI, exchange-token, and BTC-beta-high clusters. Virtual trade
+closes update `risk_protection_state`, and user-timezone daily/weekly windows
+reset the loss counters without resetting peak equity.
+
+Still open for production: moving exchange-rule refresh to a dedicated
+scheduler/worker with metrics, admin taxonomy editing, real trade close
+updates, a production fee-cache refresh policy, a low-latency market-data cache
+for risk checks, quantity/tick rounding enforcement, and actual close-only /
+reduce-only exchange adapter endpoints.
+
 ## ClickHouse Rules
 
 - Keep DDL in `infra/clickhouse/init` for local bootstrap until a dedicated

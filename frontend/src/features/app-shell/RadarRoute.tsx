@@ -16,6 +16,7 @@ import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
 import type { RadarSignal } from "@/types";
+import { isOpenFeedSignal } from "@/utils";
 
 export function RadarRoute() {
   const router = useRouter();
@@ -24,6 +25,7 @@ export function RadarRoute() {
   const setSelectedSignalId = useUiStore((state) => state.setSelectedSignalId);
   const setFilter = useUiStore((state) => state.setSignalFilter);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const tradingActionsDisabled = useTradingActionsDisabled();
   const signalIds = useSignalStore((state) => state.signalIds);
   const signalsById = useSignalStore((state) => state.signalsById);
@@ -36,12 +38,17 @@ export function RadarRoute() {
   const rejectSignalMutation = useRejectSignalMutation();
 
   useEffect(() => {
-    if (openSignalsQuery.data) replaceSignals(openSignalsQuery.data);
-  }, [openSignalsQuery.data, replaceSignals]);
+    if (openSignalsQuery.data) replaceSignals(openSignalsQuery.data.filter((signal) => isOpenFeedSignal(signal, nowMs)));
+  }, [nowMs, openSignalsQuery.data, replaceSignals]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   const signals = useMemo(
-    () => signalIds.map((signalId) => signalsById[signalId]).filter(Boolean),
-    [signalIds, signalsById]
+    () => signalIds.map((signalId) => signalsById[signalId]).filter((signal): signal is RadarSignal => Boolean(signal) && isOpenFeedSignal(signal, nowMs)),
+    [nowMs, signalIds, signalsById]
   );
   const visibleSignals = useMemo(() => {
     if (filter === "all") return signals;
@@ -104,6 +111,7 @@ export function RadarRoute() {
       busy={busy}
       actionError={actionError}
       executionPreview={executionPreviewQuery.data ?? null}
+      executionPreviewError={executionPreviewQuery.error instanceof Error ? executionPreviewQuery.error.message : null}
       executionPreviewLoading={executionPreviewQuery.isFetching}
       tradingActionsDisabled={tradingActionsDisabled}
       filter={filter}

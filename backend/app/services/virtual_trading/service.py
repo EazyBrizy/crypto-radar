@@ -25,6 +25,7 @@ from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
 from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import RadarSignal
+from app.schemas.risk import RiskDecision
 from app.schemas.trade import (
     CloseReason,
     CloseVirtualTradeRequest,
@@ -35,6 +36,13 @@ from app.schemas.trade import (
     VirtualExecutionReport,
     VirtualTrade,
 )
+from app.schemas.user import RiskManagementSettings
+from app.services.risk_audit import RiskAuditService, risk_audit_service
+from app.services.risk_fee_rate import RiskFeeRateService, RiskFeeRateSnapshot, risk_fee_rate_service
+from app.services.risk_gate import RiskContextService, RiskGateService
+from app.services.risk_management import get_user_risk_management_settings
+from app.services.risk_market_data import RiskMarketDataService, RiskMarketDataSnapshot, risk_market_data_service
+from app.services.risk_state import RiskStateService, risk_state_service
 from app.services.signal_service import ClickHouseSignalAnalyticsWriter, RedisSignalHotStore
 from app.services.trade_repository import (
     PostgresVirtualTradeRepository,
@@ -72,6 +80,11 @@ class SignalHotSideEffect(Protocol):
         ...
 
 
+class RiskSettingsProvider(Protocol):
+    def __call__(self, user_id: str) -> RiskManagementSettings:
+        ...
+
+
 class VirtualTradingService:
     """Coordinates virtual-only trade execution through the configured repository."""
 
@@ -81,11 +94,25 @@ class VirtualTradingService:
         signal_analytics_writer: SignalWriteSideEffect | None = None,
         signal_hot_store: SignalHotSideEffect | None = None,
         execution_engine: VirtualExecutionEngine | None = None,
+        risk_settings_provider: RiskSettingsProvider | None = None,
+        risk_context_service: RiskContextService | None = None,
+        risk_gate_service: RiskGateService | None = None,
+        risk_audit: RiskAuditService | None = None,
+        risk_state: RiskStateService | None = None,
+        market_data_service: RiskMarketDataService | None = None,
+        fee_rate_service: RiskFeeRateService | None = None,
     ) -> None:
         self._repository = repository or PostgresVirtualTradeRepository()
         self._signal_analytics_writer = signal_analytics_writer or ClickHouseSignalAnalyticsWriter()
         self._signal_hot_store = signal_hot_store or RedisSignalHotStore()
         self._execution_engine = execution_engine or VirtualExecutionEngine()
+        self._risk_settings_provider = risk_settings_provider
+        self._risk_context_service = risk_context_service or RiskContextService()
+        self._risk_gate_service = risk_gate_service or RiskGateService()
+        self._risk_audit = risk_audit
+        self._risk_state = risk_state
+        self._market_data_service = market_data_service or risk_market_data_service
+        self._fee_rate_service = fee_rate_service or risk_fee_rate_service
         self._trade_by_signal: dict[str, str] = {}
         self._account_balance_by_user: dict[str, float] = {}
         self._realized_pnl_by_user: dict[str, float] = {}
@@ -138,11 +165,17 @@ class VirtualTradingService:
     def get_virtual_account(self, user_id: str = "demo_user") -> VirtualAccount:
         repository_account = getattr(self._repository, "get_virtual_account", None)
         if repository_account is not None:
-            return repository_account(user_id)
+            return self._account_with_risk_settings(repository_account(user_id))
 
+        settings = self._risk_settings_for_user(user_id)
+        starting_balance = (
+            settings.virtual_starting_balance
+            if settings is not None
+            else VIRTUAL_STARTING_BALANCE
+        )
         balance = self._account_balance_by_user.setdefault(
             user_id,
-            VIRTUAL_STARTING_BALANCE,
+            starting_balance,
         )
         realized_pnl = self._realized_pnl_by_user.setdefault(user_id, 0.0)
         stats = self._account_stats_by_user.setdefault(
@@ -167,9 +200,9 @@ class VirtualTradingService:
             (trade.updated_at for trade in open_trades),
             default=datetime.now(timezone.utc),
         )
-        return VirtualAccount(
+        account = VirtualAccount(
             user_id=user_id,
-            starting_balance=VIRTUAL_STARTING_BALANCE,
+            starting_balance=starting_balance,
             balance=balance,
             equity=balance + unrealized_pnl,
             realized_pnl=realized_pnl,
@@ -182,6 +215,43 @@ class VirtualTradingService:
             losses=stats["losses"],
             breakeven=stats["breakeven"],
             updated_at=updated_at,
+        )
+        return self._account_with_risk_settings(account)
+
+    def _account_with_risk_settings(self, account: VirtualAccount) -> VirtualAccount:
+        settings = self._risk_settings_for_user(account.user_id)
+        if settings is None:
+            return account
+        risk_percent = (
+            settings.virtual_risk_per_trade_percent
+            if settings.virtual_risk_mode == "custom"
+            else settings.risk_per_trade_percent
+        )
+        risk_amount = max(account.equity, 0.0) * risk_percent / 100
+        return account.model_copy(
+            update={
+                "risk_per_trade": risk_amount,
+                "risk_reward": settings.min_rr_ratio,
+            }
+        )
+
+    def _risk_settings_for_user(self, user_id: str) -> RiskManagementSettings | None:
+        if self._risk_settings_provider is None:
+            return None
+        return self._risk_settings_provider(user_id)
+
+    @staticmethod
+    def _fallback_risk_settings(request: ManualConfirmRequest) -> RiskManagementSettings:
+        return RiskManagementSettings(
+            risk_profile="custom",
+            risk_per_trade_percent=request.risk_percent,
+            min_rr_ratio=VIRTUAL_RISK_REWARD,
+            max_daily_loss_percent=50.0,
+            max_account_drawdown_percent=90.0,
+            max_open_risk_percent=100.0,
+            include_fees_in_risk=True,
+            include_slippage_in_risk=True,
+            stop_loss_mode="structure",
         )
 
     def get_virtual_trade_by_signal(self, signal_id: str) -> Optional[VirtualTrade]:
@@ -278,86 +348,11 @@ class VirtualTradingService:
         if len(open_user_positions) >= request.max_open_positions:
             raise ValueError("Достигнут лимит открытых виртуальных позиций")
 
-        raw_entry = self._entry_price(signal)
-        if signal.stop_loss is None:
-            raise ValueError("У сигнала нет stop_loss для расчета риска")
-
-        account = self.get_virtual_account(request.user_id)
-        risk_amount = min(VIRTUAL_RISK_PER_TRADE, max(account.balance, 0.0))
-        if risk_amount <= 0:
-            raise ValueError("Virtual account balance is depleted")
-
-        side = signal.direction
-        stop_loss = signal.stop_loss
-        if not self._stop_matches_side(raw_entry, stop_loss, side):
-            stop_loss = self._fallback_stop(raw_entry, side)
-        raw_risk_per_unit = abs(raw_entry - stop_loss)
-        if raw_risk_per_unit <= 0:
-            raise ValueError("Некорректная дистанция до stop_loss")
-
-        risk_sized_usd = risk_amount / raw_risk_per_unit * raw_entry
-        requested_size_usd = request.size_usd or risk_sized_usd
-        execution = self._execution_engine.simulate_entry(
+        return self._build_virtual_trade_through_risk_gate(
             signal=signal,
             request=request,
-            reference_price=raw_entry,
-            requested_size_usd=requested_size_usd,
+            open_user_positions=open_user_positions,
         )
-        if execution.status == "rejected_virtual_execution" or execution.average_price is None:
-            raise VirtualExecutionRejected(execution)
-
-        entry_price = execution.average_price
-        if not self._stop_matches_side(entry_price, stop_loss, side):
-            stop_loss = self._fallback_stop(entry_price, side)
-        risk_per_unit = abs(entry_price - stop_loss)
-        if risk_per_unit <= 0:
-            raise ValueError("Некорректная дистанция до stop_loss")
-
-        size_usd = execution.filled_size_usd
-        if size_usd <= 0:
-            raise VirtualExecutionRejected(execution)
-        quantity = size_usd / entry_price
-        risk_amount = risk_per_unit * quantity
-        entry_fee = size_usd * request.fee_rate
-        effective_risk_percent = (
-            risk_amount / account.balance * 100
-            if account.balance > 0
-            else request.risk_percent
-        )
-        take_profit = self._take_profit(entry_price, risk_per_unit, side)
-        now = datetime.now(timezone.utc)
-
-        trade = VirtualTrade(
-            id=f"vtr_{uuid4().hex[:12]}",
-            user_id=request.user_id,
-            signal_id=signal.id,
-            exchange=signal.exchange,
-            symbol=signal.symbol,
-            strategy=signal.strategy,
-            timeframe=signal.timeframe,
-            side=side,
-            entry_price=entry_price,
-            current_price=entry_price,
-            size_usd=size_usd,
-            quantity=quantity,
-            leverage=request.leverage,
-            risk_percent=effective_risk_percent,
-            risk_amount=risk_amount,
-            risk_reward=VIRTUAL_RISK_REWARD,
-            stop_loss=stop_loss,
-            take_profit=[take_profit],
-            fees=entry_fee,
-            slippage_bps=execution.entry_slippage_bps,
-            simulation_mode=execution.mode,
-            execution_status=execution.status,
-            requested_size_usd=execution.requested_size_usd,
-            filled_size_usd=execution.filled_size_usd,
-            unfilled_size_usd=execution.unfilled_size_usd,
-            execution=execution,
-            opened_at=now,
-            updated_at=now,
-        )
-        return trade
 
     def _simulate_entry_execution(
         self,
@@ -375,36 +370,467 @@ class VirtualTradingService:
             if len(open_user_positions) >= request.max_open_positions:
                 raise ValueError("Maximum open virtual positions limit reached")
 
-        raw_entry = self._entry_price(signal)
-        if signal.stop_loss is None:
-            raise ValueError("Signal has no stop_loss for virtual risk calculation")
-
-        account = self.get_virtual_account(request.user_id)
-        risk_amount = min(VIRTUAL_RISK_PER_TRADE, max(account.balance, 0.0))
-        if risk_amount <= 0:
-            raise ValueError("Virtual account balance is depleted")
-
-        side = signal.direction
-        stop_loss = signal.stop_loss
-        if not self._stop_matches_side(raw_entry, stop_loss, side):
-            stop_loss = self._fallback_stop(raw_entry, side)
-        raw_risk_per_unit = abs(raw_entry - stop_loss)
-        if raw_risk_per_unit <= 0:
-            raise ValueError("Invalid distance to stop_loss")
-
-        risk_sized_usd = risk_amount / raw_risk_per_unit * raw_entry
-        requested_size_usd = request.size_usd or risk_sized_usd
-        execution = self._execution_engine.simulate_entry(
+        return self._simulate_entry_execution_through_risk_gate(
             signal=signal,
             request=request,
-            reference_price=raw_entry,
+        )
+
+    def _build_virtual_trade_through_risk_gate(
+        self,
+        *,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        open_user_positions: list[VirtualTrade],
+    ) -> VirtualTrade:
+        raw_entry = self._entry_price(signal)
+        risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
+        market_data = self._risk_market_snapshot(signal, request, raw_entry)
+        fee_rate = self._risk_fee_snapshot(signal, request, risk_settings)
+        gate_request = request.model_copy(
+            update={
+                "fee_rate": fee_rate.fee_rate,
+                "slippage_bps": market_data.slippage_bps,
+                "liquidation_price": request.liquidation_price or market_data.liquidation_price,
+            }
+        )
+        account = self.get_virtual_account(gate_request.user_id)
+        if account.equity <= 0:
+            raise ValueError("Virtual account balance is depleted")
+        reference = self._risk_reference(
+            user_id=gate_request.user_id,
+            exchange=signal.exchange,
+            symbol=signal.symbol,
+            side=signal.direction,
+        )
+
+        raw_decision = self._risk_gate_service.evaluate(
+            context=self._risk_context_service.build_virtual_context(
+                signal=signal,
+                request=gate_request,
+                account=account,
+                entry_price=market_data.entry_price,
+                open_positions=open_user_positions,
+                requested_notional=gate_request.size_usd,
+                stage="pre_execution",
+                exchange_min_order_size=(
+                    reference.exchange_min_order_size
+                    if reference is not None
+                    else None
+                ),
+                exchange_max_order_size=(
+                    reference.exchange_max_order_size
+                    if reference is not None
+                    else None
+                ),
+                exchange_min_notional=(
+                    reference.exchange_min_notional
+                    if reference is not None
+                    else None
+                ),
+                exchange_max_leverage=(
+                    reference.exchange_max_leverage
+                    if reference is not None
+                    else None
+                ),
+                exchange_rule_status=(
+                    reference.exchange_rule_status
+                    if reference is not None
+                    else "unknown"
+                ),
+                exchange_rule_age_seconds=(
+                    reference.exchange_rule_age_seconds
+                    if reference is not None
+                    else None
+                ),
+                exchange_rule_ttl_seconds=(
+                    reference.exchange_rule_ttl_seconds
+                    if reference is not None
+                    else None
+                ),
+                **_market_context_kwargs(market_data),
+                **_fee_context_kwargs(fee_rate),
+                daily_loss_amount=reference.daily_loss_amount if reference is not None else 0.0,
+                correlated_open_risk_amount=(
+                    reference.correlated_open_risk_amount
+                    if reference is not None
+                    else 0.0
+                ),
+                correlation_group=reference.correlation_group if reference is not None else None,
+                protection_state=reference.protection_state if reference is not None else "normal",
+                protection_reason=reference.protection_reason if reference is not None else None,
+                account_drawdown_percent=(
+                    reference.account_drawdown_percent
+                    if reference is not None
+                    else None
+                ),
+                max_account_drawdown_percent=(
+                    reference.max_account_drawdown_percent
+                    if reference is not None
+                    else 0.0
+                ),
+                user_mode_multiplier=reference.user_mode_multiplier if reference is not None else 1.0,
+            ),
+            risk_settings=risk_settings,
+        )
+        if not raw_decision.can_enter:
+            self._record_blocked_risk_decision(signal, gate_request, raw_decision)
+            raise ValueError("; ".join(raw_decision.blockers))
+
+        requested_size_usd = gate_request.size_usd or raw_decision.position_sizing.notional
+        execution = self._execution_engine.simulate_entry(
+            signal=signal,
+            request=gate_request,
+            reference_price=market_data.entry_price,
             requested_size_usd=requested_size_usd,
         )
+        execution = self._execution_with_risk_decision(execution, raw_decision)
+        if execution.status == "rejected_virtual_execution" or execution.average_price is None:
+            raise VirtualExecutionRejected(execution)
+
+        entry_price = execution.average_price
+        size_usd = execution.filled_size_usd
+        if size_usd <= 0:
+            raise VirtualExecutionRejected(execution)
+
+        filled_decision = self._risk_gate_service.evaluate(
+            context=self._risk_context_service.build_virtual_context(
+                signal=signal,
+                request=gate_request,
+                account=account,
+                entry_price=entry_price,
+                open_positions=open_user_positions,
+                requested_notional=size_usd,
+                stage="post_execution",
+                exchange_min_order_size=(
+                    reference.exchange_min_order_size
+                    if reference is not None
+                    else None
+                ),
+                exchange_max_order_size=(
+                    reference.exchange_max_order_size
+                    if reference is not None
+                    else None
+                ),
+                exchange_min_notional=(
+                    reference.exchange_min_notional
+                    if reference is not None
+                    else None
+                ),
+                exchange_max_leverage=(
+                    reference.exchange_max_leverage
+                    if reference is not None
+                    else None
+                ),
+                exchange_rule_status=(
+                    reference.exchange_rule_status
+                    if reference is not None
+                    else "unknown"
+                ),
+                exchange_rule_age_seconds=(
+                    reference.exchange_rule_age_seconds
+                    if reference is not None
+                    else None
+                ),
+                exchange_rule_ttl_seconds=(
+                    reference.exchange_rule_ttl_seconds
+                    if reference is not None
+                    else None
+                ),
+                **_market_context_kwargs(market_data),
+                **_fee_context_kwargs(fee_rate),
+                daily_loss_amount=reference.daily_loss_amount if reference is not None else 0.0,
+                correlated_open_risk_amount=(
+                    reference.correlated_open_risk_amount
+                    if reference is not None
+                    else 0.0
+                ),
+                correlation_group=reference.correlation_group if reference is not None else None,
+                protection_state=reference.protection_state if reference is not None else "normal",
+                protection_reason=reference.protection_reason if reference is not None else None,
+                account_drawdown_percent=(
+                    reference.account_drawdown_percent
+                    if reference is not None
+                    else None
+                ),
+                max_account_drawdown_percent=(
+                    reference.max_account_drawdown_percent
+                    if reference is not None
+                    else 0.0
+                ),
+                user_mode_multiplier=reference.user_mode_multiplier if reference is not None else 1.0,
+            ),
+            risk_settings=risk_settings,
+        )
+        if not filled_decision.can_enter:
+            self._record_blocked_risk_decision(signal, gate_request, filled_decision)
+            raise ValueError("; ".join(filled_decision.blockers))
+
+        execution = self._execution_with_risk_decision(execution, filled_decision)
+        quantity = size_usd / entry_price
+        now = datetime.now(timezone.utc)
+        return VirtualTrade(
+            id=f"vtr_{uuid4().hex[:12]}",
+            user_id=gate_request.user_id,
+            signal_id=signal.id,
+            exchange=signal.exchange,
+            symbol=signal.symbol,
+            strategy=signal.strategy,
+            timeframe=signal.timeframe,
+            side=signal.direction,
+            entry_price=entry_price,
+            current_price=entry_price,
+            size_usd=size_usd,
+            quantity=quantity,
+            leverage=request.leverage,
+            risk_percent=filled_decision.checked_position_sizing.risk_per_trade_percent,
+            risk_amount=filled_decision.checked_position_sizing.risk_amount,
+            risk_reward=filled_decision.take_profit_plan.targets[-1].r_multiple,
+            stop_loss=filled_decision.stop_loss_plan.stop_loss_price,
+            take_profit=[target.price for target in filled_decision.take_profit_plan.targets],
+            fees=size_usd * gate_request.fee_rate,
+            slippage_bps=execution.entry_slippage_bps,
+            simulation_mode=execution.mode,
+            execution_status=execution.status,
+            requested_size_usd=execution.requested_size_usd,
+            filled_size_usd=execution.filled_size_usd,
+            unfilled_size_usd=execution.unfilled_size_usd,
+            execution=execution,
+            opened_at=now,
+            updated_at=now,
+        )
+
+    def _simulate_entry_execution_through_risk_gate(
+        self,
+        *,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+    ) -> _VirtualEntrySimulation:
+        raw_entry = self._entry_price(signal)
+        risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
+        market_data = self._risk_market_snapshot(signal, request, raw_entry)
+        fee_rate = self._risk_fee_snapshot(signal, request, risk_settings)
+        gate_request = request.model_copy(
+            update={
+                "fee_rate": fee_rate.fee_rate,
+                "slippage_bps": market_data.slippage_bps,
+                "liquidation_price": request.liquidation_price or market_data.liquidation_price,
+            }
+        )
+        account = self.get_virtual_account(gate_request.user_id)
+        open_user_positions = [
+            trade
+            for trade in self._repository.list_virtual_trades(status="open")
+            if trade.user_id == gate_request.user_id and trade.status == "open"
+        ]
+        reference = self._risk_reference(
+            user_id=gate_request.user_id,
+            exchange=signal.exchange,
+            symbol=signal.symbol,
+            side=signal.direction,
+        )
+        decision = self._risk_gate_service.evaluate(
+            context=self._risk_context_service.build_virtual_context(
+                signal=signal,
+                request=gate_request,
+                account=account,
+                entry_price=market_data.entry_price,
+                open_positions=open_user_positions,
+                requested_notional=gate_request.size_usd,
+                stage="preview",
+                exchange_min_order_size=(
+                    reference.exchange_min_order_size
+                    if reference is not None
+                    else None
+                ),
+                exchange_max_order_size=(
+                    reference.exchange_max_order_size
+                    if reference is not None
+                    else None
+                ),
+                exchange_min_notional=(
+                    reference.exchange_min_notional
+                    if reference is not None
+                    else None
+                ),
+                exchange_max_leverage=(
+                    reference.exchange_max_leverage
+                    if reference is not None
+                    else None
+                ),
+                exchange_rule_status=(
+                    reference.exchange_rule_status
+                    if reference is not None
+                    else "unknown"
+                ),
+                exchange_rule_age_seconds=(
+                    reference.exchange_rule_age_seconds
+                    if reference is not None
+                    else None
+                ),
+                exchange_rule_ttl_seconds=(
+                    reference.exchange_rule_ttl_seconds
+                    if reference is not None
+                    else None
+                ),
+                **_market_context_kwargs(market_data),
+                **_fee_context_kwargs(fee_rate),
+                daily_loss_amount=reference.daily_loss_amount if reference is not None else 0.0,
+                correlated_open_risk_amount=(
+                    reference.correlated_open_risk_amount
+                    if reference is not None
+                    else 0.0
+                ),
+                correlation_group=reference.correlation_group if reference is not None else None,
+                protection_state=reference.protection_state if reference is not None else "normal",
+                protection_reason=reference.protection_reason if reference is not None else None,
+                account_drawdown_percent=(
+                    reference.account_drawdown_percent
+                    if reference is not None
+                    else None
+                ),
+                max_account_drawdown_percent=(
+                    reference.max_account_drawdown_percent
+                    if reference is not None
+                    else 0.0
+                ),
+                user_mode_multiplier=reference.user_mode_multiplier if reference is not None else 1.0,
+            ),
+            risk_settings=risk_settings,
+        )
+        self._record_preview_risk_decision(signal, gate_request, decision)
+        requested_size_usd = gate_request.size_usd or decision.position_sizing.notional
+        execution = self._execution_engine.simulate_entry(
+            signal=signal,
+            request=gate_request,
+            reference_price=market_data.entry_price,
+            requested_size_usd=requested_size_usd,
+        )
+        execution = self._execution_with_risk_decision(execution, decision)
         return _VirtualEntrySimulation(
             execution=execution,
             account=account,
-            side=side,
-            stop_loss=stop_loss,
+            side=signal.direction,
+            stop_loss=decision.stop_loss_plan.stop_loss_price,
+        )
+
+    def _risk_market_snapshot(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        fallback_entry_price: float,
+    ) -> RiskMarketDataSnapshot:
+        return self._market_data_service.build_snapshot(
+            exchange=signal.exchange,
+            symbol=signal.symbol,
+            side=signal.direction,
+            mode="virtual",
+            instrument_type="virtual",
+            fallback_entry_price=fallback_entry_price,
+            manual_slippage_bps=request.slippage_bps,
+            user_id=request.user_id,
+        )
+
+    def _risk_fee_snapshot(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        risk_settings: RiskManagementSettings,
+    ) -> RiskFeeRateSnapshot:
+        return self._fee_rate_service.resolve(
+            user_id=request.user_id,
+            exchange=signal.exchange,
+            mode="virtual",
+            instrument_type=_virtual_fee_instrument_type(request),
+            symbol=signal.symbol,
+            risk_settings=risk_settings,
+            requested_fee_rate=request.fee_rate,
+        )
+
+    def _risk_reference(
+        self,
+        *,
+        user_id: str,
+        exchange: str,
+        symbol: str,
+        side: str,
+    ):
+        if self._risk_state is None:
+            return None
+        try:
+            return self._risk_state.get_reference(
+                user_id=user_id,
+                mode="virtual",
+                exchange=exchange,
+                symbol=symbol,
+                side=side,
+                instrument_type="virtual",
+            )
+        except Exception as exc:
+            logger.warning("Risk reference lookup failed: %s", exc)
+            return None
+
+    def _record_blocked_risk_decision(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        decision: RiskDecision,
+    ) -> None:
+        if self._risk_audit is None:
+            return
+        try:
+            self._risk_audit.record_decision(
+                decision=decision,
+                user_id=request.user_id,
+                signal_id=signal.id,
+                input_snapshot={
+                    "flow": "virtual_trade.blocked_attempt",
+                    "request": request.model_dump(mode="json"),
+                    "signal": signal.model_dump(mode="json"),
+                },
+            )
+        except Exception as exc:
+            logger.warning("Risk audit write for blocked virtual attempt failed: %s", exc)
+
+    def _record_preview_risk_decision(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        decision: RiskDecision,
+    ) -> None:
+        if self._risk_audit is None:
+            return
+        try:
+            self._risk_audit.record_decision(
+                decision=decision,
+                user_id=request.user_id,
+                signal_id=signal.id,
+                input_snapshot={
+                    "flow": "virtual_execution.preview",
+                    "request": request.model_dump(mode="json"),
+                    "signal": signal.model_dump(mode="json"),
+                },
+            )
+        except Exception as exc:
+            logger.warning("Risk audit write for virtual preview failed: %s", exc)
+
+    @staticmethod
+    def _execution_with_risk_decision(
+        execution: VirtualExecutionReport,
+        decision: RiskDecision,
+    ) -> VirtualExecutionReport:
+        return execution.model_copy(
+            update={
+                "risk_decision": decision,
+                "risk_adjustment_plan": decision.risk_adjustment_plan,
+                "risk_check": decision.risk_check,
+                "position_sizing": decision.position_sizing,
+                "stop_loss_plan": decision.stop_loss_plan,
+                "take_profit_plan": decision.take_profit_plan,
+                "breakeven_plan": decision.breakeven_plan,
+                "trailing_stop_plan": decision.trailing_stop_plan,
+                "futures_risk_plan": decision.futures_risk_plan,
+                "notes": _dedupe_strings([*execution.notes, *decision.notes]),
+            }
         )
 
     def close_virtual_trade(
@@ -647,26 +1073,6 @@ class VirtualTradingService:
         return max(real_price + residual_impact, 0.00000001)
 
     @staticmethod
-    def _stop_matches_side(entry_price: float, stop_loss: float, side: str) -> bool:
-        if side == "long":
-            return stop_loss < entry_price
-        return stop_loss > entry_price
-
-    @staticmethod
-    def _fallback_stop(entry_price: float, side: str) -> float:
-        fallback_distance = entry_price * 0.01
-        if side == "long":
-            return entry_price - fallback_distance
-        return entry_price + fallback_distance
-
-    @staticmethod
-    def _take_profit(entry_price: float, risk_per_unit: float, side: str) -> float:
-        target_distance = risk_per_unit * VIRTUAL_RISK_REWARD
-        if side == "long":
-            return entry_price + target_distance
-        return entry_price - target_distance
-
-    @staticmethod
     def _gross_pnl(trade: VirtualTrade, price: float) -> float:
         if trade.side == "long":
             return (price - trade.entry_price) * trade.quantity
@@ -681,7 +1087,11 @@ class VirtualTradingService:
         return "breakeven"
 
 
-virtual_trading_service = VirtualTradingService()
+virtual_trading_service = VirtualTradingService(
+    risk_settings_provider=get_user_risk_management_settings,
+    risk_audit=risk_audit_service,
+    risk_state=risk_state_service,
+)
 
 # Backward-compatible alias while API/tests migrate to the virtual_trading package.
 TradeService = VirtualTradingService
@@ -750,3 +1160,44 @@ def _publish_portfolio_event(event: VirtualTradePersistenceEvent) -> None:
         f"pubsub:portfolio:{event.user_id}",
         json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":")),
     )
+
+
+def _market_context_kwargs(market_data: RiskMarketDataSnapshot) -> dict[str, Any]:
+    return {
+        "liquidation_price": market_data.liquidation_price,
+        "funding_buffer_per_unit": market_data.funding_buffer_per_unit,
+        "best_bid": market_data.best_bid,
+        "best_ask": market_data.best_ask,
+        "mark_price": market_data.mark_price,
+        "funding_rate": market_data.funding_rate,
+        "spread_percent": market_data.spread_percent,
+        "spread_bps": market_data.spread_bps,
+        "orderbook_depth_usd": market_data.orderbook_depth_usd,
+        "market_data_status": market_data.market_data_status,
+        "market_data_source": market_data.market_data_source,
+        "market_data_warnings": list(market_data.warnings),
+    }
+
+
+def _fee_context_kwargs(fee_rate: RiskFeeRateSnapshot) -> dict[str, Any]:
+    return {
+        "fee_rate_source": fee_rate.source,
+        "maker_fee_rate": fee_rate.maker_fee_rate,
+        "taker_fee_rate": fee_rate.taker_fee_rate,
+        "fee_rate_warnings": list(fee_rate.warnings),
+    }
+
+
+def _virtual_fee_instrument_type(request: ManualConfirmRequest) -> str:
+    return "futures" if request.leverage > 1 else "spot"
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result

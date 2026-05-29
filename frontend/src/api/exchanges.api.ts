@@ -1,6 +1,6 @@
-import type { ExchangeCatalog, ExchangeConnection, ExchangeConnectionDraft } from "@/features/server-state/types";
+import type { ExchangeCatalog, ExchangeConnection, ExchangeConnectionDraft, ExchangeFeeRate } from "@/features/server-state/types";
 import { openApiClient, request } from "./client";
-import { normalizeExchangeCatalog, normalizeExchangeConnection } from "./mappers";
+import { normalizeExchangeCatalog, normalizeExchangeConnection, normalizeExchangeFeeRate } from "./mappers";
 
 export const exchangesApi = {
   async catalog(): Promise<ExchangeCatalog> {
@@ -58,6 +58,17 @@ export const exchangesApi = {
         params: { path: { connection_id: connectionId } }
       })
     );
+  },
+  async feeRates(connectionId: string, category = "linear", symbol?: string): Promise<ExchangeFeeRate[]> {
+    const response = await request(() =>
+      openApiClient.GET("/api/v1/exchanges/connections/{connection_id}/fees", {
+        params: {
+          path: { connection_id: connectionId },
+          query: { category, symbol }
+        }
+      })
+    );
+    return response.map(normalizeExchangeFeeRate);
   },
   async syncConnection(connectionId: string) {
     return request(() =>

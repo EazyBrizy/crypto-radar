@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 import app.models  # noqa: F401
 from app.models.market import MarketAsset, MarketExchange, MarketPair
 from app.models.portfolio import Portfolio, PortfolioBalance, PortfolioBalanceLedger
+from app.models.risk import AssetRiskGroup
 from app.models.strategy import StrategyTemplate, StrategyVersion
 from app.models.user import AppUser, SubscriptionPlan, UserProfile, UserSubscription
 from app.models.watchlist import UserWatchlist, UserWatchlistPair
@@ -79,6 +80,100 @@ SEED_ASSETS: list[dict[str, Any]] = [
         "coingecko_id": "pepe",
         "metadata_": {"underlying_symbol": "PEPE", "contract_multiplier": 1000},
     },
+    {"symbol": "AVAX", "name": "Avalanche", "asset_type": "crypto", "decimals": 18, "coingecko_id": "avalanche-2"},
+    {"symbol": "SUI", "name": "Sui", "asset_type": "crypto", "decimals": 9, "coingecko_id": "sui"},
+    {"symbol": "NEAR", "name": "NEAR Protocol", "asset_type": "crypto", "decimals": 24, "coingecko_id": "near"},
+    {"symbol": "ADA", "name": "Cardano", "asset_type": "crypto", "decimals": 6, "coingecko_id": "cardano"},
+    {"symbol": "DOT", "name": "Polkadot", "asset_type": "crypto", "decimals": 10, "coingecko_id": "polkadot"},
+    {"symbol": "ATOM", "name": "Cosmos Hub", "asset_type": "crypto", "decimals": 6, "coingecko_id": "cosmos"},
+    {"symbol": "APT", "name": "Aptos", "asset_type": "crypto", "decimals": 8, "coingecko_id": "aptos"},
+    {"symbol": "SEI", "name": "Sei", "asset_type": "crypto", "decimals": 6, "coingecko_id": "sei-network"},
+    {"symbol": "TON", "name": "Toncoin", "asset_type": "crypto", "decimals": 9, "coingecko_id": "the-open-network"},
+    {"symbol": "INJ", "name": "Injective", "asset_type": "crypto", "decimals": 18, "coingecko_id": "injective-protocol"},
+    {"symbol": "ARB", "name": "Arbitrum", "asset_type": "crypto", "decimals": 18, "coingecko_id": "arbitrum"},
+    {"symbol": "OP", "name": "Optimism", "asset_type": "crypto", "decimals": 18, "coingecko_id": "optimism"},
+    {"symbol": "STRK", "name": "Starknet", "asset_type": "crypto", "decimals": 18, "coingecko_id": "starknet"},
+    {"symbol": "POL", "name": "Polygon Ecosystem Token", "asset_type": "crypto", "decimals": 18, "coingecko_id": "polygon-ecosystem-token"},
+    {"symbol": "SHIB", "name": "Shiba Inu", "asset_type": "crypto", "decimals": 18, "coingecko_id": "shiba-inu"},
+    {"symbol": "FLOKI", "name": "FLOKI", "asset_type": "crypto", "decimals": 9, "coingecko_id": "floki"},
+    {"symbol": "BONK", "name": "Bonk", "asset_type": "crypto", "decimals": 5, "coingecko_id": "bonk"},
+    {"symbol": "WIF", "name": "dogwifhat", "asset_type": "crypto", "decimals": 6, "coingecko_id": "dogwifcoin"},
+    {"symbol": "UNI", "name": "Uniswap", "asset_type": "crypto", "decimals": 18, "coingecko_id": "uniswap"},
+    {"symbol": "AAVE", "name": "Aave", "asset_type": "crypto", "decimals": 18, "coingecko_id": "aave"},
+    {"symbol": "MKR", "name": "Maker", "asset_type": "crypto", "decimals": 18, "coingecko_id": "maker"},
+    {"symbol": "COMP", "name": "Compound", "asset_type": "crypto", "decimals": 18, "coingecko_id": "compound-governance-token"},
+    {"symbol": "CRV", "name": "Curve DAO", "asset_type": "crypto", "decimals": 18, "coingecko_id": "curve-dao-token"},
+    {"symbol": "LDO", "name": "Lido DAO", "asset_type": "crypto", "decimals": 18, "coingecko_id": "lido-dao"},
+    {"symbol": "SNX", "name": "Synthetix Network", "asset_type": "crypto", "decimals": 18, "coingecko_id": "havven"},
+    {"symbol": "DYDX", "name": "dYdX", "asset_type": "crypto", "decimals": 18, "coingecko_id": "dydx"},
+    {"symbol": "RNDR", "name": "Render", "asset_type": "crypto", "decimals": 18, "coingecko_id": "render-token"},
+    {"symbol": "RENDER", "name": "Render", "asset_type": "crypto", "decimals": 18, "coingecko_id": "render-token"},
+    {"symbol": "FET", "name": "Artificial Superintelligence Alliance", "asset_type": "crypto", "decimals": 18, "coingecko_id": "fetch-ai"},
+    {"symbol": "TAO", "name": "Bittensor", "asset_type": "crypto", "decimals": 9, "coingecko_id": "bittensor"},
+    {"symbol": "BNB", "name": "BNB", "asset_type": "crypto", "decimals": 18, "coingecko_id": "binancecoin"},
+    {"symbol": "OKB", "name": "OKB", "asset_type": "crypto", "decimals": 18, "coingecko_id": "okb"},
+    {"symbol": "GT", "name": "GateToken", "asset_type": "crypto", "decimals": 18, "coingecko_id": "gatechain-token"},
+    {"symbol": "KCS", "name": "KuCoin Token", "asset_type": "crypto", "decimals": 6, "coingecko_id": "kucoin-shares"},
+    {"symbol": "LEO", "name": "UNUS SED LEO", "asset_type": "crypto", "decimals": 18, "coingecko_id": "leo-token"},
+    {"symbol": "CRO", "name": "Cronos", "asset_type": "crypto", "decimals": 8, "coingecko_id": "crypto-com-chain"},
+    {"symbol": "MX", "name": "MX Token", "asset_type": "crypto", "decimals": 18, "coingecko_id": "mx-token"},
+    {"symbol": "LTC", "name": "Litecoin", "asset_type": "crypto", "decimals": 8, "coingecko_id": "litecoin"},
+    {"symbol": "BCH", "name": "Bitcoin Cash", "asset_type": "crypto", "decimals": 8, "coingecko_id": "bitcoin-cash"},
+    {"symbol": "ORDI", "name": "ORDI", "asset_type": "crypto", "decimals": 18, "coingecko_id": "ordinals"},
+    {"symbol": "STX", "name": "Stacks", "asset_type": "crypto", "decimals": 6, "coingecko_id": "blockstack"},
+    {"symbol": "RUNE", "name": "THORChain", "asset_type": "crypto", "decimals": 8, "coingecko_id": "thorchain"},
+    {"symbol": "FIL", "name": "Filecoin", "asset_type": "crypto", "decimals": 18, "coingecko_id": "filecoin"},
+]
+
+SEED_ASSET_RISK_GROUPS: list[dict[str, Any]] = [
+    {"asset_symbol": "BTC", "group_code": "majors", "group_name": "BTC/ETH majors"},
+    {"asset_symbol": "ETH", "group_code": "majors", "group_name": "BTC/ETH majors"},
+    {"asset_symbol": "SOL", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "AVAX", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "SUI", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "NEAR", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "ADA", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "DOT", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "ATOM", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "APT", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "SEI", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "TON", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "INJ", "group_code": "l1", "group_name": "L1"},
+    {"asset_symbol": "ARB", "group_code": "l2", "group_name": "L2"},
+    {"asset_symbol": "OP", "group_code": "l2", "group_name": "L2"},
+    {"asset_symbol": "STRK", "group_code": "l2", "group_name": "L2"},
+    {"asset_symbol": "POL", "group_code": "l2", "group_name": "L2"},
+    {"asset_symbol": "DOGE", "group_code": "meme", "group_name": "Meme"},
+    {"asset_symbol": "1000PEPE", "group_code": "meme", "group_name": "Meme"},
+    {"asset_symbol": "SHIB", "group_code": "meme", "group_name": "Meme"},
+    {"asset_symbol": "FLOKI", "group_code": "meme", "group_name": "Meme"},
+    {"asset_symbol": "BONK", "group_code": "meme", "group_name": "Meme"},
+    {"asset_symbol": "WIF", "group_code": "meme", "group_name": "Meme"},
+    {"asset_symbol": "UNI", "group_code": "defi", "group_name": "DeFi"},
+    {"asset_symbol": "AAVE", "group_code": "defi", "group_name": "DeFi"},
+    {"asset_symbol": "MKR", "group_code": "defi", "group_name": "DeFi"},
+    {"asset_symbol": "COMP", "group_code": "defi", "group_name": "DeFi"},
+    {"asset_symbol": "CRV", "group_code": "defi", "group_name": "DeFi"},
+    {"asset_symbol": "LDO", "group_code": "defi", "group_name": "DeFi"},
+    {"asset_symbol": "SNX", "group_code": "defi", "group_name": "DeFi"},
+    {"asset_symbol": "DYDX", "group_code": "defi", "group_name": "DeFi"},
+    {"asset_symbol": "RNDR", "group_code": "ai", "group_name": "AI"},
+    {"asset_symbol": "RENDER", "group_code": "ai", "group_name": "AI"},
+    {"asset_symbol": "FET", "group_code": "ai", "group_name": "AI"},
+    {"asset_symbol": "TAO", "group_code": "ai", "group_name": "AI"},
+    {"asset_symbol": "BNB", "group_code": "exchange_tokens", "group_name": "Exchange tokens"},
+    {"asset_symbol": "OKB", "group_code": "exchange_tokens", "group_name": "Exchange tokens"},
+    {"asset_symbol": "GT", "group_code": "exchange_tokens", "group_name": "Exchange tokens"},
+    {"asset_symbol": "KCS", "group_code": "exchange_tokens", "group_name": "Exchange tokens"},
+    {"asset_symbol": "LEO", "group_code": "exchange_tokens", "group_name": "Exchange tokens"},
+    {"asset_symbol": "CRO", "group_code": "exchange_tokens", "group_name": "Exchange tokens"},
+    {"asset_symbol": "MX", "group_code": "exchange_tokens", "group_name": "Exchange tokens"},
+    {"asset_symbol": "LTC", "group_code": "btc_beta_high", "group_name": "BTC beta high"},
+    {"asset_symbol": "BCH", "group_code": "btc_beta_high", "group_name": "BTC beta high"},
+    {"asset_symbol": "ORDI", "group_code": "btc_beta_high", "group_name": "BTC beta high"},
+    {"asset_symbol": "STX", "group_code": "btc_beta_high", "group_name": "BTC beta high"},
+    {"asset_symbol": "RUNE", "group_code": "btc_beta_high", "group_name": "BTC beta high"},
+    {"asset_symbol": "FIL", "group_code": "btc_beta_high", "group_name": "BTC beta high"},
 ]
 
 SEED_PAIRS: list[dict[str, Any]] = [
@@ -288,6 +383,7 @@ def bootstrap_postgres_seed(session: Session) -> SeedSummary:
 
     exchanges = _seed_exchanges(session, tracker)
     assets = _seed_assets(session, tracker)
+    _seed_asset_risk_groups(session, tracker, assets)
     pairs = _seed_pairs(session, tracker, exchanges, assets)
     plans = _seed_subscription_plans(session, tracker)
     strategies = _seed_strategy_templates(session, tracker)
@@ -382,6 +478,35 @@ def _seed_pairs(
         )
         pairs[pair.symbol] = pair
     return pairs
+
+
+def _seed_asset_risk_groups(
+    session: Session,
+    tracker: _SeedTracker,
+    assets: dict[str, MarketAsset],
+) -> None:
+    for spec in SEED_ASSET_RISK_GROUPS:
+        asset = assets.get(spec["asset_symbol"])
+        if asset is None:
+            continue
+        _upsert_one(
+            session,
+            AssetRiskGroup,
+            "asset_risk_groups",
+            (
+                AssetRiskGroup.asset_id == asset.id,
+                AssetRiskGroup.group_code == spec["group_code"],
+            ),
+            {
+                "asset_id": asset.id,
+                "group_code": spec["group_code"],
+                "group_name": spec["group_name"],
+                "is_primary": True,
+                "source": "bootstrap",
+                "metadata_": {},
+            },
+            tracker,
+        )
 
 
 def _seed_subscription_plans(session: Session, tracker: _SeedTracker) -> dict[str, SubscriptionPlan]:
@@ -481,6 +606,71 @@ def _seed_demo_profile(session: Session, tracker: _SeedTracker, user: AppUser) -
                 "simulation_level": "mvp",
                 "simulation_level_status": "active",
                 "effective_simulation_level": "mvp",
+            },
+            "risk_management": {
+                "risk_profile": "balanced",
+                "risk_per_trade_percent": 1.0,
+                "min_rr_ratio": 2.0,
+                "max_daily_loss_percent": 3.0,
+                "max_weekly_loss_percent": 7.0,
+                "max_account_drawdown_percent": 10.0,
+                "max_open_risk_percent": 5.0,
+                "max_correlated_risk_percent": 3.0,
+                "max_spread_bps": 50.0,
+                "max_slippage_bps": 150.0,
+                "max_price_deviation_bps": 100.0,
+                "max_orderbook_liquidity_ratio": 1.0,
+                "include_fees_in_risk": True,
+                "include_slippage_in_risk": True,
+                "stop_loss_required": True,
+                "take_profit_required": True,
+                "stop_loss_mode": "fixed_percent",
+                "default_stop_loss_percent": 1.5,
+                "atr_period": 14,
+                "atr_multiplier": 2.0,
+                "take_profit_mode": "risk_multiple",
+                "tp1_r_multiple": 1.0,
+                "tp2_r_multiple": 2.0,
+                "tp3_r_multiple": 3.0,
+                "partial_take_profit_enabled": True,
+                "tp1_close_percent": 30.0,
+                "tp2_close_percent": 40.0,
+                "tp3_close_percent": 30.0,
+                "move_sl_to_breakeven_after_r": 1.0,
+                "breakeven_offset_percent": 0.05,
+                "trailing_stop_enabled": True,
+                "trailing_mode": "atr",
+                "trailing_atr_multiplier": 1.5,
+                "trailing_stop_percent": 0.5,
+                "max_leverage": 3,
+                "min_liquidation_buffer_percent": 2.0,
+                "liquidation_buffer_required": True,
+                "spot_risk_per_trade_percent": 1.0,
+                "spot_max_position_size_percent": 20.0,
+                "spot_stop_required": True,
+                "futures_risk_per_trade_percent": 0.5,
+                "futures_max_leverage": 3,
+                "futures_max_open_risk_percent": 3.0,
+                "futures_liquidation_buffer_required": True,
+                "virtual_risk_mode": "same_as_real",
+                "virtual_risk_per_trade_percent": 1.0,
+                "virtual_starting_balance": 10000.0,
+                "virtual_slippage_model": "spread_based",
+                "virtual_fee_model": "exchange_based",
+                "virtual_trading_uses_realistic_execution": True,
+                "strategy_risk_multipliers": {
+                    "trend_following": 1.0,
+                    "trend_pullback_continuation": 1.0,
+                    "breakout": 0.75,
+                    "scalping": 0.5,
+                    "mean_reversion": 0.75,
+                    "smart_money_setup": 1.0,
+                    "news_event_trade": 0.25,
+                },
+                "auto_reduce_risk_after_losses": True,
+                "allow_risk_increase_after_profit": False,
+                "increase_risk_after_profit_streak": False,
+                "max_risk_boost": 1.25,
             },
         },
     }

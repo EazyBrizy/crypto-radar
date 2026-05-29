@@ -13,8 +13,10 @@ from app.core.clickhouse_client import close_clickhouse_client
 from app.core.database import dispose_database_engine
 from app.core.health import get_storage_health
 from app.core.redis_client import close_redis_client
+from app.core.config import settings
 from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
 from app.services.realtime_gateway import realtime_gateway
+from app.workers.exchange_instrument_worker import ExchangeInstrumentRuleSyncRunner
 from app.workers.signal_worker import ScannerRunner
 
 load_dotenv()
@@ -29,14 +31,27 @@ def _scanner_enabled() -> bool:
     return raw_value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _instrument_rule_sync_enabled() -> bool:
+    return settings.exchange_instrument_sync_enabled
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     runner = ScannerRunner()
+    instrument_rule_runner = ExchangeInstrumentRuleSyncRunner()
     scanner_autostart_enabled = _scanner_enabled()
+    instrument_rule_sync_enabled = _instrument_rule_sync_enabled()
     app.state.scanner_runner = runner
+    app.state.exchange_instrument_rule_sync_runner = instrument_rule_runner
     app.state.scanner_autostart_enabled = scanner_autostart_enabled
+    app.state.exchange_instrument_rule_sync_enabled = instrument_rule_sync_enabled
 
     realtime_gateway.start_broker_bridge()
+
+    if instrument_rule_sync_enabled:
+        instrument_rule_runner.start()
+    else:
+        logging.info("Exchange instrument rule sync disabled by settings")
 
     if scanner_autostart_enabled:
         runner.start()
@@ -46,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await instrument_rule_runner.stop()
         await runner.stop()
         await realtime_gateway.stop_broker_bridge()
         close_clickhouse_client()
@@ -76,6 +92,7 @@ app.include_router(api_router)
 @app.get("/health")
 async def health() -> dict[str, object]:
     runner = getattr(app.state, "scanner_runner", None)
+    instrument_rule_runner = getattr(app.state, "exchange_instrument_rule_sync_runner", None)
     scanner_status = runner.scanner_status if runner else {}
     storage_health = await asyncio.to_thread(get_storage_health)
     return {
@@ -83,6 +100,17 @@ async def health() -> dict[str, object]:
         "scanner_enabled": runner is not None,
         "scanner_running": bool(runner and runner.is_running),
         "scanner_stopping": bool(runner and runner.is_stopping),
+        "instrument_rule_sync_enabled": bool(
+            getattr(app.state, "exchange_instrument_rule_sync_enabled", False)
+        ),
+        "instrument_rule_sync_running": bool(
+            instrument_rule_runner and instrument_rule_runner.is_running
+        ),
+        "instrument_rule_sync_last_result": (
+            instrument_rule_runner.last_result
+            if instrument_rule_runner is not None
+            else {}
+        ),
         "processed_signals": runner.processed_signals if runner else 0,
         "ticks_processed": scanner_status.get("ticks_processed", 0),
         "features_built": scanner_status.get("features_built", 0),

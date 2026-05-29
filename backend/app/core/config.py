@@ -24,5 +24,11 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     prometheus_metrics_enabled: bool = True
 
+    exchange_instrument_sync_enabled: bool = True
+    exchange_instrument_sync_interval_seconds: int = 21_600
+    exchange_instrument_rules_ttl_seconds: int = 86_400
+    bybit_instrument_rule_categories: str = "linear"
+    signal_active_ttl_seconds: int = 3_600
+
 
 settings = Settings()

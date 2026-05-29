@@ -78,4 +78,25 @@ describe("TradeJournalTable", () => {
     expect(onSelectTrade).toHaveBeenCalledWith(baseTrade);
     expect(screen.getByText("BTCUSDT").closest('[role="row"]')).toHaveClass("selected");
   });
+
+  it("runs market close action without selecting the row", async () => {
+    const user = userEvent.setup();
+    const onCloseMarket = vi.fn();
+    const onSelectTrade = vi.fn();
+
+    render(
+      <TradeJournalTable
+        onCloseMarket={onCloseMarket}
+        onSelectTrade={onSelectTrade}
+        trades={[baseTrade]}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Close ETHUSDT at market"));
+
+    expect(onCloseMarket).toHaveBeenCalledWith(baseTrade);
+    expect(onSelectTrade).not.toHaveBeenCalled();
+  });
 });

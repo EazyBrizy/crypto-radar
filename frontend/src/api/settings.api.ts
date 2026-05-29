@@ -4,10 +4,10 @@ import type {
   MarketPairOption,
   SubscriptionStatus,
   UserProfile,
-  VirtualSimulationLevel,
+  UserSettingsPatch,
   Watchlist
 } from "@/features/server-state/types";
-import type { RadarConfig, RadarStatus } from "@/types";
+import type { RadarConfig, RadarStatus, RiskStateResponse } from "@/types";
 import { billingApi } from "./billing.api";
 import { openApiClient, request } from "./client";
 import {
@@ -16,6 +16,7 @@ import {
   normalizeHealth,
   normalizeMarketPair,
   normalizeRadarStatus,
+  normalizeRiskState,
   normalizeUserProfile,
   normalizeWatchlistResponse,
 } from "./mappers";
@@ -126,7 +127,7 @@ export const settingsApi = {
       )
     );
   },
-  async updateUserSettings(patch: { virtual_simulation_level?: VirtualSimulationLevel }): Promise<UserProfile> {
+  async updateUserSettings(patch: UserSettingsPatch): Promise<UserProfile> {
     return normalizeUserProfile(
       await request(() =>
         openApiClient.PATCH("/api/v1/users/me/settings", {
@@ -135,6 +136,17 @@ export const settingsApi = {
         })
       )
     );
+  },
+  async riskState(): Promise<RiskStateResponse> {
+    const state = normalizeRiskState(
+      await request(() =>
+        openApiClient.GET("/api/v1/risk/state", {
+          params: { query: { user_id: "demo_user" } }
+        })
+      )
+    );
+    if (!state) throw new Error("API returned an empty risk state");
+    return state;
   },
   async subscriptionStatus(): Promise<SubscriptionStatus> {
     return billingApi.subscription();

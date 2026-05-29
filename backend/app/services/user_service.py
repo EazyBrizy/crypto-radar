@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,6 +11,11 @@ from app.core.database import SessionLocal
 from app.models.user import AppUser, UserProfile
 from app.schemas.user import UserProfileResponse, UserSettingsPatchRequest
 from app.services.bootstrap_service import DEMO_USERNAME
+from app.services.risk_management import (
+    apply_risk_management_patch,
+    normalize_risk_management_settings,
+)
+from app.services.trade_repository import sync_virtual_starting_balance
 
 
 class UserService:
@@ -30,6 +36,10 @@ class UserService:
             user = _resolve_user(session, user_id)
             profile = _ensure_profile(session, user)
             settings = dict(profile.settings or {})
+            previous_risk_management = normalize_risk_management_settings(
+                settings.get("risk_management"),
+                user.risk_profile,
+            )
             if patch.virtual_simulation_level is not None:
                 virtual_trading = dict(settings.get("virtual_trading") or {})
                 virtual_trading["simulation_level"] = patch.virtual_simulation_level
@@ -42,6 +52,21 @@ class UserService:
                     else "mvp"
                 )
                 settings["virtual_trading"] = virtual_trading
+            risk_management = apply_risk_management_patch(
+                current_settings=settings.get("risk_management"),
+                current_user_profile=user.risk_profile,
+                patch=patch.risk_management,
+                risk_profile=patch.risk_profile,
+            )
+            if risk_management is not None:
+                user.risk_profile = risk_management["risk_profile"]
+                _sync_virtual_balance_if_changed(
+                    session=session,
+                    user=user,
+                    previous_settings=previous_risk_management,
+                    next_settings=risk_management,
+                )
+                settings["risk_management"] = risk_management
             profile.settings = settings
             profile.updated_at = datetime.now(timezone.utc)
             session.commit()
@@ -98,13 +123,13 @@ def _profile_response(user: AppUser) -> UserProfileResponse:
         timezone=user.timezone,
         risk_profile=user.risk_profile,
         onboarding_done=profile.onboarding_done if profile else False,
-        settings=_settings_with_defaults(profile.settings if profile else {}),
+        settings=_settings_with_defaults(profile.settings if profile else {}, user.risk_profile),
         created_at=user.created_at,
         updated_at=profile.updated_at if profile else user.updated_at,
     )
 
 
-def _settings_with_defaults(settings: dict) -> dict:
+def _settings_with_defaults(settings: dict, risk_profile: str | None = None) -> dict:
     merged = dict(settings or {})
     virtual_trading = dict(merged.get("virtual_trading") or {})
     level = virtual_trading.get("simulation_level") or "mvp"
@@ -114,11 +139,28 @@ def _settings_with_defaults(settings: dict) -> dict:
     virtual_trading["simulation_level_status"] = "active" if level == "mvp" else "stub"
     virtual_trading["effective_simulation_level"] = level if level == "mvp" else "mvp"
     merged["virtual_trading"] = virtual_trading
+    merged["risk_management"] = normalize_risk_management_settings(
+        merged.get("risk_management"),
+        risk_profile,
+    )
     return merged
 
 
+def _sync_virtual_balance_if_changed(
+    *,
+    session: Session,
+    user: AppUser,
+    previous_settings: dict,
+    next_settings: dict,
+) -> None:
+    previous_balance = Decimal(str(previous_settings.get("virtual_starting_balance", 0)))
+    next_balance = Decimal(str(next_settings.get("virtual_starting_balance", 0)))
+    if next_balance > 0 and next_balance != previous_balance:
+        sync_virtual_starting_balance(session, user, next_balance)
+
+
 def _default_settings() -> dict:
-    return _settings_with_defaults({})
+    return _settings_with_defaults({}, "balanced")
 
 
 def _parse_uuid(value: str) -> UUID | None:

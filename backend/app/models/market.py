@@ -48,6 +48,7 @@ class MarketExchange(Base):
     user_connections: Mapped[list["UserExchangeConnection"]] = relationship(back_populates="exchange")
     trading_signals: Mapped[list["TradingSignal"]] = relationship(back_populates="exchange")
     orders: Mapped[list["Order"]] = relationship(back_populates="exchange")
+    instrument_rules: Mapped[list["ExchangeInstrumentRule"]] = relationship(back_populates="exchange")
 
 
 class MarketAsset(Base):
@@ -92,6 +93,7 @@ class MarketAsset(Base):
     portfolio_balance_ledger_entries: Mapped[list["PortfolioBalanceLedger"]] = relationship(back_populates="asset")
     fee_order_fills: Mapped[list["OrderFill"]] = relationship(back_populates="fee_asset")
     external_fee_trades: Mapped[list["ExternalExchangeTrade"]] = relationship(back_populates="fee_asset")
+    risk_groups: Mapped[list["AssetRiskGroup"]] = relationship(back_populates="asset")
 
 
 class MarketPair(Base):
@@ -154,3 +156,4 @@ class MarketPair(Base):
     positions: Mapped[list["Position"]] = relationship(back_populates="pair")
     external_orders: Mapped[list["ExternalExchangeOrder"]] = relationship(back_populates="pair")
     external_trades: Mapped[list["ExternalExchangeTrade"]] = relationship(back_populates="pair")
+    instrument_rules: Mapped[list["ExchangeInstrumentRule"]] = relationship(back_populates="pair")

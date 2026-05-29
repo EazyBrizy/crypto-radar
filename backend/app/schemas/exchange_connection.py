@@ -49,3 +49,37 @@ class ExchangeConnectionActionResponse(BaseModel):
     status: str = "stubbed"
     message: str
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExchangeFeeRateResponse(BaseModel):
+    connection_id: UUID
+    exchange_code: str
+    account_type: str | None = None
+    category: str
+    symbol: str | None
+    maker_fee_rate: float = Field(..., ge=0)
+    taker_fee_rate: float = Field(..., ge=0)
+    source: str
+    fetched_at: datetime
+
+
+class ExchangeInstrumentRuleResponse(BaseModel):
+    id: UUID
+    exchange_id: UUID
+    exchange_code: str
+    pair_id: UUID | None
+    symbol: str
+    category: str
+    min_order_size: float | None = Field(default=None, ge=0)
+    max_order_size: float | None = Field(default=None, ge=0)
+    min_notional: float | None = Field(default=None, ge=0)
+    qty_step: float | None = Field(default=None, gt=0)
+    tick_size: float | None = Field(default=None, gt=0)
+    max_leverage: int | None = Field(default=None, ge=1)
+    funding_interval_minutes: int | None = Field(default=None, ge=0)
+    source: str
+    fetched_at: datetime
+    updated_at: datetime
+    age_seconds: float | None = Field(default=None, ge=0)
+    ttl_seconds: int | None = Field(default=None, ge=0)
+    is_stale: bool = False

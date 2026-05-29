@@ -22,6 +22,9 @@ const LazyActiveTradeChart = dynamic(
 interface TradesPageProps {
   activeTab: "active" | "journal" | "analytics";
   onTabChange: (tab: "active" | "journal" | "analytics") => void;
+  actionError?: string | null;
+  closingTradeId?: string | null;
+  onCloseMarket?: (trade: TradeJournalEntry) => void;
   onSelectTrade?: (trade: TradeJournalEntry) => void;
   account?: VirtualAccount | null;
   selectedTrade?: TradeJournalEntry | null;
@@ -31,7 +34,10 @@ interface TradesPageProps {
 
 export function TradesPage({
   activeTab,
+  actionError = null,
   account,
+  closingTradeId = null,
+  onCloseMarket,
   onSelectTrade,
   onTabChange,
   selectedTrade = null,
@@ -85,13 +91,17 @@ export function TradesPage({
         />
       </div>
 
+      {actionError ? <p className="form-error">{actionError}</p> : null}
+
       {activeTab === "active" && activeTrade ? <LazyActiveTradeChart trade={activeTrade} /> : null}
 
       {activeTab === "analytics" ? (
         <LazyTradesAnalyticsPanel trades={trades} />
       ) : (
         <LazyTradeJournalTable
+          closingTradeId={activeTab === "active" ? closingTradeId : null}
           emptyLabel={activeTab === "active" ? "No active trades" : "Journal is empty"}
+          onCloseMarket={activeTab === "active" ? onCloseMarket : undefined}
           onSelectTrade={activeTab === "active" ? onSelectTrade : undefined}
           selectedTradeId={activeTab === "active" ? activeTrade?.id ?? selectedTradeId : null}
           trades={trades}

@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 import unittest
 
 from app.api.v1.users import router
-from app.schemas.user import UserProfileResponse, UserSettingsPatchRequest
+from app.schemas.user import RiskManagementPatch, UserProfileResponse, UserSettingsPatchRequest
+from app.services import user_service as user_service_module
 
 
 class UserProfileContractTest(unittest.TestCase):
@@ -39,6 +41,62 @@ class UserProfileContractTest(unittest.TestCase):
         request = UserSettingsPatchRequest(virtual_simulation_level="advanced")
 
         self.assertEqual(request.virtual_simulation_level, "advanced")
+
+    def test_user_settings_patch_accepts_risk_management(self) -> None:
+        request = UserSettingsPatchRequest(
+            risk_profile="custom",
+            risk_management=RiskManagementPatch(
+                risk_per_trade_percent=0.75,
+                min_rr_ratio=2.5,
+                max_daily_loss_percent=2.0,
+                max_account_drawdown_percent=8.0,
+                max_open_risk_percent=4.0,
+                stop_loss_mode="atr",
+                atr_period=14,
+                atr_multiplier=2.0,
+                tp1_r_multiple=1.0,
+                tp2_r_multiple=2.0,
+                tp3_r_multiple=3.0,
+                partial_take_profit_enabled=True,
+                tp1_close_percent=30.0,
+                tp2_close_percent=40.0,
+                tp3_close_percent=30.0,
+                move_sl_to_breakeven_after_r=1.0,
+                breakeven_offset_percent=0.05,
+                trailing_stop_enabled=True,
+                trailing_mode="atr",
+                trailing_atr_multiplier=1.5,
+                trailing_stop_percent=0.5,
+                max_leverage=3,
+                min_liquidation_buffer_percent=2.0,
+            ),
+        )
+
+        self.assertEqual(request.risk_profile, "custom")
+        self.assertEqual(request.risk_management.risk_per_trade_percent, 0.75)
+        self.assertEqual(request.risk_management.stop_loss_mode, "atr")
+        self.assertEqual(request.risk_management.tp3_close_percent, 30.0)
+        self.assertEqual(request.risk_management.max_leverage, 3)
+
+    def test_virtual_balance_change_synchronizes_portfolio_balance(self) -> None:
+        calls: list[tuple[object, object, object]] = []
+        original = user_service_module.sync_virtual_starting_balance
+        user_service_module.sync_virtual_starting_balance = (
+            lambda session, user, target_balance: calls.append((session, user, target_balance))
+        )
+        session = object()
+        user = object()
+        try:
+            user_service_module._sync_virtual_balance_if_changed(
+                session=session,
+                user=user,
+                previous_settings={"virtual_starting_balance": 100},
+                next_settings={"virtual_starting_balance": 10_000},
+            )
+        finally:
+            user_service_module.sync_virtual_starting_balance = original
+
+        self.assertEqual(calls, [(session, user, Decimal("10000"))])
 
 
 if __name__ == "__main__":

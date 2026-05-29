@@ -80,6 +80,7 @@ export const RadarSignalSchema = z.object({
   score_breakdown: SignalScoreBreakdownSchema.optional(),
   created_at: z.string(),
   updated_at: z.string(),
+  expires_at: z.string().nullable().optional(),
   confirmed_trade_id: z.string().nullable().optional()
 });
 

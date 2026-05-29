@@ -1,7 +1,7 @@
 import unittest
 from uuid import UUID
 
-from app.schemas.exchange_connection import ExchangeConnectionResponse
+from app.schemas.exchange_connection import ExchangeConnectionResponse, ExchangeFeeRateResponse
 from app.services.exchange_connection_service import StubSecretRefProvider
 
 
@@ -24,6 +24,14 @@ class ExchangeConnectionServiceContractTest(unittest.TestCase):
         self.assertNotIn("public_api_key_value", key_ref)
         self.assertNotIn("super_secret_value", key_ref)
         self.assertNotIn("passphrase_value", key_ref)
+        self.assertEqual(
+            provider.load_exchange_credentials(key_ref),
+            {
+                "api_key": "public_api_key_value",
+                "api_secret": "super_secret_value",
+                "api_passphrase": "passphrase_value",
+            },
+        )
 
     def test_response_exposes_key_ref_not_raw_secret_fields(self) -> None:
         fields = set(ExchangeConnectionResponse.model_fields)
@@ -32,6 +40,14 @@ class ExchangeConnectionServiceContractTest(unittest.TestCase):
         self.assertNotIn("api_key", fields)
         self.assertNotIn("api_secret", fields)
         self.assertNotIn("api_passphrase", fields)
+
+    def test_fee_rate_response_exposes_maker_and_taker_rates(self) -> None:
+        fields = set(ExchangeFeeRateResponse.model_fields)
+
+        self.assertIn("maker_fee_rate", fields)
+        self.assertIn("taker_fee_rate", fields)
+        self.assertIn("account_type", fields)
+        self.assertIn("source", fields)
 
 
 if __name__ == "__main__":

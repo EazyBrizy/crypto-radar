@@ -3,6 +3,13 @@ export type SubscriptionState = "active" | "trialing" | "past_due" | "canceled" 
 export type ExchangeConnectionState = "available" | "connected" | "disconnected" | "error";
 export type VirtualSimulationLevel = "mvp" | "advanced" | "pro";
 export type VirtualSimulationLevelStatus = "active" | "stub";
+export type RiskProfileName = "conservative" | "balanced" | "aggressive" | "custom";
+export type StopLossMode = "fixed_percent" | "atr" | "structure";
+export type TakeProfitMode = "risk_multiple";
+export type TrailingMode = "atr" | "percent" | "structure";
+export type VirtualRiskMode = "same_as_real" | "custom";
+export type VirtualSlippageModel = "none" | "fixed_percent" | "spread_based" | "orderbook_based" | "volatility_based";
+export type VirtualFeeModel = "manual" | "exchange_based";
 
 export interface VirtualTradingSettings {
   simulation_level: VirtualSimulationLevel;
@@ -10,12 +17,78 @@ export interface VirtualTradingSettings {
   effective_simulation_level: VirtualSimulationLevel;
 }
 
+export interface RiskManagementSettings {
+  risk_profile: RiskProfileName;
+  risk_per_trade_percent: number;
+  min_rr_ratio: number;
+  max_daily_loss_percent: number;
+  max_weekly_loss_percent: number;
+  max_account_drawdown_percent: number;
+  max_open_risk_percent: number;
+  max_correlated_risk_percent: number;
+  max_spread_bps: number;
+  max_slippage_bps: number;
+  max_price_deviation_bps: number;
+  max_orderbook_liquidity_ratio: number;
+  include_fees_in_risk: boolean;
+  include_slippage_in_risk: boolean;
+  stop_loss_required: boolean;
+  take_profit_required: boolean;
+  stop_loss_mode: StopLossMode;
+  default_stop_loss_percent: number;
+  atr_period: number;
+  atr_multiplier: number;
+  take_profit_mode: TakeProfitMode;
+  tp1_r_multiple: number;
+  tp2_r_multiple: number;
+  tp3_r_multiple: number;
+  partial_take_profit_enabled: boolean;
+  tp1_close_percent: number;
+  tp2_close_percent: number;
+  tp3_close_percent: number;
+  move_sl_to_breakeven_after_r: number;
+  breakeven_offset_percent: number;
+  trailing_stop_enabled: boolean;
+  trailing_mode: TrailingMode;
+  trailing_atr_multiplier: number;
+  trailing_stop_percent: number;
+  max_leverage: number;
+  min_liquidation_buffer_percent: number;
+  liquidation_buffer_required: boolean;
+  spot_risk_per_trade_percent: number;
+  spot_max_position_size_percent: number;
+  spot_stop_required: boolean;
+  futures_risk_per_trade_percent: number;
+  futures_max_leverage: number;
+  futures_max_open_risk_percent: number;
+  futures_liquidation_buffer_required: boolean;
+  virtual_risk_mode: VirtualRiskMode;
+  virtual_risk_per_trade_percent: number;
+  virtual_starting_balance: number;
+  virtual_slippage_model: VirtualSlippageModel;
+  virtual_fee_model: VirtualFeeModel;
+  virtual_trading_uses_realistic_execution: boolean;
+  strategy_risk_multipliers: Record<string, number>;
+  auto_reduce_risk_after_losses: boolean;
+  allow_risk_increase_after_profit: boolean;
+  increase_risk_after_profit_streak: boolean;
+  max_risk_boost: number;
+}
+
+export interface UserSettingsPatch {
+  virtual_simulation_level?: VirtualSimulationLevel;
+  risk_profile?: RiskProfileName;
+  risk_management?: Partial<RiskManagementSettings>;
+}
+
 export interface UserProfile {
   id: string;
   email: string;
   name: string | null;
+  risk_profile: RiskProfileName;
   settings: {
     virtual_trading: VirtualTradingSettings;
+    risk_management: RiskManagementSettings;
     [key: string]: unknown;
   };
   created_at: string;
@@ -158,6 +231,18 @@ export interface ExchangeConnection {
   last_sync_at: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
+}
+
+export interface ExchangeFeeRate {
+  connection_id: string;
+  exchange_code: string;
+  account_type: string | null;
+  category: string;
+  symbol: string | null;
+  maker_fee_rate: number;
+  taker_fee_rate: number;
+  source: string;
+  fetched_at: string;
 }
 
 export interface ExchangeConnectionDraft {

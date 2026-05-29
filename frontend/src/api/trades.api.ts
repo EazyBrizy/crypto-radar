@@ -1,7 +1,7 @@
 import type { TradeJournalFilters } from "@/features/server-state/query-keys";
-import type { TradeJournalResponse } from "@/types";
+import type { CloseMarketTradeResponse, TradeJournalEntry, TradeJournalResponse } from "@/types";
 import { openApiClient, request } from "./client";
-import { normalizeTradeResponse } from "./mappers";
+import { normalizeTrade, normalizeTradeResponse } from "./mappers";
 
 export const tradesApi = {
   async list(filters?: TradeJournalFilters): Promise<TradeJournalResponse> {
@@ -20,5 +20,46 @@ export const tradesApi = {
   },
   async closed(): Promise<TradeJournalResponse> {
     return tradesApi.list({ status: "closed" });
+  },
+  async closeMarket(trade: Pick<TradeJournalEntry, "id" | "mode">): Promise<CloseMarketTradeResponse> {
+    if (trade.mode === "virtual") {
+      const response = await request(() =>
+        openApiClient.POST("/api/v1/trades/virtual/{trade_id}/close", {
+          params: {
+            path: {
+              trade_id: trade.id
+            }
+          },
+          body: {
+            reason: "manual_close"
+          }
+        })
+      );
+      return {
+        mode: "virtual",
+        status: "closed",
+        message: "Virtual position closed at market with exit fees applied.",
+        trade: normalizeTrade(response)
+      };
+    }
+
+    const response = await request(() =>
+      openApiClient.POST("/api/v1/trades/{trade_id}/close-market", {
+        params: {
+          path: {
+            trade_id: trade.id
+          }
+        },
+        body: {
+          reason: "manual_close"
+        }
+      })
+    );
+    return {
+      mode: response.mode,
+      status: response.status,
+      message: response.message,
+      trade: response.trade ? normalizeTrade(response.trade) : null
+    };
   }
 };

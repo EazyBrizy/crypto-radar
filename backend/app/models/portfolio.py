@@ -177,6 +177,7 @@ class Order(Base):
         back_populates="order",
         cascade="all, delete-orphan",
     )
+    risk_decisions: Mapped[list["RiskDecisionRecord"]] = relationship(back_populates="order")
 
 
 class OrderFill(Base):
@@ -270,6 +271,12 @@ class Position(Base):
     portfolio: Mapped[Portfolio] = relationship(back_populates="positions")
     signal: Mapped["TradingSignal | None"] = relationship(back_populates="positions")
     pair: Mapped["MarketPair"] = relationship(back_populates="positions")
+    risk_decisions: Mapped[list["RiskDecisionRecord"]] = relationship(back_populates="position")
+    risk_snapshot: Mapped["PositionRiskSnapshot | None"] = relationship(
+        back_populates="position",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 Index(

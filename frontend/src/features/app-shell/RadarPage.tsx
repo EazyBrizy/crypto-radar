@@ -22,6 +22,7 @@ interface RadarPageProps {
   signals: RadarSignal[];
   actionError?: string | null;
   executionPreview?: VirtualExecutionReport | null;
+  executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
   tradingActionsDisabled?: boolean;
 }
@@ -113,6 +114,7 @@ export function RadarPage(props: RadarPageProps) {
         onReject={props.onReject}
         busy={props.busy}
         executionPreview={props.executionPreview ?? null}
+        executionPreviewError={props.executionPreviewError ?? null}
         executionPreviewLoading={props.executionPreviewLoading ?? false}
         tradingActionsDisabled={props.tradingActionsDisabled}
       />

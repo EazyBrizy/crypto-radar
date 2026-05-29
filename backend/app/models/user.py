@@ -60,6 +60,12 @@ class AppUser(Base):
     external_trades: Mapped[list["ExternalExchangeTrade"]] = relationship(back_populates="user")
     notifications: Mapped[list["Notification"]] = relationship(back_populates="user")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
+    risk_decisions: Mapped[list["RiskDecisionRecord"]] = relationship(back_populates="user")
+    risk_protection_state: Mapped["RiskProtectionState | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class UserProfile(Base):

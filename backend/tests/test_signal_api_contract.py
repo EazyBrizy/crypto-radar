@@ -18,13 +18,13 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         now = datetime.now(timezone.utc)
         self.signal_service.add_signal(
             RadarSignal(
-                id="sig_active",
+                id="sig_actionable",
                 symbol="BTC/USDT:PERP",
                 exchange="bybit",
                 strategy="test",
                 direction="long",
                 confidence=0.8,
-                status="active",
+                status="actionable",
                 score=80,
                 created_at=now,
                 updated_at=now,
@@ -48,7 +48,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         with patch("app.api.v1.signals.signal_service", self.signal_service):
             signals = await list_active_signals()
 
-        self.assertEqual([signal.id for signal in signals], ["sig_active"])
+        self.assertEqual([signal.id for signal in signals], ["sig_actionable"])
 
     async def test_active_signals_endpoint_expires_stale_signals(self) -> None:
         now = datetime.now(timezone.utc)
@@ -94,13 +94,13 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         now = datetime.now(timezone.utc)
         self.signal_service.add_signal(
             RadarSignal(
-                id="sig_new",
+                id="sig_watchlist",
                 symbol="BTC/USDT:PERP",
                 exchange="bybit",
                 strategy="test",
                 direction="long",
                 confidence=0.62,
-                status="new",
+                status="watchlist",
                 score=62,
                 created_at=now,
                 updated_at=now,
@@ -108,13 +108,13 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         )
         self.signal_service.add_signal(
             RadarSignal(
-                id="sig_active",
+                id="sig_wait_for_pullback",
                 symbol="ETH/USDT:PERP",
                 exchange="bybit",
                 strategy="test",
                 direction="short",
                 confidence=0.82,
-                status="active",
+                status="wait_for_pullback",
                 score=82,
                 created_at=now,
                 updated_at=now,
@@ -138,7 +138,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         with patch("app.api.v1.signals.signal_service", self.signal_service):
             signals = await list_open_signals()
 
-        self.assertEqual([signal.id for signal in signals], ["sig_new", "sig_active"])
+        self.assertEqual([signal.id for signal in signals], ["sig_watchlist", "sig_wait_for_pullback"])
 
 
 if __name__ == "__main__":

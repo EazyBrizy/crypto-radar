@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,80 @@ class SignalScoreBreakdown(BaseModel):
     overheat_penalty: int = Field(default=0, ge=0)
     news_event_risk_penalty: int = Field(default=0, ge=0)
     total: int = Field(default=0, ge=0, le=100)
+
+
+LayerCheckStatus = Literal["passed", "warning", "failed", "skipped"]
+
+
+class SignalLayerCheck(BaseModel):
+    name: str
+    status: LayerCheckStatus = "passed"
+    score: Optional[float] = None
+    reason: Optional[str] = None
+
+
+class MarketQualitySnapshot(BaseModel):
+    passed: bool = True
+    tier: Literal["major", "mid_alt", "low_liquidity", "unknown"] = "unknown"
+    score: int = Field(default=100, ge=0, le=100)
+    volume_24h_quote: Optional[float] = None
+    spread_bps: Optional[float] = None
+    history_ok: bool = True
+    rough_chart_score: Optional[float] = None
+    checks: List[SignalLayerCheck] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class MarketRegimeSnapshot(BaseModel):
+    signal_timeframe: str = "stream"
+    context_timeframe: Optional[str] = None
+    direction: Literal["bullish", "bearish", "range", "unknown"] = "unknown"
+    strength: Literal["weak", "normal", "strong", "unknown"] = "unknown"
+    alignment: Literal["aligned", "mixed", "against", "unknown"] = "unknown"
+    score_adjustment: int = 0
+    checks: List[SignalLayerCheck] = Field(default_factory=list)
+
+
+class StrategySetupSnapshot(BaseModel):
+    name: str
+    stage: Literal["forming", "ready", "confirmed"] = "ready"
+    checks: List[SignalLayerCheck] = Field(default_factory=list)
+
+
+class SignalConfirmationSnapshot(BaseModel):
+    passed: bool = False
+    checks: List[SignalLayerCheck] = Field(default_factory=list)
+
+
+class SignalInvalidationSnapshot(BaseModel):
+    price: Optional[float] = None
+    hard_stop: Optional[float] = None
+    conditions: List[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SignalExitPlanSnapshot(BaseModel):
+    targets: List[dict[str, Any]] = Field(default_factory=list)
+    breakeven: dict[str, Any] = Field(default_factory=dict)
+    trailing: dict[str, Any] = Field(default_factory=dict)
+
+
+SignalDirection = Literal["long", "short"]
+SignalUrgency = Literal["low", "medium", "high"]
+SignalStatus = Literal[
+    "new",
+    "active",
+    "watchlist",
+    "ready",
+    "actionable",
+    "wait_for_pullback",
+    "confirmed",
+    "rejected",
+    "expired",
+    "invalidated",
+    "closed",
+    "entry_touched",
+]
 
 
 class StrategySignal(BaseModel):
@@ -38,22 +112,14 @@ class StrategySignal(BaseModel):
     score_breakdown: SignalScoreBreakdown = Field(
         default_factory=lambda: SignalScoreBreakdown()
     )
-
-
-SignalDirection = Literal["long", "short"]
-SignalUrgency = Literal["low", "medium", "high"]
-SignalStatus = Literal[
-    "new",
-    "active",
-    "watchlist",
-    "confirmed",
-    "rejected",
-    "expired",
-    "invalidated",
-    "closed",
-    "entry_touched",
-]
-
+    status: SignalStatus = "active"
+    status_reason: Optional[str] = None
+    quality: Optional[MarketQualitySnapshot] = None
+    regime: Optional[MarketRegimeSnapshot] = None
+    setup: Optional[StrategySetupSnapshot] = None
+    confirmation: Optional[SignalConfirmationSnapshot] = None
+    invalidation: Optional[SignalInvalidationSnapshot] = None
+    exit_plan: Optional[SignalExitPlanSnapshot] = None
 
 class RadarSignal(BaseModel):
     id: str
@@ -77,6 +143,13 @@ class RadarSignal(BaseModel):
     explanation: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
     score_breakdown: SignalScoreBreakdown = Field(default_factory=SignalScoreBreakdown)
+    status_reason: Optional[str] = None
+    quality: Optional[MarketQualitySnapshot] = None
+    regime: Optional[MarketRegimeSnapshot] = None
+    setup: Optional[StrategySetupSnapshot] = None
+    confirmation: Optional[SignalConfirmationSnapshot] = None
+    invalidation: Optional[SignalInvalidationSnapshot] = None
+    exit_plan: Optional[SignalExitPlanSnapshot] = None
     created_at: datetime
     updated_at: datetime
     expires_at: Optional[datetime] = None

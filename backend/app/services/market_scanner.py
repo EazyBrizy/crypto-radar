@@ -16,6 +16,7 @@ from app.services.market_persistence import (
     MarketDataPersistenceService,
     market_data_persistence_service,
 )
+from app.services.market_quality import MarketQualityData, MarketQualityService, market_quality_service
 from app.services.message_broker import realtime_event_broker
 from app.services.realtime_events import (
     stop_loss_hit_event,
@@ -23,8 +24,10 @@ from app.services.realtime_events import (
     trade_closed_event,
     trade_updated_event,
 )
+from app.services.strategy_config_service import StrategyConfigService, strategy_config_service
 from app.services.virtual_trading import virtual_trading_service
 from app.strategies.engine import StrategyEngine
+from app.strategies.pipeline import MarketQualityInput, context_timeframe_for, context_timeframes_for
 
 logger = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL_SEC = 30.0
@@ -74,6 +77,8 @@ class MarketScanner:
         market_persistence: (
             MarketDataPersistenceService | None
         ) = market_data_persistence_service,
+        market_quality: MarketQualityService | None = market_quality_service,
+        strategy_configs: StrategyConfigService | None = strategy_config_service,
         virtual_trading: VirtualTradingPriceUpdater | None = virtual_trading_service,
     ) -> None:
         self._symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
@@ -81,6 +86,8 @@ class MarketScanner:
         self._adapters = self._build_adapters()
         self._candle_store = candle_store
         self._market_persistence = market_persistence
+        self._market_quality = market_quality
+        self._strategy_configs = strategy_configs
         self._virtual_trading = virtual_trading
         self._feature_engine = FeatureEngine()
         self._strategy_engine = StrategyEngine()
@@ -138,10 +145,31 @@ class MarketScanner:
             )
             if features is None:
                 continue
+            context_features_by_timeframe = await self._context_features_for(candle)
+            primary_context_timeframe = context_timeframe_for(candle.timeframe)
+            context_features = (
+                context_features_by_timeframe.get(primary_context_timeframe)
+                if primary_context_timeframe is not None
+                else None
+            )
+            quality = await self._market_quality_for(features)
+            strategy_configs = self._strategy_configs_for(features)
             await self._persist_market_features(features)
             self._stats.features_built += 1
-            self._stats.strategy_evaluations += self._strategy_engine.strategy_count
-            signals.extend(await self._strategy_engine.generate_signals(features))
+            self._stats.strategy_evaluations += (
+                len(strategy_configs)
+                if strategy_configs is not None
+                else self._strategy_engine.strategy_count
+            )
+            signals.extend(
+                await self._strategy_engine.generate_signals(
+                    features,
+                    context_features=context_features,
+                    context_features_by_timeframe=context_features_by_timeframe,
+                    market_quality=quality,
+                    strategy_configs=strategy_configs,
+                )
+            )
             evaluated_candles += 1
             if evaluated_candles % COOPERATIVE_YIELD_EVERY == 0:
                 await asyncio.sleep(0)
@@ -197,6 +225,52 @@ class MarketScanner:
                 features.timeframe,
                 exc,
             )
+
+    async def _context_features_for(self, candle: OHLCVCandle) -> dict[str, Features]:
+        result: dict[str, Features] = {}
+        for context_timeframe in context_timeframes_for(candle.timeframe):
+            candle_series = self._candle_store.list_candles(
+                exchange=candle.exchange,
+                symbol=candle.symbol,
+                timeframe=context_timeframe,
+                include_open=True,
+                limit=250,
+            )
+            if len(candle_series) < 2:
+                continue
+            features = await asyncio.to_thread(self._feature_engine.process_candles, candle_series)
+            if features is not None:
+                result[context_timeframe] = features
+        return result
+
+    async def _market_quality_for(self, features: Features) -> MarketQualityInput | None:
+        if self._market_quality is None:
+            return None
+        snapshot = await asyncio.to_thread(
+            self._market_quality.snapshot,
+            exchange=features.exchange,
+            symbol=features.symbol,
+        )
+        return _quality_input(snapshot)
+
+    def _strategy_configs_for(self, features: Features):
+        if self._strategy_configs is None:
+            return None
+        try:
+            return self._strategy_configs.configs_for(
+                exchange=features.exchange,
+                symbol=features.symbol,
+                timeframe=features.timeframe,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Strategy config lookup failed for %s:%s:%s: %s",
+                features.exchange,
+                features.symbol,
+                features.timeframe,
+                exc,
+            )
+            return None
 
     async def _publish_trade_updates(self, trades: list[VirtualTrade]) -> None:
         now = time.monotonic()
@@ -373,3 +447,12 @@ class MarketScanner:
                     )
         self._stats.candles_seeded = seeded_total
         logger.info("OHLCV warmup completed: seeded_candles=%s", seeded_total)
+
+
+def _quality_input(snapshot: MarketQualityData) -> MarketQualityInput:
+    return MarketQualityInput(
+        volume_24h_quote=snapshot.volume_24h_quote,
+        spread_bps=snapshot.spread_bps,
+        source=snapshot.source,
+        warnings=snapshot.warnings,
+    )

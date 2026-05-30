@@ -2,14 +2,10 @@ from typing import List, Literal, Optional
 
 from app.schemas.market import Features
 from app.schemas.signal import SignalScoreBreakdown, StrategySignal
-from app.strategies.common import (
-    WATCHLIST_SCORE,
-    build_signal,
-    has_minimum_market_data,
-    score_breakdown,
-)
+from app.strategies.common import build_signal, has_minimum_market_data, score_breakdown
 
 STRATEGY_NAME = "volatility_squeeze_breakout"
+MIN_VISIBLE_SETUP_SCORE = 45
 
 
 class VolatilitySqueezeBreakoutStrategy:
@@ -28,11 +24,12 @@ class VolatilitySqueezeBreakoutStrategy:
         if not has_minimum_market_data(features, min_history=60):
             return []
 
-        direction = self._direction(features)
-        if direction is None:
+        setup = self._setup_state(features)
+        if setup is None:
             return []
+        direction, stage_status, status_reason = setup
 
-        scoring, reasons, risks = self._score(features, direction)
+        scoring, reasons, risks = self._score(features, direction, stage_status)
 
         entry = features.close
         atr = features.atr_14 or 0
@@ -53,27 +50,72 @@ class VolatilitySqueezeBreakoutStrategy:
             entry=entry,
             stop_loss=stop_loss,
         )
-        if signal.score < WATCHLIST_SCORE:
+        if signal.score < MIN_VISIBLE_SETUP_SCORE:
             return []
-        return [signal]
+        return [signal.model_copy(update={"status": stage_status, "status_reason": status_reason})]
 
     def _direction(self, features: Features) -> Optional[Literal["LONG", "SHORT"]]:
+        setup = self._setup_state(features)
+        return setup[0] if setup is not None else None
+
+    def _setup_state(
+        self,
+        features: Features,
+    ) -> Optional[tuple[Literal["LONG", "SHORT"], str, str]]:
+        upper = features.donchian_high_20
+        lower = features.donchian_low_20
+        atr = features.atr_14 or max(abs(features.close) * 0.002, 1e-8)
         if (
-            features.donchian_high_20 is not None
-            and features.close > features.donchian_high_20
+            upper is not None
+            and features.close > upper
         ):
-            return "LONG"
+            if features.volume_spike > 1.5 and features.atr_increasing:
+                return (
+                    "LONG",
+                    "actionable",
+                    "Breakout closed above range with volume and ATR expansion",
+                )
+            return (
+                "LONG",
+                "ready",
+                "Breakout exists, but volume or ATR expansion is not confirmed yet",
+            )
         if (
-            features.donchian_low_20 is not None
-            and features.close < features.donchian_low_20
+            lower is not None
+            and features.close < lower
         ):
-            return "SHORT"
+            if features.volume_spike > 1.5 and features.atr_increasing:
+                return (
+                    "SHORT",
+                    "actionable",
+                    "Breakdown closed below range with volume and ATR expansion",
+                )
+            return (
+                "SHORT",
+                "ready",
+                "Breakdown exists, but volume or ATR expansion is not confirmed yet",
+            )
+        if features.bb_width_percentile is None or features.bb_width_percentile >= 20:
+            return None
+        if upper is not None and 0 <= upper - features.close <= atr * 0.6:
+            return (
+                "LONG",
+                "watchlist",
+                "Volatility is compressed and price is near the upper range boundary; waiting for breakout volume",
+            )
+        if lower is not None and 0 <= features.close - lower <= atr * 0.6:
+            return (
+                "SHORT",
+                "watchlist",
+                "Volatility is compressed and price is near the lower range boundary; waiting for breakdown volume",
+            )
         return None
 
     def _score(
         self,
         features: Features,
         direction: Literal["LONG", "SHORT"],
+        stage_status: str,
     ) -> tuple[SignalScoreBreakdown, list[str], list[str]]:
         trend_score = 0
         volume_score = 0
@@ -89,10 +131,13 @@ class VolatilitySqueezeBreakoutStrategy:
             volatility_score += 15
             reasons.append("Волатильность сжата: BB width percentile ниже 20")
 
-        if direction == "LONG" and features.donchian_high_20 is not None:
+        if stage_status == "watchlist":
+            trend_score += 20
+            reasons.append("Price is near the Donchian boundary, but breakout has not confirmed yet")
+        elif direction == "LONG" and features.donchian_high_20 is not None:
             trend_score += 25
             reasons.append("Цена закрылась выше Donchian high 20")
-        if direction == "SHORT" and features.donchian_low_20 is not None:
+        elif direction == "SHORT" and features.donchian_low_20 is not None:
             trend_score += 25
             reasons.append("Цена закрылась ниже Donchian low 20")
 

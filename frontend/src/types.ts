@@ -3,6 +3,9 @@ export type SignalStatus =
   | "new"
   | "active"
   | "watchlist"
+  | "ready"
+  | "actionable"
+  | "wait_for_pullback"
   | "confirmed"
   | "rejected"
   | "expired"
@@ -11,7 +14,10 @@ export type SignalStatus =
   | "entry_touched";
 export type TradeMode = "virtual" | "real";
 export type TradeStatus = "open" | "closed" | "cancelled";
+export type TradeCloseReason = "take_profit" | "stop_loss" | "manual_close" | "invalidation" | "cancelled";
 export type CloseMarketTradeStatus = "closed" | "not_implemented";
+export type TradeInvalidationStatus = "valid" | "invalidated" | "unavailable";
+export type TradeInvalidationAction = "none" | "close_market_or_wait_stop";
 export type VirtualSimulationMode = "passive" | "impact_aware";
 export type VirtualSimulationTier = "mvp" | "advanced" | "pro";
 export type VirtualExecutionStatus = "filled" | "partially_filled" | "rejected_virtual_execution";
@@ -60,6 +66,61 @@ export interface SignalScoreBreakdown {
   total: number;
 }
 
+export type LayerCheckStatus = "passed" | "warning" | "failed" | "skipped";
+
+export interface SignalLayerCheck {
+  name: string;
+  status: LayerCheckStatus;
+  score: number | null;
+  reason: string | null;
+}
+
+export interface MarketQualitySnapshot {
+  passed: boolean;
+  tier: "major" | "mid_alt" | "low_liquidity" | "unknown";
+  score: number;
+  volume_24h_quote: number | null;
+  spread_bps: number | null;
+  history_ok: boolean;
+  rough_chart_score: number | null;
+  checks: SignalLayerCheck[];
+  warnings: string[];
+}
+
+export interface MarketRegimeSnapshot {
+  signal_timeframe: string;
+  context_timeframe: string | null;
+  direction: "bullish" | "bearish" | "range" | "unknown";
+  strength: "weak" | "normal" | "strong" | "unknown";
+  alignment: "aligned" | "mixed" | "against" | "unknown";
+  score_adjustment: number;
+  checks: SignalLayerCheck[];
+}
+
+export interface StrategySetupSnapshot {
+  name: string;
+  stage: "forming" | "ready" | "confirmed";
+  checks: SignalLayerCheck[];
+}
+
+export interface SignalConfirmationSnapshot {
+  passed: boolean;
+  checks: SignalLayerCheck[];
+}
+
+export interface SignalInvalidationSnapshot {
+  price: number | null;
+  hard_stop: number | null;
+  conditions: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface SignalExitPlanSnapshot {
+  targets: Array<Record<string, unknown>>;
+  breakeven: Record<string, unknown>;
+  trailing: Record<string, unknown>;
+}
+
 export interface RadarSignal {
   id: string;
   symbol: string;
@@ -80,6 +141,13 @@ export interface RadarSignal {
   explanation: string[];
   risks: string[];
   score_breakdown: SignalScoreBreakdown;
+  status_reason: string | null;
+  quality: MarketQualitySnapshot | null;
+  regime: MarketRegimeSnapshot | null;
+  setup: StrategySetupSnapshot | null;
+  confirmation: SignalConfirmationSnapshot | null;
+  invalidation: SignalInvalidationSnapshot | null;
+  exit_plan: SignalExitPlanSnapshot | null;
   created_at: string;
   updated_at: string;
   expires_at: string | null;
@@ -441,7 +509,7 @@ export interface TradeJournalEntry {
   execution: VirtualExecutionReport | null;
   status: TradeStatus;
   result: "win" | "loss" | "breakeven" | null;
-  close_reason: "take_profit" | "stop_loss" | "manual_close" | "cancelled" | null;
+  close_reason: TradeCloseReason | null;
   pnl: number | null;
   pnl_percent: number | null;
   mfe: number;
@@ -451,6 +519,27 @@ export interface TradeJournalEntry {
   opened_at: string;
   updated_at: string;
   closed_at: string | null;
+}
+
+export interface TradeInvalidationAlert {
+  trade_id: string;
+  signal_id: string | null;
+  exchange: string;
+  symbol: string;
+  strategy: string;
+  timeframe: string;
+  side: SignalDirection;
+  status: TradeInvalidationStatus;
+  invalidated: boolean;
+  reason: string | null;
+  triggered_conditions: string[];
+  watched_conditions: string[];
+  suggested_action: TradeInvalidationAction;
+  current_price: number;
+  stop_loss: number;
+  invalidation_price: number | null;
+  detected_at: string;
+  metadata: Record<string, unknown>;
 }
 
 export interface VirtualAccount {

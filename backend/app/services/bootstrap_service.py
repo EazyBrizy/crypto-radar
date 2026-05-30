@@ -299,19 +299,30 @@ SEED_STRATEGIES: list[dict[str, Any]] = [
     },
 ]
 
+DEFAULT_STRATEGY_QUALITY_PARAMS: dict[str, Any] = {
+    "min_24h_volume_quote": 10_000_000.0,
+    "max_spread_bps": 25.0,
+    "allow_low_liquidity": False,
+    "quality_tiers": {
+        "major": {"min_24h_volume_quote": 25_000_000.0, "max_spread_bps": 15.0},
+        "mid_alt": {"min_24h_volume_quote": 10_000_000.0, "max_spread_bps": 25.0},
+        "low_liquidity": {"min_24h_volume_quote": 5_000_000.0, "max_spread_bps": 35.0},
+    },
+}
+
 SEED_STRATEGY_VERSIONS: list[dict[str, Any]] = [
     {
         "strategy_code": "trend_pullback_continuation",
         "version": "1.0",
         "status": "active",
-        "default_params": {"min_history": 200, "watchlist_score": 50, "active_score": 70},
+        "default_params": {"min_history": 200, "watchlist_score": 50, "active_score": 70, **DEFAULT_STRATEGY_QUALITY_PARAMS},
         "required_data": ["ema_20", "ema_50", "ema_200", "rsi_14", "atr_14", "volume_spike"],
     },
     {
         "strategy_code": "volatility_squeeze_breakout",
         "version": "1.0",
         "status": "active",
-        "default_params": {"min_history": 60, "watchlist_score": 50, "active_score": 70},
+        "default_params": {"min_history": 60, "watchlist_score": 50, "active_score": 70, **DEFAULT_STRATEGY_QUALITY_PARAMS},
         "required_data": [
             "bb_width_percentile",
             "donchian_high_20",
@@ -325,7 +336,7 @@ SEED_STRATEGY_VERSIONS: list[dict[str, Any]] = [
         "strategy_code": "liquidity_sweep_reversal",
         "version": "1.0",
         "status": "active",
-        "default_params": {"min_history": 30, "watchlist_score": 50, "active_score": 70},
+        "default_params": {"min_history": 30, "watchlist_score": 50, "active_score": 70, **DEFAULT_STRATEGY_QUALITY_PARAMS},
         "required_data": [
             "swing_high",
             "swing_low",
@@ -552,6 +563,10 @@ def _seed_strategy_versions(
                 "min_history": {"type": "integer", "minimum": 1},
                 "watchlist_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 "active_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "min_24h_volume_quote": {"type": "number", "minimum": 0},
+                "max_spread_bps": {"type": "number", "minimum": 0},
+                "allow_low_liquidity": {"type": "boolean"},
+                "quality_tiers": {"type": "object"},
             },
             "additionalProperties": True,
             "required_data": spec["required_data"],

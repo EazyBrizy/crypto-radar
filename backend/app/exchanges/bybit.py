@@ -83,6 +83,8 @@ class BybitTicker:
     ask1_price: float | None
     mark_price: float | None
     funding_rate: float | None
+    volume_24h: float | None
+    turnover_24h: float | None
     raw_payload: dict
 
 
@@ -250,6 +252,8 @@ def fetch_bybit_tickers(
                 ask1_price=_float_or_none(row.get("ask1Price")),
                 mark_price=_float_or_none(row.get("markPrice")),
                 funding_rate=_float_or_none(row.get("fundingRate")),
+                volume_24h=_float_or_none(row.get("volume24h")),
+                turnover_24h=_float_or_none(row.get("turnover24h")),
                 raw_payload=row,
             )
         )

@@ -25,6 +25,9 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
           <div className="pair-row">
             <strong>{signal.symbol}</strong>
             <Badge>{signal.exchange}</Badge>
+            <Badge tone={statusBadgeTone(signal.status)}>
+              {signal.status.replaceAll("_", " ")}
+            </Badge>
           </div>
           <span className="muted">{signal.strategy.replaceAll("_", " ")}</span>
         </div>
@@ -67,6 +70,14 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
 });
 
 SignalCard.displayName = "SignalCard";
+
+function statusBadgeTone(status: RadarSignal["status"]): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (status === "actionable" || status === "active" || status === "entry_touched") return "green";
+  if (status === "watchlist") return "yellow";
+  if (status === "ready" || status === "wait_for_pullback") return "blue";
+  if (status === "invalidated" || status === "expired" || status === "rejected") return "red";
+  return "neutral";
+}
 
 export const SignalCardById = memo(function SignalCardById({
   signalId,

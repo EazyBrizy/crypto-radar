@@ -33,12 +33,16 @@ class RadarConfigService:
         return self._config
 
     def selected_exchanges(self) -> list[str]:
-        return self._normalize_exchanges(self._config.exchanges)
+        strategy_exchanges = [exchange for exchange, _ in self._strategy_scope_pairs()]
+        return self._normalize_exchanges([*self._config.exchanges, *strategy_exchanges])
 
     def selected_symbols(self) -> list[str]:
         if self._config.use_all_symbols:
-            return self._all_supported_symbols()
-        return self._normalize_symbols(self._config.symbols)
+            symbols = self._all_supported_symbols()
+        else:
+            symbols = self._normalize_symbols(self._config.symbols)
+        strategy_symbols = [symbol for _, symbol in self._strategy_scope_pairs()]
+        return self._normalize_symbols([*symbols, *strategy_symbols])
 
     @staticmethod
     def _normalize_exchanges(exchanges: list[str]) -> list[str]:
@@ -62,6 +66,18 @@ class RadarConfigService:
             except Exception:
                 symbols.extend(DEFAULT_SYMBOLS)
         return list(dict.fromkeys(symbols)) or list(DEFAULT_SYMBOLS)
+
+    @staticmethod
+    def _strategy_scope_pairs() -> list[tuple[str, str]]:
+        try:
+            from app.services.strategy_config_service import strategy_config_service
+
+            pairs: list[tuple[str, str]] = []
+            for config in strategy_config_service.runtime_configs():
+                pairs.extend(config.pairs)
+            return list(dict.fromkeys(pairs))
+        except Exception:
+            return []
 
 
 radar_config_service = RadarConfigService()

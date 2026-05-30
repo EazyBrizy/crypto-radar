@@ -1,4 +1,4 @@
-import { Bell, BookOpen, Gauge, KeyRound, Radio, RefreshCw, Send, Shield, Trash2 } from "lucide-react";
+import { Bell, BookOpen, Gauge, KeyRound, Radio, RefreshCw, Send, Shield, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/Badge";
@@ -11,6 +11,8 @@ import type {
   RiskManagementSettings,
   RiskProfileName,
   StopLossMode,
+  StrategyConfig,
+  StrategyConfigPatch,
   TrailingMode,
   VirtualFeeModel,
   VirtualRiskMode,
@@ -24,6 +26,7 @@ import type { RadarConfig, RiskProtectionMode, RiskStateResponse } from "@/types
 interface SettingsPageProps {
   config: RadarConfig | null;
   availablePairs: MarketPairOption[];
+  strategyConfigs: StrategyConfig[];
   alertRules: AlertRule[];
   exchangeConnections: ExchangeConnection[];
   userProfile: UserProfile | null;
@@ -39,6 +42,7 @@ interface SettingsPageProps {
   onTestExchangeConnection: (connectionId: string) => Promise<unknown>;
   onSyncExchangeConnection: (connectionId: string) => Promise<unknown>;
   onSelectSimulationLevel: (simulationLevel: VirtualSimulationLevel) => Promise<unknown>;
+  onUpdateStrategyConfig: (configId: string, patch: StrategyConfigPatch) => Promise<unknown>;
   onUpdateRiskManagement: (patch: UserSettingsPatch) => Promise<unknown>;
 }
 
@@ -532,6 +536,7 @@ const RISK_GUIDE_SECTIONS: RiskGuideSection[] = [
 export function SettingsPage({
   config,
   availablePairs,
+  strategyConfigs,
   alertRules,
   exchangeConnections,
   userProfile,
@@ -547,6 +552,7 @@ export function SettingsPage({
   onTestExchangeConnection,
   onSyncExchangeConnection,
   onSelectSimulationLevel,
+  onUpdateStrategyConfig,
   onUpdateRiskManagement
 }: SettingsPageProps) {
   const [pairId, setPairId] = useState("");
@@ -674,6 +680,37 @@ export function SettingsPage({
     setApiKey("");
     setApiSecret("");
     setApiPassphrase("");
+  }
+
+  async function handleToggleStrategyPair(configItem: StrategyConfig, pair: MarketPairOption, checked: boolean) {
+    const pairScope = { exchange: pair.exchange, symbol: pair.symbol };
+    const nextPairs = checked
+      ? [...configItem.pairs, pairScope]
+      : configItem.pairs.filter((item) => !(item.exchange === pair.exchange && item.symbol === pair.symbol));
+    await onUpdateStrategyConfig(configItem.id, { pairs: dedupeStrategyPairs(nextPairs) });
+  }
+
+  async function handleUseAllPairs(configItem: StrategyConfig) {
+    await onUpdateStrategyConfig(configItem.id, { pairs: [] });
+  }
+
+  async function handleStrategyParamBlur(configItem: StrategyConfig, key: string, rawValue: string) {
+    const value = Number(rawValue);
+    if (!Number.isFinite(value) || value < 0) return;
+    if (Number(configItem.params[key] ?? 0) === value) return;
+    await onUpdateStrategyConfig(configItem.id, { params: { [key]: value } });
+  }
+
+  async function handleStrategyRiskNumberBlur(configItem: StrategyConfig, key: string, rawValue: string) {
+    const value = Number(rawValue);
+    if (!Number.isFinite(value) || value < 0) return;
+    if (Number(configItem.risk_settings[key] ?? 0) === value) return;
+    await onUpdateStrategyConfig(configItem.id, { risk_settings: { [key]: value } });
+  }
+
+  async function handleStrategyRiskValue(configItem: StrategyConfig, key: string, value: string | boolean) {
+    if (configItem.risk_settings[key] === value) return;
+    await onUpdateStrategyConfig(configItem.id, { risk_settings: { [key]: value } });
   }
 
   async function handleSelectRiskProfile(profile: RiskProfileName) {
@@ -832,6 +869,125 @@ export function SettingsPage({
                 <button className="icon-button compact" disabled={busy} onClick={() => onDeleteExchangeConnection(connection.id)} title="Delete" type="button">
                   <Trash2 size={15} />
                 </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="settings-section strategy-settings-section">
+          <div className="section-title"><SlidersHorizontal size={18} /><h3>Strategies</h3></div>
+          <div className="strategy-config-list">
+            {strategyConfigs.length === 0 ? <div className="empty-state compact-empty">No strategy configs</div> : null}
+            {strategyConfigs.map((strategyConfig) => (
+              <div className="strategy-config-row" key={strategyConfig.id}>
+                <div className="strategy-config-header">
+                  <div>
+                    <strong>{strategyConfig.strategy_name}</strong>
+                    <span>{strategyConfig.pairs.length ? `${strategyConfig.pairs.length} selected pairs` : "All pairs - quality filter on"}</span>
+                  </div>
+                  <label className="toggle-row compact-toggle">
+                    <input
+                      checked={strategyConfig.is_enabled}
+                      disabled={busy}
+                      onChange={(event) => onUpdateStrategyConfig(strategyConfig.id, { is_enabled: event.target.checked })}
+                      type="checkbox"
+                    />
+                    <span>{strategyConfig.is_enabled ? "On" : "Off"}</span>
+                  </label>
+                </div>
+
+                <div className="strategy-quality-grid">
+                  <label>
+                    <span>Min 24h volume</span>
+                    <input
+                      defaultValue={String(Number(strategyConfig.params.min_24h_volume_quote ?? 10_000_000))}
+                      disabled={busy}
+                      inputMode="decimal"
+                      key={`${strategyConfig.id}:min_24h_volume_quote:${String(strategyConfig.params.min_24h_volume_quote ?? "")}`}
+                      onBlur={(event) => handleStrategyParamBlur(strategyConfig, "min_24h_volume_quote", event.target.value)}
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>Max spread bps</span>
+                    <input
+                      defaultValue={String(Number(strategyConfig.params.max_spread_bps ?? 25))}
+                      disabled={busy}
+                      inputMode="decimal"
+                      key={`${strategyConfig.id}:max_spread_bps:${String(strategyConfig.params.max_spread_bps ?? "")}`}
+                      onBlur={(event) => handleStrategyParamBlur(strategyConfig, "max_spread_bps", event.target.value)}
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>Min history</span>
+                    <input
+                      defaultValue={String(Number(strategyConfig.params.min_history ?? 50))}
+                      disabled={busy}
+                      inputMode="numeric"
+                      key={`${strategyConfig.id}:min_history:${String(strategyConfig.params.min_history ?? "")}`}
+                      onBlur={(event) => handleStrategyParamBlur(strategyConfig, "min_history", event.target.value)}
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>Min RR</span>
+                    <input
+                      defaultValue={String(Number(strategyConfig.risk_settings.min_rr_ratio ?? riskManagement.min_rr_ratio ?? 2))}
+                      disabled={busy}
+                      inputMode="decimal"
+                      key={`${strategyConfig.id}:min_rr_ratio:${String(strategyConfig.risk_settings.min_rr_ratio ?? riskManagement.min_rr_ratio ?? "")}`}
+                      min="0"
+                      onBlur={(event) => handleStrategyRiskNumberBlur(strategyConfig, "min_rr_ratio", event.target.value)}
+                      step="0.1"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>RR target</span>
+                    <select
+                      disabled={busy}
+                      onChange={(event) => handleStrategyRiskValue(strategyConfig, "rr_target", event.target.value)}
+                      value={String(strategyConfig.risk_settings.rr_target ?? "final")}
+                    >
+                      <option value="final">Final target</option>
+                      <option value="nearest">Nearest target</option>
+                    </select>
+                  </label>
+                  <label className="strategy-risk-toggle">
+                    <span>Hide low-RR cards</span>
+                    <input
+                      checked={Boolean(strategyConfig.risk_settings.hide_failed_rr_signals)}
+                      disabled={busy}
+                      onChange={(event) => handleStrategyRiskValue(strategyConfig, "hide_failed_rr_signals", event.target.checked)}
+                      type="checkbox"
+                    />
+                  </label>
+                </div>
+
+                <div className="strategy-pair-toolbar">
+                  <button className="secondary-action compact-action" disabled={busy || strategyConfig.pairs.length === 0} onClick={() => handleUseAllPairs(strategyConfig)} type="button">
+                    All pairs
+                  </button>
+                  <span>{strategyConfig.pairs.length ? "Manual pair scope bypasses automatic quality exclusion." : "Automatic quality filter excludes bad instruments before strategy setup."}</span>
+                </div>
+
+                <div className="strategy-pair-grid">
+                  {availablePairs.map((pair) => {
+                    const checked = strategyConfig.pairs.some((item) => item.exchange === pair.exchange && item.symbol === pair.symbol);
+                    return (
+                      <label className="strategy-pair-option" key={`${strategyConfig.id}:${pair.id}`}>
+                        <input
+                          checked={checked}
+                          disabled={busy}
+                          onChange={(event) => handleToggleStrategyPair(strategyConfig, pair, event.target.checked)}
+                          type="checkbox"
+                        />
+                        <span>{pair.exchange}:{pair.symbol}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             ))}
           </div>
@@ -1616,6 +1772,16 @@ function shortKeyRef(keyRef: string): string {
   const parts = keyRef.split("/");
   const suffix = parts[parts.length - 1] ?? keyRef;
   return `key_ref:${suffix.slice(0, 8)}`;
+}
+
+function dedupeStrategyPairs(pairs: Array<{ exchange: string; symbol: string }>) {
+  const seen = new Set<string>();
+  return pairs.filter((pair) => {
+    const key = `${pair.exchange.toLowerCase()}:${pair.symbol.toUpperCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function riskProtectionTone(mode: RiskProtectionMode): "green" | "red" | "yellow" | "blue" {

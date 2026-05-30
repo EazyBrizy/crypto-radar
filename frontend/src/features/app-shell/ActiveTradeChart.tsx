@@ -1,19 +1,29 @@
 "use client";
 
-import { Activity, Crosshair, DollarSign, Gauge, ShieldAlert, Target } from "lucide-react";
+import { Activity, AlertTriangle, Crosshair, DollarSign, Gauge, LogOut, ShieldAlert, ShieldCheck, Target } from "lucide-react";
 
 import { PositionChartPanel } from "@/components/charts/PositionChartPanel";
 import { useCandlesQuery } from "@/hooks/use-radar-queries";
-import type { Timeframe, TradeJournalEntry } from "@/types";
+import type { Timeframe, TradeInvalidationAlert, TradeJournalEntry } from "@/types";
 import { formatPercent, formatPrice, tradePnlClass } from "@/utils";
 
 const TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
 
 interface ActiveTradeChartProps {
+  closing?: boolean;
+  invalidationAlert?: TradeInvalidationAlert | null;
+  onCloseInvalidated?: () => void;
+  onKeepStopLoss?: () => void;
   trade: TradeJournalEntry;
 }
 
-export function ActiveTradeChart({ trade }: ActiveTradeChartProps) {
+export function ActiveTradeChart({
+  closing = false,
+  invalidationAlert = null,
+  onCloseInvalidated,
+  onKeepStopLoss,
+  trade
+}: ActiveTradeChartProps) {
   const timeframe = normalizeTimeframe(trade.timeframe);
   const candlesQuery = useCandlesQuery(
     {
@@ -90,6 +100,33 @@ export function ActiveTradeChart({ trade }: ActiveTradeChartProps) {
           </>
         ) : null}
       </div>
+
+      {invalidationAlert?.invalidated ? (
+        <div className="trade-invalidation-alert">
+          <div className="trade-invalidation-copy">
+            <AlertTriangle size={18} />
+            <div>
+              <strong>Strategy invalidation</strong>
+              <span>{invalidationAlert.reason ?? invalidationAlert.triggered_conditions.join("; ")}</span>
+            </div>
+          </div>
+          <div className="trade-invalidation-meta">
+            <span>Current {formatPrice(invalidationAlert.current_price)}</span>
+            <span>Stop {formatPrice(invalidationAlert.stop_loss)}</span>
+            {invalidationAlert.invalidation_price != null ? (
+              <span>Invalidation {formatPrice(invalidationAlert.invalidation_price)}</span>
+            ) : null}
+          </div>
+          <div className="trade-invalidation-actions">
+            <button className="danger-action compact-action" disabled={closing || !onCloseInvalidated} onClick={onCloseInvalidated} type="button">
+              <LogOut size={15} /> Close market
+            </button>
+            <button className="secondary-action compact-action" disabled={closing || !onKeepStopLoss} onClick={onKeepStopLoss} type="button">
+              <ShieldCheck size={15} /> Keep stop loss
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {candlesQuery.data?.candles.length ? (
         <PositionChartPanel candles={candlesQuery.data.candles} height={340} trade={trade} />

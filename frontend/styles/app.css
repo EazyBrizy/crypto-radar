@@ -757,6 +757,7 @@ h3 { font-size: 15px; line-height: 1.3; }
 
 .decision-block,
 .execution-quality-block,
+.strategy-layers-block,
 .confidence-breakdown,
 .explanation-block,
 .checklist-block,
@@ -771,7 +772,6 @@ h3 { font-size: 15px; line-height: 1.3; }
 .decision-block span,
 .decision-block p { color: #9ca3af; font-size: 13px; }
 .decision-block strong { display: block; margin: 6px 0; font-size: 17px; }
-
 .trade-setup { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
 .execution-quality-block .section-title {
@@ -803,6 +803,69 @@ h3 { font-size: 15px; line-height: 1.3; }
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-top: 12px;
+}
+
+.strategy-layer-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.strategy-layer-metric {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.strategy-layer-metric span {
+  display: block;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.strategy-layer-metric strong {
+  display: block;
+  margin-top: 4px;
+  color: #f9fafb;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  text-transform: capitalize;
+}
+
+.invalidation-list,
+.layer-check-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.invalidation-list span,
+.layer-check-list span {
+  padding: 5px 8px;
+  border: 1px solid #263449;
+  border-radius: 999px;
+  background: #111827;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.layer-check-list .layer-check-warning {
+  border-color: #92400e;
+  color: #fde68a;
+  background: #1f1a0f;
+}
+
+.layer-check-list .layer-check-skipped {
+  color: #9ca3af;
+}
+
+.layer-check-list .layer-check-failed {
+  border-color: #7f1d1d;
+  color: #fecaca;
+  background: #3b0a0a;
 }
 
 .execution-quality-metric {
@@ -977,6 +1040,55 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   overflow-wrap: anywhere;
 }
 
+.trade-invalidation-alert {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  background: #2b0b12;
+}
+
+.trade-invalidation-copy {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  align-items: flex-start;
+  color: #fecaca;
+}
+
+.trade-invalidation-copy strong,
+.trade-invalidation-copy span,
+.trade-invalidation-meta span {
+  display: block;
+}
+
+.trade-invalidation-copy span,
+.trade-invalidation-meta {
+  color: #fca5a5;
+  font-size: 12px;
+}
+
+.trade-invalidation-copy span {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.trade-invalidation-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 150px;
+}
+
+.trade-invalidation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .trade-row {
   display: grid;
   grid-template-columns: minmax(240px, 1.1fr) minmax(360px, 1.4fr) 110px;
@@ -1012,6 +1124,10 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .analytics-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .watchlist-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.strategy-settings-section {
+  grid-column: 1 / -1;
+}
 
 .watch-card { min-height: 180px; }
 
@@ -1726,6 +1842,128 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   text-overflow: ellipsis;
 }
 
+.strategy-config-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.strategy-config-row {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.strategy-config-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.strategy-pair-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.strategy-config-header strong,
+.strategy-config-header span {
+  display: block;
+  min-width: 0;
+}
+
+.strategy-config-header strong {
+  color: #e5e7eb;
+  font-size: 14px;
+}
+
+.strategy-config-header span,
+.strategy-pair-toolbar span {
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.compact-toggle {
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+.compact-action {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.strategy-quality-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.strategy-quality-grid label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.strategy-quality-grid span {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.strategy-quality-grid input,
+.strategy-quality-grid select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid #263449;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e5e7eb;
+  padding: 0 10px;
+}
+
+.strategy-risk-toggle input {
+  width: 18px;
+  min-height: 18px;
+  justify-self: start;
+  accent-color: #22c55e;
+}
+
+.strategy-pair-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.strategy-pair-option {
+  display: flex;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.strategy-pair-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .billing-current {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1844,6 +2082,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .risk-settings-grid,
   .risk-mode-grid,
   .compact-risk-grid,
+  .strategy-quality-grid,
+  .strategy-pair-grid,
   .strategy-multiplier-grid,
   .risk-guide-intro,
   .risk-guide-playbook,
@@ -1869,6 +2109,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
   .metrics-grid,
   .execution-quality-grid,
+  .strategy-layer-grid,
   .trade-setup,
   .virtual-account-strip,
   .active-trade-summary,
@@ -1879,14 +2120,28 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .risk-guide-playbook,
   .risk-guide-snapshot,
   .risk-guide-blocker-grid,
-  .risk-guide-item-list {
+  .risk-guide-item-list,
+  .strategy-pair-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .brand span { display: none; }
+
+  .trade-invalidation-alert {
+    grid-template-columns: 1fr;
+  }
+
+  .trade-invalidation-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 560px) {
+  .strategy-layer-grid,
+  .strategy-config-header,
+  .strategy-quality-grid,
+  .strategy-pair-toolbar,
+  .strategy-pair-grid,
   .risk-guide-intro,
   .risk-guide-playbook,
   .risk-guide-snapshot,

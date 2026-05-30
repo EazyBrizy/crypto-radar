@@ -123,6 +123,11 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMM(ts)
 ORDER BY (exchange, symbol, ts);
 
+CREATE TABLE IF NOT EXISTS market.ohlcv_4h AS market.ohlcv_1m
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(ts)
+ORDER BY (exchange, symbol, ts);
+
 CREATE TABLE IF NOT EXISTS market.ohlcv_1d AS market.ohlcv_1m
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(ts)

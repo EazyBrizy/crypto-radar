@@ -5,6 +5,7 @@ import type {
   AlertRuleDraft,
   ExchangeConnectionDraft,
   NotificationDraft,
+  StrategyConfigPatch,
   SubscriptionStatus,
   UserProfile
 } from "@/features/server-state/types";
@@ -131,6 +132,16 @@ export function useCloseMarketTradeMutation() {
   });
 }
 
+export function useTradeInvalidationQuery(tradeId: string | null, options: PlannedQueryOptions = {}) {
+  return useQuery({
+    queryKey: serverStateKeys.trades.invalidation(tradeId ?? "none"),
+    queryFn: () => api.tradeInvalidation(tradeId as string),
+    enabled: options.enabled ?? Boolean(tradeId),
+    refetchInterval: options.refetchInterval ?? serverStatePolicy.reconciliationIntervalMs,
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
 export function useRadarConfigQuery() {
   return useQuery({
     queryKey: serverStateKeys.settings.radar(),
@@ -166,6 +177,29 @@ export function useMarketPairsQuery() {
     queryKey: serverStateKeys.watchlist.pairs(),
     queryFn: api.marketPairs,
     staleTime: serverStatePolicy.staticStaleTimeMs
+  });
+}
+
+export function useStrategyConfigsQuery() {
+  return useQuery({
+    queryKey: serverStateKeys.settings.strategyConfigs(),
+    queryFn: api.strategyConfigs,
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useUpdateStrategyConfigMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ configId, patch }: { configId: string; patch: StrategyConfigPatch }) =>
+      api.updateStrategyConfig(configId, patch),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.settings.strategyConfigs() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() })
+      ]);
+    }
   });
 }
 

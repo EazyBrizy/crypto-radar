@@ -18,7 +18,16 @@ from app.models.strategy import StrategyTemplate, StrategyVersion
 from app.schemas.signal import RadarSignal, SignalScoreBreakdown, StrategySignal
 
 MAX_STORED_SIGNALS = 200
-OPEN_SIGNAL_STATUSES = ("new", "active")
+OPEN_SIGNAL_STATUSES = (
+    "new",
+    "active",
+    "watchlist",
+    "ready",
+    "actionable",
+    "wait_for_pullback",
+    "entry_touched",
+)
+ACTIONABLE_SIGNAL_STATUSES = ("active", "actionable", "entry_touched")
 SIGNAL_CREATED_EVENT = "signal.created"
 SIGNAL_UPDATED_EVENT = "signal.updated"
 SIGNAL_CONFIRMED_EVENT = "signal.confirmed"
@@ -103,7 +112,7 @@ class PostgresSignalRepository:
             records = session.scalars(
                 _signal_select()
                 .where(
-                    TradingSignal.status == "active",
+                    TradingSignal.status.in_(ACTIONABLE_SIGNAL_STATUSES),
                     _expires_after(now),
                 )
                 .order_by(TradingSignal.detected_at.desc())
@@ -194,7 +203,7 @@ class PostgresSignalRepository:
             exchange_code = exchange or signal.exchange
             direction = signal.direction.lower()
             score = signal.score or int(signal.confidence * 100)
-            db_status = "active" if score >= 70 else "new"
+            db_status = _strategy_signal_status_to_db(signal.status, score)
             detected_at = _timestamp_to_datetime(signal.timestamp)
             expires_at = _signal_expires_at(detected_at)
             if expires_at is not None and expires_at <= now:
@@ -523,6 +532,13 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         explanation=explanation if isinstance(explanation, list) else _split_explanation(record.explanation),
         risks=risks if isinstance(risks, list) else [],
         score_breakdown=SignalScoreBreakdown.model_validate(score_breakdown or {}),
+        status_reason=_string_or_none(snapshot.get("status_reason")),
+        quality=snapshot.get("quality") if isinstance(snapshot.get("quality"), dict) else None,
+        regime=snapshot.get("regime") if isinstance(snapshot.get("regime"), dict) else None,
+        setup=snapshot.get("setup") if isinstance(snapshot.get("setup"), dict) else None,
+        confirmation=snapshot.get("confirmation") if isinstance(snapshot.get("confirmation"), dict) else None,
+        invalidation=snapshot.get("invalidation") if isinstance(snapshot.get("invalidation"), dict) else None,
+        exit_plan=snapshot.get("exit_plan") if isinstance(snapshot.get("exit_plan"), dict) else None,
         created_at=created_at,
         updated_at=updated_at,
         expires_at=_as_utc(record.expires_at) if record.expires_at else None,
@@ -582,6 +598,13 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "explanation": signal.explanation,
         "risks": signal.risks,
         "score_breakdown": signal.score_breakdown.model_dump(mode="json"),
+        "status_reason": signal.status_reason,
+        "quality": _model_dump_optional(signal.quality),
+        "regime": _model_dump_optional(signal.regime),
+        "setup": _model_dump_optional(signal.setup),
+        "confirmation": _model_dump_optional(signal.confirmation),
+        "invalidation": _model_dump_optional(signal.invalidation),
+        "exit_plan": _model_dump_optional(signal.exit_plan),
         "decision": {
             "confirmed_trade_id": signal.confirmed_trade_id,
             "decision_mode": signal.decision_mode,
@@ -603,17 +626,28 @@ def _snapshot_from_strategy_signal(
         "risks": signal.risks,
         "score_breakdown": signal.score_breakdown.model_dump(mode="json"),
         "source_timestamp": signal.timestamp,
+        "status_reason": signal.status_reason,
+        "quality": _model_dump_optional(signal.quality),
+        "regime": _model_dump_optional(signal.regime),
+        "setup": _model_dump_optional(signal.setup),
+        "confirmation": _model_dump_optional(signal.confirmation),
+        "invalidation": _model_dump_optional(signal.invalidation),
+        "exit_plan": _model_dump_optional(signal.exit_plan),
     }
 
 
 def _api_status_to_db(status: str) -> str:
-    if status == "watchlist":
-        return "new"
     if status == "rejected":
         return "invalidated"
-    if status == "entry_touched":
-        return "active"
     return status
+
+
+def _strategy_signal_status_to_db(status: str, score: int) -> str:
+    if status in OPEN_SIGNAL_STATUSES:
+        return status
+    if status == "rejected":
+        return "invalidated"
+    return "actionable" if score >= 70 else "watchlist"
 
 
 def _signal_key(signal: StrategySignal, exchange: str, detected_at: datetime) -> str:
@@ -678,6 +712,21 @@ def _split_explanation(explanation: str | None) -> list[str]:
 
 def _explanation_text(explanation: list[str]) -> str | None:
     return "\n".join(explanation) if explanation else None
+
+
+def _model_dump_optional(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _string_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _parse_uuid(value: str) -> UUID | None:

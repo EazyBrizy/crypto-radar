@@ -17,6 +17,7 @@ OHLCV_TABLES_BY_TIMEFRAME = {
     "5m": "market.ohlcv_5m",
     "15m": "market.ohlcv_15m",
     "1h": "market.ohlcv_1h",
+    "4h": "market.ohlcv_4h",
     "1d": "market.ohlcv_1d",
 }
 

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -20,8 +20,10 @@ ExecutionMode = Literal["virtual", "real"]
 TradeSide = Literal["long", "short"]
 TradeStatus = Literal["open", "closed", "cancelled"]
 TradeResult = Literal["win", "loss", "breakeven"]
-CloseReason = Literal["take_profit", "stop_loss", "manual_close", "cancelled"]
+CloseReason = Literal["take_profit", "stop_loss", "manual_close", "invalidation", "cancelled"]
 CloseMarketTradeStatus = Literal["closed", "not_implemented"]
+TradeInvalidationStatus = Literal["valid", "invalidated", "unavailable"]
+TradeInvalidationAction = Literal["none", "close_market_or_wait_stop"]
 SimulationMode = Literal["auto", "passive", "impact_aware"]
 VirtualSimulationMode = Literal["passive", "impact_aware"]
 VirtualSimulationTier = Literal["mvp", "advanced", "pro"]
@@ -194,6 +196,27 @@ class CloseVirtualTradeRequest(BaseModel):
 
 class CloseMarketTradeRequest(BaseModel):
     reason: CloseReason = "manual_close"
+
+
+class TradeInvalidationAlert(BaseModel):
+    trade_id: str
+    signal_id: Optional[str] = None
+    exchange: str
+    symbol: str
+    strategy: str
+    timeframe: str
+    side: TradeSide
+    status: TradeInvalidationStatus = "valid"
+    invalidated: bool = False
+    reason: Optional[str] = None
+    triggered_conditions: list[str] = Field(default_factory=list)
+    watched_conditions: list[str] = Field(default_factory=list)
+    suggested_action: TradeInvalidationAction = "none"
+    current_price: float
+    stop_loss: float
+    invalidation_price: Optional[float] = None
+    detected_at: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class VirtualTrade(BaseModel):

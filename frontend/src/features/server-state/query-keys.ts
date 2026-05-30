@@ -73,7 +73,8 @@ export const serverStateKeys = {
   },
   settings: {
     all: () => [...serverStateKeys.all, "settings"] as const,
-    radar: () => [...serverStateKeys.settings.all(), "radar"] as const
+    radar: () => [...serverStateKeys.settings.all(), "radar"] as const,
+    strategyConfigs: () => [...serverStateKeys.settings.all(), "strategy-configs"] as const
   },
   risk: {
     all: () => [...serverStateKeys.all, "risk"] as const,
@@ -119,7 +120,8 @@ export const serverStateKeys = {
   trades: {
     all: () => [...serverStateKeys.all, "trades"] as const,
     list: (filters?: TradeJournalFilters) => [...serverStateKeys.trades.all(), "list", normalizeTradeFilters(filters)] as const,
-    closed: () => [...serverStateKeys.trades.all(), "closed"] as const
+    closed: () => [...serverStateKeys.trades.all(), "closed"] as const,
+    invalidation: (tradeId: string) => [...serverStateKeys.trades.all(), "invalidation", tradeId] as const
   },
   candles: {
     all: () => [...serverStateKeys.all, "candles"] as const,

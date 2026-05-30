@@ -15,7 +15,7 @@ import {
 import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
-import type { RadarSignal } from "@/types";
+import type { RadarSignal, SignalStatus } from "@/types";
 import { isOpenFeedSignal } from "@/utils";
 
 export function RadarRoute() {
@@ -25,6 +25,7 @@ export function RadarRoute() {
   const setSelectedSignalId = useUiStore((state) => state.setSelectedSignalId);
   const setFilter = useUiStore((state) => state.setSignalFilter);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"all" | SignalStatus>("all");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const tradingActionsDisabled = useTradingActionsDisabled();
   const signalIds = useSignalStore((state) => state.signalIds);
@@ -51,9 +52,12 @@ export function RadarRoute() {
     [nowMs, signalIds, signalsById]
   );
   const visibleSignals = useMemo(() => {
-    if (filter === "all") return signals;
-    return signals.filter((signal) => signal.direction === filter);
-  }, [filter, signals]);
+    return signals.filter((signal) => {
+      const directionMatches = filter === "all" || signal.direction === filter;
+      const statusMatches = statusFilter === "all" || signal.status === statusFilter;
+      return directionMatches && statusMatches;
+    });
+  }, [filter, signals, statusFilter]);
   const visibleSignalIds = useMemo(() => visibleSignals.map((signal) => signal.id), [visibleSignals]);
   const selectedSignal = useMemo(
     () => signals.find((signal) => signal.id === selectedSignalId) ?? visibleSignals[0] ?? null,
@@ -81,6 +85,10 @@ export function RadarRoute() {
   async function handlePaperTrade(signal: RadarSignal) {
     try {
       if (tradingActionsDisabled) return;
+      if (!isActionableSignal(signal)) {
+        setActionError("Only actionable strategy signals can be sent to Paper Trade.");
+        return;
+      }
       setActionError(null);
       await confirmVirtualMutation.mutateAsync(signal.id);
       await refreshData();
@@ -115,7 +123,9 @@ export function RadarRoute() {
       executionPreviewLoading={executionPreviewQuery.isFetching}
       tradingActionsDisabled={tradingActionsDisabled}
       filter={filter}
+      statusFilter={statusFilter}
       onFilterChange={setFilter}
+      onStatusFilterChange={setStatusFilter}
       onRefresh={() => void refreshData()}
       onSelectSignal={handleSelectSignal}
       onPaperTrade={handlePaperTrade}
@@ -124,6 +134,10 @@ export function RadarRoute() {
       signalIds={visibleSignalIds}
     />
   );
+}
+
+function isActionableSignal(signal: RadarSignal): boolean {
+  return signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
 }
 
 function errorMessage(exc: unknown, fallback: string): string {

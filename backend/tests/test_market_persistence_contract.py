@@ -83,7 +83,7 @@ class MarketDataPersistenceContractTest(unittest.TestCase):
         self.assertEqual(raw_payload["source"], "normalized_trade_tick")
         self.assertEqual(raw_payload["symbol"], "BTCUSDT")
 
-    def test_candles_write_supported_ohlcv_tables_only(self) -> None:
+    def test_candles_write_supported_ohlcv_tables(self) -> None:
         open_time = 1_779_796_800_000
         candles = [
             OHLCVCandle(
@@ -116,8 +116,9 @@ class MarketDataPersistenceContractTest(unittest.TestCase):
 
         rows_written = self.service.persist_candles(candles)
 
-        self.assertEqual(rows_written, 1)
+        self.assertEqual(rows_written, 2)
         self.assertEqual(self.clickhouse.inserts[0][0], "market.ohlcv_1m")
+        self.assertEqual(self.clickhouse.inserts[1][0], "market.ohlcv_4h")
         row = self.clickhouse.inserts[0][1][0]
         self.assertEqual(row[0:2], ["bybit", "BTCUSDT"])
         self.assertEqual(row[7], Decimal("2"))

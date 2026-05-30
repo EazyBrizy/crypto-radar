@@ -111,6 +111,39 @@ export interface MarketPairOption {
   status: string;
 }
 
+export interface StrategyPairScope {
+  exchange: string;
+  symbol: string;
+}
+
+export interface StrategyConfig {
+  id: string;
+  user_id: string;
+  strategy_version_id: string;
+  strategy_code: string;
+  strategy_name: string;
+  strategy_version: string;
+  name: string;
+  exchanges: string[];
+  pairs: StrategyPairScope[];
+  timeframes: string[];
+  params: Record<string, unknown>;
+  risk_settings: Record<string, unknown>;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StrategyConfigPatch {
+  name?: string;
+  exchanges?: string[];
+  pairs?: StrategyPairScope[];
+  timeframes?: string[];
+  params?: Record<string, unknown>;
+  risk_settings?: Record<string, unknown>;
+  is_enabled?: boolean;
+}
+
 export interface WatchlistPair extends MarketPairOption {
   added_at: string;
 }

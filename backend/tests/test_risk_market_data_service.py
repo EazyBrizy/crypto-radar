@@ -29,6 +29,8 @@ class RiskMarketDataServiceTest(unittest.TestCase):
                     ask1_price=50_010,
                     mark_price=50_005,
                     funding_rate=0.0001,
+                    volume_24h=None,
+                    turnover_24h=None,
                     raw_payload={},
                 )
             ],
@@ -75,6 +77,8 @@ class RiskMarketDataServiceTest(unittest.TestCase):
                     ask1_price=50_000,
                     mark_price=49_995,
                     funding_rate=None,
+                    volume_24h=None,
+                    turnover_24h=None,
                     raw_payload={},
                 )
             ],

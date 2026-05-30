@@ -8,6 +8,7 @@ import type {
   MarketPairOption,
   NotificationDelivery,
   PersistedNotification,
+  StrategyConfig,
   SubscriptionState,
   SubscriptionStatus,
   SubscriptionTier,
@@ -39,6 +40,7 @@ import type {
   RiskDecision,
   RiskPreviewResponse,
   RiskStateResponse,
+  SignalStatus,
   StopLossPlan,
   TakeProfitPlan,
   TrailingStopPlan,
@@ -65,6 +67,7 @@ type TradeJournalEntryExtra = TradeJournalEntryDto & Partial<Pick<
 type VirtualAccountDto = Partial<VirtualAccount>;
 
 export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
+  const enriched = signal as RadarSignalDto & Partial<RadarSignal>;
   return {
     id: signal.id,
     symbol: signal.symbol,
@@ -74,7 +77,7 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     confidence: signal.confidence,
     risk_reward: signal.risk_reward ?? null,
     urgency: signal.urgency ?? "medium",
-    status: signal.status ?? "active",
+    status: normalizeSignalStatus(signal.status),
     score: signal.score ?? 0,
     timeframe: signal.timeframe ?? "stream",
     entry_min: signal.entry_min ?? null,
@@ -98,6 +101,13 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     created_at: signal.created_at,
     updated_at: signal.updated_at,
     expires_at: signal.expires_at ?? null,
+    status_reason: enriched.status_reason ?? null,
+    quality: enriched.quality ?? null,
+    regime: enriched.regime ?? null,
+    setup: enriched.setup ?? null,
+    confirmation: enriched.confirmation ?? null,
+    invalidation: enriched.invalidation ?? null,
+    exit_plan: enriched.exit_plan ?? null,
     confirmed_trade_id: signal.confirmed_trade_id ?? null
   };
 }
@@ -616,6 +626,24 @@ function normalizeExecutionStatus(value: unknown): VirtualExecutionStatus {
   return "filled";
 }
 
+function normalizeSignalStatus(value: unknown): SignalStatus {
+  if (
+    value === "new" ||
+    value === "active" ||
+    value === "watchlist" ||
+    value === "ready" ||
+    value === "actionable" ||
+    value === "wait_for_pullback" ||
+    value === "confirmed" ||
+    value === "rejected" ||
+    value === "expired" ||
+    value === "invalidated" ||
+    value === "closed" ||
+    value === "entry_touched"
+  ) return value;
+  return "active";
+}
+
 function normalizeImpactRisk(value: unknown): ImpactRisk {
   if (value === "medium" || value === "high") return value;
   return "low";
@@ -733,6 +761,36 @@ export function normalizeWatchlistResponse(value: unknown): Watchlist {
     use_all_symbols: false,
     created_at: String(watchlist.created_at ?? new Date().toISOString()),
     updated_at: watchlist.updated_at ?? null
+  };
+}
+
+export function normalizeStrategyConfig(value: unknown): StrategyConfig {
+  const config = isRecord(value) ? value : {};
+  const pairs = Array.isArray(config.pairs)
+    ? config.pairs
+        .filter(isRecord)
+        .map((pair) => ({
+          exchange: String(pair.exchange ?? "bybit").toLowerCase(),
+          symbol: String(pair.symbol ?? "").toUpperCase()
+        }))
+        .filter((pair) => pair.symbol.length > 0)
+    : [];
+  return {
+    id: String(config.id ?? ""),
+    user_id: String(config.user_id ?? "demo_user"),
+    strategy_version_id: String(config.strategy_version_id ?? ""),
+    strategy_code: String(config.strategy_code ?? ""),
+    strategy_name: String(config.strategy_name ?? config.name ?? "Strategy"),
+    strategy_version: String(config.strategy_version ?? "1.0"),
+    name: String(config.name ?? config.strategy_name ?? "Strategy"),
+    exchanges: Array.isArray(config.exchanges) ? config.exchanges.map(String) : ["bybit"],
+    pairs,
+    timeframes: Array.isArray(config.timeframes) ? config.timeframes.map(String) : ["1m", "5m", "15m", "1h", "4h", "1d"],
+    params: isRecord(config.params) ? config.params : {},
+    risk_settings: isRecord(config.risk_settings) ? config.risk_settings : {},
+    is_enabled: Boolean(config.is_enabled ?? true),
+    created_at: String(config.created_at ?? new Date().toISOString()),
+    updated_at: String(config.updated_at ?? new Date().toISOString())
   };
 }
 

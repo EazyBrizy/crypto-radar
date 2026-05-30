@@ -31,7 +31,15 @@ export function isSignalExpired(signal: RadarSignal, nowMs = Date.now()): boolea
 
 export function isOpenFeedSignal(signal: RadarSignal, nowMs = Date.now()): boolean {
   return (
-    (signal.status === "new" || signal.status === "active" || signal.status === "entry_touched") &&
+    (
+      signal.status === "new" ||
+      signal.status === "active" ||
+      signal.status === "watchlist" ||
+      signal.status === "ready" ||
+      signal.status === "actionable" ||
+      signal.status === "wait_for_pullback" ||
+      signal.status === "entry_touched"
+    ) &&
     !isSignalExpired(signal, nowMs)
   );
 }

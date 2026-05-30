@@ -2,7 +2,7 @@ import dynamic from "next/dynamic";
 import { BarChart3, History, ListFilter } from "lucide-react";
 
 import { Metric } from "@/components/Metric";
-import type { TradeJournalEntry, VirtualAccount } from "@/types";
+import type { TradeCloseReason, TradeInvalidationAlert, TradeJournalEntry, VirtualAccount } from "@/types";
 
 const LazyTradeJournalTable = dynamic(
   () => import("@/components/data-table/TradeJournalTable").then((module) => module.TradeJournalTable),
@@ -24,7 +24,9 @@ interface TradesPageProps {
   onTabChange: (tab: "active" | "journal" | "analytics") => void;
   actionError?: string | null;
   closingTradeId?: string | null;
-  onCloseMarket?: (trade: TradeJournalEntry) => void;
+  invalidationAlert?: TradeInvalidationAlert | null;
+  onCloseMarket?: (trade: TradeJournalEntry, reason?: TradeCloseReason) => void;
+  onDismissInvalidation?: (tradeId: string) => void;
   onSelectTrade?: (trade: TradeJournalEntry) => void;
   account?: VirtualAccount | null;
   selectedTrade?: TradeJournalEntry | null;
@@ -37,7 +39,9 @@ export function TradesPage({
   actionError = null,
   account,
   closingTradeId = null,
+  invalidationAlert = null,
   onCloseMarket,
+  onDismissInvalidation,
   onSelectTrade,
   onTabChange,
   selectedTrade = null,
@@ -93,7 +97,15 @@ export function TradesPage({
 
       {actionError ? <p className="form-error">{actionError}</p> : null}
 
-      {activeTab === "active" && activeTrade ? <LazyActiveTradeChart trade={activeTrade} /> : null}
+      {activeTab === "active" && activeTrade ? (
+        <LazyActiveTradeChart
+          closing={closingTradeId === activeTrade.id}
+          invalidationAlert={invalidationAlert?.trade_id === activeTrade.id ? invalidationAlert : null}
+          onCloseInvalidated={onCloseMarket ? () => onCloseMarket(activeTrade, "invalidation") : undefined}
+          onKeepStopLoss={onDismissInvalidation ? () => onDismissInvalidation(activeTrade.id) : undefined}
+          trade={activeTrade}
+        />
+      ) : null}
 
       {activeTab === "analytics" ? (
         <LazyTradesAnalyticsPanel trades={trades} />

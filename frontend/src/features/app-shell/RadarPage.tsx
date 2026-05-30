@@ -3,14 +3,16 @@ import { Filter, RadioTower, RefreshCw } from "lucide-react";
 import { Metric } from "@/components/Metric";
 import { SignalDetails } from "@/components/SignalDetails";
 import { SignalFeed } from "@/components/SignalFeed";
-import type { HealthStatus, RadarSignal, RadarStatus, VirtualExecutionReport } from "@/types";
+import type { HealthStatus, RadarSignal, RadarStatus, SignalStatus, VirtualExecutionReport } from "@/types";
 
 interface RadarPageProps {
   busy: boolean;
   filter: "all" | "long" | "short";
+  statusFilter: "all" | SignalStatus;
   health: HealthStatus | null;
   loading: boolean;
   onFilterChange: (filter: "all" | "long" | "short") => void;
+  onStatusFilterChange: (filter: "all" | SignalStatus) => void;
   onPaperTrade: (signal: RadarSignal) => void;
   onRefresh: () => void;
   onReject: (signal: RadarSignal) => void;
@@ -28,7 +30,7 @@ interface RadarPageProps {
 }
 
 export function RadarPage(props: RadarPageProps) {
-  const activeSignals = props.signals.filter((signal) => signal.status === "active").length;
+  const activeSignals = props.signals.filter((signal) => signal.status === "actionable" || signal.status === "active").length;
   const highConfidence = props.signals.filter((signal) => signal.score >= 80).length;
   const latestSeries = Object.entries(props.radarStatus?.candle_history ?? {})
     .sort(([, left], [, right]) => right - left)
@@ -89,6 +91,18 @@ export function RadarPage(props: RadarPageProps) {
               type="button"
             >
               {item}
+            </button>
+          ))}
+        </div>
+        <div className="filter-row status-filter-row">
+          {(["all", "watchlist", "ready", "actionable", "wait_for_pullback", "invalidated"] as const).map((item) => (
+            <button
+              className={props.statusFilter === item ? "filter-chip active" : "filter-chip"}
+              key={item}
+              onClick={() => props.onStatusFilterChange(item)}
+              type="button"
+            >
+              {item.replaceAll("_", " ")}
             </button>
           ))}
         </div>

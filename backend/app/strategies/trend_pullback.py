@@ -2,14 +2,10 @@ from typing import List, Literal, Optional
 
 from app.schemas.market import Features
 from app.schemas.signal import SignalScoreBreakdown, StrategySignal
-from app.strategies.common import (
-    WATCHLIST_SCORE,
-    build_signal,
-    has_minimum_market_data,
-    score_breakdown,
-)
+from app.strategies.common import build_signal, has_minimum_market_data, score_breakdown
 
 STRATEGY_NAME = "trend_pullback_continuation"
+MIN_VISIBLE_SETUP_SCORE = 45
 
 
 class TrendPullbackContinuationStrategy:
@@ -21,9 +17,10 @@ class TrendPullbackContinuationStrategy:
         if not has_minimum_market_data(features, min_history=200):
             return []
 
-        direction = self._direction(features)
-        if direction is None:
+        setup = self._setup_state(features)
+        if setup is None:
             return []
+        direction, stage_status, status_reason = setup
 
         scoring, reasons, risks = self._score(features, direction)
 
@@ -43,11 +40,18 @@ class TrendPullbackContinuationStrategy:
             entry=features.close,
             stop_loss=stop_loss,
         )
-        if signal.score < WATCHLIST_SCORE:
+        if signal.score < MIN_VISIBLE_SETUP_SCORE:
             return []
-        return [signal]
+        return [signal.model_copy(update={"status": stage_status, "status_reason": status_reason})]
 
     def _direction(self, features: Features) -> Optional[Literal["LONG", "SHORT"]]:
+        setup = self._setup_state(features)
+        return setup[0] if setup is not None else None
+
+    def _setup_state(
+        self,
+        features: Features,
+    ) -> Optional[tuple[Literal["LONG", "SHORT"], str, str]]:
         if (
             features.ema_50 is None
             or features.ema_200 is None
@@ -57,23 +61,27 @@ class TrendPullbackContinuationStrategy:
             return None
 
         near_pullback_zone = self._near_pullback_zone(features)
-        if (
-            features.close > features.ema_200
-            and features.ema_50 > features.ema_200
-            and near_pullback_zone
-            and 45 <= features.rsi_14 <= 60
-            and features.candle_bullish
-        ):
-            return "LONG"
+        approaching_pullback_zone = self._approaching_pullback_zone(features)
+        long_trend = features.close > features.ema_200 and features.ema_50 > features.ema_200
+        short_trend = features.close < features.ema_200 and features.ema_50 < features.ema_200
 
-        if (
-            features.close < features.ema_200
-            and features.ema_50 < features.ema_200
-            and near_pullback_zone
-            and 40 <= features.rsi_14 <= 55
-            and features.candle_bearish
-        ):
-            return "SHORT"
+        if long_trend and approaching_pullback_zone:
+            if near_pullback_zone and 45 <= features.rsi_14 <= 60 and features.candle_bullish:
+                if features.volume_spike >= 1.1:
+                    return ("LONG", "actionable", "Pullback held EMA zone with bullish candle and volume confirmation")
+                return ("LONG", "ready", "Pullback held EMA zone; waiting for volume confirmation")
+            if near_pullback_zone:
+                return ("LONG", "ready", "Price is in the EMA pullback zone; waiting for bullish confirmation")
+            return ("LONG", "watchlist", "Uptrend is intact and price is approaching the EMA pullback zone")
+
+        if short_trend and approaching_pullback_zone:
+            if near_pullback_zone and 40 <= features.rsi_14 <= 55 and features.candle_bearish:
+                if features.volume_spike >= 1.1:
+                    return ("SHORT", "actionable", "Pullback rejected EMA zone with bearish candle and volume confirmation")
+                return ("SHORT", "ready", "Pullback rejected EMA zone; waiting for volume confirmation")
+            if near_pullback_zone:
+                return ("SHORT", "ready", "Price is in the EMA pullback zone; waiting for bearish confirmation")
+            return ("SHORT", "watchlist", "Downtrend is intact and price is approaching the EMA pullback zone")
 
         return None
 
@@ -81,6 +89,13 @@ class TrendPullbackContinuationStrategy:
         atr = features.atr_14 or max(abs(features.close) * 0.002, 1e-8)
         return any(
             ema is not None and abs(features.close - ema) <= atr
+            for ema in (features.ema_20, features.ema_50)
+        )
+
+    def _approaching_pullback_zone(self, features: Features) -> bool:
+        atr = features.atr_14 or max(abs(features.close) * 0.002, 1e-8)
+        return any(
+            ema is not None and abs(features.close - ema) <= atr * 1.8
             for ema in (features.ema_20, features.ema_50)
         )
 

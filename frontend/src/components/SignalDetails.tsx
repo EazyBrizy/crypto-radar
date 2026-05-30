@@ -51,7 +51,8 @@ export function SignalDetails({
 
   const isLong = signal.direction === "long";
   const riskFailed = executionPreview?.risk_check?.status === "failed";
-  const actionsDisabled = busy || tradingActionsDisabled || riskFailed;
+  const statusAllowsTrade = signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
+  const actionsDisabled = busy || tradingActionsDisabled || riskFailed || !statusAllowsTrade;
   const breakdown = signal.score_breakdown;
   const reasons = signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."];
 
@@ -71,8 +72,8 @@ export function SignalDetails({
 
       <div className="decision-block">
         <span>Recommended action</span>
-        <strong>Ждать вход внутри зоны {entryZone(signal)}</strong>
-        <p>Решение должно опираться на entry, invalidation и риск, а не только на направление.</p>
+        <strong>{recommendedAction(signal)}</strong>
+        <p>{signal.status_reason ?? "Decision must use setup status, invalidation and risk context, not direction alone."}</p>
       </div>
 
       <div className="trade-setup">
@@ -88,6 +89,8 @@ export function SignalDetails({
         error={executionPreviewError}
         loading={executionPreviewLoading}
       />
+
+      <StrategyLayersBlock signal={signal} />
 
       <div className="detail-actions">
         <button className="secondary-action" onClick={() => setChartOpen((open) => !open)} type="button">
@@ -126,7 +129,7 @@ export function SignalDetails({
         <CheckRow done text="Сетап соответствует стратегии" />
         <CheckRow done text="Entry, SL и TP рассчитаны" />
         <CheckRow done text="Risk/Reward указан" />
-        <CheckRow text={signal.score >= 70 ? "Сигнал actionable" : "Сигнал в watchlist"} />
+        <CheckRow done={statusAllowsTrade} text={`Strategy status: ${signal.status.replaceAll("_", " ")}`} />
       </div>
 
       {signal.risks.length ? (
@@ -153,8 +156,89 @@ export function SignalDetails({
       {riskFailed ? (
         <p className="form-description">Entry is blocked by backend risk gate.</p>
       ) : null}
+      {!statusAllowsTrade ? (
+        <p className="form-description">Entry actions are available only for actionable strategy signals.</p>
+      ) : null}
     </section>
   );
+}
+
+function recommendedAction(signal: RadarSignal): string {
+  if (signal.status === "watchlist") return "Watch setup formation, no entry yet";
+  if (signal.status === "ready") return "Setup exists, wait for confirmation";
+  if (signal.status === "wait_for_pullback") return "Wait for pullback or retest";
+  if (signal.status === "invalidated") return "Idea is invalidated";
+  if (signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched") {
+    return `Entry candidate inside ${entryZone(signal)}`;
+  }
+  return `Monitor status ${signal.status.replaceAll("_", " ")}`;
+}
+
+function StrategyLayersBlock({ signal }: { signal: RadarSignal }) {
+  const regimeChecks = signal.regime?.checks.filter((check) => check.status !== "passed").slice(0, 4) ?? [];
+  const layers = [
+    {
+      label: "Market quality",
+      value: signal.quality ? `${signal.quality.tier.replace("_", " ")} / ${signal.quality.score}` : "-"
+    },
+    {
+      label: "Market regime",
+      value: signal.regime ? `${signal.regime.direction} / ${signal.regime.alignment}` : "-"
+    },
+    {
+      label: "Strategy setup",
+      value: signal.setup ? signal.setup.stage : "-"
+    },
+    {
+      label: "Confirmation",
+      value: signal.confirmation ? (signal.confirmation.passed ? "passed" : "pending") : "-"
+    },
+    {
+      label: "Invalidation",
+      value: signal.invalidation?.price == null ? "-" : formatPrice(signal.invalidation.price)
+    },
+    {
+      label: "Exit management",
+      value: signal.exit_plan?.targets.length ? `${signal.exit_plan.targets.length} targets` : "-"
+    }
+  ];
+
+  return (
+    <div className="strategy-layers-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Strategy Layers</h3>
+      </div>
+      <div className="strategy-layer-grid">
+        {layers.map((layer) => (
+          <div className="strategy-layer-metric" key={layer.label}>
+            <span>{layer.label}</span>
+            <strong>{layer.value}</strong>
+          </div>
+        ))}
+      </div>
+      {signal.invalidation?.conditions.length ? (
+        <div className="invalidation-list">
+          {signal.invalidation.conditions.slice(0, 3).map((condition) => (
+            <span key={condition}>{condition}</span>
+          ))}
+        </div>
+      ) : null}
+      {regimeChecks.length ? (
+        <div className="layer-check-list">
+          {regimeChecks.map((check) => (
+            <span className={`layer-check-${check.status}`} key={`${check.name}:${check.reason ?? ""}`}>
+              {formatLayerCheckName(check.name)}: {check.reason ?? check.status}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function formatLayerCheckName(value: string): string {
+  return value.replaceAll("_", " ");
 }
 
 function ExecutionQualityBlock({

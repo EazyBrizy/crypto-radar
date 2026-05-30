@@ -1585,7 +1585,7 @@ export interface components {
              * @default manual_close
              * @enum {string}
              */
-            reason: "take_profit" | "stop_loss" | "manual_close" | "cancelled";
+            reason: "take_profit" | "stop_loss" | "manual_close" | "invalidation" | "cancelled";
         };
         /** CloseMarketTradeResponse */
         CloseMarketTradeResponse: {
@@ -1612,7 +1612,7 @@ export interface components {
              * @default manual_close
              * @enum {string}
              */
-            reason: "take_profit" | "stop_loss" | "manual_close" | "cancelled";
+            reason: "take_profit" | "stop_loss" | "manual_close" | "invalidation" | "cancelled";
         };
         /** ExchangeConnectionActionResponse */
         ExchangeConnectionActionResponse: {
@@ -3479,7 +3479,7 @@ export interface components {
             /** Result */
             result?: ("win" | "loss" | "breakeven") | null;
             /** Close Reason */
-            close_reason?: ("take_profit" | "stop_loss" | "manual_close" | "cancelled") | null;
+            close_reason?: ("take_profit" | "stop_loss" | "manual_close" | "invalidation" | "cancelled") | null;
             /** Pnl */
             pnl?: number | null;
             /** Pnl Percent */
@@ -3996,7 +3996,7 @@ export interface components {
             /** Result */
             result?: ("win" | "loss" | "breakeven") | null;
             /** Close Reason */
-            close_reason?: ("take_profit" | "stop_loss" | "manual_close" | "cancelled") | null;
+            close_reason?: ("take_profit" | "stop_loss" | "manual_close" | "invalidation" | "cancelled") | null;
             /** Pnl */
             pnl?: number | null;
             /** Pnl Percent */

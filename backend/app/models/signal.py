@@ -19,7 +19,10 @@ class TradingSignal(Base):
         CheckConstraint("length(trim(timeframe)) > 0", name="ck_trading_signals_timeframe_not_blank"),
         CheckConstraint("direction IN ('long', 'short')", name="ck_trading_signals_direction"),
         CheckConstraint(
-            "status IN ('new', 'active', 'confirmed', 'expired', 'invalidated', 'closed')",
+            "status IN ("
+            "'new', 'active', 'watchlist', 'ready', 'actionable', 'wait_for_pullback', "
+            "'entry_touched', 'confirmed', 'expired', 'invalidated', 'closed'"
+            ")",
             name="ck_trading_signals_status",
         ),
         UniqueConstraint("signal_key", name="uq_trading_signals_signal_key"),

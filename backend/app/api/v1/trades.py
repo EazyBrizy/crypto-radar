@@ -16,6 +16,7 @@ from app.schemas.trade import (
     CloseVirtualTradeRequest,
     RealConfirmRequest,
     RealExecutionResult,
+    TradeInvalidationAlert,
     TradeJournalEntry,
     TradeJournalResponse,
     VirtualAccount,
@@ -32,6 +33,7 @@ from app.services.realtime_events import (
 )
 from app.services.real_trade_import_service import RealTradeImportNotReadyError, real_trade_import_service
 from app.services.signal_service import signal_service
+from app.services.trade_invalidation import trade_invalidation_service
 from app.services.virtual_trading import (
     get_virtual_simulation_model_info,
     virtual_trading_service,
@@ -159,6 +161,21 @@ async def get_virtual_simulation_model() -> VirtualSimulationModelInfo:
     return get_virtual_simulation_model_info()
 
 
+@router.get("/{trade_id}/invalidation", response_model=TradeInvalidationAlert)
+async def get_trade_invalidation(trade_id: str) -> TradeInvalidationAlert:
+    trade = virtual_trading_service.get_virtual_trade(trade_id)
+    if trade is not None:
+        return trade_invalidation_service.evaluate_trade(trade)
+    real_trade = virtual_trading_service.get_real_trade(trade_id)
+    if real_trade is not None:
+        return trade_invalidation_service.evaluate_trade(real_trade)
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Trade is not found",
+    )
+
+
 @router.get("/virtual/{trade_id}", response_model=VirtualTrade)
 async def get_virtual_trade(trade_id: str) -> VirtualTrade:
     trade = virtual_trading_service.get_virtual_trade(trade_id)
@@ -207,7 +224,7 @@ async def close_market_trade(
         return CloseMarketTradeResponse(
             mode="virtual",
             status="closed",
-            message="Virtual position closed at market with exit fees applied.",
+            message=_close_market_message(request.reason),
             trade=TradeJournalEntry.model_validate(closed_trade.model_dump()),
         )
 
@@ -252,3 +269,9 @@ async def _publish_virtual_close_events(trade: VirtualTrade) -> None:
         await realtime_event_broker.publish(take_profit_hit_event(trade))
     elif trade.close_reason == "stop_loss":
         await realtime_event_broker.publish(stop_loss_hit_event(trade))
+
+
+def _close_market_message(reason: str) -> str:
+    if reason == "invalidation":
+        return "Virtual position closed at market because the strategy idea was invalidated."
+    return "Virtual position closed at market with exit fees applied."

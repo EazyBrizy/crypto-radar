@@ -2,6 +2,8 @@ import type {
   AlertRule,
   AlertRuleDraft,
   MarketPairOption,
+  StrategyConfig,
+  StrategyConfigPatch,
   SubscriptionStatus,
   UserProfile,
   UserSettingsPatch,
@@ -9,7 +11,7 @@ import type {
 } from "@/features/server-state/types";
 import type { RadarConfig, RadarStatus, RiskStateResponse } from "@/types";
 import { billingApi } from "./billing.api";
-import { openApiClient, request } from "./client";
+import { API_BASE, openApiClient, request } from "./client";
 import {
   normalizeAlertRule,
   normalizeConfig,
@@ -17,6 +19,7 @@ import {
   normalizeMarketPair,
   normalizeRadarStatus,
   normalizeRiskState,
+  normalizeStrategyConfig,
   normalizeUserProfile,
   normalizeWatchlistResponse,
 } from "./mappers";
@@ -34,6 +37,18 @@ export const settingsApi = {
   async marketPairs(): Promise<MarketPairOption[]> {
     const response = await request(() => openApiClient.GET("/api/v1/market-pairs"));
     return response.map(normalizeMarketPair);
+  },
+  async strategyConfigs(): Promise<StrategyConfig[]> {
+    const response = await fetchJson<unknown[]>("/api/v1/strategies/configs?user_id=demo_user");
+    return response.map(normalizeStrategyConfig);
+  },
+  async updateStrategyConfig(configId: string, patch: StrategyConfigPatch): Promise<StrategyConfig> {
+    return normalizeStrategyConfig(
+      await fetchJson(`/api/v1/strategies/configs/${encodeURIComponent(configId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ user_id: "demo_user", ...patch })
+      })
+    );
   },
   async addWatchlistPair(pairId: string): Promise<Watchlist> {
     return normalizeWatchlistResponse(
@@ -152,3 +167,19 @@ export const settingsApi = {
     return billingApi.subscription();
   }
 };
+
+async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers ?? {})
+    }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = payload && typeof payload === "object" && "detail" in payload ? payload.detail : null;
+    throw new Error(typeof detail === "string" ? detail : `API error ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}

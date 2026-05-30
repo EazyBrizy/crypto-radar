@@ -11,10 +11,12 @@ import {
   useMarketPairsQuery,
   useRadarConfigQuery,
   useRiskStateQuery,
+  useStrategyConfigsQuery,
   useSyncExchangeConnectionMutation,
   useTestAlertRuleMutation,
   useTestExchangeConnectionMutation,
   useUpdateExchangeConnectionMutation,
+  useUpdateStrategyConfigMutation,
   useUpdateAlertRuleMutation,
   useUpdateUserSettingsMutation,
   useUserProfileQuery
@@ -23,12 +25,14 @@ import type {
   AlertRuleDraft,
   ExchangeConnectionDraft,
   UserSettingsPatch,
+  StrategyConfigPatch,
   VirtualSimulationLevel
 } from "@/features/server-state/types";
 
 export function SettingsRoute() {
   const configQuery = useRadarConfigQuery();
   const marketPairsQuery = useMarketPairsQuery();
+  const strategyConfigsQuery = useStrategyConfigsQuery();
   const alertRulesQuery = useAlertRulesQuery();
   const exchangeConnectionsQuery = useExchangeConnectionsQuery();
   const userProfileQuery = useUserProfileQuery({ enabled: true });
@@ -43,11 +47,13 @@ export function SettingsRoute() {
   const testExchangeConnectionMutation = useTestExchangeConnectionMutation();
   const syncExchangeConnectionMutation = useSyncExchangeConnectionMutation();
   const updateUserSettingsMutation = useUpdateUserSettingsMutation();
+  const updateStrategyConfigMutation = useUpdateStrategyConfigMutation();
 
   return (
     <SettingsPage
       config={configQuery.data ?? null}
       availablePairs={marketPairsQuery.data ?? []}
+      strategyConfigs={strategyConfigsQuery.data ?? []}
       alertRules={alertRulesQuery.data ?? []}
       exchangeConnections={exchangeConnectionsQuery.data ?? []}
       userProfile={userProfileQuery.data ?? null}
@@ -62,7 +68,8 @@ export function SettingsRoute() {
         deleteExchangeConnectionMutation.isPending ||
         testExchangeConnectionMutation.isPending ||
         syncExchangeConnectionMutation.isPending ||
-        updateUserSettingsMutation.isPending
+        updateUserSettingsMutation.isPending ||
+        updateStrategyConfigMutation.isPending
       }
       onCreateAlert={(draft: AlertRuleDraft) => createAlertRuleMutation.mutateAsync(draft)}
       onToggleAlert={(alertId, isEnabled) =>
@@ -85,6 +92,9 @@ export function SettingsRoute() {
       }
       onUpdateRiskManagement={(patch: UserSettingsPatch) =>
         updateUserSettingsMutation.mutateAsync(patch)
+      }
+      onUpdateStrategyConfig={(configId: string, patch: StrategyConfigPatch) =>
+        updateStrategyConfigMutation.mutateAsync({ configId, patch })
       }
     />
   );

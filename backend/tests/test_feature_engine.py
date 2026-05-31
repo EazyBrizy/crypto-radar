@@ -98,6 +98,43 @@ class FeatureEngineTest(unittest.TestCase):
         self.assertIsNotNone(features.range_20_atr)
         self.assertLess(features.range_20 or 0, features.range_50_average or 0)
 
+    def test_candle_features_use_fractal_swing_levels_with_touch_counts(self) -> None:
+        engine = FeatureEngine()
+        start = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp() * 1000)
+        candles = []
+        for index in range(60):
+            high = 102.0
+            low = 98.0
+            close = 100.0
+            volume = 100.0
+            if index in {24, 38}:
+                high = 110.0
+                close = 104.0
+                volume = 220.0
+            if index in {28, 42}:
+                low = 90.0
+                close = 96.0
+                volume = 210.0
+            candles.append(
+                _candle(
+                    start + index * 60_000,
+                    high=high,
+                    low=low,
+                    close=close,
+                    volume=volume,
+                )
+            )
+
+        features = engine.process_candles(candles)
+
+        self.assertIsNotNone(features)
+        self.assertAlmostEqual(features.swing_high or 0.0, 110.0)
+        self.assertAlmostEqual(features.swing_low or 0.0, 90.0)
+        self.assertGreaterEqual(features.swing_high_touch_count, 2)
+        self.assertGreaterEqual(features.swing_low_touch_count, 2)
+        self.assertIsNotNone(features.swing_high_volume_score)
+        self.assertIsNotNone(features.swing_low_volume_score)
+
 
 def _candle(
     open_time: int,

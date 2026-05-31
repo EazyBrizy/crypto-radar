@@ -111,6 +111,22 @@ class StrategyConfigValidationTest(unittest.TestCase):
         for key in DEFAULT_STRATEGY_PARAMS_BY_CODE["volatility_squeeze_breakout"]:
             self.assertIn(key, config.params)
 
+    def test_liquidity_sweep_defaults_are_added_to_existing_params(self) -> None:
+        config = SimpleNamespace(
+            params={},
+            risk_settings={},
+            strategy_version=SimpleNamespace(
+                strategy=SimpleNamespace(code="liquidity_sweep_reversal")
+            ),
+            updated_at=None,
+        )
+
+        changed = _normalize_existing_strategy_defaults([config])
+
+        self.assertTrue(changed)
+        for key in DEFAULT_STRATEGY_PARAMS_BY_CODE["liquidity_sweep_reversal"]:
+            self.assertIn(key, config.params)
+
 
 if __name__ == "__main__":
     unittest.main()

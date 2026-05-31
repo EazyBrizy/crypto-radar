@@ -81,6 +81,7 @@ export function SignalDetails({
 
       <PullbackGuidanceBlock signal={signal} />
       <BreakoutEntryPlanBlock signal={signal} />
+      <LiquiditySweepPlanBlock signal={signal} />
       <AutoEntryBlock signal={signal} />
 
       <div className="trade-setup">
@@ -265,6 +266,59 @@ function breakoutEntryPlan(signal: RadarSignal): {
   };
 }
 
+function LiquiditySweepPlanBlock({ signal }: { signal: RadarSignal }) {
+  const plan = liquiditySweepPlan(signal);
+  if (!plan) return null;
+  return (
+    <div className="risk-reward-detail-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Liquidity Sweep</h3>
+      </div>
+      <p>{plan.mode}</p>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Swept level" value={formatPrice(plan.sweptLevel)} />
+        <MetricLine label="Wick" value={formatRatio(plan.wickRatio)} />
+        <MetricLine label="Level touches" value={plan.levelTouches == null ? "-" : String(plan.levelTouches)} />
+        <MetricLine label="Aggressive" value={formatPrice(plan.aggressiveEntry)} />
+        <MetricLine label="Confirm zone" value={plan.confirmationZone} />
+      </div>
+    </div>
+  );
+}
+
+function liquiditySweepPlan(signal: RadarSignal): {
+  sweptLevel: number | null;
+  wickRatio: number | null;
+  levelTouches: number | null;
+  aggressiveEntry: number | null;
+  confirmationZone: string;
+  mode: string;
+} | null {
+  if (signal.strategy !== "liquidity_sweep_reversal") return null;
+  const metadata = signal.invalidation?.metadata ?? {};
+  const sweptLevel = numberMetadata(metadata, "swept_level");
+  const wickRatio = numberMetadata(metadata, "wick_ratio");
+  const levelTouches = numberMetadata(metadata, "level_touch_count");
+  const aggressiveEntry = numberMetadata(metadata, "aggressive_entry") ?? signal.entry_min ?? signal.entry_max;
+  const conservativeMin = numberMetadata(metadata, "conservative_entry_min");
+  const conservativeMax = numberMetadata(metadata, "conservative_entry_max");
+  const conservativeTrigger = numberMetadata(metadata, "conservative_trigger");
+  if (sweptLevel == null && aggressiveEntry == null && conservativeTrigger == null) return null;
+  return {
+    sweptLevel,
+    wickRatio,
+    levelTouches,
+    aggressiveEntry,
+    confirmationZone: conservativeMin == null && conservativeMax == null
+      ? formatPrice(conservativeTrigger)
+      : `${formatPrice(conservativeMin)} - ${formatPrice(conservativeMax)}`,
+    mode: signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched"
+      ? "Sweep is actionable only after reclaim, wick, volume and RR checks stay valid."
+      : "Sweep is staged; wait for reclaim or a confirmation candle through micro structure."
+  };
+}
+
 function pullbackGuidance(signal: RadarSignal): {
   reason: string;
   bodyAtr: string;
@@ -357,6 +411,10 @@ function riskRewardDetails(signal: RadarSignal): {
 
 function formatRMultiple(value: number | null): string {
   return value == null ? "-" : `${value.toFixed(2)}R`;
+}
+
+function formatRatio(value: number | null): string {
+  return value == null ? "-" : `${Math.round(value * 100)}%`;
 }
 
 function formatRrTarget(value: string | null): string {

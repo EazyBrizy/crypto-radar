@@ -58,6 +58,16 @@ DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
         "breakout_stop_atr": 1.0,
         "narrow_range_stop_atr": 0.5,
     },
+    "liquidity_sweep_reversal": {
+        "min_sweep_wick_ratio": 0.45,
+        "sweep_volume_spike_multiplier": 1.3,
+        "confirmation_volume_spike": 1.1,
+        "watchlist_distance_atr": 0.6,
+        "sweep_stop_atr": 0.3,
+        "sweep_aggressive_close_position": 0.6,
+        "min_level_retests": 2,
+        "sweep_level_confluence_atr": 0.5,
+    },
 }
 
 

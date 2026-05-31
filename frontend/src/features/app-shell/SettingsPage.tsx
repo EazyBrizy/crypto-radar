@@ -114,6 +114,23 @@ const SQUEEZE_BREAKOUT_FIELD_LABELS: Array<{
   { key: "max_squeeze_range_atr", label: "Range ATR", step: "0.1", min: "1", defaultValue: 5 }
 ];
 
+const LIQUIDITY_SWEEP_FIELD_LABELS: Array<{
+  key: string;
+  label: string;
+  step: string;
+  min: string;
+  max?: string;
+  defaultValue: number;
+}> = [
+  { key: "min_sweep_wick_ratio", label: "Min wick", step: "0.05", min: "0", max: "1", defaultValue: 0.45 },
+  { key: "sweep_volume_spike_multiplier", label: "Sweep volume x", step: "0.1", min: "0", defaultValue: 1.3 },
+  { key: "confirmation_volume_spike", label: "Confirm volume x", step: "0.1", min: "0", defaultValue: 1.1 },
+  { key: "sweep_aggressive_close_position", label: "Close strength", step: "0.05", min: "0", max: "1", defaultValue: 0.6 },
+  { key: "sweep_stop_atr", label: "Stop ATR", step: "0.1", min: "0", defaultValue: 0.3 },
+  { key: "min_level_retests", label: "Level retests", step: "1", min: "0", defaultValue: 2 },
+  { key: "sweep_level_confluence_atr", label: "HTF level ATR", step: "0.1", min: "0", defaultValue: 0.5 }
+];
+
 type RiskNumericField =
   | "risk_per_trade_percent"
   | "min_rr_ratio"
@@ -1125,6 +1142,24 @@ export function SettingsPage({
                   </label>
                   {strategyConfig.strategy_code === "volatility_squeeze_breakout"
                     ? SQUEEZE_BREAKOUT_FIELD_LABELS.map((field) => (
+                        <label key={`${strategyConfig.id}:${field.key}`}>
+                          <span>{field.label}</span>
+                          <input
+                            defaultValue={String(Number(strategyConfig.params[field.key] ?? field.defaultValue))}
+                            disabled={busy}
+                            inputMode="decimal"
+                            key={`${strategyConfig.id}:${field.key}:${String(strategyConfig.params[field.key] ?? "")}`}
+                            max={field.max}
+                            min={field.min}
+                            onBlur={(event) => handleStrategyParamBlur(strategyConfig, field.key, event.target.value)}
+                            step={field.step}
+                            type="number"
+                          />
+                        </label>
+                      ))
+                    : null}
+                  {strategyConfig.strategy_code === "liquidity_sweep_reversal"
+                    ? LIQUIDITY_SWEEP_FIELD_LABELS.map((field) => (
                         <label key={`${strategyConfig.id}:${field.key}`}>
                           <span>{field.label}</span>
                           <input

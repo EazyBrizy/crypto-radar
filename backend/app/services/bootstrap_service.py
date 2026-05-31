@@ -321,6 +321,17 @@ DEFAULT_SQUEEZE_BREAKOUT_PARAMS: dict[str, Any] = {
     "narrow_range_stop_atr": 0.5,
 }
 
+DEFAULT_LIQUIDITY_SWEEP_PARAMS: dict[str, Any] = {
+    "min_sweep_wick_ratio": 0.45,
+    "sweep_volume_spike_multiplier": 1.3,
+    "confirmation_volume_spike": 1.1,
+    "watchlist_distance_atr": 0.6,
+    "sweep_stop_atr": 0.3,
+    "sweep_aggressive_close_position": 0.6,
+    "min_level_retests": 2,
+    "sweep_level_confluence_atr": 0.5,
+}
+
 SEED_STRATEGY_VERSIONS: list[dict[str, Any]] = [
     {
         "strategy_code": "trend_pullback_continuation",
@@ -368,6 +379,7 @@ SEED_STRATEGY_VERSIONS: list[dict[str, Any]] = [
             "active_score": 70,
             "max_body_atr": 2.0,
             "max_range_atr": 3.8,
+            **DEFAULT_LIQUIDITY_SWEEP_PARAMS,
             **DEFAULT_STRATEGY_QUALITY_PARAMS,
         },
         "required_data": [
@@ -608,6 +620,13 @@ def _seed_strategy_versions(
                 "watchlist_distance_atr": {"type": "number", "minimum": 0},
                 "breakout_stop_atr": {"type": "number", "minimum": 0},
                 "narrow_range_stop_atr": {"type": "number", "minimum": 0},
+                "min_sweep_wick_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+                "sweep_volume_spike_multiplier": {"type": "number", "minimum": 0},
+                "confirmation_volume_spike": {"type": "number", "minimum": 0},
+                "sweep_stop_atr": {"type": "number", "minimum": 0},
+                "sweep_aggressive_close_position": {"type": "number", "minimum": 0, "maximum": 1},
+                "min_level_retests": {"type": "integer", "minimum": 0},
+                "sweep_level_confluence_atr": {"type": "number", "minimum": 0},
             },
             "additionalProperties": True,
             "required_data": spec["required_data"],

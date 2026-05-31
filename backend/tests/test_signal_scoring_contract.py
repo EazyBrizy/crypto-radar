@@ -42,9 +42,12 @@ class SignalScoringContractTest(unittest.IsolatedAsyncioTestCase):
             history_length=80,
             rsi_14=62,
             atr_14=1,
+            atr_sma_50=2,
             bb_width_percentile=10,
             donchian_high_20=105,
-            donchian_low_20=90,
+            donchian_low_20=102,
+            range_20=3,
+            range_50_average=5,
             atr_increasing=True,
         )
 
@@ -92,7 +95,11 @@ class SignalScoringContractTest(unittest.IsolatedAsyncioTestCase):
                 update={
                     "bb_width_percentile": 10,
                     "donchian_high_20": 95,
+                    "donchian_low_20": 92,
                     "atr_14": 1,
+                    "atr_sma_50": 2,
+                    "range_20": 3,
+                    "range_50_average": 5,
                     "atr_increasing": True,
                 }
             )

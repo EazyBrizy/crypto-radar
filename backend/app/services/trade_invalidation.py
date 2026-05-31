@@ -465,22 +465,34 @@ def _liquidity_sweep_conditions(
     if side == "long":
         swept_low = _number(metadata.get("swept_low"), metadata.get("swept_level"), metadata.get("swing_low"), features.swing_low)
         reclaim_level = _number(metadata.get("reclaim_level"), swept_low)
+        sweep_extreme = _number(metadata.get("sweep_extreme"))
+        volume_threshold = _number(metadata.get("volume_disappears_below")) or 1.0
         if swept_low is not None and features.close < swept_low:
             triggered.append("Close returns below swept low")
-        if swept_low is not None and features.low < swept_low and reclaim_level is not None and features.close < reclaim_level:
+        if sweep_extreme is not None and features.low < sweep_extreme:
             triggered.append("Sweep low is broken again")
-        if reclaim_level is not None and features.close < reclaim_level and features.volume_spike < 1.0:
+        elif swept_low is not None and features.low < swept_low and reclaim_level is not None and features.close < reclaim_level:
+            triggered.append("Sweep low is broken again")
+        if reclaim_level is not None and features.close < reclaim_level and features.volume_spike < volume_threshold:
             triggered.append("Next candles fail to hold reclaim")
+        elif reclaim_level is not None and features.close <= reclaim_level and features.close < features.open and features.volume_spike < volume_threshold:
+            triggered.append("Volume disappears after reclaim")
         return triggered
 
     swept_high = _number(metadata.get("swept_high"), metadata.get("swept_level"), metadata.get("swing_high"), features.swing_high)
     rejection_level = _number(metadata.get("rejection_level"), swept_high)
+    sweep_extreme = _number(metadata.get("sweep_extreme"))
+    volume_threshold = _number(metadata.get("volume_disappears_below")) or 1.0
     if swept_high is not None and features.close > swept_high:
         triggered.append("Close returns above swept high")
-    if swept_high is not None and features.high > swept_high and rejection_level is not None and features.close > rejection_level:
+    if sweep_extreme is not None and features.high > sweep_extreme:
         triggered.append("Sweep high is broken again")
-    if rejection_level is not None and features.close > rejection_level and features.volume_spike < 1.0:
+    elif swept_high is not None and features.high > swept_high and rejection_level is not None and features.close > rejection_level:
+        triggered.append("Sweep high is broken again")
+    if rejection_level is not None and features.close > rejection_level and features.volume_spike < volume_threshold:
         triggered.append("Next candles fail to hold rejection")
+    elif rejection_level is not None and features.close >= rejection_level and features.close > features.open and features.volume_spike < volume_threshold:
+        triggered.append("Volume disappears after rejection")
     return triggered
 
 

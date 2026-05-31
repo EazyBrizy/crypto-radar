@@ -158,6 +158,74 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signal.status, "actionable")
         self.assertNotIn("wait for pullback", signal.status_reason or "")
 
+    async def test_liquidity_sweep_current_reclaim_scores_level_quality(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 98.8,
+                "open": 99.2,
+                "high": 100.5,
+                "low": 96.2,
+                "close": 98.8,
+                "swing_low": 98.0,
+                "swing_low_touch_count": 3,
+                "swing_low_volume_score": 1.4,
+                "lower_wick_ratio": 0.6,
+                "upper_wick_ratio": 0.3,
+                "volume_spike": 1.8,
+            }
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].status, "actionable")
+        self.assertGreaterEqual(candidates[0].score, 80)
+        self.assertIn("recent touches", " ".join(candidates[0].explanation))
+
+    async def test_liquidity_sweep_confirmation_candle_can_be_actionable(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 99.3,
+                "open": 98.7,
+                "high": 99.5,
+                "low": 98.4,
+                "close": 99.3,
+                "previous_high": 99.0,
+                "previous_low": 96.8,
+                "previous_close": 98.3,
+                "swing_low": 98.0,
+                "swing_low_touch_count": 2,
+                "volume_spike": 1.2,
+                "lower_wick_ratio": 0.2,
+            }
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].status, "actionable")
+        self.assertIn("Conservative confirmation", " ".join(candidates[0].explanation))
+
+    async def test_liquidity_sweep_breakout_continuation_is_hidden(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 94.9,
+                "open": 95.4,
+                "high": 95.7,
+                "low": 94.8,
+                "close": 94.9,
+                "previous_low": 95.4,
+                "previous_close": 95.7,
+                "swing_low": 96.0,
+                "lower_wick_ratio": 0.2,
+                "volume_spike": 1.9,
+            }
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+
+        self.assertEqual(candidates, [])
+
     def test_strategy_pipeline_keeps_low_rr_card_but_not_actionable(self) -> None:
         features = _breakout_features()
         candidate = build_signal(
@@ -558,6 +626,61 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal.status, "ready")
         self.assertIn("waiting for reclaim", signal.status_reason or "")
+
+    async def test_liquidity_sweep_gets_higher_timeframe_level_confluence(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 98.8,
+                "open": 99.2,
+                "high": 100.5,
+                "low": 96.2,
+                "close": 98.8,
+                "swing_low": 98.0,
+                "swing_low_touch_count": 2,
+                "lower_wick_ratio": 0.6,
+                "upper_wick_ratio": 0.3,
+                "volume_spike": 1.8,
+            }
+        )
+        support = SupportResistanceLevel(
+            kind="support",
+            price=98.1,
+            retest_count=3,
+            age_candles=5,
+            first_seen_index=10,
+            last_seen_index=45,
+            volume_score=1.6,
+            freshness_score=0.9,
+            strength=82.0,
+        )
+        snapshot = SupportResistanceSnapshot(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            atr=2.0,
+            levels=(support,),
+        )
+        candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+
+        signal = StrategySignalPipeline().finalize(
+            candidates[0],
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                support_resistance_by_timeframe={"1h": snapshot},
+                pair_scope_configured=True,
+                strategy_params={"min_rr_ratio": 1.5, "rr_target": "final"},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertTrue(
+            any(
+                check.name == "sweep_htf_level_confluence" and check.status == "passed"
+                for check in (signal.regime.checks if signal and signal.regime else [])
+            )
+        )
+        self.assertEqual(signal.exit_plan.targets[-1].get("source") if signal and signal.exit_plan else None, "micro_BOS_or_ATR_trailing")
 
     def test_pipeline_preserves_invalidated_strategy_stage(self) -> None:
         features = _breakout_features()

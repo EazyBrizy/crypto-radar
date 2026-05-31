@@ -20,6 +20,10 @@ ATR_LOOKBACK = 14
 ATR_SMA_LOOKBACK = 50
 DONCHIAN_LOOKBACK = 20
 RANGE_CONTRACTION_LOOKBACK = 50
+SWING_MIN_LOOKBACK = 20
+SWING_MAX_LOOKBACK = 50
+SWING_FRACTAL_WINDOW = 2
+SWING_TOUCH_TOLERANCE_ATR = 0.25
 EMA200_CHOP_LOOKBACK = 50
 EMA200_SLOPE_LOOKBACK = 20
 EMA200_NEAR_ATR_MULTIPLIER = 0.5
@@ -246,6 +250,179 @@ class FeatureEngine:
         if not comparison_window:
             return current_range, None
         return current_range, sum(comparison_window) / len(comparison_window)
+
+    @staticmethod
+    def _fractal_swing_levels(
+        candles: List[OHLCVCandle],
+        atr: float | None,
+    ) -> tuple[
+        Optional[float],
+        Optional[float],
+        int,
+        int,
+        Optional[float],
+        Optional[float],
+        Optional[int],
+        Optional[int],
+    ]:
+        previous_candles = candles[:-1]
+        if len(previous_candles) < SWING_MIN_LOOKBACK:
+            return None, None, 0, 0, None, None, None, None
+
+        lookback = previous_candles[-SWING_MAX_LOOKBACK:]
+        offset = len(previous_candles) - len(lookback)
+        latest_close = candles[-1].close if candles else previous_candles[-1].close
+        tolerance = max(
+            (atr if atr is not None and atr > 0 else abs(latest_close) * 0.005) * SWING_TOUCH_TOLERANCE_ATR,
+            abs(latest_close) * 0.0005,
+        )
+        average_volume = FeatureEngine._average_volume_from_candles(lookback)
+
+        high_candidates: list[tuple[float, int, int, float | None]] = []
+        low_candidates: list[tuple[float, int, int, float | None]] = []
+        window = SWING_FRACTAL_WINDOW
+        for local_index in range(window, len(lookback) - window):
+            candle = lookback[local_index]
+            neighbors = [
+                *lookback[local_index - window:local_index],
+                *lookback[local_index + 1:local_index + window + 1],
+            ]
+            if not neighbors:
+                continue
+            global_index = offset + local_index
+            if (
+                candle.high >= max(item.high for item in neighbors)
+                and candle.high > lookback[local_index - 1].high
+                and candle.high > lookback[local_index + 1].high
+            ):
+                touches, volume_score, last_touch_index = FeatureEngine._level_touch_stats(
+                    lookback,
+                    price=candle.high,
+                    kind="high",
+                    tolerance=tolerance,
+                    average_volume=average_volume,
+                    offset=offset,
+                )
+                high_candidates.append((candle.high, max(touches, 1), last_touch_index or global_index, volume_score))
+            if (
+                candle.low <= min(item.low for item in neighbors)
+                and candle.low < lookback[local_index - 1].low
+                and candle.low < lookback[local_index + 1].low
+            ):
+                touches, volume_score, last_touch_index = FeatureEngine._level_touch_stats(
+                    lookback,
+                    price=candle.low,
+                    kind="low",
+                    tolerance=tolerance,
+                    average_volume=average_volume,
+                    offset=offset,
+                )
+                low_candidates.append((candle.low, max(touches, 1), last_touch_index or global_index, volume_score))
+
+        high_fallback = FeatureEngine._equal_level_fallback(
+            lookback,
+            kind="high",
+            tolerance=tolerance,
+            average_volume=average_volume,
+            offset=offset,
+        )
+        low_fallback = FeatureEngine._equal_level_fallback(
+            lookback,
+            kind="low",
+            tolerance=tolerance,
+            average_volume=average_volume,
+            offset=offset,
+        )
+        if high_fallback is not None and not high_candidates:
+            high_candidates.append(high_fallback)
+        if low_fallback is not None and not low_candidates:
+            low_candidates.append(low_fallback)
+
+        high = FeatureEngine._select_swing_level(high_candidates, latest_index=len(previous_candles) - 1)
+        low = FeatureEngine._select_swing_level(low_candidates, latest_index=len(previous_candles) - 1)
+        return (
+            high[0] if high is not None else None,
+            low[0] if low is not None else None,
+            high[1] if high is not None else 0,
+            low[1] if low is not None else 0,
+            high[2] if high is not None else None,
+            low[2] if low is not None else None,
+            high[3] if high is not None else None,
+            low[3] if low is not None else None,
+        )
+
+    @staticmethod
+    def _level_touch_stats(
+        candles: List[OHLCVCandle],
+        *,
+        price: float,
+        kind: str,
+        tolerance: float,
+        average_volume: float,
+        offset: int,
+    ) -> tuple[int, float | None, int | None]:
+        touches: list[tuple[int, OHLCVCandle]] = []
+        for local_index, candle in enumerate(candles):
+            level_price = candle.high if kind == "high" else candle.low
+            if abs(level_price - price) <= tolerance:
+                touches.append((offset + local_index, candle))
+        if not touches:
+            return 0, None, None
+        volume_score = (
+            sum(candle.volume for _, candle in touches) / len(touches) / average_volume
+            if average_volume > 0
+            else None
+        )
+        return len(touches), volume_score, touches[-1][0]
+
+    @staticmethod
+    def _equal_level_fallback(
+        candles: List[OHLCVCandle],
+        *,
+        kind: str,
+        tolerance: float,
+        average_volume: float,
+        offset: int,
+    ) -> tuple[float, int, int, float | None] | None:
+        if len(candles) < DONCHIAN_LOOKBACK:
+            return None
+        window = candles[-DONCHIAN_LOOKBACK:]
+        price = max(candle.high for candle in window) if kind == "high" else min(candle.low for candle in window)
+        touches, volume_score, last_touch_index = FeatureEngine._level_touch_stats(
+            candles,
+            price=price,
+            kind=kind,
+            tolerance=tolerance,
+            average_volume=average_volume,
+            offset=offset,
+        )
+        if touches < 2 or last_touch_index is None:
+            return None
+        return price, touches, last_touch_index, volume_score
+
+    @staticmethod
+    def _select_swing_level(
+        candidates: list[tuple[float, int, int, float | None]],
+        *,
+        latest_index: int,
+    ) -> tuple[float, int, float | None, int] | None:
+        if not candidates:
+            return None
+
+        def level_score(candidate: tuple[float, int, int, float | None]) -> float:
+            _, touches, index, volume_score = candidate
+            age = max(0, latest_index - index)
+            freshness = max(0.0, 1.0 - age / max(SWING_MAX_LOOKBACK, 1))
+            volume_component = min(volume_score or 1.0, 2.5)
+            return touches * 20 + freshness * 10 + volume_component * 5
+
+        price, touches, index, volume_score = max(candidates, key=level_score)
+        return price, touches, None if volume_score is None else round(volume_score, 3), max(0, latest_index - index)
+
+    @staticmethod
+    def _average_volume_from_candles(candles: List[OHLCVCandle]) -> float:
+        volumes = [max(candle.volume, 0.0) for candle in candles]
+        return sum(volumes) / len(volumes) if volumes else 0.0
 
     @staticmethod
     def _adx_series_from_candles(
@@ -537,6 +714,16 @@ class FeatureEngine:
             if len(previous_candles) >= DONCHIAN_LOOKBACK
             else None
         )
+        (
+            swing_high,
+            swing_low,
+            swing_high_touch_count,
+            swing_low_touch_count,
+            swing_high_volume_score,
+            swing_low_volume_score,
+            swing_high_age_candles,
+            swing_low_age_candles,
+        ) = self._fractal_swing_levels(ordered, atr_14)
         previous_close = previous_closes[-1] if previous_closes else latest.open
         price_change = (
             (latest.close - previous_close) / previous_close
@@ -588,8 +775,14 @@ class FeatureEngine:
             range_20=range_20,
             range_50_average=range_50_average,
             range_20_atr=range_20 / atr_14 if range_20 is not None and atr_14 is not None and atr_14 > 0 else None,
-            swing_high=donchian_high,
-            swing_low=donchian_low,
+            swing_high=swing_high,
+            swing_low=swing_low,
+            swing_high_touch_count=swing_high_touch_count,
+            swing_low_touch_count=swing_low_touch_count,
+            swing_high_volume_score=swing_high_volume_score,
+            swing_low_volume_score=swing_low_volume_score,
+            swing_high_age_candles=swing_high_age_candles,
+            swing_low_age_candles=swing_low_age_candles,
             candle_bullish=candle_bullish,
             candle_bearish=candle_bearish,
             upper_wick_ratio=upper_wick_ratio,
@@ -699,6 +892,12 @@ class FeatureEngine:
                 range_20_atr=None,
                 swing_high=donchian_high,
                 swing_low=donchian_low,
+                swing_high_touch_count=1 if donchian_high is not None else 0,
+                swing_low_touch_count=1 if donchian_low is not None else 0,
+                swing_high_volume_score=None,
+                swing_low_volume_score=None,
+                swing_high_age_candles=None,
+                swing_low_age_candles=None,
                 candle_bullish=pseudo_close > pseudo_open,
                 candle_bearish=pseudo_close < pseudo_open,
                 upper_wick_ratio=upper_wick_ratio,

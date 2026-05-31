@@ -64,6 +64,12 @@ class Features(BaseModel):
 
     swing_high: Optional[float] = None
     swing_low: Optional[float] = None
+    swing_high_touch_count: int = 0
+    swing_low_touch_count: int = 0
+    swing_high_volume_score: Optional[float] = None
+    swing_low_volume_score: Optional[float] = None
+    swing_high_age_candles: Optional[int] = None
+    swing_low_age_candles: Optional[int] = None
     candle_bullish: bool = False
     candle_bearish: bool = False
     upper_wick_ratio: Optional[float] = None

@@ -699,6 +699,42 @@ Exit:
 - TP2: opposite range boundary;
 - if TP1 is too close and RR < min, do not make actionable.
 
+Implementation status for Strategy 3 pass:
+
+- Backend feature layer now derives 20-50 candle fractal swing levels and
+  keeps level touch count, age and local volume score in `Features`.
+- Liquidity Sweep scoring was upgraded to the 100-point budget: level quality,
+  sweep/reclaim, wick ratio, volume, confirmation candle, micro BOS and
+  ADX/trend context, with penalties for settled breaks, follow-through
+  breakouts and strong local trend conflict.
+- The strategy now supports aggressive and conservative entry modes through
+  staged statuses: `watchlist`, `ready`, `actionable`.
+- Higher-timeframe level confluence is evaluated in the shared regime layer via
+  S/R snapshots or context swing/Donchian fallback.
+- Structured invalidation metadata now includes swept level, sweep extreme,
+  wick ratio, touch count, aggressive entry and conservative confirmation zone.
+- Exit management adds a Liquidity Sweep TP3 runner after micro-BOS/ATR
+  trailing.
+- Strategy config defaults and Settings UI expose the main Liquidity Sweep
+  knobs without adding PostgreSQL columns: wick threshold, sweep volume,
+  confirmation volume, close strength, stop ATR, retests and HTF confluence.
+- Signal Details now has a Liquidity Sweep block showing swept level, wick,
+  touches, aggressive entry and confirmation zone.
+
+Remaining tails for Strategy 3:
+
+- Previous session/day high/low levels are not yet first-class inputs; MVP uses
+  fractal/equal swing levels plus higher-timeframe S/R snapshots.
+- Orderbook/liquidity-depth writer is still missing, so bad liquidity/spread is
+  handled by scanner quality and execution-time risk preview, not by live L2
+  sweep absorption.
+- News impulse filtering is not implemented; strong breakout/news regimes must
+  be handled later by a macro/news guard or analytics rule.
+- Micro BOS is based on previous candle high/low for MVP. A richer internal
+  market-structure model can replace it after backtests.
+- Thresholds need calibration per symbol tier and timeframe after backtests and
+  paper-trade samples.
+
 ## Overextension Guard
 
 Правило должно быть общим для всех стратегий:

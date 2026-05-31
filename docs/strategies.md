@@ -243,6 +243,26 @@ Risk:
 - TP1 = середина диапазона
 - TP2 = противоположная граница диапазона
 
+Runtime implementation notes:
+
+- `FeatureEngine` uses 20-50 candle fractal swing levels and records level
+  touch count, age and volume score for sweep scoring.
+- Equal high/low fallback is allowed only when the level has at least two
+  recent touches; random one-off highs/lows are not promoted into sweep levels.
+- The strategy emits staged ideas: `watchlist` near visible liquidity, `ready`
+  after an unreclaimed or weak reclaim, and `actionable` after an aggressive
+  sweep or conservative confirmation candle.
+- Aggressive sweep requires reclaim/rejection, wick ratio, volume and close
+  strength. Conservative sweep requires the next candle to break micro
+  structure in the reversal direction with at least `1.1x` volume.
+- The scoring budget follows the 100-point Liquidity Sweep model in
+  `docs/scoring.md`; HTF level confluence, RR, spread/liquidity and strong
+  regime conflict stay in shared pipeline layers.
+- Invalidation metadata stores the swept level, sweep extreme, wick ratio,
+  level touch count, aggressive entry and conservative confirmation zone.
+- Exit management uses TP1 at range midpoint, TP2 at the opposite range
+  boundary, and a TP3 runner after micro-BOS/ATR trailing.
+
 ## Pipeline
 
 ```text

@@ -536,6 +536,22 @@ class MarketRegimeFilter:
             )
             checks.append(obstacle_check)
             adjustment += obstacle_adjustment
+            if signal.strategy == "liquidity_sweep_reversal":
+                level_check, level_adjustment = _liquidity_sweep_context_level_check(
+                    signal=signal,
+                    signal_features=signal_features,
+                    context_features=primary_features,
+                    support_resistance=support_resistance,
+                    tolerance_atr=float(context.strategy_params.get("sweep_level_confluence_atr", 0.5)),
+                    min_strength=float(
+                        context.strategy_params.get(
+                            "context_level_min_strength",
+                            CONTEXT_LEVEL_MIN_STRENGTH,
+                        )
+                    ),
+                )
+                checks.append(level_check)
+                adjustment += level_adjustment
 
         return MarketRegimeSnapshot(
             signal_timeframe=signal_features.timeframe,
@@ -768,6 +784,12 @@ class InvalidationLayer:
                 ]
         elif signal.strategy == "liquidity_sweep_reversal":
             swept_level = features.swing_low if direction == "long" else features.swing_high
+            conservative_trigger = features.high if direction == "long" else features.low
+            conservative_zone = _entry_zone_around_level(conservative_trigger, features.atr_14)
+            wick_ratio = features.lower_wick_ratio if direction == "long" else features.upper_wick_ratio
+            touch_count = features.swing_low_touch_count if direction == "long" else features.swing_high_touch_count
+            level_volume_score = features.swing_low_volume_score if direction == "long" else features.swing_high_volume_score
+            level_age = features.swing_low_age_candles if direction == "long" else features.swing_high_age_candles
             metadata.update(
                 {
                     "swept_low": features.swing_low,
@@ -775,6 +797,18 @@ class InvalidationLayer:
                     "swept_level": swept_level,
                     "reclaim_level": swept_level if direction == "long" else None,
                     "rejection_level": swept_level if direction == "short" else None,
+                    "sweep_extreme": features.low if direction == "long" else features.high,
+                    "wick_ratio": wick_ratio,
+                    "level_touch_count": touch_count,
+                    "level_volume_score": level_volume_score,
+                    "level_age_candles": level_age,
+                    "aggressive_entry": features.close,
+                    "conservative_trigger": conservative_trigger,
+                    "conservative_entry_min": conservative_zone[0],
+                    "conservative_entry_max": conservative_zone[1],
+                    "micro_bos_trigger": features.previous_high if direction == "long" else features.previous_low,
+                    "close_position": _directional_close_location(signal.direction, features),
+                    "volume_disappears_below": 1.0,
                 }
             )
             if direction == "long":
@@ -782,12 +816,14 @@ class InvalidationLayer:
                     "Close returns below swept low",
                     "Sweep low is broken again",
                     "Next candles fail to hold reclaim",
+                    "Volume disappears after reclaim",
                 ]
             else:
                 conditions = [
                     "Close returns above swept high",
                     "Sweep high is broken again",
                     "Next candles fail to hold rejection",
+                    "Volume disappears after rejection",
                 ]
         else:
             conditions = ["Signal stop is reached", "Setup expires before confirmation"]
@@ -849,6 +885,17 @@ class ExitManagementLayer:
                         "source": "range_measured_move",
                     }
                 )
+        elif signal.strategy == "liquidity_sweep_reversal":
+            targets.append(
+                {
+                    "label": "TP3",
+                    "price": None,
+                    "r_multiple": None,
+                    "action": "runner_trailing",
+                    "close_percent": "runner",
+                    "source": "micro_BOS_or_ATR_trailing",
+                }
+            )
 
         breakeven = {}
         if entry is not None and targets:
@@ -1024,6 +1071,106 @@ def _regime_score_adjustment(strategy: str, alignment: str, strength: str) -> in
     if alignment == "against":
         return -12
     return 0
+
+
+def _liquidity_sweep_context_level_check(
+    *,
+    signal: StrategySignal,
+    signal_features: Features,
+    context_features: Features,
+    support_resistance: SupportResistanceSnapshot | None,
+    tolerance_atr: float,
+    min_strength: float,
+) -> tuple[SignalLayerCheck, int]:
+    direction = signal.direction.lower()
+    swept_level = signal_features.swing_low if direction == "long" else signal_features.swing_high
+    if swept_level is None:
+        return (
+            SignalLayerCheck(
+                name="sweep_htf_level_confluence",
+                status="skipped",
+                reason="Swept level is unavailable for higher-timeframe confluence",
+            ),
+            0,
+        )
+    atr = signal_features.atr_14 or context_features.atr_14
+    if atr is None or atr <= 0:
+        return (
+            SignalLayerCheck(
+                name="sweep_htf_level_confluence",
+                status="skipped",
+                reason="ATR is unavailable for higher-timeframe level confluence",
+            ),
+            0,
+        )
+
+    tolerance = max(atr * tolerance_atr, abs(swept_level) * 0.0005)
+    level_kind = "support" if direction == "long" else "resistance"
+    if support_resistance is not None:
+        matches = [
+            level
+            for level in support_resistance.levels
+            if level.kind == level_kind
+            and level.strength >= min_strength
+            and abs(level.price - swept_level) <= tolerance
+        ]
+        if matches:
+            level = max(matches, key=lambda item: (item.strength, item.retest_count))
+            return (
+                SignalLayerCheck(
+                    name="sweep_htf_level_confluence",
+                    status="passed",
+                    score=round(level.strength, 3),
+                    reason=(
+                        f"Swept level {swept_level:.8f} aligns with {support_resistance.timeframe} "
+                        f"S/R {level_kind} {level.price:.8f}; strength {level.strength:.0f}, "
+                        f"retests {level.retest_count}, volume x{level.volume_score:.2f}"
+                    ),
+                    metadata={
+                        "swept_level": swept_level,
+                        "context_level": level.price,
+                        "context_timeframe": support_resistance.timeframe,
+                        "strength": level.strength,
+                        "retests": level.retest_count,
+                    },
+                ),
+                10,
+            )
+
+    fallback_levels = (
+        (context_features.swing_low, context_features.donchian_low_20)
+        if direction == "long"
+        else (context_features.swing_high, context_features.donchian_high_20)
+    )
+    confluence_levels = [level for level in fallback_levels if level is not None and abs(level - swept_level) <= tolerance]
+    if confluence_levels:
+        level = min(confluence_levels, key=lambda value: abs(value - swept_level))
+        return (
+            SignalLayerCheck(
+                name="sweep_htf_level_confluence",
+                status="passed",
+                score=round(abs(level - swept_level) / atr, 3),
+                reason=(
+                    f"Swept level {swept_level:.8f} aligns with {context_features.timeframe} "
+                    f"{level_kind} {level:.8f}"
+                ),
+                metadata={
+                    "swept_level": swept_level,
+                    "context_level": level,
+                    "context_timeframe": context_features.timeframe,
+                },
+            ),
+            10,
+        )
+
+    return (
+        SignalLayerCheck(
+            name="sweep_htf_level_confluence",
+            status="skipped",
+            reason=f"No higher-timeframe {level_kind} confluence near swept level {swept_level:.8f}",
+        ),
+        0,
+    )
 
 
 def _macro_regime_score_adjustment(strategy: str, alignment: str, strength: str) -> int:
@@ -1716,7 +1863,7 @@ def _target_rr(signal: StrategySignal, target: float | None) -> float | None:
         reward = target - entry
     else:
         reward = entry - target
-    return round(reward / risk, 4)
+    return round(max(0.0, reward) / risk, 4)
 
 
 def _hide_failed_rr_signals(params: Mapping[str, Any]) -> bool:

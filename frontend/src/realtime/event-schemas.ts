@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { RadarSignalSchema, RadarStatusSchema, SignalSideSchema, TradeJournalEntrySchema } from "@/validation/common-schemas";
+import { RadarSignalSchema, RadarStatusSchema, SignalSideSchema, TradeInvalidationAlertSchema, TradeJournalEntrySchema } from "@/validation/common-schemas";
 
 const EventEnvelopeBaseSchema = z.object({
   id: z.string().min(1),
@@ -112,6 +112,18 @@ const TradePayloadSchema = z.object({
   closeReason: z.string().nullable().optional()
 });
 
+const TradeInvalidationPayloadSchema = z.object({
+  alert: TradeInvalidationAlertSchema,
+  tradeId: z.string().min(1),
+  signalId: z.string().nullable(),
+  pair: z.string().min(1),
+  exchange: z.string().min(1),
+  side: SignalSideSchema,
+  reason: z.string().nullable().optional(),
+  triggeredConditions: z.array(z.string()).default([]),
+  fingerprint: z.string().nullable().optional()
+});
+
 export const StandardRealtimeEventSchema = z.discriminatedUnion("type", [
   EventEnvelopeBaseSchema.extend({
     type: z.literal("signal.created"),
@@ -152,6 +164,10 @@ export const StandardRealtimeEventSchema = z.discriminatedUnion("type", [
   EventEnvelopeBaseSchema.extend({
     type: z.literal("trade.closed"),
     payload: TradePayloadSchema
+  }),
+  EventEnvelopeBaseSchema.extend({
+    type: z.literal("trade.invalidation"),
+    payload: TradeInvalidationPayloadSchema
   }),
   EventEnvelopeBaseSchema.extend({
     type: z.literal("exchange.disconnected"),

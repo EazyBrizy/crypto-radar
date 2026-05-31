@@ -16,6 +16,8 @@ from app.schemas.trade import (
     CloseVirtualTradeRequest,
     RealConfirmRequest,
     RealExecutionResult,
+    TradeInvalidationActionRequest,
+    TradeInvalidationActionResponse,
     TradeInvalidationAlert,
     TradeJournalEntry,
     TradeJournalResponse,
@@ -176,6 +178,31 @@ async def get_trade_invalidation(trade_id: str) -> TradeInvalidationAlert:
     )
 
 
+@router.post("/{trade_id}/invalidation/actions", response_model=TradeInvalidationActionResponse)
+async def record_trade_invalidation_action(
+    trade_id: str,
+    request: TradeInvalidationActionRequest,
+) -> TradeInvalidationActionResponse:
+    trade = virtual_trading_service.get_virtual_trade(trade_id)
+    if trade is None:
+        trade = virtual_trading_service.get_real_trade(trade_id)
+    if trade is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Trade is not found",
+        )
+    alert = trade_invalidation_service.record_user_action(
+        trade,
+        request.action,
+        user_id=request.user_id,
+    )
+    return TradeInvalidationActionResponse(
+        action=request.action,
+        alert=alert,
+        message=_trade_invalidation_action_message(request.action),
+    )
+
+
 @router.get("/virtual/{trade_id}", response_model=VirtualTrade)
 async def get_virtual_trade(trade_id: str) -> VirtualTrade:
     trade = virtual_trading_service.get_virtual_trade(trade_id)
@@ -209,6 +236,11 @@ async def close_market_trade(
 ) -> CloseMarketTradeResponse:
     virtual_trade = virtual_trading_service.get_virtual_trade(trade_id)
     if virtual_trade is not None:
+        invalidation_alert = (
+            trade_invalidation_service.evaluate_trade(virtual_trade)
+            if request.reason == "invalidation"
+            else None
+        )
         was_open = virtual_trade.status == "open"
         closed_trade = virtual_trading_service.close_virtual_trade(
             trade_id,
@@ -218,6 +250,12 @@ async def close_market_trade(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Virtual trade is not found",
+            )
+        if invalidation_alert is not None:
+            trade_invalidation_service.record_user_action(
+                virtual_trade,
+                "close_market",
+                alert=invalidation_alert,
             )
         if was_open:
             await _publish_virtual_close_events(closed_trade)
@@ -251,11 +289,23 @@ async def close_virtual_trade(
     trade_id: str,
     request: CloseVirtualTradeRequest,
 ) -> VirtualTrade:
+    current_trade = virtual_trading_service.get_virtual_trade(trade_id)
+    invalidation_alert = (
+        trade_invalidation_service.evaluate_trade(current_trade)
+        if current_trade is not None and request.reason == "invalidation"
+        else None
+    )
     trade = virtual_trading_service.close_virtual_trade(trade_id, request)
     if trade is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Виртуальная сделка не найдена",
+        )
+    if current_trade is not None and invalidation_alert is not None:
+        trade_invalidation_service.record_user_action(
+            current_trade,
+            "close_market",
+            alert=invalidation_alert,
         )
     await _publish_virtual_close_events(trade)
     return trade
@@ -275,3 +325,11 @@ def _close_market_message(reason: str) -> str:
     if reason == "invalidation":
         return "Virtual position closed at market because the strategy idea was invalidated."
     return "Virtual position closed at market with exit fees applied."
+
+
+def _trade_invalidation_action_message(action: str) -> str:
+    if action == "keep_stop_loss":
+        return "Strategy invalidation prompt dismissed; stop loss remains active."
+    if action == "close_market":
+        return "Strategy invalidation close-market decision was recorded."
+    return "Strategy invalidation prompt dismissed."

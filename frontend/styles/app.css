@@ -756,6 +756,8 @@ h3 { font-size: 15px; line-height: 1.3; }
 }
 
 .decision-block,
+.pullback-guidance-block,
+.risk-reward-detail-block,
 .execution-quality-block,
 .strategy-layers-block,
 .confidence-breakdown,
@@ -773,6 +775,47 @@ h3 { font-size: 15px; line-height: 1.3; }
 .decision-block p { color: #9ca3af; font-size: 13px; }
 .decision-block strong { display: block; margin: 6px 0; font-size: 17px; }
 .trade-setup { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.pullback-guidance-block {
+  border-color: #92400e;
+  background: #171407;
+}
+
+.pullback-guidance-block .section-title {
+  justify-content: flex-start;
+}
+
+.pullback-guidance-block p {
+  margin: 8px 0 0;
+  color: #fde68a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.pullback-guidance-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.risk-reward-detail-block .section-title {
+  justify-content: flex-start;
+}
+
+.risk-reward-detail-block p {
+  margin: 8px 0 0;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.risk-reward-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
 
 .execution-quality-block .section-title {
   justify-content: flex-start;
@@ -1901,6 +1944,79 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   font-size: 12px;
 }
 
+.strategy-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.strategy-scope-grid > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.strategy-scope-grid > div > span {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.strategy-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.strategy-context-grid {
+  grid-column: 1 / -1;
+}
+
+.strategy-context-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 7px;
+}
+
+.strategy-context-select {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.strategy-context-select span {
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.strategy-context-select select {
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid #263449;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+}
+
+.strategy-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid #263449;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.strategy-scope-chip input,
+.strategy-pair-option input {
+  accent-color: #22c55e;
+}
+
 .strategy-quality-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1955,6 +2071,10 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   background: #0f172a;
   color: #cbd5e1;
   font-size: 12px;
+}
+
+.strategy-pair-option:has(input:disabled) {
+  color: #64748b;
 }
 
 .strategy-pair-option span {
@@ -2083,6 +2203,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .risk-mode-grid,
   .compact-risk-grid,
   .strategy-quality-grid,
+  .strategy-scope-grid,
   .strategy-pair-grid,
   .strategy-multiplier-grid,
   .risk-guide-intro,
@@ -2109,6 +2230,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
   .metrics-grid,
   .execution-quality-grid,
+  .pullback-guidance-grid,
+  .risk-reward-detail-grid,
   .strategy-layer-grid,
   .trade-setup,
   .virtual-account-strip,
@@ -2137,9 +2260,12 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 @media (max-width: 560px) {
+  .pullback-guidance-grid,
+  .risk-reward-detail-grid,
   .strategy-layer-grid,
   .strategy-config-header,
   .strategy-quality-grid,
+  .strategy-scope-grid,
   .strategy-pair-toolbar,
   .strategy-pair-grid,
   .risk-guide-intro,

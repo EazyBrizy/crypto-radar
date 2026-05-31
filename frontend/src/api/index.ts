@@ -37,6 +37,7 @@ export const api = {
   closedTrades: tradesApi.closed,
   closeMarketTrade: tradesApi.closeMarket,
   tradeInvalidation: tradesApi.invalidation,
+  tradeInvalidationAction: tradesApi.invalidationAction,
   journalHistory: journalApi.history,
   notifications: notificationsApi.list,
   createNotification: notificationsApi.create,

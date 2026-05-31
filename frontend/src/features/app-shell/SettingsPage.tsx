@@ -83,6 +83,23 @@ const RISK_PROFILES: Array<{
   { value: "custom", label: "Custom", caption: "Manual limits" }
 ];
 
+const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
+const MAX_BODY_ATR_DEFAULTS: Record<string, number> = {
+  trend_pullback_continuation: 2.0,
+  volatility_squeeze_breakout: 2.5,
+  liquidity_sweep_reversal: 2.0
+};
+const MAX_RANGE_ATR_DEFAULTS: Record<string, number> = {
+  trend_pullback_continuation: 3.0,
+  volatility_squeeze_breakout: 3.5,
+  liquidity_sweep_reversal: 3.8
+};
+const RR_TARGET_DEFAULTS: Record<string, "final" | "nearest"> = {
+  trend_pullback_continuation: "final",
+  volatility_squeeze_breakout: "final",
+  liquidity_sweep_reversal: "nearest"
+};
+
 type RiskNumericField =
   | "risk_per_trade_percent"
   | "min_rr_ratio"
@@ -558,7 +575,10 @@ export function SettingsPage({
   const [pairId, setPairId] = useState("");
   const [conditionType, setConditionType] = useState("price_above");
   const [targetPrice, setTargetPrice] = useState("");
-  const supportedExchanges = config?.exchanges?.length ? config.exchanges : ["bybit"];
+  const supportedExchanges = useMemo(
+    () => config?.exchanges?.length ? config.exchanges : ["bybit"],
+    [config]
+  );
   const [exchangeCode, setExchangeCode] = useState(supportedExchanges[0] ?? "bybit");
   const [connectionLabel, setConnectionLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -568,6 +588,13 @@ export function SettingsPage({
   const selectedPair = useMemo(
     () => availablePairs.find((pair) => pair.id === pairId) ?? availablePairs[0] ?? null,
     [availablePairs, pairId]
+  );
+  const availableStrategyExchanges = useMemo(
+    () => dedupeStrings([
+      ...supportedExchanges,
+      ...availablePairs.map((pair) => pair.exchange)
+    ]),
+    [availablePairs, supportedExchanges]
   );
   const simulationLevel = userProfile?.settings.virtual_trading.simulation_level ?? "mvp";
   const riskManagement = userProfile?.settings.risk_management ?? defaultRiskManagement();
@@ -688,6 +715,32 @@ export function SettingsPage({
       ? [...configItem.pairs, pairScope]
       : configItem.pairs.filter((item) => !(item.exchange === pair.exchange && item.symbol === pair.symbol));
     await onUpdateStrategyConfig(configItem.id, { pairs: dedupeStrategyPairs(nextPairs) });
+  }
+
+  async function handleToggleStrategyExchange(configItem: StrategyConfig, exchange: string, checked: boolean) {
+    const nextExchanges = checked
+      ? [...configItem.exchanges, exchange]
+      : configItem.exchanges.filter((item) => item !== exchange);
+    if (!checked && nextExchanges.length === 0) return;
+    await onUpdateStrategyConfig(configItem.id, { exchanges: dedupeStrings(nextExchanges) });
+  }
+
+  async function handleToggleStrategyTimeframe(configItem: StrategyConfig, timeframe: string, checked: boolean) {
+    const nextTimeframes = checked
+      ? [...configItem.timeframes, timeframe]
+      : configItem.timeframes.filter((item) => item !== timeframe);
+    if (!checked && nextTimeframes.length === 0) return;
+    await onUpdateStrategyConfig(configItem.id, { timeframes: dedupeStrings(nextTimeframes) });
+  }
+
+  async function handleStrategyContextTimeframe(configItem: StrategyConfig, signalTimeframe: string, contextTimeframe: string) {
+    const nextMap = { ...getContextTimeframeMap(configItem.params) };
+    if (contextTimeframe) {
+      nextMap[signalTimeframe] = contextTimeframe;
+    } else {
+      delete nextMap[signalTimeframe];
+    }
+    await onUpdateStrategyConfig(configItem.id, { params: { context_timeframe_map: nextMap } });
   }
 
   async function handleUseAllPairs(configItem: StrategyConfig) {
@@ -878,12 +931,24 @@ export function SettingsPage({
           <div className="section-title"><SlidersHorizontal size={18} /><h3>Strategies</h3></div>
           <div className="strategy-config-list">
             {strategyConfigs.length === 0 ? <div className="empty-state compact-empty">No strategy configs</div> : null}
-            {strategyConfigs.map((strategyConfig) => (
-              <div className="strategy-config-row" key={strategyConfig.id}>
+            {strategyConfigs.map((strategyConfig) => {
+              const strategyExchangeOptions = dedupeStrings([
+                ...availableStrategyExchanges,
+                ...strategyConfig.exchanges
+              ]);
+              const contextTimeframeMap = getContextTimeframeMap(strategyConfig.params);
+              return (
+                <div className="strategy-config-row" key={strategyConfig.id}>
                 <div className="strategy-config-header">
                   <div>
                     <strong>{strategyConfig.strategy_name}</strong>
-                    <span>{strategyConfig.pairs.length ? `${strategyConfig.pairs.length} selected pairs` : "All pairs - quality filter on"}</span>
+                    <span>
+                      {strategyConfig.pairs.length ? `${strategyConfig.pairs.length} selected pairs` : "All pairs - quality filter on"}
+                      {" · "}
+                      {strategyConfig.exchanges.join(", ")}
+                      {" · "}
+                      {strategyConfig.timeframes.join(", ")}
+                    </span>
                   </div>
                   <label className="toggle-row compact-toggle">
                     <input
@@ -894,6 +959,67 @@ export function SettingsPage({
                     />
                     <span>{strategyConfig.is_enabled ? "On" : "Off"}</span>
                   </label>
+                </div>
+
+                <div className="strategy-scope-grid">
+                  <div>
+                    <span>Exchanges</span>
+                    <div className="strategy-chip-row">
+                      {strategyExchangeOptions.map((exchange) => {
+                        const checked = strategyConfig.exchanges.includes(exchange);
+                        return (
+                          <label className="strategy-scope-chip" key={`${strategyConfig.id}:exchange:${exchange}`}>
+                            <input
+                              checked={checked}
+                              disabled={busy || (checked && strategyConfig.exchanges.length <= 1)}
+                              onChange={(event) => handleToggleStrategyExchange(strategyConfig, exchange, event.target.checked)}
+                              type="checkbox"
+                            />
+                            <span>{exchange}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <span>Timeframes</span>
+                    <div className="strategy-chip-row">
+                      {STRATEGY_TIMEFRAMES.map((timeframe) => {
+                        const checked = strategyConfig.timeframes.includes(timeframe);
+                        return (
+                          <label className="strategy-scope-chip" key={`${strategyConfig.id}:timeframe:${timeframe}`}>
+                            <input
+                              checked={checked}
+                              disabled={busy || (checked && strategyConfig.timeframes.length <= 1)}
+                              onChange={(event) => handleToggleStrategyTimeframe(strategyConfig, timeframe, event.target.checked)}
+                              type="checkbox"
+                            />
+                            <span>{timeframe}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="strategy-context-grid">
+                    <span>Context TF</span>
+                    <div className="strategy-context-row">
+                      {strategyConfig.timeframes.map((timeframe) => (
+                        <label className="strategy-context-select" key={`${strategyConfig.id}:context:${timeframe}`}>
+                          <span>{timeframe}</span>
+                          <select
+                            disabled={busy}
+                            onChange={(event) => handleStrategyContextTimeframe(strategyConfig, timeframe, event.target.value)}
+                            value={contextTimeframeMap[timeframe] ?? ""}
+                          >
+                            <option value="">Default</option>
+                            {contextTimeframeOptions(timeframe).map((option) => (
+                              <option key={option} value={option}>{option}</option>
+                            ))}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="strategy-quality-grid">
@@ -931,6 +1057,59 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
+                    <span>Min S/R ATR</span>
+                    <input
+                      defaultValue={String(Number(strategyConfig.params.context_obstacle_min_atr ?? 1))}
+                      disabled={busy}
+                      inputMode="decimal"
+                      key={`${strategyConfig.id}:context_obstacle_min_atr:${String(strategyConfig.params.context_obstacle_min_atr ?? "")}`}
+                      min="0"
+                      onBlur={(event) => handleStrategyParamBlur(strategyConfig, "context_obstacle_min_atr", event.target.value)}
+                      step="0.1"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>S/R strength</span>
+                    <input
+                      defaultValue={String(Number(strategyConfig.params.context_level_min_strength ?? 25))}
+                      disabled={busy}
+                      inputMode="decimal"
+                      key={`${strategyConfig.id}:context_level_min_strength:${String(strategyConfig.params.context_level_min_strength ?? "")}`}
+                      max="100"
+                      min="0"
+                      onBlur={(event) => handleStrategyParamBlur(strategyConfig, "context_level_min_strength", event.target.value)}
+                      step="1"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>Max body ATR</span>
+                    <input
+                      defaultValue={String(Number(strategyConfig.params.max_body_atr ?? defaultMaxBodyAtr(strategyConfig.strategy_code)))}
+                      disabled={busy}
+                      inputMode="decimal"
+                      key={`${strategyConfig.id}:max_body_atr:${String(strategyConfig.params.max_body_atr ?? "")}`}
+                      min="0.5"
+                      onBlur={(event) => handleStrategyParamBlur(strategyConfig, "max_body_atr", event.target.value)}
+                      step="0.1"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>Max range ATR</span>
+                    <input
+                      defaultValue={String(Number(strategyConfig.params.max_range_atr ?? defaultMaxRangeAtr(strategyConfig.strategy_code)))}
+                      disabled={busy}
+                      inputMode="decimal"
+                      key={`${strategyConfig.id}:max_range_atr:${String(strategyConfig.params.max_range_atr ?? "")}`}
+                      min="1"
+                      onBlur={(event) => handleStrategyParamBlur(strategyConfig, "max_range_atr", event.target.value)}
+                      step="0.1"
+                      type="number"
+                    />
+                  </label>
+                  <label>
                     <span>Min RR</span>
                     <input
                       defaultValue={String(Number(strategyConfig.risk_settings.min_rr_ratio ?? riskManagement.min_rr_ratio ?? 2))}
@@ -948,7 +1127,7 @@ export function SettingsPage({
                     <select
                       disabled={busy}
                       onChange={(event) => handleStrategyRiskValue(strategyConfig, "rr_target", event.target.value)}
-                      value={String(strategyConfig.risk_settings.rr_target ?? "final")}
+                      value={String(strategyConfig.risk_settings.rr_target ?? defaultRrTarget(strategyConfig.strategy_code))}
                     >
                       <option value="final">Final target</option>
                       <option value="nearest">Nearest target</option>
@@ -975,21 +1154,24 @@ export function SettingsPage({
                 <div className="strategy-pair-grid">
                   {availablePairs.map((pair) => {
                     const checked = strategyConfig.pairs.some((item) => item.exchange === pair.exchange && item.symbol === pair.symbol);
+                    const active = pair.status === "active";
                     return (
                       <label className="strategy-pair-option" key={`${strategyConfig.id}:${pair.id}`}>
                         <input
                           checked={checked}
-                          disabled={busy}
+                          disabled={busy || !active}
                           onChange={(event) => handleToggleStrategyPair(strategyConfig, pair, event.target.checked)}
                           type="checkbox"
                         />
                         <span>{pair.exchange}:{pair.symbol}</span>
+                        {!active ? <Badge tone="yellow">{pair.status}</Badge> : null}
                       </label>
                     );
                   })}
                 </div>
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -1782,6 +1964,41 @@ function dedupeStrategyPairs(pairs: Array<{ exchange: string; symbol: string }>)
     seen.add(key);
     return true;
   });
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean)));
+}
+
+function getContextTimeframeMap(params: Record<string, unknown>): Record<string, string> {
+  const rawMap = params.context_timeframe_map;
+  if (!rawMap || typeof rawMap !== "object" || Array.isArray(rawMap)) return {};
+  return Object.fromEntries(
+    Object.entries(rawMap)
+      .map(([signalTimeframe, contextTimeframe]) => [
+        signalTimeframe.trim().toLowerCase(),
+        String(contextTimeframe).trim().toLowerCase()
+      ])
+      .filter(([signalTimeframe, contextTimeframe]) => signalTimeframe && contextTimeframe && contextTimeframe !== "default")
+  );
+}
+
+function contextTimeframeOptions(signalTimeframe: string): string[] {
+  const index = STRATEGY_TIMEFRAMES.indexOf(signalTimeframe);
+  if (index < 0) return STRATEGY_TIMEFRAMES;
+  return STRATEGY_TIMEFRAMES.slice(index + 1);
+}
+
+function defaultMaxBodyAtr(strategyCode: string): number {
+  return MAX_BODY_ATR_DEFAULTS[strategyCode] ?? 2.5;
+}
+
+function defaultMaxRangeAtr(strategyCode: string): number {
+  return MAX_RANGE_ATR_DEFAULTS[strategyCode] ?? 3.5;
+}
+
+function defaultRrTarget(strategyCode: string): "final" | "nearest" {
+  return RR_TARGET_DEFAULTS[strategyCode] ?? "final";
 }
 
 function riskProtectionTone(mode: RiskProtectionMode): "green" | "red" | "yellow" | "blue" {

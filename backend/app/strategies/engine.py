@@ -3,6 +3,7 @@ from typing import Any, List, Mapping
 
 from app.schemas.market import Features
 from app.schemas.signal import StrategySignal
+from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
 from app.strategies.liquidity_sweep import LiquiditySweepReversalStrategy
 from app.strategies.pipeline import MarketQualityInput, StrategyEvaluationContext, StrategySignalPipeline
@@ -33,6 +34,7 @@ class StrategyEngine:
         features: Features,
         context_features: Features | None = None,
         context_features_by_timeframe: Mapping[str, Features] | None = None,
+        support_resistance_by_timeframe: Mapping[str, SupportResistanceSnapshot] | None = None,
         market_quality: MarketQualityInput | None = None,
         strategy_configs: Mapping[str, Any] | None = None,
     ) -> List[StrategySignal]:
@@ -47,6 +49,7 @@ class StrategyEngine:
                 signal_features=features,
                 context_features=context_features,
                 context_features_by_timeframe=context_features_by_timeframe or {},
+                support_resistance_by_timeframe=support_resistance_by_timeframe or {},
                 market_quality=market_quality,
                 strategy_params=strategy_params,
                 pair_scope_configured=bool(getattr(runtime_config, "pair_scope_configured", False)),

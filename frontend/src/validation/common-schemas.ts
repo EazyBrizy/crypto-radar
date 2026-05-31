@@ -65,7 +65,8 @@ export const SignalLayerCheckSchema = z.object({
   name: z.string(),
   status: z.enum(["passed", "warning", "failed", "skipped"]).default("passed"),
   score: z.number().nullable().optional(),
-  reason: z.string().nullable().optional()
+  reason: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).default({})
 });
 
 export const RadarSignalSchema = z.object({
@@ -76,6 +77,11 @@ export const RadarSignalSchema = z.object({
   direction: SignalDirectionSchema,
   confidence: z.number(),
   risk_reward: z.number().nullable().optional(),
+  first_target_rr: z.number().nullable().optional(),
+  final_target_rr: z.number().nullable().optional(),
+  selected_rr: z.number().nullable().optional(),
+  selected_rr_target: z.string().nullable().optional(),
+  min_rr_ratio: z.number().nullable().optional(),
   urgency: z.enum(["low", "medium", "high"]).default("medium"),
   status: SignalStatusSchema.default("active"),
   score: z.number().default(0),
@@ -246,6 +252,31 @@ export const TradeJournalEntrySchema = z.object({
   opened_at: z.string(),
   updated_at: z.string(),
   closed_at: z.string().nullable().optional()
+});
+
+export const TradeInvalidationAlertSchema = z.object({
+  trade_id: z.string(),
+  signal_id: z.string().nullable().optional(),
+  exchange: z.string(),
+  symbol: z.string(),
+  strategy: z.string(),
+  timeframe: z.string(),
+  side: SignalDirectionSchema,
+  status: z.enum(["valid", "invalidated", "unavailable"]),
+  invalidated: z.boolean().default(false),
+  reason: z.string().nullable().optional(),
+  triggered_conditions: z.array(z.string()).default([]),
+  watched_conditions: z.array(z.string()).default([]),
+  suggested_action: z.enum(["none", "close_market_or_wait_stop"]).default("none"),
+  current_price: z.number(),
+  stop_loss: z.number(),
+  invalidation_price: z.number().nullable().optional(),
+  detected_at: z.string(),
+  fingerprint: z.string().nullable().optional(),
+  user_action: z.enum(["close_market", "keep_stop_loss", "dismissed"]).nullable().optional(),
+  user_action_at: z.string().nullable().optional(),
+  action_dismissed: z.boolean().default(false),
+  metadata: z.record(z.string(), z.unknown()).default({})
 });
 
 export const RadarStatusSchema = z.object({

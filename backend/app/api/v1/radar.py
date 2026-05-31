@@ -33,7 +33,7 @@ async def update_radar_config(
     request: Request,
 ) -> RadarConfig:
     config = radar_config_service.update_config(update)
-    candle_service.configure_timeframes(config.timeframes)
+    candle_service.configure_timeframes(radar_config_service.selected_timeframes())
     runner = getattr(request.app.state, "scanner_runner", None)
     if runner is not None:
         await runner.reconfigure()
@@ -78,6 +78,8 @@ def _scanner_status(
         "scanner_enabled": enabled,
         "scanner_running": False,
         "scanner_stopping": False,
+        "scanner_subscription_hash": radar_config_service.scanner_subscription_hash(),
+        "strategy_config_hash": radar_config_service.strategy_config_hash(),
         "processed_signals": 0,
         "exchanges": [],
         "symbols": [],

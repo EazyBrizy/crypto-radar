@@ -18,6 +18,7 @@ export type TradeCloseReason = "take_profit" | "stop_loss" | "manual_close" | "i
 export type CloseMarketTradeStatus = "closed" | "not_implemented";
 export type TradeInvalidationStatus = "valid" | "invalidated" | "unavailable";
 export type TradeInvalidationAction = "none" | "close_market_or_wait_stop";
+export type TradeInvalidationUserAction = "close_market" | "keep_stop_loss" | "dismissed";
 export type VirtualSimulationMode = "passive" | "impact_aware";
 export type VirtualSimulationTier = "mvp" | "advanced" | "pro";
 export type VirtualExecutionStatus = "filled" | "partially_filled" | "rejected_virtual_execution";
@@ -73,6 +74,7 @@ export interface SignalLayerCheck {
   status: LayerCheckStatus;
   score: number | null;
   reason: string | null;
+  metadata: Record<string, unknown>;
 }
 
 export interface MarketQualitySnapshot {
@@ -129,6 +131,11 @@ export interface RadarSignal {
   direction: SignalDirection;
   confidence: number;
   risk_reward: number | null;
+  first_target_rr: number | null;
+  final_target_rr: number | null;
+  selected_rr: number | null;
+  selected_rr_target: string | null;
+  min_rr_ratio: number | null;
   urgency: "low" | "medium" | "high";
   status: SignalStatus;
   score: number;
@@ -539,7 +546,17 @@ export interface TradeInvalidationAlert {
   stop_loss: number;
   invalidation_price: number | null;
   detected_at: string;
+  fingerprint: string | null;
+  user_action: TradeInvalidationUserAction | null;
+  user_action_at: string | null;
+  action_dismissed: boolean;
   metadata: Record<string, unknown>;
+}
+
+export interface TradeInvalidationActionResponse {
+  action: TradeInvalidationUserAction;
+  alert: TradeInvalidationAlert;
+  message: string;
 }
 
 export interface VirtualAccount {
@@ -598,6 +615,8 @@ export interface RadarStatus extends HealthStatus {
   symbols: string[];
   timeframes: string[];
   strategies: string[];
+  scanner_subscription_hash: string | null;
+  strategy_config_hash: string | null;
   ticks_processed: number;
   candles_updated: number;
   features_built: number;

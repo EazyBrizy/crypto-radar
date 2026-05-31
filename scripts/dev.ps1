@@ -236,6 +236,35 @@ function Normalize-PathEnvironment {
     $Environment[$preferredKey] = $preferredValue
 }
 
+function Invoke-BackendCommand {
+    param(
+        [string]$Name,
+        [string[]]$Arguments,
+        [hashtable]$Environment = @{}
+    )
+
+    Write-Info $Name
+    $previousEnvironment = @{}
+    foreach ($key in $Environment.Keys) {
+        $previousEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+        [Environment]::SetEnvironmentVariable($key, [string]$Environment[$key], "Process")
+    }
+
+    Push-Location $BackendDir
+    try {
+        & $BackendPython @Arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "$Name failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+        foreach ($key in $Environment.Keys) {
+            [Environment]::SetEnvironmentVariable($key, $previousEnvironment[$key], "Process")
+        }
+    }
+}
+
 if (Test-PythonExecutable -Path $BackendVenvPython) {
     $BackendPython = $BackendVenvPython
 }
@@ -294,6 +323,11 @@ if ($BackendPythonPath) {
 if ($NoScanner) {
     $backendEnv["CRYPTO_RADAR_SCANNER_ENABLED"] = "false"
 }
+
+Invoke-BackendCommand `
+    -Name "Applying database migrations..." `
+    -Arguments @("-m", "alembic", "upgrade", "head") `
+    -Environment $backendEnv
 
 $frontendEnv = @{
     NEXT_DEV_HOST = $FrontendHost

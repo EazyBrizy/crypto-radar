@@ -7,6 +7,7 @@ import { RadarPage } from "@/features/app-shell/RadarPage";
 import {
   useConfirmVirtualMutation,
   useHealthQuery,
+  useHistoricalSignalsQuery,
   useOpenSignalsQuery,
   useRadarStatusQuery,
   useRejectSignalMutation,
@@ -26,6 +27,7 @@ export function RadarRoute() {
   const setFilter = useUiStore((state) => state.setSignalFilter);
   const [actionError, setActionError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | SignalStatus>("all");
+  const [signalView, setSignalView] = useState<"open" | "history">("open");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const tradingActionsDisabled = useTradingActionsDisabled();
   const signalIds = useSignalStore((state) => state.signalIds);
@@ -35,6 +37,7 @@ export function RadarRoute() {
   const healthQuery = useHealthQuery();
   const radarStatusQuery = useRadarStatusQuery();
   const openSignalsQuery = useOpenSignalsQuery();
+  const historicalSignalsQuery = useHistoricalSignalsQuery();
   const confirmVirtualMutation = useConfirmVirtualMutation();
   const rejectSignalMutation = useRejectSignalMutation();
 
@@ -51,31 +54,38 @@ export function RadarRoute() {
     () => signalIds.map((signalId) => signalsById[signalId]).filter((signal): signal is RadarSignal => Boolean(signal) && isOpenFeedSignal(signal, nowMs)),
     [nowMs, signalIds, signalsById]
   );
+  const historicalSignals = useMemo(
+    () => (historicalSignalsQuery.data ?? []).filter((signal) => signal.status === "invalidated" || signal.status === "expired"),
+    [historicalSignalsQuery.data]
+  );
+  const sourceSignals = signalView === "history" ? historicalSignals : signals;
   const visibleSignals = useMemo(() => {
-    return signals.filter((signal) => {
+    return sourceSignals.filter((signal) => {
       const directionMatches = filter === "all" || signal.direction === filter;
       const statusMatches = statusFilter === "all" || signal.status === statusFilter;
       return directionMatches && statusMatches;
     });
-  }, [filter, signals, statusFilter]);
+  }, [filter, sourceSignals, statusFilter]);
   const visibleSignalIds = useMemo(() => visibleSignals.map((signal) => signal.id), [visibleSignals]);
   const selectedSignal = useMemo(
-    () => signals.find((signal) => signal.id === selectedSignalId) ?? visibleSignals[0] ?? null,
-    [selectedSignalId, signals, visibleSignals]
+    () => sourceSignals.find((signal) => signal.id === selectedSignalId) ?? visibleSignals[0] ?? null,
+    [selectedSignalId, sourceSignals, visibleSignals]
   );
   const executionPreviewQuery = useSignalExecutionPreviewQuery(selectedSignal?.id ?? null, {
-    enabled: Boolean(selectedSignal) && !tradingActionsDisabled
+    enabled: Boolean(selectedSignal) && signalView === "open" && !tradingActionsDisabled
   });
-  const loading = [healthQuery, radarStatusQuery, openSignalsQuery].some((query) => query.isLoading);
+  const loading = [healthQuery, radarStatusQuery, openSignalsQuery].some((query) => query.isLoading)
+    || (signalView === "history" && historicalSignalsQuery.isLoading);
   const busy = confirmVirtualMutation.isPending || rejectSignalMutation.isPending || tradingActionsDisabled;
 
   const refreshData = useCallback(async () => {
     await Promise.all([
       healthQuery.refetch(),
       radarStatusQuery.refetch(),
-      openSignalsQuery.refetch()
+      openSignalsQuery.refetch(),
+      historicalSignalsQuery.refetch()
     ]);
-  }, [healthQuery, openSignalsQuery, radarStatusQuery]);
+  }, [healthQuery, historicalSignalsQuery, openSignalsQuery, radarStatusQuery]);
 
   const handleSelectSignal = useCallback((signal: RadarSignal) => {
     setActionError(null);
@@ -112,6 +122,7 @@ export function RadarRoute() {
   return (
     <RadarPage
       signals={visibleSignals}
+      signalView={signalView}
       selectedSignal={selectedSignal}
       health={healthQuery.data ?? radarStatusQuery.data ?? null}
       radarStatus={radarStatusQuery.data ?? null}
@@ -125,6 +136,7 @@ export function RadarRoute() {
       filter={filter}
       statusFilter={statusFilter}
       onFilterChange={setFilter}
+      onSignalViewChange={setSignalView}
       onStatusFilterChange={setStatusFilter}
       onRefresh={() => void refreshData()}
       onSelectSignal={handleSelectSignal}

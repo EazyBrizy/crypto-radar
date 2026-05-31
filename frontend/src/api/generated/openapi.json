@@ -2153,6 +2153,105 @@
         }
       }
     },
+    "/api/v1/strategies/configs": {
+      "get": {
+        "tags": [
+          "strategies"
+        ],
+        "summary": "List Strategy Configs",
+        "operationId": "list_strategy_configs_api_v1_strategies_configs_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "demo_user",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StrategyConfigResponse"
+                  },
+                  "title": "Response List Strategy Configs Api V1 Strategies Configs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategies/configs/{config_id}": {
+      "patch": {
+        "tags": [
+          "strategies"
+        ],
+        "summary": "Update Strategy Config",
+        "operationId": "update_strategy_config_api_v1_strategies_configs__config_id__patch",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyConfigUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/trades": {
       "get": {
         "tags": [
@@ -2642,6 +2741,100 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VirtualSimulationModelInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trades/{trade_id}/invalidation": {
+      "get": {
+        "tags": [
+          "trades"
+        ],
+        "summary": "Get Trade Invalidation",
+        "operationId": "get_trade_invalidation_api_v1_trades__trade_id__invalidation_get",
+        "parameters": [
+          {
+            "name": "trade_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Trade Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradeInvalidationAlert"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trades/{trade_id}/invalidation/actions": {
+      "post": {
+        "tags": [
+          "trades"
+        ],
+        "summary": "Record Trade Invalidation Action",
+        "operationId": "record_trade_invalidation_action_api_v1_trades__trade_id__invalidation_actions_post",
+        "parameters": [
+          {
+            "name": "trade_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Trade Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TradeInvalidationActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradeInvalidationActionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -4728,6 +4921,7 @@
               "take_profit",
               "stop_loss",
               "manual_close",
+              "invalidation",
               "cancelled"
             ],
             "title": "Reason",
@@ -4798,6 +4992,7 @@
               "take_profit",
               "stop_loss",
               "manual_close",
+              "invalidation",
               "cancelled"
             ],
             "title": "Reason",
@@ -6094,6 +6289,154 @@
         ],
         "title": "MarketPairOption"
       },
+      "MarketQualitySnapshot": {
+        "properties": {
+          "passed": {
+            "type": "boolean",
+            "title": "Passed",
+            "default": true
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "major",
+              "mid_alt",
+              "low_liquidity",
+              "unknown"
+            ],
+            "title": "Tier",
+            "default": "unknown"
+          },
+          "score": {
+            "type": "integer",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Score",
+            "default": 100
+          },
+          "volume_24h_quote": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume 24H Quote"
+          },
+          "spread_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread Bps"
+          },
+          "history_ok": {
+            "type": "boolean",
+            "title": "History Ok",
+            "default": true
+          },
+          "rough_chart_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rough Chart Score"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/SignalLayerCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "title": "MarketQualitySnapshot"
+      },
+      "MarketRegimeSnapshot": {
+        "properties": {
+          "signal_timeframe": {
+            "type": "string",
+            "title": "Signal Timeframe",
+            "default": "stream"
+          },
+          "context_timeframe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Timeframe"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "bullish",
+              "bearish",
+              "range",
+              "unknown"
+            ],
+            "title": "Direction",
+            "default": "unknown"
+          },
+          "strength": {
+            "type": "string",
+            "enum": [
+              "weak",
+              "normal",
+              "strong",
+              "unknown"
+            ],
+            "title": "Strength",
+            "default": "unknown"
+          },
+          "alignment": {
+            "type": "string",
+            "enum": [
+              "aligned",
+              "mixed",
+              "against",
+              "unknown"
+            ],
+            "title": "Alignment",
+            "default": "unknown"
+          },
+          "score_adjustment": {
+            "type": "integer",
+            "title": "Score Adjustment",
+            "default": 0
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/SignalLayerCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "title": "MarketRegimeSnapshot"
+      },
       "NotificationCreateRequest": {
         "properties": {
           "user_id": {
@@ -6720,6 +7063,65 @@
             ],
             "title": "Risk Reward"
           },
+          "first_target_rr": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Target Rr"
+          },
+          "final_target_rr": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Target Rr"
+          },
+          "selected_rr": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Rr"
+          },
+          "selected_rr_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Rr Target"
+          },
+          "min_rr_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Rr Ratio"
+          },
           "urgency": {
             "type": "string",
             "enum": [
@@ -6736,6 +7138,9 @@
               "new",
               "active",
               "watchlist",
+              "ready",
+              "actionable",
+              "wait_for_pullback",
               "confirmed",
               "rejected",
               "expired",
@@ -6829,6 +7234,77 @@
           },
           "score_breakdown": {
             "$ref": "#/components/schemas/SignalScoreBreakdown"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarketQualitySnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "regime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarketRegimeSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "setup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StrategySetupSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalConfirmationSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invalidation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalInvalidationSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exit_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalExitPlanSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "created_at": {
             "type": "string",
@@ -9215,6 +9691,139 @@
         ],
         "title": "SignalAIExplanationResponse"
       },
+      "SignalConfirmationSnapshot": {
+        "properties": {
+          "passed": {
+            "type": "boolean",
+            "title": "Passed",
+            "default": false
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/SignalLayerCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "title": "SignalConfirmationSnapshot"
+      },
+      "SignalExitPlanSnapshot": {
+        "properties": {
+          "targets": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Targets"
+          },
+          "breakeven": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Breakeven"
+          },
+          "trailing": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Trailing"
+          }
+        },
+        "type": "object",
+        "title": "SignalExitPlanSnapshot"
+      },
+      "SignalInvalidationSnapshot": {
+        "properties": {
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "hard_stop": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Stop"
+          },
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Conditions"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "title": "SignalInvalidationSnapshot"
+      },
+      "SignalLayerCheck": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "warning",
+              "failed",
+              "skipped"
+            ],
+            "title": "Status",
+            "default": "passed"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "SignalLayerCheck"
+      },
       "SignalScoreBreakdown": {
         "properties": {
           "trend_score": {
@@ -9363,6 +9972,268 @@
         ],
         "title": "StopLossPlan"
       },
+      "StrategyConfigResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "strategy_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Strategy Version Id"
+          },
+          "strategy_code": {
+            "type": "string",
+            "title": "Strategy Code"
+          },
+          "strategy_name": {
+            "type": "string",
+            "title": "Strategy Name"
+          },
+          "strategy_version": {
+            "type": "string",
+            "title": "Strategy Version"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "exchanges": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exchanges"
+          },
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyPairScope"
+            },
+            "type": "array",
+            "title": "Pairs"
+          },
+          "timeframes": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "1m",
+                "5m",
+                "15m",
+                "1h",
+                "4h",
+                "1d"
+              ]
+            },
+            "type": "array",
+            "title": "Timeframes"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "risk_settings": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Risk Settings"
+          },
+          "is_enabled": {
+            "type": "boolean",
+            "title": "Is Enabled"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "strategy_version_id",
+          "strategy_code",
+          "strategy_name",
+          "strategy_version",
+          "name",
+          "exchanges",
+          "pairs",
+          "timeframes",
+          "params",
+          "is_enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "StrategyConfigResponse"
+      },
+      "StrategyConfigUpdateRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "default": "demo_user"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "exchanges": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchanges"
+          },
+          "pairs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/StrategyPairScope"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pairs"
+          },
+          "timeframes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "1m",
+                    "5m",
+                    "15m",
+                    "1h",
+                    "4h",
+                    "1d"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeframes"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          },
+          "risk_settings": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Settings"
+          },
+          "is_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Enabled"
+          }
+        },
+        "type": "object",
+        "title": "StrategyConfigUpdateRequest"
+      },
+      "StrategyPairScope": {
+        "properties": {
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          }
+        },
+        "type": "object",
+        "required": [
+          "exchange",
+          "symbol"
+        ],
+        "title": "StrategyPairScope"
+      },
+      "StrategySetupSnapshot": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "forming",
+              "ready",
+              "confirmed"
+            ],
+            "title": "Stage",
+            "default": "ready"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/SignalLayerCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "StrategySetupSnapshot"
+      },
       "TakeProfitPlan": {
         "properties": {
           "mode": {
@@ -9463,6 +10334,234 @@
           "action"
         ],
         "title": "TakeProfitTarget"
+      },
+      "TradeInvalidationActionRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "close_market",
+              "keep_stop_loss",
+              "dismissed"
+            ],
+            "title": "Action"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "default": "demo_user"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "TradeInvalidationActionRequest"
+      },
+      "TradeInvalidationActionResponse": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "close_market",
+              "keep_stop_loss",
+              "dismissed"
+            ],
+            "title": "Action"
+          },
+          "alert": {
+            "$ref": "#/components/schemas/TradeInvalidationAlert"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action",
+          "alert",
+          "message"
+        ],
+        "title": "TradeInvalidationActionResponse"
+      },
+      "TradeInvalidationAlert": {
+        "properties": {
+          "trade_id": {
+            "type": "string",
+            "title": "Trade Id"
+          },
+          "signal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Id"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "strategy": {
+            "type": "string",
+            "title": "Strategy"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "invalidated",
+              "unavailable"
+            ],
+            "title": "Status",
+            "default": "valid"
+          },
+          "invalidated": {
+            "type": "boolean",
+            "title": "Invalidated",
+            "default": false
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "triggered_conditions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Triggered Conditions"
+          },
+          "watched_conditions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Watched Conditions"
+          },
+          "suggested_action": {
+            "type": "string",
+            "enum": [
+              "none",
+              "close_market_or_wait_stop"
+            ],
+            "title": "Suggested Action",
+            "default": "none"
+          },
+          "current_price": {
+            "type": "number",
+            "title": "Current Price"
+          },
+          "stop_loss": {
+            "type": "number",
+            "title": "Stop Loss"
+          },
+          "invalidation_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalidation Price"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Detected At"
+          },
+          "fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fingerprint"
+          },
+          "user_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "close_market",
+                  "keep_stop_loss",
+                  "dismissed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Action"
+          },
+          "user_action_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Action At"
+          },
+          "action_dismissed": {
+            "type": "boolean",
+            "title": "Action Dismissed",
+            "default": false
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "trade_id",
+          "exchange",
+          "symbol",
+          "strategy",
+          "timeframe",
+          "side",
+          "current_price",
+          "stop_loss",
+          "detected_at"
+        ],
+        "title": "TradeInvalidationAlert"
       },
       "TradeJournalEntry": {
         "properties": {
@@ -9675,6 +10774,7 @@
                   "take_profit",
                   "stop_loss",
                   "manual_close",
+                  "invalidation",
                   "cancelled"
                 ]
               },
@@ -11019,6 +12119,7 @@
                   "take_profit",
                   "stop_loss",
                   "manual_close",
+                  "invalidation",
                   "cancelled"
                 ]
               },

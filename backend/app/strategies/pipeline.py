@@ -14,6 +14,7 @@ from app.schemas.signal import (
     StrategySetupSnapshot,
     StrategySignal,
 )
+from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
 MAJOR_BASE_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP"}
@@ -36,6 +37,13 @@ MACRO_CONTEXT_TIMEFRAME_BY_SIGNAL: dict[str, str] = {
 
 MIN_CONTEXT_HISTORY = 50
 CONTEXT_OBSTACLE_MIN_ATR = 1.0
+CONTEXT_LEVEL_MIN_STRENGTH = 25.0
+
+CONTEXT_OBSTACLE_MIN_ATR_BY_STRATEGY: dict[str, float] = {
+    "trend_pullback_continuation": 0.8,
+    "volatility_squeeze_breakout": 1.2,
+    "liquidity_sweep_reversal": 0.7,
+}
 
 MIN_HISTORY_BY_STRATEGY: dict[str, int] = {
     "trend_pullback_continuation": 200,
@@ -60,6 +68,11 @@ IMPULSE_BODY_RATIO = 0.7
 EXTREME_CLOSE_LOCATION = 0.8
 REJECTION_WICK_RATIO = 0.45
 DEFAULT_MIN_RR_RATIO = 2.0
+RR_TARGET_BY_STRATEGY: dict[str, str] = {
+    "trend_pullback_continuation": "final",
+    "volatility_squeeze_breakout": "final",
+    "liquidity_sweep_reversal": "nearest",
+}
 
 QUALITY_DEFAULTS_BY_TIER: dict[str, dict[str, float]] = {
     "major": {"min_24h_volume_quote": 25_000_000.0, "max_spread_bps": 15.0, "rough_chart_fail": 5.0},
@@ -82,9 +95,19 @@ class StrategyEvaluationContext:
     signal_features: Features
     context_features: Features | None = None
     context_features_by_timeframe: Mapping[str, Features] = field(default_factory=dict)
+    support_resistance_by_timeframe: Mapping[str, SupportResistanceSnapshot] = field(default_factory=dict)
     strategy_params: Mapping[str, Any] = field(default_factory=dict)
     market_quality: MarketQualityInput | None = None
     pair_scope_configured: bool = False
+
+
+@dataclass(frozen=True)
+class PullbackTarget:
+    price: float | None
+    label: str
+    source: str
+    entry_min: float | None = None
+    entry_max: float | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +118,7 @@ class OverextensionAssessment:
     body_threshold: float
     range_threshold: float
     reason: str
+    pullback_target: PullbackTarget
 
 
 @dataclass(frozen=True)
@@ -102,20 +126,24 @@ class RiskRewardAssessment:
     passed: bool
     rr: float | None
     min_rr: float
+    target_key: str
     target_label: str
     first_target_rr: float | None
     final_target_rr: float | None
     reason: str
 
 
-def context_timeframe_for(timeframe: str) -> str | None:
+def context_timeframe_for(timeframe: str, strategy_params: Mapping[str, Any] | None = None) -> str | None:
+    override = _context_timeframe_override(timeframe, strategy_params or {})
+    if override is not None:
+        return override
     return CONTEXT_TIMEFRAME_BY_SIGNAL.get(timeframe)
 
 
-def context_timeframes_for(timeframe: str) -> tuple[str, ...]:
+def context_timeframes_for(timeframe: str, strategy_params: Mapping[str, Any] | None = None) -> tuple[str, ...]:
     result: list[str] = []
     for candidate in (
-        CONTEXT_TIMEFRAME_BY_SIGNAL.get(timeframe),
+        context_timeframe_for(timeframe, strategy_params),
         MACRO_CONTEXT_TIMEFRAME_BY_SIGNAL.get(timeframe),
     ):
         if candidate and candidate not in result:
@@ -167,20 +195,31 @@ class StrategySignalPipeline:
         if not risk_reward.passed:
             risks.append(risk_reward.reason)
 
-        return signal.model_copy(
-            update={
-                "status": status,
-                "status_reason": status_reason,
-                "quality": quality,
-                "regime": regime,
-                "setup": setup,
-                "confirmation": confirmation,
-                "invalidation": invalidation,
-                "exit_plan": exit_plan,
-                "explanation": explanation,
-                "risks": risks,
-            }
-        )
+        updates: dict[str, Any] = {
+            "status": status,
+            "status_reason": status_reason,
+            "quality": quality,
+            "regime": regime,
+            "setup": setup,
+            "confirmation": confirmation,
+            "invalidation": invalidation,
+            "exit_plan": exit_plan,
+            "first_target_rr": risk_reward.first_target_rr,
+            "final_target_rr": risk_reward.final_target_rr,
+            "selected_rr": risk_reward.rr,
+            "selected_rr_target": risk_reward.target_key,
+            "min_rr_ratio": risk_reward.min_rr,
+            "explanation": explanation,
+            "risks": risks,
+        }
+        if status == "wait_for_pullback":
+            overextension = _overextension_check(confirmation)
+            target = _pullback_target_from_check(overextension)
+            if target is not None:
+                updates["entry_min"] = target.entry_min
+                updates["entry_max"] = target.entry_max
+
+        return signal.model_copy(update=updates)
 
 
 class MarketQualityFilter:
@@ -389,7 +428,7 @@ class MarketRegimeFilter:
         signal_features = context.signal_features
         primary_features = _primary_context_features(context)
         features = primary_features or signal_features
-        expected_context_timeframe = context_timeframe_for(signal_features.timeframe)
+        expected_context_timeframe = context_timeframe_for(signal_features.timeframe, context.strategy_params)
         context_timeframe = features.timeframe if primary_features is not None else expected_context_timeframe
         direction = _trend_direction(features)
         strength = _trend_strength(features)
@@ -468,14 +507,22 @@ class MarketRegimeFilter:
             )
 
         if primary_features is not None:
+            support_resistance = _primary_support_resistance(context)
             obstacle_check, obstacle_adjustment = _context_obstacle_check(
                 signal=signal,
                 signal_features=signal_features,
                 context_features=primary_features,
+                support_resistance=support_resistance,
                 min_atr=float(
                     context.strategy_params.get(
                         "context_obstacle_min_atr",
-                        CONTEXT_OBSTACLE_MIN_ATR,
+                        CONTEXT_OBSTACLE_MIN_ATR_BY_STRATEGY.get(signal.strategy, CONTEXT_OBSTACLE_MIN_ATR),
+                    )
+                ),
+                min_strength=float(
+                    context.strategy_params.get(
+                        "context_level_min_strength",
+                        CONTEXT_LEVEL_MIN_STRENGTH,
                     )
                 ),
             )
@@ -541,12 +588,14 @@ class ConfirmationLayer:
                 status="warning" if overextension.overextended else "passed",
                 score=round(overextension.body_atr, 3),
                 reason=overextension.reason,
+                metadata=_overextension_metadata(overextension),
             ),
             SignalLayerCheck(
                 name="risk_reward_guard",
                 status="passed" if risk_reward.passed else "failed",
                 score=None if risk_reward.rr is None else round(risk_reward.rr, 3),
                 reason=risk_reward.reason,
+                metadata=_risk_reward_metadata(risk_reward),
             ),
             SignalLayerCheck(
                 name="volume_confirmation",
@@ -630,6 +679,7 @@ class InvalidationLayer:
             "swing_high": features.swing_high,
             "swing_low": features.swing_low,
             "ema_50": features.ema_50,
+            "vwap": features.vwap,
             "rsi_14": features.rsi_14,
             "donchian_high_20": features.donchian_high_20,
             "donchian_low_20": features.donchian_low_20,
@@ -832,7 +882,7 @@ def _bool_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
 
 
 def _primary_context_features(context: StrategyEvaluationContext) -> Features | None:
-    expected = context_timeframe_for(context.signal_features.timeframe)
+    expected = context_timeframe_for(context.signal_features.timeframe, context.strategy_params)
     if expected:
         features = context.context_features_by_timeframe.get(expected)
         if features is not None:
@@ -840,10 +890,41 @@ def _primary_context_features(context: StrategyEvaluationContext) -> Features | 
     return context.context_features
 
 
+def _primary_support_resistance(context: StrategyEvaluationContext) -> SupportResistanceSnapshot | None:
+    expected = context_timeframe_for(context.signal_features.timeframe, context.strategy_params)
+    if expected:
+        snapshot = context.support_resistance_by_timeframe.get(expected)
+        if snapshot is not None:
+            return snapshot
+    if context.context_features is not None:
+        return context.support_resistance_by_timeframe.get(context.context_features.timeframe)
+    return None
+
+
 def _macro_context_features(context: StrategyEvaluationContext) -> Features | None:
     expected = MACRO_CONTEXT_TIMEFRAME_BY_SIGNAL.get(context.signal_features.timeframe)
     if expected:
         return context.context_features_by_timeframe.get(expected)
+    return None
+
+
+def _context_timeframe_override(timeframe: str, strategy_params: Mapping[str, Any]) -> str | None:
+    raw_map = strategy_params.get("context_timeframe_map")
+    if not isinstance(raw_map, Mapping):
+        return None
+    raw_value = raw_map.get(timeframe)
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip().lower()
+    if value in {"", "default"}:
+        return None
+    allowed_timeframes = (
+        set(CONTEXT_TIMEFRAME_BY_SIGNAL)
+        | set(CONTEXT_TIMEFRAME_BY_SIGNAL.values())
+        | set(MACRO_CONTEXT_TIMEFRAME_BY_SIGNAL.values())
+    )
+    if value in allowed_timeframes:
+        return value
     return None
 
 
@@ -874,7 +955,9 @@ def _context_obstacle_check(
     signal: StrategySignal,
     signal_features: Features,
     context_features: Features,
+    support_resistance: SupportResistanceSnapshot | None,
     min_atr: float,
+    min_strength: float,
 ) -> tuple[SignalLayerCheck, int]:
     entry = _entry_price(signal) or signal_features.close
     atr = signal_features.atr_14 or context_features.atr_14
@@ -886,6 +969,47 @@ def _context_obstacle_check(
                 reason="ATR is unavailable for context support/resistance distance",
             ),
             0,
+        )
+
+    if support_resistance is not None:
+        check_name = "context_resistance" if signal.direction.lower() == "long" else "context_support"
+        level_kind = "resistance" if signal.direction.lower() == "long" else "support"
+        level = support_resistance.nearest_obstacle(
+            direction=signal.direction,
+            entry=entry,
+            min_strength=min_strength,
+        )
+        if level is None:
+            return (
+                SignalLayerCheck(
+                    name=check_name,
+                    status="passed",
+                    reason=(
+                        f"No {support_resistance.timeframe} S/R {level_kind} near entry "
+                        f"with strength >= {min_strength:.0f}"
+                    ),
+                ),
+                0,
+            )
+        distance_atr = (
+            (level.price - entry) / atr
+            if signal.direction.lower() == "long"
+            else (entry - level.price) / atr
+        )
+        status = "warning" if distance_atr <= min_atr else "passed"
+        return (
+            SignalLayerCheck(
+                name=check_name,
+                status=status,
+                score=round(distance_atr, 3),
+                reason=(
+                    f"{support_resistance.timeframe} S/R {level_kind} {level.price:.8f} "
+                    f"is {distance_atr:.2f} ATR from entry; strength {level.strength:.0f}, "
+                    f"retests {level.retest_count}, age {level.age_candles} candles, "
+                    f"volume x{level.volume_score:.2f}"
+                ),
+            ),
+            -8 if status == "warning" else 0,
         )
 
     if signal.direction.lower() == "long":
@@ -1026,6 +1150,11 @@ def _assess_overextension(
             body_threshold=body_threshold,
             range_threshold=range_threshold,
             reason="ATR is unavailable; overextension guard skipped",
+            pullback_target=PullbackTarget(
+                price=None,
+                label="ATR unavailable",
+                source="unavailable",
+            ),
         )
 
     candle_range = max(features.high - features.low, 0.0)
@@ -1052,17 +1181,17 @@ def _assess_overextension(
     if body_overextended:
         reason = (
             f"Signal candle body is {body_atr:.2f} ATR, above dynamic limit "
-            f"{body_threshold:.2f} ATR; wait for pullback to {pullback_target}"
+            f"{body_threshold:.2f} ATR; wait for pullback to {pullback_target.label}"
         )
     elif impulse_range_overextended:
         reason = (
             f"Signal candle range is {range_atr:.2f} ATR with an impulse close near the extreme; "
-            f"wait for retest of {pullback_target}"
+            f"wait for retest of {pullback_target.label}"
         )
     elif rejection_wick_overextended:
         reason = (
             f"Signal candle has a {rejection_wick:.0%} rejection wick and {range_atr:.2f} ATR range; "
-            f"wait for fresh reclaim or pullback to {pullback_target}"
+            f"wait for fresh reclaim or pullback to {pullback_target.label}"
         )
     else:
         reason = (
@@ -1077,6 +1206,7 @@ def _assess_overextension(
         body_threshold=body_threshold,
         range_threshold=range_threshold,
         reason=reason,
+        pullback_target=pullback_target,
     )
 
 
@@ -1215,27 +1345,120 @@ def _is_liquidity_absorption_pattern(signal: StrategySignal, features: Features)
     return False
 
 
-def _pullback_target(signal: StrategySignal, features: Features) -> str:
+def _overextension_metadata(overextension: OverextensionAssessment) -> dict[str, Any]:
+    target = overextension.pullback_target
+    return {
+        "body_atr": overextension.body_atr,
+        "range_atr": overextension.range_atr,
+        "body_threshold": overextension.body_threshold,
+        "range_threshold": overextension.range_threshold,
+        "pullback_target_price": target.price,
+        "pullback_target_label": target.label,
+        "pullback_target_source": target.source,
+        "pullback_entry_min": target.entry_min,
+        "pullback_entry_max": target.entry_max,
+    }
+
+
+def _risk_reward_metadata(risk_reward: RiskRewardAssessment) -> dict[str, Any]:
+    return {
+        "first_target_rr": risk_reward.first_target_rr,
+        "final_target_rr": risk_reward.final_target_rr,
+        "selected_rr": risk_reward.rr,
+        "selected_rr_target": risk_reward.target_key,
+        "selected_rr_label": risk_reward.target_label,
+        "min_rr_ratio": risk_reward.min_rr,
+    }
+
+
+def _overextension_check(confirmation: SignalConfirmationSnapshot) -> SignalLayerCheck | None:
+    for check in confirmation.checks:
+        if check.name == "overextension_guard":
+            return check
+    return None
+
+
+def _pullback_target_from_check(check: SignalLayerCheck | None) -> PullbackTarget | None:
+    if check is None:
+        return None
+    metadata = check.metadata
+    price = _number_or_none(metadata.get("pullback_target_price"))
+    entry_min = _number_or_none(metadata.get("pullback_entry_min"))
+    entry_max = _number_or_none(metadata.get("pullback_entry_max"))
+    if price is None and entry_min is None and entry_max is None:
+        return None
+    label = str(metadata.get("pullback_target_label") or "pullback target")
+    source = str(metadata.get("pullback_target_source") or "unknown")
+    return PullbackTarget(
+        price=price,
+        label=label,
+        source=source,
+        entry_min=entry_min,
+        entry_max=entry_max,
+    )
+
+
+def _pullback_target(signal: StrategySignal, features: Features) -> PullbackTarget:
     direction = signal.direction.lower()
+    atr = features.atr_14 if features.atr_14 is not None and features.atr_14 > 0 else None
     if signal.strategy == "volatility_squeeze_breakout":
         if direction == "long" and features.donchian_high_20 is not None:
-            return f"breakout level {features.donchian_high_20:.8f}"
+            return _target_from_price(
+                features.donchian_high_20,
+                "breakout_level",
+                f"breakout level {features.donchian_high_20:.8f}",
+                atr,
+            )
         if direction == "short" and features.donchian_low_20 is not None:
-            return f"breakdown level {features.donchian_low_20:.8f}"
-        return "the breakout trigger level"
+            return _target_from_price(
+                features.donchian_low_20,
+                "breakdown_level",
+                f"breakdown level {features.donchian_low_20:.8f}",
+                atr,
+            )
+        return _target_from_price(None, "breakout_trigger", "the breakout trigger level", atr)
     if signal.strategy == "trend_pullback_continuation":
-        ema_levels = [level for level in (features.ema_20, features.ema_50) if level is not None]
-        if ema_levels:
-            target = min(ema_levels, key=lambda level: abs(features.close - level))
-            return f"EMA pullback zone {target:.8f}"
-        return "the EMA/VWAP pullback zone"
+        candidates = [
+            ("ema_20", features.ema_20),
+            ("ema_50", features.ema_50),
+            ("vwap", features.vwap),
+        ]
+        usable = [(source, value) for source, value in candidates if value is not None]
+        if usable:
+            source, target = min(usable, key=lambda item: abs(features.close - item[1]))
+            label = f"{source.upper().replace('_', '')} pullback zone {target:.8f}" if source.startswith("ema") else f"VWAP pullback zone {target:.8f}"
+            return _target_from_price(target, source, label, atr)
+        return _target_from_price(None, "ema_vwap_zone", "the EMA/VWAP pullback zone", atr)
     if signal.strategy == "liquidity_sweep_reversal":
         if direction == "long" and features.swing_low is not None:
-            return f"swept low {features.swing_low:.8f}"
+            return _target_from_price(features.swing_low, "swept_low", f"swept low {features.swing_low:.8f}", atr)
         if direction == "short" and features.swing_high is not None:
-            return f"swept high {features.swing_high:.8f}"
-        return "the swept liquidity level"
-    return "the trigger level or VWAP"
+            return _target_from_price(features.swing_high, "swept_high", f"swept high {features.swing_high:.8f}", atr)
+        return _target_from_price(None, "swept_liquidity", "the swept liquidity level", atr)
+    fallback_price = features.vwap
+    if fallback_price is not None:
+        return _target_from_price(fallback_price, "vwap", f"VWAP {fallback_price:.8f}", atr)
+    return _target_from_price(None, "trigger_or_vwap", "the trigger level or VWAP", atr)
+
+
+def _target_from_price(price: float | None, source: str, label: str, atr: float | None) -> PullbackTarget:
+    if price is None:
+        return PullbackTarget(price=None, label=label, source=source)
+    buffer = max((atr or 0.0) * 0.1, abs(price) * 0.0005)
+    return PullbackTarget(
+        price=price,
+        label=label,
+        source=source,
+        entry_min=price - buffer,
+        entry_max=price + buffer,
+    )
+
+
+def _number_or_none(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> RiskRewardAssessment:
@@ -1245,6 +1468,7 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
             passed=True,
             rr=signal.risk_reward,
             min_rr=min_rr,
+            target_key="disabled",
             target_label="disabled",
             first_target_rr=_target_rr(signal, signal.take_profit_1),
             final_target_rr=_target_rr(signal, signal.take_profit_2 or signal.take_profit_1),
@@ -1253,8 +1477,8 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
 
     first_target_rr = _target_rr(signal, signal.take_profit_1)
     final_target_rr = _target_rr(signal, signal.take_profit_2 or signal.take_profit_1)
-    rr_target = str(params.get("rr_target") or "final").strip().lower()
-    if rr_target in {"first", "nearest", "tp1"}:
+    rr_target = _rr_target_key(params, signal.strategy)
+    if rr_target == "nearest":
         selected_rr = first_target_rr
         target_label = "nearest target"
     else:
@@ -1266,6 +1490,7 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
             passed=False,
             rr=None,
             min_rr=min_rr,
+            target_key=rr_target,
             target_label=target_label,
             first_target_rr=first_target_rr,
             final_target_rr=final_target_rr,
@@ -1279,6 +1504,7 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
             passed=False,
             rr=selected_rr,
             min_rr=min_rr,
+            target_key=rr_target,
             target_label=target_label,
             first_target_rr=first_target_rr,
             final_target_rr=final_target_rr,
@@ -1293,11 +1519,19 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
         passed=True,
         rr=selected_rr,
         min_rr=min_rr,
+        target_key=rr_target,
         target_label=target_label,
         first_target_rr=first_target_rr,
         final_target_rr=final_target_rr,
         reason=f"Risk/reward passed: {target_label} is {selected_rr:.2f}R, minimum {min_rr:.2f}R",
     )
+
+
+def _rr_target_key(params: Mapping[str, Any], strategy: str) -> str:
+    raw_target = str(params.get("rr_target") or RR_TARGET_BY_STRATEGY.get(strategy, "final")).strip().lower()
+    if raw_target in {"first", "nearest", "tp1"}:
+        return "nearest"
+    return "final"
 
 
 def _target_rr(signal: StrategySignal, target: float | None) -> float | None:

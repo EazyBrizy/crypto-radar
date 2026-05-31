@@ -35,6 +35,7 @@ class Features(BaseModel):
     ema_50: Optional[float] = None
     ema_200: Optional[float] = None
     sma_20: Optional[float] = None
+    vwap: Optional[float] = None
     rsi_14: Optional[float] = None
     atr_14: Optional[float] = None
     adx: Optional[float] = None

@@ -76,12 +76,16 @@ export function SignalDetails({
         <p>{signal.status_reason ?? "Decision must use setup status, invalidation and risk context, not direction alone."}</p>
       </div>
 
+      <PullbackGuidanceBlock signal={signal} />
+
       <div className="trade-setup">
         <div><span>Entry Zone</span><strong>{entryZone(signal)}</strong></div>
         <div><span>Stop Loss</span><strong>{formatPrice(signal.stop_loss)}</strong></div>
         <div><span>Take Profit</span><strong>{formatPrice(signal.take_profit_1)} / {formatPrice(signal.take_profit_2)}</strong></div>
         <div><span>Risk / Reward</span><strong>1 : {signal.risk_reward?.toFixed(2) ?? "-"}</strong></div>
       </div>
+
+      <RiskRewardDetailBlock signal={signal} />
 
       <ExecutionQualityBlock
         signal={signal}
@@ -172,6 +176,124 @@ function recommendedAction(signal: RadarSignal): string {
     return `Entry candidate inside ${entryZone(signal)}`;
   }
   return `Monitor status ${signal.status.replaceAll("_", " ")}`;
+}
+
+function PullbackGuidanceBlock({ signal }: { signal: RadarSignal }) {
+  const guidance = pullbackGuidance(signal);
+  if (!guidance) return null;
+  return (
+    <div className="pullback-guidance-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Pullback Wait</h3>
+      </div>
+      <p>{guidance.reason}</p>
+      <div className="pullback-guidance-grid">
+        <MetricLine label="Do not chase" value={`${guidance.bodyAtr} body / ${guidance.rangeAtr} range`} />
+        <MetricLine label="Wait near" value={guidance.targetLabel} />
+        <MetricLine label="Pullback zone" value={guidance.entryZone} />
+      </div>
+    </div>
+  );
+}
+
+function pullbackGuidance(signal: RadarSignal): {
+  reason: string;
+  bodyAtr: string;
+  rangeAtr: string;
+  targetLabel: string;
+  entryZone: string;
+} | null {
+  if (signal.status !== "wait_for_pullback") return null;
+  const check = signal.confirmation?.checks.find((item) => item.name === "overextension_guard");
+  const metadata = check?.metadata ?? {};
+  const targetLabel = stringMetadata(metadata, "pullback_target_label") ?? "planned retest";
+  const entryMin = numberMetadata(metadata, "pullback_entry_min") ?? signal.entry_min;
+  const entryMax = numberMetadata(metadata, "pullback_entry_max") ?? signal.entry_max;
+  return {
+    reason: check?.reason ?? signal.status_reason ?? "Signal candle is extended; wait for a retest instead of market entry.",
+    bodyAtr: atrMetric(metadata, "body_atr", "body_threshold"),
+    rangeAtr: atrMetric(metadata, "range_atr", "range_threshold"),
+    targetLabel,
+    entryZone: entryMin == null && entryMax == null ? entryZone(signal) : `${formatPrice(entryMin)} - ${formatPrice(entryMax)}`
+  };
+}
+
+function atrMetric(metadata: Record<string, unknown>, valueKey: string, thresholdKey: string): string {
+  const value = numberMetadata(metadata, valueKey);
+  const threshold = numberMetadata(metadata, thresholdKey);
+  if (value == null) return "-";
+  return threshold == null ? `${value.toFixed(2)} ATR` : `${value.toFixed(2)} / ${threshold.toFixed(2)} ATR`;
+}
+
+function numberMetadata(metadata: Record<string, unknown>, key: string): number | null {
+  const value = metadata[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringMetadata(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+function RiskRewardDetailBlock({ signal }: { signal: RadarSignal }) {
+  const details = riskRewardDetails(signal);
+  if (!details) return null;
+  return (
+    <div className="risk-reward-detail-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Risk / Reward Filter</h3>
+      </div>
+      <p>{details.reason}</p>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Nearest RR" value={formatRMultiple(details.firstTargetRr)} />
+        <MetricLine label="Final RR" value={formatRMultiple(details.finalTargetRr)} />
+        <MetricLine label="Selected RR" value={formatRMultiple(details.selectedRr)} />
+        <MetricLine label="Filter target" value={details.selectedTarget} />
+        <MetricLine label="Minimum RR" value={formatRMultiple(details.minRr)} />
+      </div>
+    </div>
+  );
+}
+
+function riskRewardDetails(signal: RadarSignal): {
+  firstTargetRr: number | null;
+  finalTargetRr: number | null;
+  selectedRr: number | null;
+  selectedTarget: string;
+  minRr: number | null;
+  reason: string;
+} | null {
+  const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
+  const metadata = check?.metadata ?? {};
+  const firstTargetRr = signal.first_target_rr ?? numberMetadata(metadata, "first_target_rr");
+  const finalTargetRr = signal.final_target_rr ?? numberMetadata(metadata, "final_target_rr");
+  const selectedRr = signal.selected_rr ?? numberMetadata(metadata, "selected_rr") ?? signal.risk_reward;
+  const minRr = signal.min_rr_ratio ?? numberMetadata(metadata, "min_rr_ratio");
+  const selectedTarget = formatRrTarget(
+    signal.selected_rr_target
+      ?? stringMetadata(metadata, "selected_rr_target")
+      ?? stringMetadata(metadata, "selected_rr_label")
+  );
+  if (firstTargetRr == null && finalTargetRr == null && selectedRr == null && !check) return null;
+  return {
+    firstTargetRr,
+    finalTargetRr,
+    selectedRr,
+    selectedTarget,
+    minRr,
+    reason: check?.reason ?? "Strategy RR classification is shown here; final entry permission still comes from the risk gate."
+  };
+}
+
+function formatRMultiple(value: number | null): string {
+  return value == null ? "-" : `${value.toFixed(2)}R`;
+}
+
+function formatRrTarget(value: string | null): string {
+  if (!value) return "-";
+  return value.replaceAll("_", " ");
 }
 
 function StrategyLayersBlock({ signal }: { signal: RadarSignal }) {

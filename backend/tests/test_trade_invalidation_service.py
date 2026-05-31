@@ -1,11 +1,13 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from app.schemas.candle import OHLCVCandle
+from app.schemas.market import Features
 from app.schemas.signal import RadarSignal, SignalInvalidationSnapshot
-from app.schemas.trade import VirtualTrade
+from app.schemas.trade import TradeInvalidationAlert, TradeJournalEntry, VirtualTrade
 from app.services.feature_engine import FeatureEngine
-from app.services.trade_invalidation import TradeInvalidationService
+from app.services.trade_invalidation import TradeInvalidationActionRecord, TradeInvalidationMonitor, TradeInvalidationService
 
 
 class StaticSignals:
@@ -24,6 +26,43 @@ class StaticCandles:
 
     def list_candles(self, **_kwargs) -> list[OHLCVCandle]:
         return self._candles
+
+
+class MemoryActions:
+    def __init__(self) -> None:
+        self.records: dict[tuple[str, str], TradeInvalidationActionRecord] = {}
+
+    def latest_for_alert(self, alert):
+        return self.records.get((alert.trade_id, alert.fingerprint))
+
+    def record(self, alert, action, *, user_id: str = "demo_user"):
+        record = TradeInvalidationActionRecord(action=action, created_at=datetime.now(timezone.utc))
+        self.records[(alert.trade_id, alert.fingerprint)] = record
+        return record
+
+
+class StaticOpenTrades:
+    def __init__(self, trades: list[TradeJournalEntry]) -> None:
+        self._trades = trades
+
+    def list_trade_journal(self, **_kwargs) -> list[TradeJournalEntry]:
+        return self._trades
+
+
+class StaticInvalidations:
+    def __init__(self, alert: TradeInvalidationAlert) -> None:
+        self.alert = alert
+
+    def evaluate_trade_with_features(self, _trade, _features):
+        return self.alert
+
+
+class CapturingBroker:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    async def publish(self, event: dict[str, object]) -> None:
+        self.events.append(event)
 
 
 class TradeInvalidationServiceTest(unittest.TestCase):
@@ -52,6 +91,7 @@ class TradeInvalidationServiceTest(unittest.TestCase):
             signals=StaticSignals(signal),
             candles=StaticCandles(_flat_then_drop_candles()),
             feature_engine=FeatureEngine(),
+            actions=MemoryActions(),
         )
 
         alert = service.evaluate_trade(trade)
@@ -70,6 +110,7 @@ class TradeInvalidationServiceTest(unittest.TestCase):
             signals=StaticSignals(signal),
             candles=StaticCandles(_flat_then_drop_candles()),
             feature_engine=FeatureEngine(),
+            actions=MemoryActions(),
         )
 
         alert = service.evaluate_trade(trade)
@@ -77,6 +118,55 @@ class TradeInvalidationServiceTest(unittest.TestCase):
         self.assertFalse(alert.invalidated)
         self.assertEqual(alert.status, "unavailable")
         self.assertIn("unavailable", alert.reason or "")
+
+    def test_keep_stop_loss_action_is_persisted_on_matching_alert(self) -> None:
+        actions = MemoryActions()
+        trade = _trade(strategy="trend_pullback_continuation", side="long")
+        signal = _signal(
+            strategy=trade.strategy,
+            direction="long",
+            invalidation=SignalInvalidationSnapshot(
+                price=94.0,
+                hard_stop=90.0,
+                conditions=["Close below EMA50"],
+                metadata={"ema_50": 99.0},
+            ),
+        )
+        service = TradeInvalidationService(
+            signals=StaticSignals(signal),
+            candles=StaticCandles(_flat_then_drop_candles()),
+            feature_engine=FeatureEngine(),
+            actions=actions,
+        )
+
+        alert = service.evaluate_trade(trade)
+        stored = service.record_user_action(trade, "keep_stop_loss", alert=alert)
+        reloaded = service.evaluate_trade(trade)
+
+        self.assertEqual(stored.user_action, "keep_stop_loss")
+        self.assertTrue(stored.action_dismissed)
+        self.assertEqual(reloaded.user_action, "keep_stop_loss")
+        self.assertTrue(reloaded.action_dismissed)
+
+
+class TradeInvalidationMonitorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_closed_candle_monitor_publishes_trade_invalidation_once(self) -> None:
+        trade = TradeJournalEntry.model_validate(_trade("trend_pullback_continuation", "long").model_dump())
+        alert = _alert_for_trade(trade)
+        broker = CapturingBroker()
+        monitor = TradeInvalidationMonitor(
+            trades=StaticOpenTrades([trade]),
+            invalidations=StaticInvalidations(alert),
+        )
+
+        with patch("app.services.trade_invalidation.realtime_event_broker", broker):
+            first = await monitor.process_closed_candle(_features())
+            second = await monitor.process_closed_candle(_features())
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 0)
+        self.assertEqual(len(broker.events), 1)
+        self.assertEqual(broker.events[0]["type"], "trade.invalidation")
 
 
 def _trade(strategy: str, side: str) -> VirtualTrade:
@@ -161,6 +251,50 @@ def _flat_then_drop_candles() -> list[OHLCVCandle]:
             )
         )
     return candles
+
+
+def _features() -> Features:
+    return Features(
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="15m",
+        timestamp=1,
+        price=95.0,
+        open=100.0,
+        high=100.0,
+        low=94.0,
+        close=95.0,
+        price_change_1m=-0.05,
+        volume=100.0,
+        volume_spike=1.0,
+        volume_ma_20=100.0,
+        volatility=1.0,
+        history_length=60,
+    )
+
+
+def _alert_for_trade(trade: TradeJournalEntry) -> TradeInvalidationAlert:
+    now = datetime.now(timezone.utc)
+    return TradeInvalidationAlert(
+        trade_id=trade.id,
+        signal_id=trade.signal_id,
+        exchange=trade.exchange,
+        symbol=trade.symbol,
+        strategy=trade.strategy,
+        timeframe=trade.timeframe,
+        side=trade.side,
+        status="invalidated",
+        invalidated=True,
+        reason="Close below EMA50",
+        triggered_conditions=["Close below EMA50"],
+        watched_conditions=["Close below EMA50"],
+        suggested_action="close_market_or_wait_stop",
+        current_price=95.0,
+        stop_loss=trade.stop_loss,
+        invalidation_price=96.0,
+        detected_at=now,
+        fingerprint="fp_test",
+    )
 
 
 if __name__ == "__main__":

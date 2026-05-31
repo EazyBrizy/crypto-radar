@@ -57,6 +57,16 @@ class SignalRepository(Protocol):
     def list_open_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
         ...
 
+    def list_open_signals_for_series(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        limit: int = MAX_STORED_SIGNALS,
+    ) -> list[RadarSignal]:
+        ...
+
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         ...
 
@@ -84,6 +94,17 @@ class SignalRepository(Protocol):
         self,
         signal_id: str,
         note: str | None = None,
+    ) -> SignalWriteResult | None:
+        ...
+
+    def transition_signal(
+        self,
+        signal_id: str,
+        *,
+        new_status: str,
+        event_type: str,
+        reason: str | None = None,
+        lifecycle: dict[str, Any] | None = None,
     ) -> SignalWriteResult | None:
         ...
 
@@ -128,6 +149,34 @@ class PostgresSignalRepository:
             records = session.scalars(
                 _signal_select()
                 .where(
+                    TradingSignal.status.in_(OPEN_SIGNAL_STATUSES),
+                    _expires_after(now),
+                )
+                .order_by(TradingSignal.detected_at.desc())
+                .limit(limit)
+            ).all()
+            return [_record_to_radar_signal(record) for record in records]
+
+    def list_open_signals_for_series(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        limit: int = MAX_STORED_SIGNALS,
+    ) -> list[RadarSignal]:
+        with self._session_factory() as session:
+            now = datetime.now(timezone.utc)
+            if _expire_open_signal_records(session, now):
+                session.commit()
+            records = session.scalars(
+                _signal_select()
+                .join(TradingSignal.exchange)
+                .join(TradingSignal.pair)
+                .where(
+                    MarketExchange.code == exchange.lower(),
+                    MarketPair.symbol == _normalize_symbol(symbol),
+                    TradingSignal.timeframe == timeframe,
                     TradingSignal.status.in_(OPEN_SIGNAL_STATUSES),
                     _expires_after(now),
                 )
@@ -313,6 +362,51 @@ class PostgresSignalRepository:
             event_type=SIGNAL_INVALIDATED_EVENT,
             decision={"decision_note": note},
         )
+
+    def transition_signal(
+        self,
+        signal_id: str,
+        *,
+        new_status: str,
+        event_type: str,
+        reason: str | None = None,
+        lifecycle: dict[str, Any] | None = None,
+    ) -> SignalWriteResult | None:
+        with self._session_factory() as session:
+            record = _get_signal_record(session, signal_id)
+            if record is None:
+                return None
+            now = datetime.now(timezone.utc)
+            old_status = record.status
+            if old_status == new_status:
+                return None
+            record.status = new_status
+            record.updated_at = now
+            snapshot = dict(record.features_snapshot or {})
+            if reason:
+                snapshot["status_reason"] = reason
+            lifecycle_event = {
+                "event": event_type,
+                "old_status": old_status,
+                "new_status": new_status,
+                "reason": reason,
+                "created_at": now.isoformat(),
+                **(lifecycle or {}),
+            }
+            lifecycle_events = snapshot.get("lifecycle_events")
+            if not isinstance(lifecycle_events, list):
+                lifecycle_events = []
+            snapshot["lifecycle_events"] = [*lifecycle_events[-19:], lifecycle_event]
+            record.features_snapshot = snapshot
+            result = _persist_signal_event(
+                session,
+                record,
+                event_type,
+                old_status=old_status,
+                now=now,
+            )
+            session.commit()
+            return result
 
     def _transition_signal(
         self,
@@ -520,6 +614,11 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         direction=record.direction,
         confidence=float(record.confidence),
         risk_reward=_float(record.risk_reward),
+        first_target_rr=_float(snapshot.get("first_target_rr")),
+        final_target_rr=_float(snapshot.get("final_target_rr")),
+        selected_rr=_float(snapshot.get("selected_rr")),
+        selected_rr_target=_string_or_none(snapshot.get("selected_rr_target")),
+        min_rr_ratio=_float(snapshot.get("min_rr_ratio")),
         urgency=snapshot.get("urgency", "medium"),
         status=status,
         score=int(round(float(record.score))),
@@ -597,6 +696,11 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "urgency": signal.urgency,
         "explanation": signal.explanation,
         "risks": signal.risks,
+        "first_target_rr": signal.first_target_rr,
+        "final_target_rr": signal.final_target_rr,
+        "selected_rr": signal.selected_rr,
+        "selected_rr_target": signal.selected_rr_target,
+        "min_rr_ratio": signal.min_rr_ratio,
         "score_breakdown": signal.score_breakdown.model_dump(mode="json"),
         "status_reason": signal.status_reason,
         "quality": _model_dump_optional(signal.quality),
@@ -624,6 +728,11 @@ def _snapshot_from_strategy_signal(
         "urgency": signal.urgency,
         "explanation": explanation or signal.explanation,
         "risks": signal.risks,
+        "first_target_rr": signal.first_target_rr,
+        "final_target_rr": signal.final_target_rr,
+        "selected_rr": signal.selected_rr,
+        "selected_rr_target": signal.selected_rr_target,
+        "min_rr_ratio": signal.min_rr_ratio,
         "score_breakdown": signal.score_breakdown.model_dump(mode="json"),
         "source_timestamp": signal.timestamp,
         "status_reason": signal.status_reason,

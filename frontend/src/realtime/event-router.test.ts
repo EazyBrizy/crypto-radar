@@ -4,7 +4,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { queryKeys, serverStateKeys } from "@/features/server-state/query-keys";
 import { useNotificationStore } from "@/stores/notification-store";
 import { useSignalStore } from "@/stores/signal-store";
-import type { RadarSignal } from "@/types";
+import type { RadarSignal, TradeJournalEntry } from "@/types";
 import { createRealtimeEventRouter } from "./event-router";
 
 const baseSignal: RadarSignal = {
@@ -15,6 +15,11 @@ const baseSignal: RadarSignal = {
   direction: "long",
   confidence: 0.84,
   risk_reward: 2.1,
+  first_target_rr: 1.4,
+  final_target_rr: 2.1,
+  selected_rr: 2.1,
+  selected_rr_target: "final",
+  min_rr_ratio: 2,
   urgency: "medium",
   status: "active",
   score: 84,
@@ -40,6 +45,49 @@ const baseSignal: RadarSignal = {
   created_at: "2026-05-25T10:12:41.231Z",
   updated_at: "2026-05-25T10:12:41.231Z",
   expires_at: "2099-05-25T11:12:41.231Z"
+};
+
+const baseTrade: TradeJournalEntry = {
+  id: "trade_1",
+  user_id: "demo_user",
+  signal_id: "sig_1",
+  mode: "virtual",
+  exchange: "bybit",
+  symbol: "BTCUSDT",
+  strategy: "trend_pullback_continuation",
+  timeframe: "15m",
+  side: "long",
+  entry_price: 100,
+  current_price: 95,
+  exit_price: null,
+  size_usd: 100,
+  quantity: 1,
+  leverage: 1,
+  risk_percent: 1,
+  risk_amount: 1,
+  risk_reward: 2,
+  stop_loss: 90,
+  take_profit: [110],
+  fees: 0,
+  slippage_bps: 0,
+  simulation_mode: "passive",
+  execution_status: "filled",
+  requested_size_usd: null,
+  filled_size_usd: null,
+  unfilled_size_usd: 0,
+  execution: null,
+  status: "open",
+  result: null,
+  close_reason: null,
+  pnl: null,
+  pnl_percent: null,
+  mfe: 0,
+  mae: 0,
+  screenshots: [],
+  ai_review: null,
+  opened_at: "2026-05-25T10:12:41.231Z",
+  updated_at: "2026-05-25T10:12:41.231Z",
+  closed_at: null
 };
 
 describe("createRealtimeEventRouter signal feed updates", () => {
@@ -176,5 +224,57 @@ describe("createRealtimeEventRouter signal feed updates", () => {
     expect(useNotificationStore.getState().notifications[0]?.id).toBe("ntf_1");
     expect(useNotificationStore.getState().notifications[0]?.kind).toBe("alert");
     expect(queryClient.isFetching({ queryKey: serverStateKeys.notifications.all() })).toBe(0);
+  });
+
+  it("stores trade.invalidation alerts and pushes a notification", () => {
+    const queryClient = new QueryClient();
+    const router = createRealtimeEventRouter({ queryClient, onRealtimeEvent: () => undefined });
+
+    router.route({
+      id: "evt_trade_invalidation",
+      type: "trade.invalidation",
+      version: 1,
+      timestamp: "2026-05-25T10:12:46.231Z",
+      payload: {
+        alert: {
+          trade_id: baseTrade.id,
+          signal_id: baseTrade.signal_id,
+          exchange: baseTrade.exchange,
+          symbol: baseTrade.symbol,
+          strategy: baseTrade.strategy,
+          timeframe: baseTrade.timeframe,
+          side: baseTrade.side,
+          status: "invalidated",
+          invalidated: true,
+          reason: "Close below EMA50",
+          triggered_conditions: ["Close below EMA50"],
+          watched_conditions: ["Close below EMA50"],
+          suggested_action: "close_market_or_wait_stop",
+          current_price: 95,
+          stop_loss: 90,
+          invalidation_price: 96,
+          detected_at: "2026-05-25T10:12:46.231Z",
+          fingerprint: "fp_1",
+          user_action: null,
+          user_action_at: null,
+          action_dismissed: false,
+          metadata: {}
+        },
+        tradeId: baseTrade.id,
+        signalId: baseTrade.signal_id,
+        pair: baseTrade.symbol,
+        exchange: baseTrade.exchange,
+        side: "LONG",
+        reason: "Close below EMA50",
+        triggeredConditions: ["Close below EMA50"],
+        fingerprint: "fp_1"
+      }
+    });
+
+    expect(queryClient.getQueryData(serverStateKeys.trades.invalidation(baseTrade.id))).toMatchObject({
+      invalidated: true,
+      trade_id: baseTrade.id
+    });
+    expect(useNotificationStore.getState().notifications[0]?.title).toBe("Strategy invalidation");
   });
 });

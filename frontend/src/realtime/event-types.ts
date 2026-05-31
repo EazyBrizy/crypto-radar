@@ -1,4 +1,4 @@
-import type { HealthStatus, RadarSignal, RadarStatus, TradeJournalEntry } from "@/types";
+import type { HealthStatus, RadarSignal, RadarStatus, TradeInvalidationAlert, TradeJournalEntry } from "@/types";
 
 export type RealtimeConnectionStatus =
   | "idle"
@@ -24,6 +24,7 @@ export type RealtimeEventType =
   | "trade.activated"
   | "trade.updated"
   | "trade.closed"
+  | "trade.invalidation"
   | "exchange.disconnected"
   | "price.touched_entry"
   | "order.status_changed"
@@ -91,6 +92,18 @@ export interface TradeRealtimePayload {
   pnl?: number | null;
   pnlPercent?: number | null;
   closeReason?: string | null;
+}
+
+export interface TradeInvalidationRealtimePayload {
+  alert: TradeInvalidationAlert;
+  tradeId: string;
+  signalId: string | null;
+  pair: string;
+  exchange: string;
+  side: string;
+  reason?: string | null;
+  triggeredConditions: string[];
+  fingerprint?: string | null;
 }
 
 export interface ConnectionHeartbeatPayload {
@@ -162,6 +175,7 @@ export type StandardRealtimeEvent =
   | RealtimeEventEnvelope<"take_profit.hit", TradeTargetHitPayload>
   | RealtimeEventEnvelope<"stop_loss.hit", TradeTargetHitPayload>
   | RealtimeEventEnvelope<"trade.activated" | "trade.updated" | "trade.closed", TradeRealtimePayload>
+  | RealtimeEventEnvelope<"trade.invalidation", TradeInvalidationRealtimePayload>
   | RealtimeEventEnvelope<"exchange.disconnected", ExchangeDisconnectedPayload>
   | RealtimeEventEnvelope<"price.touched_entry", PriceTouchedEntryPayload>
   | RealtimeEventEnvelope<"order.status_changed", OrderStatusChangedPayload>

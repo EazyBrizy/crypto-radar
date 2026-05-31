@@ -5,6 +5,7 @@ import time
 from typing import Optional
 
 from app.services.market_scanner import MarketScanner
+from app.services.candle_service import candle_service
 from app.services.message_broker import realtime_event_broker
 from app.services.notification_service import notification_service
 from app.services.radar_config_service import radar_config_service
@@ -31,6 +32,7 @@ class ScannerRunner:
         self._external_scanner = scanner is not None
         self._stopping = False
         self._last_update_event_monotonic: dict[str, float] = {}
+        self._scanner_subscription_hash = radar_config_service.scanner_subscription_hash()
 
     @property
     def is_running(self) -> bool:
@@ -50,6 +52,8 @@ class ScannerRunner:
             "scanner_running": self.is_running,
             "scanner_stopping": self.is_stopping,
             "processed_signals": self._processed_signals,
+            "scanner_subscription_hash": self._scanner_subscription_hash,
+            "strategy_config_hash": radar_config_service.strategy_config_hash(),
             **self._scanner.stats,
         }
 
@@ -61,14 +65,19 @@ class ScannerRunner:
         logger.info("Scanner runner started")
 
     async def reconfigure(self) -> None:
+        next_subscription_hash = radar_config_service.scanner_subscription_hash()
+        should_rebuild = next_subscription_hash != self._scanner_subscription_hash
         was_running = self.is_running
-        if was_running:
+        if was_running and should_rebuild:
             await self.stop()
-        if not self._external_scanner:
+        if not self._external_scanner and should_rebuild:
             self._scanner = self._build_configured_scanner()
+            self._scanner_subscription_hash = next_subscription_hash
             self._processed_signals = 0
             self._last_update_event_monotonic.clear()
-        if was_running:
+        elif not should_rebuild:
+            logger.info("Scanner subscription config unchanged; runtime strategy cache was refreshed")
+        if was_running and should_rebuild:
             self.start()
 
     async def stop(self) -> None:
@@ -158,6 +167,7 @@ class ScannerRunner:
 
     @staticmethod
     def _build_configured_scanner() -> MarketScanner:
+        candle_service.configure_timeframes(radar_config_service.selected_timeframes())
         return MarketScanner(
             symbols=radar_config_service.selected_symbols(),
             exchanges=radar_config_service.selected_exchanges(),

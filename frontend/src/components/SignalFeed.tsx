@@ -1,7 +1,7 @@
 import { type ReactNode, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
-import { SignalCardById } from "@/components/SignalCard";
+import { SignalCard, SignalCardById } from "@/components/SignalCard";
 import type { RadarSignal } from "@/types";
 
 interface SignalFeedProps {
@@ -10,21 +10,23 @@ interface SignalFeedProps {
   onSelectSignal: (signal: RadarSignal) => void;
   selectedSignalId: string | null;
   signalIds: string[];
+  signals?: RadarSignal[];
 }
 
-export function SignalFeed({ emptyState, loading, onSelectSignal, selectedSignalId, signalIds }: SignalFeedProps) {
+export function SignalFeed({ emptyState, loading, onSelectSignal, selectedSignalId, signalIds, signals }: SignalFeedProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
+  const renderedSignalIds = signals ? signals.map((signal) => signal.id) : signalIds;
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
-    count: signalIds.length,
+    count: renderedSignalIds.length,
     estimateSize: () => 186,
     getScrollElement: () => parentRef.current,
     overscan: 8
   });
   const virtualItems = virtualizer.getVirtualItems();
 
-  if (loading) return <div className="empty-state">Р—Р°РіСЂСѓР¶Р°РµРј СЃРёРіРЅР°Р»С‹...</div>;
-  if (!signalIds.length) return <>{emptyState}</>;
+  if (loading) return <div className="empty-state">Loading signals...</div>;
+  if (!renderedSignalIds.length) return <>{emptyState}</>;
 
   return (
     <div className="signal-feed virtual-signal-feed" ref={parentRef}>
@@ -35,7 +37,8 @@ export function SignalFeed({ emptyState, loading, onSelectSignal, selectedSignal
         }}
       >
         {virtualItems.map((virtualItem) => {
-          const signalId = signalIds[virtualItem.index];
+          const signal = signals?.[virtualItem.index] ?? null;
+          const signalId = signal?.id ?? signalIds[virtualItem.index];
           return (
             <div
               className="virtual-signal-row"
@@ -46,11 +49,15 @@ export function SignalFeed({ emptyState, loading, onSelectSignal, selectedSignal
                 transform: `translateY(${virtualItem.start}px)`
               }}
             >
-              <SignalCardById
-                signalId={signalId}
-                selected={selectedSignalId === signalId}
-                onSelect={onSelectSignal}
-              />
+              {signal ? (
+                <SignalCard signal={signal} selected={selectedSignalId === signalId} onSelect={onSelectSignal} />
+              ) : (
+                <SignalCardById
+                  signalId={signalId}
+                  selected={selectedSignalId === signalId}
+                  onSelect={onSelectSignal}
+                />
+              )}
             </div>
           );
         })}

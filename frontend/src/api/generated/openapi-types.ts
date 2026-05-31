@@ -674,6 +674,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/strategies/configs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Strategy Configs */
+        get: operations["list_strategy_configs_api_v1_strategies_configs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategies/configs/{config_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Strategy Config */
+        patch: operations["update_strategy_config_api_v1_strategies_configs__config_id__patch"];
+        trace?: never;
+    };
     "/api/v1/trades": {
         parameters: {
             query?: never;
@@ -821,6 +855,40 @@ export interface paths {
         get: operations["get_virtual_simulation_model_api_v1_trades_virtual_simulation_model_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trades/{trade_id}/invalidation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Trade Invalidation */
+        get: operations["get_trade_invalidation_api_v1_trades__trade_id__invalidation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trades/{trade_id}/invalidation/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Trade Invalidation Action */
+        post: operations["record_trade_invalidation_action_api_v1_trades__trade_id__invalidation_actions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2144,6 +2212,75 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** MarketQualitySnapshot */
+        MarketQualitySnapshot: {
+            /**
+             * Passed
+             * @default true
+             */
+            passed: boolean;
+            /**
+             * Tier
+             * @default unknown
+             * @enum {string}
+             */
+            tier: "major" | "mid_alt" | "low_liquidity" | "unknown";
+            /**
+             * Score
+             * @default 100
+             */
+            score: number;
+            /** Volume 24H Quote */
+            volume_24h_quote?: number | null;
+            /** Spread Bps */
+            spread_bps?: number | null;
+            /**
+             * History Ok
+             * @default true
+             */
+            history_ok: boolean;
+            /** Rough Chart Score */
+            rough_chart_score?: number | null;
+            /** Checks */
+            checks?: components["schemas"]["SignalLayerCheck"][];
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** MarketRegimeSnapshot */
+        MarketRegimeSnapshot: {
+            /**
+             * Signal Timeframe
+             * @default stream
+             */
+            signal_timeframe: string;
+            /** Context Timeframe */
+            context_timeframe?: string | null;
+            /**
+             * Direction
+             * @default unknown
+             * @enum {string}
+             */
+            direction: "bullish" | "bearish" | "range" | "unknown";
+            /**
+             * Strength
+             * @default unknown
+             * @enum {string}
+             */
+            strength: "weak" | "normal" | "strong" | "unknown";
+            /**
+             * Alignment
+             * @default unknown
+             * @enum {string}
+             */
+            alignment: "aligned" | "mixed" | "against" | "unknown";
+            /**
+             * Score Adjustment
+             * @default 0
+             */
+            score_adjustment: number;
+            /** Checks */
+            checks?: components["schemas"]["SignalLayerCheck"][];
+        };
         /** NotificationCreateRequest */
         NotificationCreateRequest: {
             /**
@@ -2398,6 +2535,16 @@ export interface components {
             confidence: number;
             /** Risk Reward */
             risk_reward?: number | null;
+            /** First Target Rr */
+            first_target_rr?: number | null;
+            /** Final Target Rr */
+            final_target_rr?: number | null;
+            /** Selected Rr */
+            selected_rr?: number | null;
+            /** Selected Rr Target */
+            selected_rr_target?: string | null;
+            /** Min Rr Ratio */
+            min_rr_ratio?: number | null;
             /**
              * Urgency
              * @default medium
@@ -2409,7 +2556,7 @@ export interface components {
              * @default active
              * @enum {string}
              */
-            status: "new" | "active" | "watchlist" | "confirmed" | "rejected" | "expired" | "invalidated" | "closed" | "entry_touched";
+            status: "new" | "active" | "watchlist" | "ready" | "actionable" | "wait_for_pullback" | "confirmed" | "rejected" | "expired" | "invalidated" | "closed" | "entry_touched";
             /**
              * Score
              * @default 0
@@ -2435,6 +2582,14 @@ export interface components {
             /** Risks */
             risks?: string[];
             score_breakdown?: components["schemas"]["SignalScoreBreakdown"];
+            /** Status Reason */
+            status_reason?: string | null;
+            quality?: components["schemas"]["MarketQualitySnapshot"] | null;
+            regime?: components["schemas"]["MarketRegimeSnapshot"] | null;
+            setup?: components["schemas"]["StrategySetupSnapshot"] | null;
+            confirmation?: components["schemas"]["SignalConfirmationSnapshot"] | null;
+            invalidation?: components["schemas"]["SignalInvalidationSnapshot"] | null;
+            exit_plan?: components["schemas"]["SignalExitPlanSnapshot"] | null;
             /**
              * Created At
              * Format: date-time
@@ -3264,6 +3419,63 @@ export interface components {
              */
             created_at: string;
         };
+        /** SignalConfirmationSnapshot */
+        SignalConfirmationSnapshot: {
+            /**
+             * Passed
+             * @default false
+             */
+            passed: boolean;
+            /** Checks */
+            checks?: components["schemas"]["SignalLayerCheck"][];
+        };
+        /** SignalExitPlanSnapshot */
+        SignalExitPlanSnapshot: {
+            /** Targets */
+            targets?: {
+                [key: string]: unknown;
+            }[];
+            /** Breakeven */
+            breakeven?: {
+                [key: string]: unknown;
+            };
+            /** Trailing */
+            trailing?: {
+                [key: string]: unknown;
+            };
+        };
+        /** SignalInvalidationSnapshot */
+        SignalInvalidationSnapshot: {
+            /** Price */
+            price?: number | null;
+            /** Hard Stop */
+            hard_stop?: number | null;
+            /** Conditions */
+            conditions?: string[];
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /** SignalLayerCheck */
+        SignalLayerCheck: {
+            /** Name */
+            name: string;
+            /**
+             * Status
+             * @default passed
+             * @enum {string}
+             */
+            status: "passed" | "warning" | "failed" | "skipped";
+            /** Score */
+            score?: number | null;
+            /** Reason */
+            reason?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         /** SignalScoreBreakdown */
         SignalScoreBreakdown: {
             /**
@@ -3343,6 +3555,104 @@ export interface components {
             /** Warnings */
             warnings?: string[];
         };
+        /** StrategyConfigResponse */
+        StrategyConfigResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /**
+             * Strategy Version Id
+             * Format: uuid
+             */
+            strategy_version_id: string;
+            /** Strategy Code */
+            strategy_code: string;
+            /** Strategy Name */
+            strategy_name: string;
+            /** Strategy Version */
+            strategy_version: string;
+            /** Name */
+            name: string;
+            /** Exchanges */
+            exchanges: string[];
+            /** Pairs */
+            pairs: components["schemas"]["StrategyPairScope"][];
+            /** Timeframes */
+            timeframes: ("1m" | "5m" | "15m" | "1h" | "4h" | "1d")[];
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Risk Settings */
+            risk_settings?: {
+                [key: string]: unknown;
+            };
+            /** Is Enabled */
+            is_enabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** StrategyConfigUpdateRequest */
+        StrategyConfigUpdateRequest: {
+            /**
+             * User Id
+             * @default demo_user
+             */
+            user_id: string;
+            /** Name */
+            name?: string | null;
+            /** Exchanges */
+            exchanges?: string[] | null;
+            /** Pairs */
+            pairs?: components["schemas"]["StrategyPairScope"][] | null;
+            /** Timeframes */
+            timeframes?: ("1m" | "5m" | "15m" | "1h" | "4h" | "1d")[] | null;
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            } | null;
+            /** Risk Settings */
+            risk_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Is Enabled */
+            is_enabled?: boolean | null;
+        };
+        /** StrategyPairScope */
+        StrategyPairScope: {
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /** StrategySetupSnapshot */
+        StrategySetupSnapshot: {
+            /** Name */
+            name: string;
+            /**
+             * Stage
+             * @default ready
+             * @enum {string}
+             */
+            stage: "forming" | "ready" | "confirmed";
+            /** Checks */
+            checks?: components["schemas"]["SignalLayerCheck"][];
+        };
         /** TakeProfitPlan */
         TakeProfitPlan: {
             /**
@@ -3384,6 +3694,99 @@ export interface components {
              * @enum {string}
              */
             action: "move_stop_to_breakeven" | "trailing_stop" | "full_close" | "observe";
+        };
+        /** TradeInvalidationActionRequest */
+        TradeInvalidationActionRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "close_market" | "keep_stop_loss" | "dismissed";
+            /**
+             * User Id
+             * @default demo_user
+             */
+            user_id: string;
+        };
+        /** TradeInvalidationActionResponse */
+        TradeInvalidationActionResponse: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "close_market" | "keep_stop_loss" | "dismissed";
+            alert: components["schemas"]["TradeInvalidationAlert"];
+            /** Message */
+            message: string;
+        };
+        /** TradeInvalidationAlert */
+        TradeInvalidationAlert: {
+            /** Trade Id */
+            trade_id: string;
+            /** Signal Id */
+            signal_id?: string | null;
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+            /** Strategy */
+            strategy: string;
+            /** Timeframe */
+            timeframe: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /**
+             * Status
+             * @default valid
+             * @enum {string}
+             */
+            status: "valid" | "invalidated" | "unavailable";
+            /**
+             * Invalidated
+             * @default false
+             */
+            invalidated: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Triggered Conditions */
+            triggered_conditions?: string[];
+            /** Watched Conditions */
+            watched_conditions?: string[];
+            /**
+             * Suggested Action
+             * @default none
+             * @enum {string}
+             */
+            suggested_action: "none" | "close_market_or_wait_stop";
+            /** Current Price */
+            current_price: number;
+            /** Stop Loss */
+            stop_loss: number;
+            /** Invalidation Price */
+            invalidation_price?: number | null;
+            /**
+             * Detected At
+             * Format: date-time
+             */
+            detected_at: string;
+            /** Fingerprint */
+            fingerprint?: string | null;
+            /** User Action */
+            user_action?: ("close_market" | "keep_stop_loss" | "dismissed") | null;
+            /** User Action At */
+            user_action_at?: string | null;
+            /**
+             * Action Dismissed
+             * @default false
+             */
+            action_dismissed: boolean;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
         };
         /** TradeJournalEntry */
         TradeJournalEntry: {
@@ -5537,6 +5940,72 @@ export interface operations {
             };
         };
     };
+    list_strategy_configs_api_v1_strategies_configs_get: {
+        parameters: {
+            query?: {
+                user_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyConfigResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_strategy_config_api_v1_strategies_configs__config_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                config_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyConfigUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyConfigResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_trade_journal_api_v1_trades_get: {
         parameters: {
             query?: {
@@ -5811,6 +6280,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VirtualSimulationModelInfo"];
+                };
+            };
+        };
+    };
+    get_trade_invalidation_api_v1_trades__trade_id__invalidation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trade_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradeInvalidationAlert"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_trade_invalidation_action_api_v1_trades__trade_id__invalidation_actions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trade_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TradeInvalidationActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradeInvalidationActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

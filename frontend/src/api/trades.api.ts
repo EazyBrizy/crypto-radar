@@ -1,5 +1,13 @@
 import type { TradeJournalFilters } from "@/features/server-state/query-keys";
-import type { CloseMarketTradeResponse, TradeCloseReason, TradeInvalidationAlert, TradeJournalEntry, TradeJournalResponse } from "@/types";
+import type {
+  CloseMarketTradeResponse,
+  TradeCloseReason,
+  TradeInvalidationActionResponse,
+  TradeInvalidationAlert,
+  TradeInvalidationUserAction,
+  TradeJournalEntry,
+  TradeJournalResponse
+} from "@/types";
 import { API_BASE, API_TIMEOUT_MS, openApiClient, request } from "./client";
 import { normalizeTrade, normalizeTradeResponse } from "./mappers";
 
@@ -69,14 +77,27 @@ export const tradesApi = {
   },
   async invalidation(tradeId: string): Promise<TradeInvalidationAlert> {
     return rawJson<TradeInvalidationAlert>(`/api/v1/trades/${encodeURIComponent(tradeId)}/invalidation`);
+  },
+  async invalidationAction({
+    action,
+    tradeId
+  }: {
+    action: TradeInvalidationUserAction;
+    tradeId: string;
+  }): Promise<TradeInvalidationActionResponse> {
+    return rawJson<TradeInvalidationActionResponse>(`/api/v1/trades/${encodeURIComponent(tradeId)}/invalidation/actions`, {
+      body: JSON.stringify({ action }),
+      headers: { "content-type": "application/json" },
+      method: "POST"
+    });
   }
 };
 
-async function rawJson<T>(path: string): Promise<T> {
+async function rawJson<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
-    const response = await fetch(`${API_BASE}${path}`, { signal: controller.signal });
+    const response = await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal });
     const data = await response.json().catch(() => null);
     if (!response.ok) {
       throw new Error(apiErrorMessage(data) ?? `API error ${response.status}`);

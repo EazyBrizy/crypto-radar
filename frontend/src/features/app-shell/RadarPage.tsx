@@ -8,10 +8,12 @@ import type { HealthStatus, RadarSignal, RadarStatus, SignalStatus, VirtualExecu
 interface RadarPageProps {
   busy: boolean;
   filter: "all" | "long" | "short";
+  signalView: "open" | "history";
   statusFilter: "all" | SignalStatus;
   health: HealthStatus | null;
   loading: boolean;
   onFilterChange: (filter: "all" | "long" | "short") => void;
+  onSignalViewChange: (view: "open" | "history") => void;
   onStatusFilterChange: (filter: "all" | SignalStatus) => void;
   onPaperTrade: (signal: RadarSignal) => void;
   onRefresh: () => void;
@@ -83,6 +85,18 @@ export function RadarPage(props: RadarPageProps) {
 
         <div className="filter-row">
           <Filter size={16} />
+          {(["open", "history"] as const).map((item) => (
+            <button
+              className={props.signalView === item ? "filter-chip active" : "filter-chip"}
+              key={item}
+              onClick={() => props.onSignalViewChange(item)}
+              type="button"
+            >
+              {item === "open" ? "open ideas" : "history"}
+            </button>
+          ))}
+        </div>
+        <div className="filter-row">
           {(["all", "long", "short"] as const).map((item) => (
             <button
               className={props.filter === item ? "filter-chip active" : "filter-chip"}
@@ -95,7 +109,7 @@ export function RadarPage(props: RadarPageProps) {
           ))}
         </div>
         <div className="filter-row status-filter-row">
-          {(["all", "watchlist", "ready", "actionable", "wait_for_pullback", "invalidated"] as const).map((item) => (
+          {(["all", "watchlist", "ready", "actionable", "wait_for_pullback", "invalidated", "expired"] as const).map((item) => (
             <button
               className={props.statusFilter === item ? "filter-chip active" : "filter-chip"}
               key={item}
@@ -111,12 +125,17 @@ export function RadarPage(props: RadarPageProps) {
           emptyState={
             <div className="empty-state">
               <RadioTower size={26} />
-              <strong>No active signals yet</strong>
-              <span>The scanner may still be building candle history, or the market has not produced a valid setup.</span>
+              <strong>{props.signalView === "history" ? "No historical signals yet" : "No active signals yet"}</strong>
+              <span>
+                {props.signalView === "history"
+                  ? "Invalidated and expired ideas will appear here after lifecycle transitions."
+                  : "The scanner may still be building candle history, or the market has not produced a valid setup."}
+              </span>
             </div>
           }
           loading={props.loading}
           signalIds={props.signalIds}
+          signals={props.signals}
           selectedSignalId={props.selectedSignalId}
           onSelectSignal={props.onSelectSignal}
         />

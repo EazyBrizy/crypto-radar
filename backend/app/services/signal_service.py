@@ -5,6 +5,7 @@ from typing import Any, Protocol
 from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
 from app.repositories.signal_repository import (
+    MAX_STORED_SIGNALS,
     PostgresSignalRepository,
     SignalRepository,
     SignalWriteResult,
@@ -120,6 +121,23 @@ class SignalService:
             if signal.status in {"new", "active"}
         ]
 
+    def list_open_signals_for_series(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        limit: int = MAX_STORED_SIGNALS,
+    ) -> list[RadarSignal]:
+        list_for_series = getattr(self._repository, "list_open_signals_for_series", None)
+        if list_for_series is not None:
+            return list_for_series(exchange=exchange, symbol=symbol, timeframe=timeframe, limit=limit)
+        return [
+            signal
+            for signal in self.list_open_signals()
+            if signal.exchange == exchange and signal.symbol == symbol and signal.timeframe == timeframe
+        ][:limit]
+
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         return self._repository.get_signal(signal_id)
 
@@ -179,6 +197,30 @@ class SignalService:
         note: str | None = None,
     ) -> RadarSignal | None:
         result = self._repository.reject_signal(signal_id, note=note)
+        if result is None:
+            return None
+        self._after_write(result)
+        return result.signal
+
+    def transition_signal(
+        self,
+        signal_id: str,
+        *,
+        new_status: str,
+        event_type: str,
+        reason: str | None = None,
+        lifecycle: dict[str, Any] | None = None,
+    ) -> RadarSignal | None:
+        transition = getattr(self._repository, "transition_signal", None)
+        if transition is None:
+            return None
+        result = transition(
+            signal_id,
+            new_status=new_status,
+            event_type=event_type,
+            reason=reason,
+            lifecycle=lifecycle,
+        )
         if result is None:
             return None
         self._after_write(result)

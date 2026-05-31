@@ -25,6 +25,13 @@ from app.services.realtime_events import (
     trade_updated_event,
 )
 from app.services.strategy_config_service import StrategyConfigService, strategy_config_service
+from app.services.support_resistance import (
+    SupportResistanceService,
+    SupportResistanceSnapshot,
+    support_resistance_service,
+)
+from app.services.signal_lifecycle import SignalLifecycleWorker, signal_lifecycle_worker
+from app.services.trade_invalidation import TradeInvalidationMonitor, trade_invalidation_monitor
 from app.services.virtual_trading import virtual_trading_service
 from app.strategies.engine import StrategyEngine
 from app.strategies.pipeline import MarketQualityInput, context_timeframe_for, context_timeframes_for
@@ -78,6 +85,9 @@ class MarketScanner:
             MarketDataPersistenceService | None
         ) = market_data_persistence_service,
         market_quality: MarketQualityService | None = market_quality_service,
+        support_resistance: SupportResistanceService | None = support_resistance_service,
+        signal_lifecycle: SignalLifecycleWorker | None = signal_lifecycle_worker,
+        trade_invalidation: TradeInvalidationMonitor | None = trade_invalidation_monitor,
         strategy_configs: StrategyConfigService | None = strategy_config_service,
         virtual_trading: VirtualTradingPriceUpdater | None = virtual_trading_service,
     ) -> None:
@@ -87,6 +97,9 @@ class MarketScanner:
         self._candle_store = candle_store
         self._market_persistence = market_persistence
         self._market_quality = market_quality
+        self._support_resistance = support_resistance
+        self._signal_lifecycle = signal_lifecycle
+        self._trade_invalidation = trade_invalidation
         self._strategy_configs = strategy_configs
         self._virtual_trading = virtual_trading
         self._feature_engine = FeatureEngine()
@@ -128,6 +141,8 @@ class MarketScanner:
         evaluated_candles = 0
         for candle in updated_candles:
             series_key = f"{candle.exchange}:{candle.symbol}:{candle.timeframe}"
+            if candle.trades <= 1:
+                await self._process_closed_candle_lifecycle(candle)
             if not self._should_evaluate_series(series_key, candle):
                 continue
 
@@ -152,6 +167,10 @@ class MarketScanner:
                 if primary_context_timeframe is not None
                 else None
             )
+            support_resistance_by_timeframe = await self._support_resistance_for(
+                candle,
+                context_features_by_timeframe,
+            )
             quality = await self._market_quality_for(features)
             strategy_configs = self._strategy_configs_for(features)
             await self._persist_market_features(features)
@@ -166,6 +185,7 @@ class MarketScanner:
                     features,
                     context_features=context_features,
                     context_features_by_timeframe=context_features_by_timeframe,
+                    support_resistance_by_timeframe=support_resistance_by_timeframe,
                     market_quality=quality,
                     strategy_configs=strategy_configs,
                 )
@@ -228,7 +248,7 @@ class MarketScanner:
 
     async def _context_features_for(self, candle: OHLCVCandle) -> dict[str, Features]:
         result: dict[str, Features] = {}
-        for context_timeframe in context_timeframes_for(candle.timeframe):
+        for context_timeframe in self._context_timeframes_for_signal(candle.timeframe):
             candle_series = self._candle_store.list_candles(
                 exchange=candle.exchange,
                 symbol=candle.symbol,
@@ -242,6 +262,97 @@ class MarketScanner:
             if features is not None:
                 result[context_timeframe] = features
         return result
+
+    async def _support_resistance_for(
+        self,
+        candle: OHLCVCandle,
+        context_features_by_timeframe: dict[str, Features],
+    ) -> dict[str, SupportResistanceSnapshot]:
+        if self._support_resistance is None:
+            return {}
+        result: dict[str, SupportResistanceSnapshot] = {}
+        for context_timeframe in self._context_timeframes_for_signal(candle.timeframe):
+            candle_series = self._candle_store.list_candles(
+                exchange=candle.exchange,
+                symbol=candle.symbol,
+                timeframe=context_timeframe,
+                include_open=True,
+                limit=250,
+            )
+            if len(candle_series) < 5:
+                continue
+            context_features = context_features_by_timeframe.get(context_timeframe)
+            snapshot = await asyncio.to_thread(
+                self._support_resistance.build_snapshot,
+                candle_series,
+                atr=context_features.atr_14 if context_features is not None else None,
+            )
+            if snapshot is not None:
+                result[context_timeframe] = snapshot
+        return result
+
+    async def _process_closed_candle_lifecycle(self, candle: OHLCVCandle) -> None:
+        candle_series = self._candle_store.list_candles(
+            exchange=candle.exchange,
+            symbol=candle.symbol,
+            timeframe=candle.timeframe,
+            include_open=False,
+            limit=250,
+        )
+        if len(candle_series) < 2:
+            return
+        features = await asyncio.to_thread(self._feature_engine.process_candles, candle_series)
+        if features is None:
+            return
+        if self._signal_lifecycle is not None:
+            try:
+                transitions = await self._signal_lifecycle.process_closed_candle(features)
+            except Exception as exc:
+                logger.warning(
+                    "Signal lifecycle failed for %s:%s:%s: %s",
+                    candle.exchange,
+                    candle.symbol,
+                    candle.timeframe,
+                    exc,
+                )
+            else:
+                if transitions:
+                    logger.info(
+                        "Signal lifecycle transitions for %s:%s:%s: %s",
+                        candle.exchange,
+                        candle.symbol,
+                        candle.timeframe,
+                        len(transitions),
+                    )
+        if self._trade_invalidation is None:
+            return
+        try:
+            await self._trade_invalidation.process_closed_candle(features)
+        except Exception as exc:
+            logger.warning(
+                "Trade invalidation lifecycle failed for %s:%s:%s: %s",
+                candle.exchange,
+                candle.symbol,
+                candle.timeframe,
+                exc,
+            )
+
+    def _context_timeframes_for_signal(self, timeframe: str) -> tuple[str, ...]:
+        result = list(context_timeframes_for(timeframe))
+        if self._strategy_configs is None:
+            return tuple(result)
+        try:
+            runtime_configs = self._strategy_configs.runtime_configs()
+        except Exception as exc:
+            logger.warning("Strategy context timeframe lookup failed: %s", exc)
+            return tuple(result)
+        for config in runtime_configs:
+            if config.timeframes and timeframe not in config.timeframes:
+                continue
+            for candidate in context_timeframes_for(timeframe, config.params):
+                if candidate not in result:
+                    result.append(candidate)
+        return tuple(result)
 
     async def _market_quality_for(self, features: Features) -> MarketQualityInput | None:
         if self._market_quality is None:

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { TradesPage } from "@/features/app-shell/TradesPage";
-import { useCloseMarketTradeMutation, useTradeInvalidationQuery, useTradesQuery } from "@/hooks/use-radar-queries";
+import { useCloseMarketTradeMutation, useTradeInvalidationActionMutation, useTradeInvalidationQuery, useTradesQuery } from "@/hooks/use-radar-queries";
 import { useUiStore } from "@/stores/ui-store";
 import type { TradeTab } from "@/stores/ui-store";
 import type { TradeCloseReason, TradeJournalEntry } from "@/types";
@@ -14,12 +14,12 @@ export function TradesRoute({ tab }: { tab: TradeTab }) {
   const selectedTradeId = useUiStore((state) => state.selectedTradeId);
   const setSelectedTradeId = useUiStore((state) => state.setSelectedTradeId);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [dismissedInvalidations, setDismissedInvalidations] = useState<Set<string>>(() => new Set());
   const tradesQuery = useTradesQuery(
     tab === "active" ? { status: "open" } : tab === "journal" ? { status: "closed" } : { status: "closed" },
     { enabled: tab === "active" || tab === "journal" || tab === "analytics" }
   );
   const closeMarketTradeMutation = useCloseMarketTradeMutation();
+  const invalidationActionMutation = useTradeInvalidationActionMutation();
   const trades = useMemo(() => tradesQuery.data?.trades ?? [], [tradesQuery.data?.trades]);
   const selectedTrade = useMemo(
     () => trades.find((trade) => trade.id === selectedTradeId) ?? trades.find((trade) => trade.status === "open") ?? null,
@@ -27,10 +27,10 @@ export function TradesRoute({ tab }: { tab: TradeTab }) {
   );
   const invalidationQuery = useTradeInvalidationQuery(selectedTrade?.id ?? null, {
     enabled: tab === "active" && selectedTrade?.status === "open",
-    refetchInterval: 10_000
+    refetchInterval: false
   });
   const invalidationAlert = (
-    invalidationQuery.data?.invalidated && !dismissedInvalidations.has(invalidationQuery.data.trade_id)
+    invalidationQuery.data?.invalidated && !invalidationQuery.data.action_dismissed
   ) ? invalidationQuery.data : null;
 
   useEffect(() => {
@@ -63,9 +63,17 @@ export function TradesRoute({ tab }: { tab: TradeTab }) {
     }
   }, [closeMarketTradeMutation, tradesQuery]);
 
-  const handleDismissInvalidation = useCallback((tradeId: string) => {
-    setDismissedInvalidations((current) => new Set(current).add(tradeId));
-  }, []);
+  const handleDismissInvalidation = useCallback(async (tradeId: string) => {
+    try {
+      setActionError(null);
+      await invalidationActionMutation.mutateAsync({
+        action: "keep_stop_loss",
+        tradeId
+      });
+    } catch (exc) {
+      setActionError(errorMessage(exc, "Could not save invalidation decision."));
+    }
+  }, [invalidationActionMutation]);
 
   return (
     <TradesPage
@@ -73,7 +81,13 @@ export function TradesRoute({ tab }: { tab: TradeTab }) {
       account={tradesQuery.data?.account ?? null}
       trades={trades}
       activeTab={tab}
-      closingTradeId={closeMarketTradeMutation.isPending ? closeMarketTradeMutation.variables?.id ?? null : null}
+      closingTradeId={
+        closeMarketTradeMutation.isPending
+          ? closeMarketTradeMutation.variables?.id ?? null
+          : invalidationActionMutation.isPending
+            ? selectedTrade?.id ?? null
+            : null
+      }
       invalidationAlert={invalidationAlert}
       selectedTrade={selectedTrade}
       selectedTradeId={selectedTrade?.id ?? selectedTradeId}

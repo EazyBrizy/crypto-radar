@@ -7,6 +7,7 @@ from app.strategies.engine import StrategyEngine
 from app.strategies.liquidity_sweep import LiquiditySweepReversalStrategy
 from app.strategies.pipeline import MarketQualityInput, StrategyEvaluationContext, StrategySignalPipeline
 from app.strategies.trend_pullback import TrendPullbackContinuationStrategy
+from app.services.support_resistance import SupportResistanceLevel, SupportResistanceSnapshot
 
 
 class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
@@ -82,6 +83,17 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signal.status, "wait_for_pullback")
         self.assertIn("dynamic limit", signal.status_reason or "")
         self.assertIn("breakout level", signal.status_reason or "")
+        overextension_check = next(
+            check
+            for check in (signal.confirmation.checks if signal.confirmation else [])
+            if check.name == "overextension_guard"
+        )
+        self.assertEqual(overextension_check.metadata.get("pullback_target_source"), "breakout_level")
+        self.assertAlmostEqual(overextension_check.metadata.get("pullback_target_price"), 101.0)
+        self.assertIsNotNone(signal.entry_min)
+        self.assertIsNotNone(signal.entry_max)
+        self.assertLess(signal.entry_min or 0, 101.0)
+        self.assertGreater(signal.entry_max or 0, 101.0)
 
     async def test_rejection_wick_waits_for_fresh_reclaim(self) -> None:
         features = _breakout_features().model_copy(
@@ -131,7 +143,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
                 signal_features=features,
                 context_features=_bullish_context_features(),
                 pair_scope_configured=True,
-                strategy_params={"min_rr_ratio": 1.5},
+                strategy_params={"min_rr_ratio": 1.5, "rr_target": "final"},
             ),
         )
 
@@ -170,6 +182,82 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signal.status, "ready")
         self.assertIn("Risk/reward blocked", signal.status_reason or "")
         self.assertIn("configured minimum", " ".join(signal.risks if signal else []))
+
+    def test_risk_reward_guard_exposes_first_final_and_selected_rr(self) -> None:
+        features = _breakout_features()
+        candidate = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            scoring=score_breakdown(
+                trend_score=35,
+                volume_score=20,
+                volatility_score=20,
+                risk_reward_score=15,
+            ),
+            reasons=["Breakout setup is classified by strategy layer"],
+            entry=features.close,
+            stop_loss=100.2,
+            take_profit_1=102.2,
+            take_profit_2=104.2,
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                strategy_params={"min_rr_ratio": 1.5, "rr_target": "final"},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.selected_rr_target, "final")
+        self.assertAlmostEqual(signal.first_target_rr or 0, 1.0)
+        self.assertAlmostEqual(signal.final_target_rr or 0, 3.0)
+        self.assertAlmostEqual(signal.selected_rr or 0, 3.0)
+        rr_check = next(
+            check
+            for check in (signal.confirmation.checks if signal.confirmation else [])
+            if check.name == "risk_reward_guard"
+        )
+        self.assertEqual(rr_check.metadata.get("selected_rr_target"), "final")
+        self.assertAlmostEqual(rr_check.metadata.get("first_target_rr"), 1.0)
+        self.assertAlmostEqual(rr_check.metadata.get("final_target_rr"), 3.0)
+
+    def test_sweep_defaults_to_nearest_rr_target(self) -> None:
+        features = _breakout_features()
+        candidate = build_signal(
+            features=features,
+            strategy="liquidity_sweep_reversal",
+            direction="LONG",
+            scoring=score_breakdown(
+                trend_score=35,
+                volume_score=20,
+                volatility_score=15,
+                risk_reward_score=15,
+            ),
+            reasons=["Liquidity sweep setup is classified by strategy layer"],
+            entry=features.close,
+            stop_loss=100.2,
+            take_profit_1=102.2,
+            take_profit_2=104.2,
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "ready")
+        self.assertEqual(signal.selected_rr_target, "nearest")
+        self.assertAlmostEqual(signal.first_target_rr or 0, 1.0)
+        self.assertAlmostEqual(signal.final_target_rr or 0, 3.0)
+        self.assertAlmostEqual(signal.selected_rr or 0, 1.0)
+        self.assertIn("nearest target", signal.status_reason or "")
 
     def test_strategy_pipeline_can_hide_low_rr_cards_by_strategy_setting(self) -> None:
         features = _breakout_features()
@@ -406,6 +494,72 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    def test_breakout_uses_support_resistance_snapshot_for_context_obstacle(self) -> None:
+        features = _breakout_features()
+        context = _bullish_context_features().model_copy(
+            update={
+                "swing_high": 110.0,
+                "donchian_high_20": 112.0,
+            }
+        )
+        resistance = SupportResistanceLevel(
+            kind="resistance",
+            price=101.55,
+            retest_count=3,
+            age_candles=4,
+            first_seen_index=10,
+            last_seen_index=46,
+            volume_score=1.4,
+            freshness_score=0.9,
+            strength=78.0,
+        )
+        snapshot = SupportResistanceSnapshot(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            atr=2.0,
+            levels=(resistance,),
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            _quality_candidate(features),
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=context,
+                support_resistance_by_timeframe={"1h": snapshot},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "ready")
+        self.assertTrue(
+            any(
+                check.name == "context_resistance"
+                and check.status == "warning"
+                and "S/R resistance" in (check.reason or "")
+                for check in (signal.regime.checks if signal and signal.regime else [])
+            )
+        )
+
+    def test_context_timeframe_can_be_overridden_per_strategy(self) -> None:
+        features = _breakout_features()
+        default_context = _bearish_context_features()
+        override_context = _bullish_context_features().model_copy(update={"timeframe": "4h"})
+
+        signal = StrategySignalPipeline().finalize(
+            _quality_candidate(features),
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=default_context,
+                context_features_by_timeframe={"1h": default_context, "4h": override_context},
+                strategy_params={"context_timeframe_map": {"15m": "4h"}},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.regime.context_timeframe if signal and signal.regime else None, "4h")
+        self.assertEqual(signal.regime.alignment if signal and signal.regime else None, "aligned")
+
     def test_macro_context_can_block_liquidity_sweep_countertrend_short(self) -> None:
         features = _breakout_features()
         primary = _bearish_context_features()
@@ -429,6 +583,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
                 signal_features=features,
                 context_features=primary,
                 context_features_by_timeframe={"1h": primary, "4h": macro},
+                strategy_params={"rr_target": "final"},
             ),
         )
 

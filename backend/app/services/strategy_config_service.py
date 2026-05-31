@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -18,10 +20,25 @@ from app.schemas.strategy import StrategyConfigResponse, StrategyConfigUpdateReq
 from app.services.bootstrap_service import DEMO_USERNAME
 
 RUNTIME_CONFIG_CACHE_TTL_SEC = 10.0
+RR_TARGET_DEFAULT_VERSION = "strategy-rr-target-v1"
+RR_TARGET_BY_STRATEGY: dict[str, str] = {
+    "trend_pullback_continuation": "final",
+    "volatility_squeeze_breakout": "final",
+    "liquidity_sweep_reversal": "nearest",
+}
 
 DEFAULT_STRATEGY_QUALITY_PARAMS: dict[str, Any] = {
     "min_24h_volume_quote": 10_000_000.0,
     "max_spread_bps": 25.0,
+    "context_timeframe_map": {
+        "1m": "15m",
+        "5m": "1h",
+        "15m": "1h",
+        "1h": "4h",
+        "4h": "1d",
+    },
+    "context_obstacle_min_atr": 1.0,
+    "context_level_min_strength": 25.0,
     "allow_low_liquidity": False,
     "quality_tiers": {
         "major": {"min_24h_volume_quote": 25_000_000.0, "max_spread_bps": 15.0},
@@ -47,13 +64,19 @@ class StrategyRuntimeConfig:
         normalized_symbol = symbol.strip().upper()
         if not self.is_enabled:
             return False
-        if self.exchanges and normalized_exchange not in self.exchanges:
-            return False
         if self.timeframes and timeframe not in self.timeframes:
             return False
-        if self.pairs and (normalized_exchange, normalized_symbol) not in self.pairs:
+        if self.pairs:
+            if (normalized_exchange, normalized_symbol) not in self.pairs:
+                return False
+            return True
+        if self.exchanges and normalized_exchange not in self.exchanges:
             return False
         return True
+
+
+class StrategyConfigValidationError(ValueError):
+    pass
 
 
 class StrategyConfigService:
@@ -82,9 +105,9 @@ class StrategyConfigService:
             if request.name is not None:
                 config.name = request.name.strip()
             if request.exchanges is not None:
-                config.exchange_scope = _normalize_exchanges(request.exchanges)
+                config.exchange_scope = _validate_exchanges(session, request.exchanges)
             if request.pairs is not None:
-                config.pair_scope = _normalize_pairs(request.pairs)
+                config.pair_scope = _validate_pairs(session, request.pairs)
             if request.timeframes is not None:
                 config.timeframes = list(dict.fromkeys(request.timeframes))
             if request.params is not None:
@@ -113,7 +136,13 @@ class StrategyConfigService:
             return cached[1]
         default_risk_settings = _default_strategy_risk_settings(user_id)
         configs = [
-            _response_to_runtime(config, default_risk_settings=default_risk_settings)
+            _response_to_runtime(
+                config,
+                default_risk_settings=_risk_settings_for_strategy(
+                    config.strategy_code,
+                    default_risk_settings,
+                ),
+            )
             for config in self.list_configs(user_id=user_id)
             if config.is_enabled
         ]
@@ -133,6 +162,22 @@ class StrategyConfigService:
             for config in self.runtime_configs(user_id=user_id)
             if config.matches(exchange=exchange, symbol=symbol, timeframe=timeframe)
         }
+
+    def config_hash(self, user_id: str = "demo_user") -> str:
+        payload = [
+            {
+                "strategy_code": config.strategy_code,
+                "exchanges": config.exchanges,
+                "pairs": [pair.model_dump(mode="json") for pair in config.pairs],
+                "timeframes": config.timeframes,
+                "params": config.params,
+                "risk_settings": config.risk_settings,
+                "is_enabled": config.is_enabled,
+            }
+            for config in self.list_configs(user_id=user_id)
+        ]
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
     def invalidate_cache(self) -> None:
         self._runtime_cache = None
@@ -179,10 +224,8 @@ def _ensure_default_configs(session: Session, user: AppUser) -> None:
             continue
         params = dict(version.default_params or {})
         params.update(DEFAULT_STRATEGY_QUALITY_PARAMS)
-        risk_settings = {
-            "rr_target": "final",
-            "hide_failed_rr_signals": False,
-        }
+        params.update(_default_overextension_params(version.strategy.code))
+        risk_settings = _persisted_risk_settings_for_strategy(version.strategy.code)
         session.add(
             UserStrategyConfig(
                 user_id=user.id,
@@ -197,6 +240,11 @@ def _ensure_default_configs(session: Session, user: AppUser) -> None:
             )
         )
         changed = True
+    changed = _normalize_existing_strategy_defaults(
+        session.scalars(
+            _config_select().where(UserStrategyConfig.user_id == user.id)
+        ).unique().all()
+    ) or changed
     if changed:
         session.commit()
 
@@ -262,8 +310,81 @@ def _default_strategy_risk_settings(user_id: str) -> dict[str, Any]:
         min_rr_ratio = 2.0
     return {
         "min_rr_ratio": min_rr_ratio,
-        "rr_target": "final",
         "hide_failed_rr_signals": False,
+    }
+
+
+def _risk_settings_for_strategy(strategy_code: str, base_settings: dict[str, Any]) -> dict[str, Any]:
+    settings = dict(base_settings)
+    settings.setdefault("hide_failed_rr_signals", False)
+    settings["rr_target"] = _default_rr_target_for_strategy(strategy_code)
+    settings["rr_target_default_version"] = RR_TARGET_DEFAULT_VERSION
+    return settings
+
+
+def _persisted_risk_settings_for_strategy(strategy_code: str) -> dict[str, Any]:
+    return {
+        "rr_target": _default_rr_target_for_strategy(strategy_code),
+        "rr_target_default_version": RR_TARGET_DEFAULT_VERSION,
+        "hide_failed_rr_signals": False,
+    }
+
+
+def _default_rr_target_for_strategy(strategy_code: str) -> str:
+    return RR_TARGET_BY_STRATEGY.get(strategy_code, "final")
+
+
+def _normalize_existing_strategy_defaults(configs: list[UserStrategyConfig]) -> bool:
+    changed = False
+    now = datetime.now(timezone.utc)
+    for config in configs:
+        strategy_code = config.strategy_version.strategy.code
+        risk_settings = dict(config.risk_settings or {})
+        config_changed = False
+        if "hide_failed_rr_signals" not in risk_settings:
+            risk_settings["hide_failed_rr_signals"] = False
+            config_changed = True
+        if "rr_target" not in risk_settings:
+            risk_settings["rr_target"] = _default_rr_target_for_strategy(strategy_code)
+            config_changed = True
+        elif _is_legacy_default_rr_target(strategy_code, risk_settings):
+            risk_settings["rr_target"] = _default_rr_target_for_strategy(strategy_code)
+            config_changed = True
+        if risk_settings.get("rr_target_default_version") != RR_TARGET_DEFAULT_VERSION:
+            risk_settings["rr_target_default_version"] = RR_TARGET_DEFAULT_VERSION
+            config_changed = True
+        if config_changed:
+            config.risk_settings = risk_settings
+            config.updated_at = now
+            changed = True
+    return changed
+
+
+def _is_legacy_default_rr_target(strategy_code: str, risk_settings: dict[str, Any]) -> bool:
+    if _default_rr_target_for_strategy(strategy_code) == "final":
+        return False
+    if risk_settings.get("rr_target_default_version"):
+        return False
+    if str(risk_settings.get("rr_target") or "").lower() != "final":
+        return False
+    allowed_legacy_keys = {"rr_target", "hide_failed_rr_signals"}
+    return set(risk_settings).issubset(allowed_legacy_keys) and not bool(risk_settings.get("hide_failed_rr_signals"))
+
+
+def _default_overextension_params(strategy_code: str) -> dict[str, float]:
+    body_defaults = {
+        "trend_pullback_continuation": 2.0,
+        "volatility_squeeze_breakout": 2.5,
+        "liquidity_sweep_reversal": 2.0,
+    }
+    range_defaults = {
+        "trend_pullback_continuation": 3.0,
+        "volatility_squeeze_breakout": 3.5,
+        "liquidity_sweep_reversal": 3.8,
+    }
+    return {
+        "max_body_atr": body_defaults.get(strategy_code, 2.5),
+        "max_range_atr": range_defaults.get(strategy_code, 3.5),
     }
 
 
@@ -281,13 +402,67 @@ def _normalize_exchanges(values: list[Any]) -> list[str]:
     return list(dict.fromkeys(normalized))
 
 
-def _normalize_pairs(values: list[StrategyPairScope]) -> list[dict[str, str]]:
+def _normalize_pairs(values: list[StrategyPairScope]) -> list[tuple[str, str]]:
     pairs = [
         (pair.exchange.strip().lower(), pair.symbol.strip().upper())
         for pair in values
         if pair.exchange.strip() and pair.symbol.strip()
     ]
-    return [{"exchange": exchange, "symbol": symbol} for exchange, symbol in dict.fromkeys(pairs)]
+    return list(dict.fromkeys(pairs))
+
+
+def _validate_exchanges(session: Session, values: list[str]) -> list[str]:
+    exchanges = _normalize_exchanges(values)
+    records = {
+        exchange.code.lower(): exchange
+        for exchange in session.scalars(
+            select(MarketExchange).where(MarketExchange.code.in_(exchanges))
+        ).all()
+    }
+    errors: list[str] = []
+    for exchange in exchanges:
+        record = records.get(exchange)
+        if record is None:
+            errors.append(f"Exchange '{exchange}' is not present in market_exchanges")
+        elif record.status != "active":
+            errors.append(f"Exchange '{exchange}' is disabled")
+    if errors:
+        raise StrategyConfigValidationError("; ".join(errors))
+    return exchanges
+
+
+def _validate_pairs(session: Session, values: list[StrategyPairScope]) -> list[dict[str, str]]:
+    pairs = _normalize_pairs(values)
+    if not pairs:
+        return []
+
+    exchanges = list(dict.fromkeys(exchange for exchange, _ in pairs))
+    symbols = list(dict.fromkeys(symbol for _, symbol in pairs))
+    records = {
+        (pair.exchange.code.lower(), pair.symbol.upper()): pair
+        for pair in session.scalars(
+            select(MarketPair)
+            .join(MarketPair.exchange)
+            .options(joinedload(MarketPair.exchange))
+            .where(MarketExchange.code.in_(exchanges), MarketPair.symbol.in_(symbols))
+        ).unique().all()
+    }
+
+    errors: list[str] = []
+    for exchange, symbol in pairs:
+        pair = records.get((exchange, symbol))
+        if pair is None:
+            errors.append(f"Market pair '{exchange}:{symbol}' is not found in market_pairs")
+            continue
+        if pair.exchange.status != "active":
+            errors.append(f"Exchange '{exchange}' is disabled for pair '{exchange}:{symbol}'")
+        elif pair.status != "active":
+            errors.append(f"Market pair '{exchange}:{symbol}' is disabled")
+
+    if errors:
+        raise StrategyConfigValidationError("; ".join(errors))
+
+    return [{"exchange": exchange, "symbol": symbol} for exchange, symbol in pairs]
 
 
 def _pairs_from_scope(values: Any) -> list[tuple[str, str]]:

@@ -36,19 +36,25 @@ try {
 
   const python = resolvePython();
   const node = process.execPath;
+  const backendEnv = {
+    ...process.env,
+    PYTHONPATH: [
+      path.join(backendDir, ".venv", "Lib", "site-packages"),
+      backendDir,
+    ].join(path.delimiter),
+    CRYPTO_RADAR_SCANNER_ENABLED: "false",
+  };
+  runManaged(python, ["-m", "alembic", "upgrade", "head"], {
+    cwd: backendDir,
+    env: backendEnv,
+    name: "migrations",
+  });
   const backend = spawnManaged(
     python,
     ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(backendPort)],
     {
       cwd: backendDir,
-      env: {
-        ...process.env,
-        PYTHONPATH: [
-          path.join(backendDir, ".venv", "Lib", "site-packages"),
-          backendDir,
-        ].join(path.delimiter),
-        CRYPTO_RADAR_SCANNER_ENABLED: "false",
-      },
+      env: backendEnv,
       name: "backend",
     },
   );
@@ -248,6 +254,21 @@ function spawnManaged(command, commandArgs, options) {
     child.smokeExit = { code, signal };
   });
   return child;
+}
+
+function runManaged(command, commandArgs, options) {
+  const result = spawnSync(command, commandArgs, {
+    cwd: options.cwd,
+    env: normalizeWindowsEnv(options.env),
+    encoding: "utf8",
+    shell: false,
+  });
+  if (result.status === 0) return;
+  throw new Error([
+    `${options.name} failed with exit code ${result.status ?? "unknown"}.`,
+    result.stdout,
+    result.stderr,
+  ].filter(Boolean).join("\n"));
 }
 
 function normalizeWindowsEnv(env) {

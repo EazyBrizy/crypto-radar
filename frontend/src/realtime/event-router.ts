@@ -5,7 +5,7 @@ import { warnIfRealtimeEventExceedsBudget } from "@/performance/budgets";
 import { useNotificationStore } from "@/stores/notification-store";
 import { usePriceStore } from "@/stores/price-store";
 import { useSignalStore, type SignalPatch } from "@/stores/signal-store";
-import type { HealthStatus, RadarResponse, RadarSignal, RadarStatus, SignalStatus, TradeJournalEntry, TradeJournalResponse } from "@/types";
+import type { HealthStatus, RadarResponse, RadarSignal, RadarStatus, SignalStatus, TradeInvalidationAlert, TradeJournalEntry, TradeJournalResponse } from "@/types";
 import { isOpenFeedSignal } from "@/utils";
 import type { NotificationRealtimePayload, RealtimeMessage, StandardRealtimeEvent } from "./event-types";
 
@@ -159,6 +159,12 @@ function routeStandardEvent(
     return;
   }
 
+  if (event.type === "trade.invalidation") {
+    applyTradeInvalidation(options.queryClient, event.payload.alert);
+    pushTradeInvalidationNotification(event.payload.alert);
+    return;
+  }
+
   if (event.type === "take_profit.hit") {
     pushTakeProfitNotification(event.payload.pair, event.payload.price, event.payload.target, event.payload.tradeId);
     return;
@@ -245,15 +251,6 @@ function applySignalEntryTouched(queryClient: QueryClient, signalId: string, pri
   });
 }
 
-function pushNewSignalNotification(signal: RadarSignal) {
-  useNotificationStore.getState().push({
-    kind: "signal",
-    message: `${signal.symbol} ${signal.direction.toUpperCase()} · score ${Math.round(signal.score)}`,
-    signalId: signal.id,
-    title: "New signal"
-  });
-}
-
 function pushTakeProfitNotification(pair: string, price: number, target = "TP1", tradeId?: string | null) {
   useNotificationStore.getState().push({
     id: tradeId ? `tp_${tradeId}_${target}` : undefined,
@@ -327,6 +324,21 @@ function applyTradeUpdate(queryClient: QueryClient, trade: TradeJournalEntry) {
   }));
   void queryClient.invalidateQueries({ queryKey: serverStateKeys.journal.all() });
   void queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.all() });
+}
+
+function applyTradeInvalidation(queryClient: QueryClient, alert: TradeInvalidationAlert) {
+  queryClient.setQueryData<TradeInvalidationAlert>(serverStateKeys.trades.invalidation(alert.trade_id), alert);
+  void queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.list({ status: "open" }) });
+}
+
+function pushTradeInvalidationNotification(alert: TradeInvalidationAlert) {
+  if (alert.action_dismissed) return;
+  useNotificationStore.getState().push({
+    id: `trade_invalidation_${alert.trade_id}_${alert.fingerprint ?? "current"}`,
+    kind: "trade",
+    message: alert.reason ?? `${alert.symbol} strategy idea is invalidated`,
+    title: "Strategy invalidation"
+  });
 }
 
 function isSignalEvent(message: RealtimeMessage): message is Extract<RealtimeMessage, { signal: RadarSignal }> {

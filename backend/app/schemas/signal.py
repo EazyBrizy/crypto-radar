@@ -24,6 +24,7 @@ class SignalLayerCheck(BaseModel):
     status: LayerCheckStatus = "passed"
     score: Optional[float] = None
     reason: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class MarketQualitySnapshot(BaseModel):
@@ -106,6 +107,11 @@ class StrategySignal(BaseModel):
     take_profit_1: Optional[float] = None
     take_profit_2: Optional[float] = None
     risk_reward: Optional[float] = Field(default=None, ge=0)
+    first_target_rr: Optional[float] = Field(default=None, ge=0)
+    final_target_rr: Optional[float] = Field(default=None, ge=0)
+    selected_rr: Optional[float] = Field(default=None, ge=0)
+    selected_rr_target: Optional[str] = None
+    min_rr_ratio: Optional[float] = Field(default=None, ge=0)
     urgency: Literal["low", "medium", "high"] = "medium"
     explanation: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
@@ -129,6 +135,11 @@ class RadarSignal(BaseModel):
     direction: SignalDirection
     confidence: float = Field(..., ge=0, le=1)
     risk_reward: Optional[float] = Field(default=None, ge=0)
+    first_target_rr: Optional[float] = Field(default=None, ge=0)
+    final_target_rr: Optional[float] = Field(default=None, ge=0)
+    selected_rr: Optional[float] = Field(default=None, ge=0)
+    selected_rr_target: Optional[str] = None
+    min_rr_ratio: Optional[float] = Field(default=None, ge=0)
     urgency: SignalUrgency = "medium"
     status: SignalStatus = "active"
     score: int = Field(default=0, ge=0, le=100)

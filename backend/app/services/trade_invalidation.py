@@ -1,15 +1,31 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
+from uuid import UUID
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.core.database import SessionLocal
+from app.models.trade_invalidation import TradeInvalidationAction
+from app.models.user import AppUser
 from app.schemas.candle import OHLCVCandle
 from app.schemas.market import Features
 from app.schemas.signal import RadarSignal, SignalInvalidationSnapshot
-from app.schemas.trade import TradeInvalidationAlert, TradeJournalEntry, VirtualTrade
+from app.schemas.trade import TradeInvalidationAlert, TradeJournalEntry, TradeInvalidationUserAction, VirtualTrade
 from app.services.candle_service import candle_service
 from app.services.feature_engine import FeatureEngine
+from app.services.message_broker import realtime_event_broker
+from app.services.realtime_events import trade_invalidation_event
 from app.services.signal_service import signal_service
+from app.services.virtual_trading import virtual_trading_service
+
+logger = logging.getLogger(__name__)
 
 
 class SignalLookup(Protocol):
@@ -32,6 +48,88 @@ class CandleLookup(Protocol):
 TradeLike = VirtualTrade | TradeJournalEntry
 
 
+class OpenTradeLookup(Protocol):
+    def list_trade_journal(
+        self,
+        mode: str | None = None,
+        status: str | None = None,
+        signal_id: str | None = None,
+    ) -> list[TradeJournalEntry]:
+        ...
+
+
+@dataclass(frozen=True)
+class TradeInvalidationActionRecord:
+    action: TradeInvalidationUserAction
+    created_at: datetime
+    dismissed_at: datetime | None = None
+
+
+class TradeInvalidationActionStore(Protocol):
+    def latest_for_alert(self, alert: TradeInvalidationAlert) -> TradeInvalidationActionRecord | None:
+        ...
+
+    def record(
+        self,
+        alert: TradeInvalidationAlert,
+        action: TradeInvalidationUserAction,
+        *,
+        user_id: str = "demo_user",
+    ) -> TradeInvalidationActionRecord:
+        ...
+
+
+class PostgresTradeInvalidationActionStore:
+    def __init__(self, session_factory: sessionmaker[Session] = SessionLocal) -> None:
+        self._session_factory = session_factory
+
+    def latest_for_alert(self, alert: TradeInvalidationAlert) -> TradeInvalidationActionRecord | None:
+        if not alert.fingerprint:
+            return None
+        with self._session_factory() as session:
+            record = session.scalars(
+                select(TradeInvalidationAction)
+                .where(
+                    TradeInvalidationAction.trade_id == alert.trade_id,
+                    TradeInvalidationAction.fingerprint == alert.fingerprint,
+                )
+                .order_by(TradeInvalidationAction.created_at.desc())
+                .limit(1)
+            ).first()
+            return _action_record(record)
+
+    def record(
+        self,
+        alert: TradeInvalidationAlert,
+        action: TradeInvalidationUserAction,
+        *,
+        user_id: str = "demo_user",
+    ) -> TradeInvalidationActionRecord:
+        now = datetime.now(timezone.utc)
+        fingerprint = alert.fingerprint or _alert_fingerprint(alert)
+        with self._session_factory() as session:
+            user = _resolve_user(session, user_id)
+            record = TradeInvalidationAction(
+                user_id=user.id if user is not None else None,
+                trade_id=alert.trade_id,
+                signal_id=_uuid_or_none(alert.signal_id),
+                mode=alert.metadata.get("trade_mode") if alert.metadata.get("trade_mode") in {"virtual", "real"} else "virtual",
+                action=action,
+                fingerprint=fingerprint,
+                reason=alert.reason,
+                alert_snapshot=alert.model_copy(update={"fingerprint": fingerprint}).model_dump(mode="json"),
+                dismissed_at=now if _dismisses_alert(action) else None,
+                created_at=now,
+            )
+            session.add(record)
+            session.commit()
+            return TradeInvalidationActionRecord(
+                action=action,
+                created_at=record.created_at,
+                dismissed_at=record.dismissed_at,
+            )
+
+
 class TradeInvalidationService:
     def __init__(
         self,
@@ -39,20 +137,25 @@ class TradeInvalidationService:
         signals: SignalLookup | None = None,
         candles: CandleLookup | None = None,
         feature_engine: FeatureEngine | None = None,
+        actions: TradeInvalidationActionStore | None = None,
     ) -> None:
         self._signals = signals or signal_service
         self._candles = candles or candle_service
         self._feature_engine = feature_engine or FeatureEngine()
+        self._actions = actions or PostgresTradeInvalidationActionStore()
 
     def evaluate_trade(self, trade: TradeLike) -> TradeInvalidationAlert:
+        features = self._latest_features(trade)
+        return self.evaluate_trade_with_features(trade, features)
+
+    def evaluate_trade_with_features(self, trade: TradeLike, features: Features | None) -> TradeInvalidationAlert:
         detected_at = datetime.now(timezone.utc)
         signal = self._signal_for_trade(trade)
         snapshot = signal.invalidation if signal is not None else None
-        features = self._latest_features(trade)
         current_price = features.close if features is not None else trade.current_price
 
         if trade.status != "open":
-            return self._alert(
+            return self._with_user_action(self._alert(
                 trade=trade,
                 snapshot=snapshot,
                 detected_at=detected_at,
@@ -60,10 +163,10 @@ class TradeInvalidationService:
                 status="unavailable",
                 reason="Trade is not open",
                 metadata={"data_status": "trade_closed"},
-            )
+            ))
 
         if snapshot is None:
-            return self._alert(
+            return self._with_user_action(self._alert(
                 trade=trade,
                 snapshot=None,
                 detected_at=detected_at,
@@ -71,10 +174,10 @@ class TradeInvalidationService:
                 status="unavailable",
                 reason="Signal invalidation plan is unavailable",
                 metadata={"data_status": "missing_signal_invalidation"},
-            )
+            ))
 
         if features is None:
-            return self._alert(
+            return self._with_user_action(self._alert(
                 trade=trade,
                 snapshot=snapshot,
                 detected_at=detected_at,
@@ -82,7 +185,7 @@ class TradeInvalidationService:
                 status="unavailable",
                 reason="Not enough candle data to evaluate logical invalidation",
                 metadata={"data_status": "missing_candles", **snapshot.metadata},
-            )
+            ))
 
         triggered = self._triggered_conditions(trade, snapshot, features)
         latest_metadata = {
@@ -99,15 +202,15 @@ class TradeInvalidationService:
             "latest_swing_low": features.swing_low,
         }
         if not triggered:
-            return self._alert(
+            return self._with_user_action(self._alert(
                 trade=trade,
                 snapshot=snapshot,
                 detected_at=detected_at,
                 current_price=current_price,
                 metadata=latest_metadata,
-            )
+            ))
 
-        return self._alert(
+        return self._with_user_action(self._alert(
             trade=trade,
             snapshot=snapshot,
             detected_at=detected_at,
@@ -118,6 +221,26 @@ class TradeInvalidationService:
             triggered_conditions=triggered,
             suggested_action="close_market_or_wait_stop",
             metadata=latest_metadata,
+        ))
+
+    def record_user_action(
+        self,
+        trade: TradeLike,
+        action: TradeInvalidationUserAction,
+        *,
+        user_id: str = "demo_user",
+        alert: TradeInvalidationAlert | None = None,
+    ) -> TradeInvalidationAlert:
+        current_alert = alert or self.evaluate_trade(trade)
+        fingerprint = current_alert.fingerprint or _alert_fingerprint(current_alert)
+        current_alert = current_alert.model_copy(update={"fingerprint": fingerprint})
+        record = self._actions.record(current_alert, action, user_id=user_id)
+        return current_alert.model_copy(
+            update={
+                "user_action": record.action,
+                "user_action_at": record.created_at,
+                "action_dismissed": _dismisses_alert(record.action),
+            }
         )
 
     def _signal_for_trade(self, trade: TradeLike) -> RadarSignal | None:
@@ -144,14 +267,13 @@ class TradeInvalidationService:
         snapshot: SignalInvalidationSnapshot,
         features: Features,
     ) -> list[str]:
-        strategy = trade.strategy
-        if strategy == "trend_pullback_continuation":
-            return _trend_pullback_conditions(trade.side, snapshot, features)
-        if strategy == "volatility_squeeze_breakout":
-            return _squeeze_breakout_conditions(trade.side, snapshot, features)
-        if strategy == "liquidity_sweep_reversal":
-            return _liquidity_sweep_conditions(trade.side, snapshot, features)
-        return _fallback_conditions(trade, snapshot, features)
+        return signal_invalidation_conditions(
+            strategy=trade.strategy,
+            side=trade.side,
+            snapshot=snapshot,
+            features=features,
+            stop_loss=trade.stop_loss,
+        )
 
     @staticmethod
     def _alert(
@@ -167,7 +289,8 @@ class TradeInvalidationService:
         suggested_action: str = "none",
         metadata: dict[str, Any] | None = None,
     ) -> TradeInvalidationAlert:
-        return TradeInvalidationAlert(
+        metadata = metadata or {}
+        alert = TradeInvalidationAlert(
             trade_id=trade.id,
             signal_id=trade.signal_id,
             exchange=trade.exchange,
@@ -185,8 +308,71 @@ class TradeInvalidationService:
             stop_loss=trade.stop_loss,
             invalidation_price=(snapshot.price or snapshot.hard_stop) if snapshot is not None else None,
             detected_at=detected_at,
-            metadata=metadata or {},
+            metadata={**metadata, "trade_mode": trade.mode},
         )
+        return alert.model_copy(update={"fingerprint": _alert_fingerprint(alert)})
+
+    def _with_user_action(self, alert: TradeInvalidationAlert) -> TradeInvalidationAlert:
+        record = self._actions.latest_for_alert(alert)
+        if record is None:
+            return alert
+        return alert.model_copy(
+            update={
+                "user_action": record.action,
+                "user_action_at": record.created_at,
+                "action_dismissed": _dismisses_alert(record.action),
+            }
+        )
+
+
+class TradeInvalidationMonitor:
+    def __init__(
+        self,
+        *,
+        trades: OpenTradeLookup | None = None,
+        invalidations: TradeInvalidationService | None = None,
+    ) -> None:
+        self._trades = trades or virtual_trading_service
+        self._invalidations = invalidations or trade_invalidation_service
+        self._published_fingerprints: dict[str, str] = {}
+
+    async def process_closed_candle(self, features: Features) -> list[TradeInvalidationAlert]:
+        alerts: list[TradeInvalidationAlert] = []
+        for trade in self._matching_open_trades(features):
+            alert = self._invalidations.evaluate_trade_with_features(trade, features)
+            if not alert.invalidated or alert.action_dismissed:
+                continue
+            if not self._should_publish(alert):
+                continue
+            alerts.append(alert)
+            await realtime_event_broker.publish(trade_invalidation_event(alert))
+        if alerts:
+            logger.info(
+                "Trade invalidation alerts for %s:%s:%s: %s",
+                features.exchange,
+                features.symbol,
+                features.timeframe,
+                len(alerts),
+            )
+        return alerts
+
+    def _matching_open_trades(self, features: Features) -> list[TradeJournalEntry]:
+        return [
+            trade
+            for trade in self._trades.list_trade_journal(status="open")
+            if trade.exchange == features.exchange
+            and trade.symbol == features.symbol
+            and trade.timeframe == features.timeframe
+            and trade.status == "open"
+        ]
+
+    def _should_publish(self, alert: TradeInvalidationAlert) -> bool:
+        fingerprint = alert.fingerprint or _alert_fingerprint(alert)
+        previous = self._published_fingerprints.get(alert.trade_id)
+        if previous == fingerprint:
+            return False
+        self._published_fingerprints[alert.trade_id] = fingerprint
+        return True
 
 
 def _trend_pullback_conditions(
@@ -219,6 +405,23 @@ def _trend_pullback_conditions(
     if rsi_14 is not None and rsi_14 > rsi_short_max:
         triggered.append("RSI reclaims the 55 zone")
     return triggered
+
+
+def signal_invalidation_conditions(
+    *,
+    strategy: str,
+    side: str,
+    snapshot: SignalInvalidationSnapshot,
+    features: Features,
+    stop_loss: float | None = None,
+) -> list[str]:
+    if strategy == "trend_pullback_continuation":
+        return _trend_pullback_conditions(side, snapshot, features)
+    if strategy == "volatility_squeeze_breakout":
+        return _squeeze_breakout_conditions(side, snapshot, features)
+    if strategy == "liquidity_sweep_reversal":
+        return _liquidity_sweep_conditions(side, snapshot, features)
+    return _fallback_signal_conditions(side, snapshot, features, stop_loss)
 
 
 def _squeeze_breakout_conditions(
@@ -296,6 +499,22 @@ def _fallback_conditions(
     return []
 
 
+def _fallback_signal_conditions(
+    side: str,
+    snapshot: SignalInvalidationSnapshot,
+    features: Features,
+    stop_loss: float | None,
+) -> list[str]:
+    invalidation_price = _number(snapshot.price, snapshot.hard_stop, stop_loss)
+    if invalidation_price is None:
+        return []
+    if side == "long" and features.close <= invalidation_price:
+        return ["Signal stop is reached"]
+    if side == "short" and features.close >= invalidation_price:
+        return ["Signal stop is reached"]
+    return []
+
+
 def _safe_timeframe(value: str) -> str | None:
     return value if value in {"1m", "5m", "15m", "1h", "4h", "1d"} else None
 
@@ -311,4 +530,51 @@ def _number(*values: Any) -> float | None:
     return None
 
 
+def _alert_fingerprint(alert: TradeInvalidationAlert) -> str:
+    payload = {
+        "trade_id": alert.trade_id,
+        "signal_id": alert.signal_id,
+        "strategy": alert.strategy,
+        "side": alert.side,
+        "status": alert.status,
+        "triggered_conditions": sorted(alert.triggered_conditions),
+        "invalidation_price": alert.invalidation_price,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
+def _dismisses_alert(action: TradeInvalidationUserAction) -> bool:
+    return action in {"keep_stop_loss", "dismissed", "close_market"}
+
+
+def _action_record(record: TradeInvalidationAction | None) -> TradeInvalidationActionRecord | None:
+    if record is None:
+        return None
+    return TradeInvalidationActionRecord(
+        action=record.action,
+        created_at=record.created_at,
+        dismissed_at=record.dismissed_at,
+    )
+
+
+def _resolve_user(session: Session, user_id: str) -> AppUser | None:
+    user = session.scalars(
+        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
+    ).first()
+    if user is not None:
+        return user
+    return session.scalars(select(AppUser).where(AppUser.username == "demo")).first()
+
+
+def _uuid_or_none(value: str | None) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
+
+
 trade_invalidation_service = TradeInvalidationService()
+trade_invalidation_monitor = TradeInvalidationMonitor()

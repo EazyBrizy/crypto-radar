@@ -31,6 +31,16 @@ class TradingSignalModelsTest(unittest.TestCase):
         self.assertIn("ck_trading_signals_status", constraint_names)
         self.assertIn("uq_trading_signals_signal_key", constraint_names)
 
+    def test_status_constraint_allows_strategy_lifecycle_statuses(self) -> None:
+        status_constraint = next(
+            constraint
+            for constraint in TradingSignal.__table__.constraints
+            if constraint.name == "ck_trading_signals_status"
+        )
+        status_sql = str(status_constraint.sqltext)
+        for status in ("watchlist", "ready", "actionable", "wait_for_pullback", "entry_touched"):
+            self.assertIn(status, status_sql)
+
     def test_event_table_is_partitioned_by_created_at(self) -> None:
         self.assertEqual(
             TradingSignalEvent.__table__.dialect_options["postgresql"]["partition_by"],

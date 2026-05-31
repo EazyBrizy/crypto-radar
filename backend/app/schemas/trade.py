@@ -24,6 +24,7 @@ CloseReason = Literal["take_profit", "stop_loss", "manual_close", "invalidation"
 CloseMarketTradeStatus = Literal["closed", "not_implemented"]
 TradeInvalidationStatus = Literal["valid", "invalidated", "unavailable"]
 TradeInvalidationAction = Literal["none", "close_market_or_wait_stop"]
+TradeInvalidationUserAction = Literal["close_market", "keep_stop_loss", "dismissed"]
 SimulationMode = Literal["auto", "passive", "impact_aware"]
 VirtualSimulationMode = Literal["passive", "impact_aware"]
 VirtualSimulationTier = Literal["mvp", "advanced", "pro"]
@@ -216,7 +217,22 @@ class TradeInvalidationAlert(BaseModel):
     stop_loss: float
     invalidation_price: Optional[float] = None
     detected_at: datetime
+    fingerprint: Optional[str] = None
+    user_action: Optional[TradeInvalidationUserAction] = None
+    user_action_at: Optional[datetime] = None
+    action_dismissed: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TradeInvalidationActionRequest(BaseModel):
+    action: TradeInvalidationUserAction
+    user_id: str = "demo_user"
+
+
+class TradeInvalidationActionResponse(BaseModel):
+    action: TradeInvalidationUserAction
+    alert: TradeInvalidationAlert
+    message: str
 
 
 class VirtualTrade(BaseModel):

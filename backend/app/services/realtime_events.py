@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from app.schemas.notification import NotificationResponse
 from app.schemas.signal import RadarSignal
-from app.schemas.trade import TradeJournalEntry, VirtualTrade
+from app.schemas.trade import TradeInvalidationAlert, TradeJournalEntry, VirtualTrade
 
 RealtimeEventType = Literal[
     "signal.created",
@@ -14,6 +14,7 @@ RealtimeEventType = Literal[
     "trade.activated",
     "trade.updated",
     "trade.closed",
+    "trade.invalidation",
     "take_profit.hit",
     "stop_loss.hit",
     "price.touched_entry",
@@ -78,6 +79,23 @@ def trade_closed_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any
     return create_realtime_event(
         "trade.closed",
         payload,
+    )
+
+
+def trade_invalidation_event(alert: TradeInvalidationAlert) -> dict[str, Any]:
+    return create_realtime_event(
+        "trade.invalidation",
+        {
+            "alert": alert,
+            "tradeId": alert.trade_id,
+            "signalId": alert.signal_id,
+            "pair": alert.symbol,
+            "exchange": alert.exchange,
+            "side": alert.side.upper(),
+            "reason": alert.reason,
+            "triggeredConditions": alert.triggered_conditions,
+            "fingerprint": alert.fingerprint,
+        },
     )
 
 

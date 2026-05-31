@@ -142,6 +142,21 @@ export function useTradeInvalidationQuery(tradeId: string | null, options: Plann
   });
 }
 
+export function useTradeInvalidationActionMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: api.tradeInvalidationAction,
+    onSuccess: async (response) => {
+      queryClient.setQueryData(
+        serverStateKeys.trades.invalidation(response.alert.trade_id),
+        response.alert
+      );
+      await queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.all() });
+    }
+  });
+}
+
 export function useRadarConfigQuery() {
   return useQuery({
     queryKey: serverStateKeys.settings.radar(),

@@ -1,6 +1,7 @@
 import logging
 import statistics
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from typing import Deque, Dict, Iterable, Iterator, List, Optional, Set
 
 from app.schemas.candle import OHLCVCandle
@@ -265,6 +266,41 @@ class FeatureEngine:
             candle.close < candle.open,
         )
 
+    @staticmethod
+    def _session_vwap(candles: List[OHLCVCandle]) -> Optional[float]:
+        if not candles:
+            return None
+        latest = candles[-1]
+        if latest.timeframe == "1d":
+            return None
+        latest_session = datetime.fromtimestamp(latest.open_time / 1000, tz=timezone.utc).date()
+        numerator = 0.0
+        denominator = 0.0
+        for candle in candles:
+            candle_session = datetime.fromtimestamp(candle.open_time / 1000, tz=timezone.utc).date()
+            if candle_session != latest_session:
+                continue
+            if candle.volume <= 0:
+                continue
+            typical_price = (candle.high + candle.low + candle.close) / 3
+            numerator += typical_price * candle.volume
+            denominator += candle.volume
+        if denominator <= 0:
+            return None
+        return numerator / denominator
+
+    @staticmethod
+    def _rolling_vwap(values: List[float], volumes: List[float], period: int = PRICE_LOOKBACK) -> Optional[float]:
+        if not values or not volumes:
+            return None
+        price_window = values[-period:]
+        volume_window = volumes[-period:]
+        denominator = sum(volume for volume in volume_window if volume > 0)
+        if denominator <= 0:
+            return None
+        numerator = sum(price * max(volume, 0.0) for price, volume in zip(price_window, volume_window))
+        return numerator / denominator
+
     def process_candles(self, candles: List[OHLCVCandle]) -> Optional[Features]:
         if not candles:
             return None
@@ -319,6 +355,7 @@ class FeatureEngine:
             ema_50=self._ema(closes, EMA_MID),
             ema_200=self._ema(closes, EMA_LONG),
             sma_20=self._sma(closes, PRICE_LOOKBACK),
+            vwap=self._session_vwap(ordered),
             rsi_14=self._rsi(closes, RSI_LOOKBACK),
             atr_14=self._atr_from_candles(ordered, ATR_LOOKBACK),
             adx=self._adx_proxy(closes),
@@ -410,6 +447,7 @@ class FeatureEngine:
                 ema_50=ema_50,
                 ema_200=ema_200,
                 sma_20=sma_20,
+                vwap=self._rolling_vwap(values, volumes),
                 rsi_14=rsi_14,
                 atr_14=atr_14,
                 adx=adx,

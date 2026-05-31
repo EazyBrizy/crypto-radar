@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from app.repositories.signal_repository import (
     MAX_STORED_SIGNALS,
+    SIGNAL_AUTO_ENTRY_ARMED_EVENT,
     SIGNAL_CONFIRMED_EVENT,
     SIGNAL_CREATED_EVENT,
     SIGNAL_INVALIDATED_EVENT,
@@ -10,7 +11,7 @@ from app.repositories.signal_repository import (
     SignalWriteResult,
     _signal_expires_at,
 )
-from app.schemas.signal import RadarSignal, StrategySignal
+from app.schemas.signal import RadarSignal, SignalAutoEntrySnapshot, StrategySignal
 from app.services.signal_service import NullSignalAnalyticsWriter, NullSignalHotStore, SignalService
 
 OPEN_SIGNAL_STATUSES = {"new", "active", "watchlist", "ready", "actionable", "wait_for_pullback", "entry_touched"}
@@ -129,6 +130,28 @@ class EphemeralSignalRepository:
         )
         self._signals[signal_id] = updated
         return _write_result(updated, False, SIGNAL_INVALIDATED_EVENT)
+
+    def arm_auto_entry(self, signal_id: str, *, request: dict) -> SignalWriteResult | None:
+        signal = self._signals.get(signal_id)
+        if signal is None:
+            return None
+        now = datetime.now(timezone.utc)
+        updated = signal.model_copy(
+            update={
+                "auto_entry": SignalAutoEntrySnapshot(
+                    enabled=True,
+                    status="pending",
+                    mode=request.get("mode", "virtual"),
+                    user_id=request.get("user_id", "demo_user"),
+                    armed_at=now,
+                    message="Auto-entry is armed and waiting for strategy confirmation",
+                    request=request,
+                ),
+                "updated_at": now,
+            }
+        )
+        self._signals[signal_id] = updated
+        return _write_result(updated, False, SIGNAL_AUTO_ENTRY_ARMED_EVENT)
 
     def _expire_open_signals(self) -> None:
         now = datetime.now(timezone.utc)

@@ -123,6 +123,19 @@ export interface SignalExitPlanSnapshot {
   trailing: Record<string, unknown>;
 }
 
+export interface SignalAutoEntrySnapshot {
+  enabled: boolean;
+  status: "pending" | "triggered" | "failed" | "cancelled";
+  mode: TradeMode;
+  user_id: string;
+  armed_at: string | null;
+  triggered_at: string | null;
+  message: string | null;
+  request: Record<string, unknown>;
+  trade_id: string | null;
+  real_execution: Record<string, unknown> | null;
+}
+
 export interface RadarSignal {
   id: string;
   symbol: string;
@@ -155,6 +168,7 @@ export interface RadarSignal {
   confirmation: SignalConfirmationSnapshot | null;
   invalidation: SignalInvalidationSnapshot | null;
   exit_plan: SignalExitPlanSnapshot | null;
+  auto_entry: SignalAutoEntrySnapshot | null;
   created_at: string;
   updated_at: string;
   expires_at: string | null;

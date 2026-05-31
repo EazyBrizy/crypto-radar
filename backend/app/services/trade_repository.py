@@ -674,6 +674,16 @@ class PostgresVirtualTradeRepository:
             "decision_mode": request.mode,
             "decision_note": "Пользователь подтвердил сигнал в virtual mode",
         }
+        auto_entry = snapshot.get("auto_entry")
+        if isinstance(auto_entry, dict) and auto_entry.get("status") == "pending":
+            snapshot["auto_entry"] = {
+                **auto_entry,
+                "enabled": False,
+                "status": "triggered",
+                "triggered_at": now.isoformat(),
+                "trade_id": trade_id,
+                "message": "Auto-entry confirmed the setup and opened a virtual trade",
+            }
         signal.features_snapshot = snapshot
         return _persist_signal_event(
             session,

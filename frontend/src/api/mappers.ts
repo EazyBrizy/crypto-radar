@@ -113,6 +113,7 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     confirmation: enriched.confirmation ?? null,
     invalidation: enriched.invalidation ?? null,
     exit_plan: enriched.exit_plan ?? null,
+    auto_entry: enriched.auto_entry ?? null,
     confirmed_trade_id: signal.confirmed_trade_id ?? null
   };
 }

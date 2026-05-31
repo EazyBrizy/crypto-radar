@@ -18,6 +18,9 @@ EMA_LONG = 200
 RSI_LOOKBACK = 14
 ATR_LOOKBACK = 14
 DONCHIAN_LOOKBACK = 20
+EMA200_CHOP_LOOKBACK = 50
+EMA200_SLOPE_LOOKBACK = 20
+EMA200_NEAR_ATR_MULTIPLIER = 0.5
 ONE_MINUTE_MS = 60_000
 VOLUME_EPSILON = 1e-8
 VOLUME_SPIKE_MAX = 20.0
@@ -127,6 +130,19 @@ class FeatureEngine:
         return ema
 
     @staticmethod
+    def _ema_series(values: List[float], period: int) -> List[Optional[float]]:
+        series: List[Optional[float]] = [None] * len(values)
+        if len(values) < period:
+            return series
+        multiplier = 2 / (period + 1)
+        ema = sum(values[:period]) / period
+        series[period - 1] = ema
+        for index in range(period, len(values)):
+            ema = (values[index] - ema) * multiplier + ema
+            series[index] = ema
+        return series
+
+    @staticmethod
     def _sma(values: List[float], period: int) -> Optional[float]:
         if len(values) < period:
             return None
@@ -179,6 +195,82 @@ class FeatureEngine:
         if len(true_ranges) < period:
             return None
         return sum(true_ranges[-period:]) / period
+
+    @staticmethod
+    def _adx_series_from_candles(
+        candles: List[OHLCVCandle],
+        period: int = ATR_LOOKBACK,
+    ) -> List[Optional[float]]:
+        series: List[Optional[float]] = [None] * len(candles)
+        if len(candles) <= period * 2:
+            return series
+
+        true_ranges: list[float] = []
+        plus_dm: list[float] = []
+        minus_dm: list[float] = []
+        for previous, current in zip(candles[:-1], candles[1:]):
+            high_move = current.high - previous.high
+            low_move = previous.low - current.low
+            true_ranges.append(
+                max(
+                    current.high - current.low,
+                    abs(current.high - previous.close),
+                    abs(current.low - previous.close),
+                )
+            )
+            plus_dm.append(high_move if high_move > low_move and high_move > 0 else 0.0)
+            minus_dm.append(low_move if low_move > high_move and low_move > 0 else 0.0)
+
+        smoothed_tr = sum(true_ranges[:period])
+        smoothed_plus_dm = sum(plus_dm[:period])
+        smoothed_minus_dm = sum(minus_dm[:period])
+        dx_values: list[float] = []
+        adx: float | None = None
+
+        for tr_index in range(period - 1, len(true_ranges)):
+            if tr_index >= period:
+                smoothed_tr = smoothed_tr - (smoothed_tr / period) + true_ranges[tr_index]
+                smoothed_plus_dm = smoothed_plus_dm - (smoothed_plus_dm / period) + plus_dm[tr_index]
+                smoothed_minus_dm = smoothed_minus_dm - (smoothed_minus_dm / period) + minus_dm[tr_index]
+
+            if smoothed_tr <= 0:
+                dx = 0.0
+            else:
+                plus_di = 100 * smoothed_plus_dm / smoothed_tr
+                minus_di = 100 * smoothed_minus_dm / smoothed_tr
+                denominator = plus_di + minus_di
+                dx = 0.0 if denominator <= 0 else 100 * abs(plus_di - minus_di) / denominator
+
+            dx_values.append(dx)
+            candle_index = tr_index + 1
+            if len(dx_values) < period:
+                continue
+            if adx is None:
+                adx = sum(dx_values[-period:]) / period
+            else:
+                adx = (adx * (period - 1) + dx) / period
+            series[candle_index] = adx
+
+        return series
+
+    @staticmethod
+    def _adx_stats(adx_series: List[Optional[float]]) -> tuple[Optional[float], bool, Optional[float], int]:
+        values = [value for value in adx_series if value is not None]
+        if not values:
+            return None, False, None, 0
+
+        latest = values[-1]
+        rising_bars = 0
+        for current, previous in zip(reversed(values[1:]), reversed(values[:-1])):
+            if current > previous:
+                rising_bars += 1
+                if rising_bars >= 5:
+                    break
+                continue
+            break
+
+        slope_5 = latest - values[-6] if len(values) >= 6 else None
+        return latest, bool(rising_bars >= 3 and (slope_5 is None or slope_5 > 0)), slope_5, rising_bars
 
     @staticmethod
     def _atr_from_values(values: List[float], period: int = ATR_LOOKBACK) -> Optional[float]:
@@ -252,6 +344,60 @@ class FeatureEngine:
         return bool(current is not None and previous is not None and current > previous)
 
     @staticmethod
+    def _ema200_chop_metrics(
+        closes: List[float],
+        ema_200_series: List[Optional[float]],
+        atr: float | None,
+    ) -> tuple[int, Optional[float], Optional[float], Optional[float]]:
+        window_indexes = [
+            index
+            for index in range(max(0, len(closes) - EMA200_CHOP_LOOKBACK), len(closes))
+            if ema_200_series[index] is not None
+        ]
+        if not window_indexes:
+            return 0, None, None, None
+
+        signs: list[int] = []
+        near_count = 0
+        near_threshold = (atr or 0.0) * EMA200_NEAR_ATR_MULTIPLIER if atr is not None and atr > 0 else None
+        for index in window_indexes:
+            ema_200 = ema_200_series[index]
+            if ema_200 is None:
+                continue
+            diff = closes[index] - ema_200
+            if diff > 0:
+                signs.append(1)
+            elif diff < 0:
+                signs.append(-1)
+            else:
+                signs.append(0)
+            if near_threshold is not None and abs(diff) <= near_threshold:
+                near_count += 1
+
+        cross_count = 0
+        previous_sign = 0
+        for sign in signs:
+            if sign == 0:
+                continue
+            if previous_sign and sign != previous_sign:
+                cross_count += 1
+            previous_sign = sign
+
+        near_ratio = near_count / len(window_indexes) if near_threshold is not None else None
+        latest_ema = ema_200_series[-1]
+        past_index = len(ema_200_series) - EMA200_SLOPE_LOOKBACK - 1
+        past_ema = ema_200_series[past_index] if past_index >= 0 else None
+        slope_atr = (
+            abs(latest_ema - past_ema) / atr
+            if latest_ema is not None and past_ema is not None and atr is not None and atr > 0
+            else None
+        )
+        cross_score = min(50.0, cross_count * 12.5)
+        near_score = min(30.0, (near_ratio or 0.0) / 0.35 * 30.0) if near_ratio is not None else 0.0
+        flat_score = max(0.0, (0.25 - slope_atr) / 0.25 * 20.0) if slope_atr is not None else 0.0
+        return cross_count, near_ratio, slope_atr, min(100.0, cross_score + near_score + flat_score)
+
+    @staticmethod
     def _wick_ratios(candle: OHLCVCandle) -> tuple[float, float, bool, bool]:
         candle_range = candle.high - candle.low
         if candle_range == 0:
@@ -309,11 +455,20 @@ class FeatureEngine:
         latest = ordered[-1]
         closes = [candle.close for candle in ordered]
         volumes = [candle.volume for candle in ordered]
+        ema_200_series = self._ema_series(closes, EMA_LONG)
         previous_candles = ordered[:-1]
         previous_closes = closes[:-1]
+        previous_candle = previous_candles[-1] if previous_candles else None
         volume_ma_20 = self._sma(volumes, VOLUME_LOOKBACK) or latest.volume
         volume_spike = latest.volume / (volume_ma_20 + VOLUME_EPSILON)
         volume_spike = min(volume_spike, VOLUME_SPIKE_MAX)
+        atr_14 = self._atr_from_candles(ordered, ATR_LOOKBACK)
+        adx, adx_rising, adx_slope_5, adx_rising_bars = self._adx_stats(
+            self._adx_series_from_candles(ordered, ATR_LOOKBACK)
+        )
+        ema_200_cross_count_50, ema_200_near_ratio_50, ema_200_slope_atr_20, ema_200_chop_score = (
+            self._ema200_chop_metrics(closes, ema_200_series, atr_14)
+        )
         upper_wick_ratio, lower_wick_ratio, candle_bullish, candle_bearish = (
             self._wick_ratios(latest)
         )
@@ -346,6 +501,11 @@ class FeatureEngine:
             low=latest.low,
             close=latest.close,
             price_change_1m=price_change,
+            previous_open=previous_candle.open if previous_candle is not None else None,
+            previous_high=previous_candle.high if previous_candle is not None else None,
+            previous_low=previous_candle.low if previous_candle is not None else None,
+            previous_close=previous_candle.close if previous_candle is not None else None,
+            previous_volume=previous_candle.volume if previous_candle is not None else None,
             volume=latest.volume,
             volume_spike=volume_spike,
             volume_ma_20=volume_ma_20,
@@ -353,13 +513,19 @@ class FeatureEngine:
             history_length=len(ordered),
             ema_20=self._ema(closes, EMA_SHORT),
             ema_50=self._ema(closes, EMA_MID),
-            ema_200=self._ema(closes, EMA_LONG),
+            ema_200=ema_200_series[-1],
             sma_20=self._sma(closes, PRICE_LOOKBACK),
             vwap=self._session_vwap(ordered),
             rsi_14=self._rsi(closes, RSI_LOOKBACK),
-            atr_14=self._atr_from_candles(ordered, ATR_LOOKBACK),
-            adx=self._adx_proxy(closes),
-            adx_rising=self._adx_rising(closes),
+            atr_14=atr_14,
+            adx=adx,
+            adx_rising=adx_rising,
+            adx_slope_5=adx_slope_5,
+            adx_rising_bars=adx_rising_bars,
+            ema_200_cross_count_50=ema_200_cross_count_50,
+            ema_200_near_ratio_50=ema_200_near_ratio_50,
+            ema_200_slope_atr_20=ema_200_slope_atr_20,
+            ema_200_chop_score=ema_200_chop_score,
             bb_width=self._bb_width(closes, PRICE_LOOKBACK),
             bb_width_percentile=self._bb_width_percentile(closes),
             donchian_high_20=donchian_high,
@@ -408,6 +574,8 @@ class FeatureEngine:
                 lower_wick_ratio = 0.0
 
             previous_values = values[:-1]
+            previous_price = previous_values[-1] if previous_values else None
+            previous_volume = volumes[-2] if len(volumes) >= 2 else None
             donchian_high = (
                 max(previous_values[-DONCHIAN_LOOKBACK:])
                 if len(previous_values) >= DONCHIAN_LOOKBACK
@@ -438,6 +606,11 @@ class FeatureEngine:
                 low=pseudo_low,
                 close=data.price,
                 price_change_1m=self._price_change_1m(data, buffer),
+                previous_open=previous_price,
+                previous_high=previous_price,
+                previous_low=previous_price,
+                previous_close=previous_price,
+                previous_volume=previous_volume,
                 volume=data.volume,
                 volume_spike=self._volume_spike(data, buffer),
                 volume_ma_20=volume_ma_20,
@@ -452,6 +625,12 @@ class FeatureEngine:
                 atr_14=atr_14,
                 adx=adx,
                 adx_rising=self._adx_rising(values),
+                adx_slope_5=None,
+                adx_rising_bars=0,
+                ema_200_cross_count_50=0,
+                ema_200_near_ratio_50=None,
+                ema_200_slope_atr_20=None,
+                ema_200_chop_score=None,
                 bb_width=bb_width,
                 bb_width_percentile=bb_width_percentile,
                 donchian_high_20=donchian_high,

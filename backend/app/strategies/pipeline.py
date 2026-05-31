@@ -19,6 +19,7 @@ from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_
 
 MAJOR_BASE_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP"}
 LOW_LIQUIDITY_BASE_ASSETS = {"1000PEPE", "PEPE", "SHIB", "FLOKI", "BONK", "WIF"}
+TREND_STRATEGIES = {"trend_pullback_continuation"}
 
 CONTEXT_TIMEFRAME_BY_SIGNAL: dict[str, str] = {
     "1m": "15m",
@@ -162,6 +163,8 @@ class StrategySignalPipeline:
             return None
 
         regime = MarketRegimeFilter().evaluate(signal, context)
+        if _has_severe_ema200_chop(regime) and signal.strategy == "trend_pullback_continuation":
+            return None
         signal = _apply_regime_score(signal, regime)
         setup = StrategySetupLayer().evaluate(signal)
         risk_reward = _assess_risk_reward(signal, context.strategy_params)
@@ -192,6 +195,8 @@ class StrategySignalPipeline:
             risks.append("Signal is against a strong higher-timeframe regime")
         if _has_context_obstacle(regime):
             risks.append("Signal is too close to higher-timeframe support/resistance")
+        if _has_borderline_ema200_chop(regime):
+            risks.append("Price is chopping around EMA200; trend-continuation setups are less reliable")
         if not risk_reward.passed:
             risks.append(risk_reward.reason)
 
@@ -433,7 +438,7 @@ class MarketRegimeFilter:
         direction = _trend_direction(features)
         strength = _trend_strength(features)
         alignment = _alignment(signal.direction.lower(), direction)
-        adjustment = _regime_score_adjustment(alignment, strength)
+        adjustment = _regime_score_adjustment(signal.strategy, alignment, strength)
         checks: list[SignalLayerCheck] = []
 
         if primary_features is None:
@@ -478,6 +483,9 @@ class MarketRegimeFilter:
                 reason=f"Higher timeframe trend strength is {strength}",
             )
         )
+        chop_check, chop_adjustment = _ema200_chop_check(signal, signal_features)
+        checks.append(chop_check)
+        adjustment += chop_adjustment
 
         macro_features = _macro_context_features(context)
         if macro_features is None:
@@ -494,7 +502,7 @@ class MarketRegimeFilter:
             macro_direction = _trend_direction(macro_features)
             macro_strength = _trend_strength(macro_features)
             macro_alignment = _alignment(signal.direction.lower(), macro_direction)
-            adjustment += _macro_regime_score_adjustment(macro_alignment, macro_strength)
+            adjustment += _macro_regime_score_adjustment(signal.strategy, macro_alignment, macro_strength)
             checks.append(
                 SignalLayerCheck(
                     name="macro_regime_alignment",
@@ -544,7 +552,7 @@ class StrategySetupLayer:
     def evaluate(self, signal: StrategySignal) -> StrategySetupSnapshot:
         if signal.status == "watchlist":
             stage = "forming"
-        elif signal.status == "ready":
+        elif signal.status in {"ready", "wait_for_pullback"}:
             stage = "ready"
         else:
             stage = "confirmed" if signal.score >= ACTIONABLE_SCORE else "ready"
@@ -638,6 +646,9 @@ class RiskInvalidationLayer:
 
         if _has_strong_regime_conflict(regime):
             return ("watchlist", "Higher timeframe is strongly against the signal direction")
+
+        if signal.strategy == "trend_pullback_continuation" and _has_borderline_ema200_chop(regime):
+            return ("watchlist", "EMA200 chop is elevated; trend pullback stays on watchlist")
 
         if _has_context_obstacle(regime):
             return ("ready", "Higher timeframe support/resistance is too close")
@@ -774,15 +785,40 @@ class ExitManagementLayer:
             if price is None:
                 continue
             r_multiple = abs(price - entry) / risk if entry is not None and risk and risk > 0 else None
-            targets.append({"label": label, "price": price, "r_multiple": r_multiple})
+            action = "partial_close" if label == "TP1" else "reduce_and_keep_runner"
+            close_percent = 40 if label == "TP1" else 30
+            targets.append(
+                {
+                    "label": label,
+                    "price": price,
+                    "r_multiple": r_multiple,
+                    "action": action,
+                    "close_percent": close_percent,
+                }
+            )
+        if signal.strategy == "trend_pullback_continuation":
+            targets.append(
+                {
+                    "label": "TP3",
+                    "price": None,
+                    "r_multiple": None,
+                    "action": "runner_trailing",
+                    "close_percent": "runner",
+                    "source": "EMA20" if context.signal_features.ema_20 is not None else "ATR",
+                }
+            )
 
         breakeven = {}
         if entry is not None and targets:
-            breakeven = {"after": "TP1", "stop_price": entry}
+            breakeven = {"after": "TP1", "stop_price": entry, "close_percent_before_move": 40}
 
         trailing = {
             "enabled_after": "TP1" if signal.strategy != "volatility_squeeze_breakout" else "ATR expansion",
-            "source": "ATR" if context.signal_features.atr_14 is not None else "structure",
+            "source": (
+                "EMA20"
+                if signal.strategy == "trend_pullback_continuation" and context.signal_features.ema_20 is not None
+                else "ATR" if context.signal_features.atr_14 is not None else "structure"
+            ),
         }
         return SignalExitPlanSnapshot(targets=targets, breakeven=breakeven, trailing=trailing)
 
@@ -928,7 +964,15 @@ def _context_timeframe_override(timeframe: str, strategy_params: Mapping[str, An
     return None
 
 
-def _regime_score_adjustment(alignment: str, strength: str) -> int:
+def _regime_score_adjustment(strategy: str, alignment: str, strength: str) -> int:
+    if strategy == "trend_pullback_continuation":
+        if alignment == "aligned":
+            return 10
+        if alignment == "against" and strength == "strong":
+            return -25
+        if alignment == "against":
+            return -20
+        return 0
     if alignment == "aligned" and strength == "strong":
         return 8
     if alignment == "aligned":
@@ -940,7 +984,13 @@ def _regime_score_adjustment(alignment: str, strength: str) -> int:
     return 0
 
 
-def _macro_regime_score_adjustment(alignment: str, strength: str) -> int:
+def _macro_regime_score_adjustment(strategy: str, alignment: str, strength: str) -> int:
+    if strategy == "trend_pullback_continuation":
+        if alignment == "against" and strength == "strong":
+            return -12
+        if alignment == "against":
+            return -6
+        return 0
     if alignment == "aligned" and strength == "strong":
         return 3
     if alignment == "against" and strength == "strong":
@@ -1098,12 +1148,72 @@ def _has_context_obstacle(regime: MarketRegimeSnapshot) -> bool:
     )
 
 
+def _has_severe_ema200_chop(regime: MarketRegimeSnapshot) -> bool:
+    return any(check.name == "ema200_chop" and check.status == "failed" for check in regime.checks)
+
+
+def _has_borderline_ema200_chop(regime: MarketRegimeSnapshot) -> bool:
+    return any(check.name == "ema200_chop" and check.status == "warning" for check in regime.checks)
+
+
+def _ema200_chop_check(signal: StrategySignal, features: Features) -> tuple[SignalLayerCheck, int]:
+    score = features.ema_200_chop_score
+    if score is None:
+        return (
+            SignalLayerCheck(
+                name="ema200_chop",
+                status="skipped",
+                reason="EMA200 chop metrics are unavailable",
+            ),
+            0,
+        )
+
+    severe = score >= 70 or features.ema_200_cross_count_50 >= 4
+    borderline = score >= 45 or features.ema_200_cross_count_50 >= 3
+    status = "failed" if severe else "warning" if borderline else "passed"
+    reason = (
+        f"EMA200 chop score {score:.1f}: {features.ema_200_cross_count_50} crosses in 50 candles, "
+        f"near-ratio {_format_optional_ratio(features.ema_200_near_ratio_50)}, "
+        f"slope {_format_optional_float(features.ema_200_slope_atr_20)} ATR"
+    )
+    adjustment = 0
+    if signal.strategy in TREND_STRATEGIES:
+        if severe:
+            adjustment = -20
+        elif borderline:
+            adjustment = -15
+    return (
+        SignalLayerCheck(
+            name="ema200_chop",
+            status=status,
+            score=round(score, 3),
+            reason=reason,
+            metadata={
+                "cross_count_50": features.ema_200_cross_count_50,
+                "near_ratio_50": features.ema_200_near_ratio_50,
+                "slope_atr_20": features.ema_200_slope_atr_20,
+                "chop_score": score,
+                "strategy_adjustment": adjustment,
+            },
+        ),
+        adjustment,
+    )
+
+
+def _format_optional_ratio(value: float | None) -> str:
+    return "-" if value is None else f"{value:.0%}"
+
+
+def _format_optional_float(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f}"
+
+
 def _trend_direction(features: Features) -> str:
     if features.ema_50 is None or features.ema_200 is None:
         return "unknown"
-    if features.close > features.ema_200 and features.ema_50 > features.ema_200:
+    if features.close > features.ema_200 and features.ema_50 >= features.ema_200:
         return "bullish"
-    if features.close < features.ema_200 and features.ema_50 < features.ema_200:
+    if features.close < features.ema_200 and features.ema_50 <= features.ema_200:
         return "bearish"
     return "range"
 

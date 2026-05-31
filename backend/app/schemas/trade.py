@@ -166,6 +166,7 @@ class VirtualExecutionReport(BaseModel):
 class ManualConfirmRequest(BaseModel):
     mode: ExecutionMode = "virtual"
     user_id: str = "demo_user"
+    auto_enter_on_confirmation: bool = False
     account_balance: float = Field(default=100.0, gt=0)
     risk_percent: float = Field(default=10.0, gt=0, le=100)
     leverage: int = Field(default=1, ge=1, le=100)

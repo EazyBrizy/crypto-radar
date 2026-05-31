@@ -6088,6 +6088,11 @@
             "title": "User Id",
             "default": "demo_user"
           },
+          "auto_enter_on_confirmation": {
+            "type": "boolean",
+            "title": "Auto Enter On Confirmation",
+            "default": false
+          },
           "account_balance": {
             "type": "number",
             "exclusiveMinimum": 0,
@@ -7306,6 +7311,16 @@
               }
             ]
           },
+          "auto_entry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalAutoEntrySnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -7415,6 +7430,11 @@
             "type": "string",
             "title": "User Id",
             "default": "demo_user"
+          },
+          "auto_enter_on_confirmation": {
+            "type": "boolean",
+            "title": "Auto Enter On Confirmation",
+            "default": false
           },
           "account_balance": {
             "type": "number",
@@ -9690,6 +9710,105 @@
           "created_at"
         ],
         "title": "SignalAIExplanationResponse"
+      },
+      "SignalAutoEntrySnapshot": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "triggered",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "default": "pending"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "real"
+            ],
+            "title": "Mode",
+            "default": "virtual"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "default": "demo_user"
+          },
+          "armed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Armed At"
+          },
+          "triggered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggered At"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "request": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Request"
+          },
+          "trade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Id"
+          },
+          "real_execution": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Real Execution"
+          }
+        },
+        "type": "object",
+        "title": "SignalAutoEntrySnapshot"
       },
       "SignalConfirmationSnapshot": {
         "properties": {

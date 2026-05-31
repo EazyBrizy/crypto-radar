@@ -52,7 +52,10 @@ export function SignalDetails({
   const isLong = signal.direction === "long";
   const riskFailed = executionPreview?.risk_check?.status === "failed";
   const statusAllowsTrade = signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
-  const actionsDisabled = busy || tradingActionsDisabled || riskFailed || !statusAllowsTrade;
+  const autoEntryPending = signal.auto_entry?.status === "pending";
+  const canArmAutoEntry = signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback";
+  const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || (!statusAllowsTrade && !canArmAutoEntry) || (statusAllowsTrade && riskFailed);
+  const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const breakdown = signal.score_breakdown;
   const reasons = signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."];
 
@@ -77,6 +80,7 @@ export function SignalDetails({
       </div>
 
       <PullbackGuidanceBlock signal={signal} />
+      <AutoEntryBlock signal={signal} />
 
       <div className="trade-setup">
         <div><span>Entry Zone</span><strong>{entryZone(signal)}</strong></div>
@@ -144,13 +148,13 @@ export function SignalDetails({
       ) : null}
 
       <div className="detail-actions">
-        <button className="primary-action" onClick={() => onPaperTrade(signal)} disabled={actionsDisabled} type="button">
-          <FileCheck2 size={17} /> Paper Trade
+        <button className="primary-action" onClick={() => onPaperTrade(signal)} disabled={entryActionDisabled} type="button">
+          <FileCheck2 size={17} /> {statusAllowsTrade ? "Paper Trade" : autoEntryPending ? "Auto Paper Armed" : "Auto Paper"}
         </button>
         <button className="secondary-action" type="button" disabled>
           <ExternalLink size={17} /> Open Exchange
         </button>
-        <button className="danger-action" onClick={() => onReject(signal)} disabled={actionsDisabled} type="button">
+        <button className="danger-action" onClick={() => onReject(signal)} disabled={rejectDisabled} type="button">
           <XCircle size={17} /> Ignore Signal
         </button>
       </div>
@@ -160,8 +164,8 @@ export function SignalDetails({
       {riskFailed ? (
         <p className="form-description">Entry is blocked by backend risk gate.</p>
       ) : null}
-      {!statusAllowsTrade ? (
-        <p className="form-description">Entry actions are available only for actionable strategy signals.</p>
+      {!statusAllowsTrade && !autoEntryPending ? (
+        <p className="form-description">Use Auto Paper to wait for confirmation and enter automatically after the trigger candle.</p>
       ) : null}
     </section>
   );
@@ -176,6 +180,23 @@ function recommendedAction(signal: RadarSignal): string {
     return `Entry candidate inside ${entryZone(signal)}`;
   }
   return `Monitor status ${signal.status.replaceAll("_", " ")}`;
+}
+
+function AutoEntryBlock({ signal }: { signal: RadarSignal }) {
+  const autoEntry = signal.auto_entry;
+  if (!autoEntry) return null;
+  return (
+    <div className="auto-entry-block">
+      <div className="section-title">
+        <FileCheck2 size={18} />
+        <h3>Auto Entry</h3>
+        <Badge tone={autoEntry.status === "pending" ? "blue" : autoEntry.status === "failed" ? "red" : "green"}>
+          {autoEntry.status.replaceAll("_", " ")}
+        </Badge>
+      </div>
+      <p>{autoEntry.message ?? `Auto ${autoEntry.mode} entry is ${autoEntry.status}.`}</p>
+    </div>
+  );
 }
 
 function PullbackGuidanceBlock({ signal }: { signal: RadarSignal }) {

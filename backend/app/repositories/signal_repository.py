@@ -33,6 +33,8 @@ SIGNAL_UPDATED_EVENT = "signal.updated"
 SIGNAL_CONFIRMED_EVENT = "signal.confirmed"
 SIGNAL_INVALIDATED_EVENT = "signal.invalidated"
 SIGNAL_EXPIRED_EVENT = "signal.expired"
+SIGNAL_AUTO_ENTRY_ARMED_EVENT = "signal.auto_entry_armed"
+SIGNAL_AUTO_ENTRY_FAILED_EVENT = "signal.auto_entry_failed"
 
 
 class SignalReferenceError(ValueError):
@@ -105,6 +107,27 @@ class SignalRepository(Protocol):
         event_type: str,
         reason: str | None = None,
         lifecycle: dict[str, Any] | None = None,
+        signal_updates: dict[str, Any] | None = None,
+    ) -> SignalWriteResult | None:
+        ...
+
+    def arm_auto_entry(
+        self,
+        signal_id: str,
+        *,
+        request: dict[str, Any],
+    ) -> SignalWriteResult | None:
+        ...
+
+    def update_auto_entry(
+        self,
+        signal_id: str,
+        *,
+        status: str,
+        message: str | None = None,
+        trade_id: str | None = None,
+        real_execution: dict[str, Any] | None = None,
+        event_type: str = SIGNAL_UPDATED_EVENT,
     ) -> SignalWriteResult | None:
         ...
 
@@ -311,6 +334,7 @@ class PostgresSignalRepository:
                 session.add(record)
                 session.flush()
             else:
+                snapshot = _merge_strategy_snapshot(record.features_snapshot, snapshot)
                 record.status = db_status
                 record.confidence = _decimal(signal.confidence) or Decimal("0")
                 record.score = _decimal(score) or Decimal("0")
@@ -371,6 +395,7 @@ class PostgresSignalRepository:
         event_type: str,
         reason: str | None = None,
         lifecycle: dict[str, Any] | None = None,
+        signal_updates: dict[str, Any] | None = None,
     ) -> SignalWriteResult | None:
         with self._session_factory() as session:
             record = _get_signal_record(session, signal_id)
@@ -383,6 +408,8 @@ class PostgresSignalRepository:
             record.status = new_status
             record.updated_at = now
             snapshot = dict(record.features_snapshot or {})
+            if signal_updates:
+                _apply_signal_updates(record, snapshot, signal_updates)
             if reason:
                 snapshot["status_reason"] = reason
             lifecycle_event = {
@@ -403,6 +430,84 @@ class PostgresSignalRepository:
                 record,
                 event_type,
                 old_status=old_status,
+                now=now,
+            )
+            session.commit()
+            return result
+
+    def arm_auto_entry(
+        self,
+        signal_id: str,
+        *,
+        request: dict[str, Any],
+    ) -> SignalWriteResult | None:
+        with self._session_factory() as session:
+            record = _get_signal_record(session, signal_id)
+            if record is None:
+                return None
+            now = datetime.now(timezone.utc)
+            snapshot = dict(record.features_snapshot or {})
+            snapshot["auto_entry"] = {
+                "enabled": True,
+                "status": "pending",
+                "mode": str(request.get("mode") or "virtual"),
+                "user_id": str(request.get("user_id") or "demo_user"),
+                "armed_at": now.isoformat(),
+                "message": "Auto-entry is armed and waiting for strategy confirmation",
+                "request": request,
+            }
+            record.features_snapshot = snapshot
+            record.updated_at = now
+            result = _persist_signal_event(
+                session,
+                record,
+                SIGNAL_AUTO_ENTRY_ARMED_EVENT,
+                old_status=record.status,
+                now=now,
+            )
+            session.commit()
+            return result
+
+    def update_auto_entry(
+        self,
+        signal_id: str,
+        *,
+        status: str,
+        message: str | None = None,
+        trade_id: str | None = None,
+        real_execution: dict[str, Any] | None = None,
+        event_type: str = SIGNAL_UPDATED_EVENT,
+    ) -> SignalWriteResult | None:
+        with self._session_factory() as session:
+            record = _get_signal_record(session, signal_id)
+            if record is None:
+                return None
+            now = datetime.now(timezone.utc)
+            snapshot = dict(record.features_snapshot or {})
+            auto_entry = dict(snapshot.get("auto_entry") or {})
+            auto_entry.update(
+                {
+                    "enabled": status == "pending",
+                    "status": status,
+                    "message": message,
+                }
+            )
+            if status in {"triggered", "failed", "cancelled"}:
+                auto_entry["triggered_at"] = now.isoformat()
+            if trade_id is not None:
+                auto_entry["trade_id"] = trade_id
+            if real_execution is not None:
+                auto_entry["real_execution"] = real_execution
+            snapshot["auto_entry"] = auto_entry
+            if message:
+                snapshot["status_reason"] = message
+            record.features_snapshot = snapshot
+            record.updated_at = now
+            result = _persist_signal_event(
+                session,
+                record,
+                event_type,
+                old_status=record.status,
                 now=now,
             )
             session.commit()
@@ -638,6 +743,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         confirmation=snapshot.get("confirmation") if isinstance(snapshot.get("confirmation"), dict) else None,
         invalidation=snapshot.get("invalidation") if isinstance(snapshot.get("invalidation"), dict) else None,
         exit_plan=snapshot.get("exit_plan") if isinstance(snapshot.get("exit_plan"), dict) else None,
+        auto_entry=snapshot.get("auto_entry") if isinstance(snapshot.get("auto_entry"), dict) else None,
         created_at=created_at,
         updated_at=updated_at,
         expires_at=_as_utc(record.expires_at) if record.expires_at else None,
@@ -689,6 +795,56 @@ def _update_record_from_signal(
     record.explanation = "\n".join(signal.explanation) if signal.explanation else None
 
 
+def _apply_signal_updates(
+    record: TradingSignal,
+    snapshot: dict[str, Any],
+    updates: dict[str, Any],
+) -> None:
+    if "entry_min" in updates:
+        snapshot["entry_min"] = updates["entry_min"]
+    if "entry_max" in updates:
+        snapshot["entry_max"] = updates["entry_max"]
+    entry = _snapshot_entry_price(snapshot)
+    if entry is not None:
+        record.entry_price = _decimal(entry)
+    if "stop_loss" in updates:
+        record.stop_loss = _decimal(updates["stop_loss"])
+    take_profit = list(record.take_profit or [])
+    if "take_profit_1" in updates:
+        if take_profit:
+            take_profit[0] = updates["take_profit_1"]
+        else:
+            take_profit.append(updates["take_profit_1"])
+    if "take_profit_2" in updates:
+        if len(take_profit) >= 2:
+            take_profit[1] = updates["take_profit_2"]
+        else:
+            while len(take_profit) < 1:
+                take_profit.append(None)
+            take_profit.append(updates["take_profit_2"])
+    record.take_profit = [price for price in take_profit if price is not None]
+    if "risk_reward" in updates:
+        record.risk_reward = _decimal(updates["risk_reward"])
+    for key in (
+        "confirmation",
+        "first_target_rr",
+        "final_target_rr",
+        "selected_rr",
+        "selected_rr_target",
+        "min_rr_ratio",
+    ):
+        if key in updates:
+            snapshot[key] = updates[key]
+
+
+def _snapshot_entry_price(snapshot: dict[str, Any]) -> float | None:
+    entry_min = _float(snapshot.get("entry_min"))
+    entry_max = _float(snapshot.get("entry_max"))
+    if entry_min is not None and entry_max is not None:
+        return (entry_min + entry_max) / 2
+    return entry_min if entry_min is not None else entry_max
+
+
 def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
     return {
         "entry_min": signal.entry_min,
@@ -709,6 +865,7 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "confirmation": _model_dump_optional(signal.confirmation),
         "invalidation": _model_dump_optional(signal.invalidation),
         "exit_plan": _model_dump_optional(signal.exit_plan),
+        "auto_entry": _model_dump_optional(signal.auto_entry),
         "decision": {
             "confirmed_trade_id": signal.confirmed_trade_id,
             "decision_mode": signal.decision_mode,
@@ -742,7 +899,21 @@ def _snapshot_from_strategy_signal(
         "confirmation": _model_dump_optional(signal.confirmation),
         "invalidation": _model_dump_optional(signal.invalidation),
         "exit_plan": _model_dump_optional(signal.exit_plan),
+        "auto_entry": _model_dump_optional(signal.auto_entry),
     }
+
+
+def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str, Any]) -> dict[str, Any]:
+    if not existing:
+        return incoming
+    merged = dict(incoming)
+    for key in ("auto_entry", "decision", "lifecycle_events"):
+        value = existing.get(key)
+        if value is not None and key not in merged:
+            merged[key] = value
+        elif value is not None and key == "auto_entry":
+            merged[key] = value
+    return merged
 
 
 def _api_status_to_db(status: str) -> str:

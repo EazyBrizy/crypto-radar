@@ -135,6 +135,18 @@ export const RadarSignalSchema = z.object({
     breakeven: z.record(z.string(), z.unknown()).default({}),
     trailing: z.record(z.string(), z.unknown()).default({})
   }).nullable().optional(),
+  auto_entry: z.object({
+    enabled: z.boolean(),
+    status: z.enum(["pending", "triggered", "failed", "cancelled"]),
+    mode: z.enum(["virtual", "real"]),
+    user_id: z.string(),
+    armed_at: z.string().nullable().optional(),
+    triggered_at: z.string().nullable().optional(),
+    message: z.string().nullable().optional(),
+    request: z.record(z.string(), z.unknown()).default({}),
+    trade_id: z.string().nullable().optional(),
+    real_execution: z.record(z.string(), z.unknown()).nullable().optional()
+  }).nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   expires_at: z.string().nullable().optional(),

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, Text
 from sqlalchemy import UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -49,6 +49,7 @@ class MarketExchange(Base):
     trading_signals: Mapped[list["TradingSignal"]] = relationship(back_populates="exchange")
     orders: Mapped[list["Order"]] = relationship(back_populates="exchange")
     instrument_rules: Mapped[list["ExchangeInstrumentRule"]] = relationship(back_populates="exchange")
+    derivative_snapshots: Mapped[list["MarketDerivativeSnapshot"]] = relationship(back_populates="exchange")
 
 
 class MarketAsset(Base):
@@ -157,3 +158,56 @@ class MarketPair(Base):
     external_orders: Mapped[list["ExternalExchangeOrder"]] = relationship(back_populates="pair")
     external_trades: Mapped[list["ExternalExchangeTrade"]] = relationship(back_populates="pair")
     instrument_rules: Mapped[list["ExchangeInstrumentRule"]] = relationship(back_populates="pair")
+    derivative_snapshots: Mapped[list["MarketDerivativeSnapshot"]] = relationship(back_populates="pair")
+
+
+class MarketDerivativeSnapshot(Base):
+    __tablename__ = "market_derivative_snapshots"
+    __table_args__ = (
+        CheckConstraint("length(trim(symbol)) > 0", name="ck_market_derivative_snapshots_symbol_not_blank"),
+        CheckConstraint("category IN ('linear', 'inverse', 'option')", name="ck_market_derivative_snapshots_category"),
+        CheckConstraint("mark_price IS NULL OR mark_price > 0", name="ck_market_derivative_snapshots_mark_price_positive"),
+        UniqueConstraint("exchange_id", "symbol", "category", name="uq_market_derivative_snapshots_exchange_symbol_category"),
+        Index("ix_market_derivative_snapshots_pair_id", "pair_id"),
+        Index("ix_market_derivative_snapshots_fetched_at", "fetched_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    exchange_id: Mapped[UUID] = mapped_column(
+        ForeignKey("market_exchanges.id", name="fk_market_derivative_snapshots_exchange_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pair_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("market_pairs.id", name="fk_market_derivative_snapshots_pair_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'linear'"))
+    mark_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    funding_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 10), nullable=True)
+    volume_24h: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    turnover_24h: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'bybit_v5_tickers'"))
+    raw_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+    exchange: Mapped[MarketExchange] = relationship(back_populates="derivative_snapshots")
+    pair: Mapped[MarketPair | None] = relationship(back_populates="derivative_snapshots")

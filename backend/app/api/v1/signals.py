@@ -63,6 +63,23 @@ async def confirm_signal(
             status_code=status.HTTP_409_CONFLICT,
             detail="Signal cannot be confirmed in current status",
         )
+    if request.auto_enter_on_confirmation and not _signal_can_enter_now(signal):
+        armed_signal = signal_service.arm_auto_entry(signal.id, request.model_dump(mode="json"))
+        if armed_signal is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Signal is not found",
+            )
+        await realtime_event_broker.publish(signal_updated_event(armed_signal))
+        return ManualDecisionResponse(
+            signal=armed_signal,
+            message="Auto-entry armed; the strategy will enter after confirmation",
+        )
+    if not _signal_can_enter_now(signal):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Signal is not actionable yet. Arm auto-entry to wait for confirmation.",
+        )
 
     if request.mode == "real":
         real_execution = await real_execution_service.place_order(signal, request)
@@ -153,3 +170,7 @@ async def reject_signal(
         signal=signal,
         message="Signal rejected",
     )
+
+
+def _signal_can_enter_now(signal: RadarSignal) -> bool:
+    return signal.status in {"actionable", "active", "entry_touched"}

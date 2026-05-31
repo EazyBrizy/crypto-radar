@@ -73,6 +73,19 @@ class SignalExitPlanSnapshot(BaseModel):
     trailing: dict[str, Any] = Field(default_factory=dict)
 
 
+class SignalAutoEntrySnapshot(BaseModel):
+    enabled: bool = False
+    status: Literal["pending", "triggered", "failed", "cancelled"] = "pending"
+    mode: Literal["virtual", "real"] = "virtual"
+    user_id: str = "demo_user"
+    armed_at: Optional[datetime] = None
+    triggered_at: Optional[datetime] = None
+    message: Optional[str] = None
+    request: dict[str, Any] = Field(default_factory=dict)
+    trade_id: Optional[str] = None
+    real_execution: Optional[dict[str, Any]] = None
+
+
 SignalDirection = Literal["long", "short"]
 SignalUrgency = Literal["low", "medium", "high"]
 SignalStatus = Literal[
@@ -126,6 +139,7 @@ class StrategySignal(BaseModel):
     confirmation: Optional[SignalConfirmationSnapshot] = None
     invalidation: Optional[SignalInvalidationSnapshot] = None
     exit_plan: Optional[SignalExitPlanSnapshot] = None
+    auto_entry: Optional[SignalAutoEntrySnapshot] = None
 
 class RadarSignal(BaseModel):
     id: str
@@ -161,6 +175,7 @@ class RadarSignal(BaseModel):
     confirmation: Optional[SignalConfirmationSnapshot] = None
     invalidation: Optional[SignalInvalidationSnapshot] = None
     exit_plan: Optional[SignalExitPlanSnapshot] = None
+    auto_entry: Optional[SignalAutoEntrySnapshot] = None
     created_at: datetime
     updated_at: datetime
     expires_at: Optional[datetime] = None

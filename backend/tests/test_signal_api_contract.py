@@ -2,9 +2,18 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.api.v1.signals import list_active_signals, list_open_signals
+from app.api.v1.signals import confirm_signal, list_active_signals, list_open_signals
 from app.schemas.signal import RadarSignal
+from app.schemas.trade import ManualConfirmRequest
 from backend.tests.ephemeral_signal_service import ephemeral_signal_service
+
+
+class _FakeRealtimeBroker:
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    async def publish(self, event: dict) -> None:
+        self.events.append(event)
 
 
 class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
@@ -139,6 +148,38 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
             signals = await list_open_signals()
 
         self.assertEqual([signal.id for signal in signals], ["sig_watchlist", "sig_wait_for_pullback"])
+
+    async def test_confirm_endpoint_arms_auto_entry_for_non_actionable_signal(self) -> None:
+        now = datetime.now(timezone.utc)
+        signal = RadarSignal(
+            id="sig_ready",
+            symbol="BTC/USDT:PERP",
+            exchange="bybit",
+            strategy="trend_pullback_continuation",
+            direction="long",
+            confidence=0.74,
+            status="ready",
+            score=74,
+            created_at=now,
+            updated_at=now,
+        )
+        self.signal_service.add_signal(signal)
+        broker = _FakeRealtimeBroker()
+
+        with (
+            patch("app.api.v1.signals.signal_service", self.signal_service),
+            patch("app.api.v1.signals.realtime_event_broker", broker),
+        ):
+            response = await confirm_signal(
+                signal.id,
+                ManualConfirmRequest(mode="virtual", user_id="demo_user", auto_enter_on_confirmation=True),
+            )
+
+        self.assertEqual(response.signal.status, "ready")
+        self.assertEqual(response.signal.auto_entry.status if response.signal.auto_entry else None, "pending")
+        self.assertEqual(response.signal.auto_entry.mode if response.signal.auto_entry else None, "virtual")
+        self.assertIn("Auto-entry armed", response.message)
+        self.assertEqual(broker.events[0]["type"], "signal.updated")
 
 
 if __name__ == "__main__":

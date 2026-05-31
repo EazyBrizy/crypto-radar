@@ -2125,6 +2125,11 @@ export interface components {
              */
             user_id: string;
             /**
+             * Auto Enter On Confirmation
+             * @default false
+             */
+            auto_enter_on_confirmation: boolean;
+            /**
              * Account Balance
              * @default 100
              */
@@ -2590,6 +2595,7 @@ export interface components {
             confirmation?: components["schemas"]["SignalConfirmationSnapshot"] | null;
             invalidation?: components["schemas"]["SignalInvalidationSnapshot"] | null;
             exit_plan?: components["schemas"]["SignalExitPlanSnapshot"] | null;
+            auto_entry?: components["schemas"]["SignalAutoEntrySnapshot"] | null;
             /**
              * Created At
              * Format: date-time
@@ -2626,6 +2632,11 @@ export interface components {
              * @default demo_user
              */
             user_id: string;
+            /**
+             * Auto Enter On Confirmation
+             * @default false
+             */
+            auto_enter_on_confirmation: boolean;
             /**
              * Account Balance
              * @default 100
@@ -3418,6 +3429,47 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** SignalAutoEntrySnapshot */
+        SignalAutoEntrySnapshot: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "triggered" | "failed" | "cancelled";
+            /**
+             * Mode
+             * @default virtual
+             * @enum {string}
+             */
+            mode: "virtual" | "real";
+            /**
+             * User Id
+             * @default demo_user
+             */
+            user_id: string;
+            /** Armed At */
+            armed_at?: string | null;
+            /** Triggered At */
+            triggered_at?: string | null;
+            /** Message */
+            message?: string | null;
+            /** Request */
+            request?: {
+                [key: string]: unknown;
+            };
+            /** Trade Id */
+            trade_id?: string | null;
+            /** Real Execution */
+            real_execution?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** SignalConfirmationSnapshot */
         SignalConfirmationSnapshot: {

@@ -11,9 +11,16 @@ from app.services.realtime_events import signal_invalidated_event, signal_update
 from app.services.signal_service import SignalService, signal_service
 from app.services.trade_invalidation import signal_invalidation_conditions
 
+FUNDING_ENTRY_BLOCK_THRESHOLD = 0.0015
+
 
 class RealtimePublisher(Protocol):
     async def publish(self, event: dict[str, Any]) -> None:
+        ...
+
+
+class AutoEntryExecutor(Protocol):
+    async def execute_if_ready(self, signal: RadarSignal) -> RadarSignal | None:
         ...
 
 
@@ -31,6 +38,7 @@ class _LifecycleDecision:
     status: str
     reason: str
     event_type: str = SIGNAL_UPDATED_EVENT
+    signal_updates: dict[str, Any] | None = None
 
 
 class SignalLifecycleWorker:
@@ -41,9 +49,15 @@ class SignalLifecycleWorker:
         *,
         signals: SignalService | None = None,
         publisher: RealtimePublisher | None = None,
+        auto_entry: AutoEntryExecutor | None = None,
     ) -> None:
         self._signals = signals or signal_service
         self._publisher = publisher or realtime_event_broker
+        if auto_entry is None:
+            from app.services.auto_entry import auto_entry_service
+
+            auto_entry = auto_entry_service
+        self._auto_entry = auto_entry
 
     async def process_closed_candle(self, features: Features) -> list[SignalLifecycleTransition]:
         candidates = self._signals.list_open_signals_for_series(
@@ -70,6 +84,7 @@ class SignalLifecycleWorker:
                     "close": features.close,
                     "volume_spike": features.volume_spike,
                 },
+                signal_updates=decision.signal_updates,
             )
             if updated is None:
                 continue
@@ -82,6 +97,8 @@ class SignalLifecycleWorker:
             )
             transitions.append(transition)
             await self._publish_transition(transition)
+            if updated.status in {"actionable", "active", "entry_touched"}:
+                await self._auto_entry.execute_if_ready(updated)
         return transitions
 
     async def _publish_transition(self, transition: SignalLifecycleTransition) -> None:
@@ -104,9 +121,16 @@ def _lifecycle_decision(signal: RadarSignal, features: Features) -> _LifecycleDe
         if not _entry_zone_touched(signal, features):
             return None
         if _confirmation_candle(signal, features) and not _status_reason_blocks_actionable(signal):
+            funding_reason = _funding_blocks_confirmation(signal, features)
+            if funding_reason is not None:
+                return _LifecycleDecision(
+                    status="ready",
+                    reason=funding_reason,
+                )
             return _LifecycleDecision(
                 status="actionable",
                 reason="Pullback retest reached and confirmation candle closed; entry still requires risk/reward gate",
+                signal_updates=_confirmation_signal_updates(signal, features),
             )
         return _LifecycleDecision(
             status="ready",
@@ -115,9 +139,12 @@ def _lifecycle_decision(signal: RadarSignal, features: Features) -> _LifecycleDe
 
     if signal.status == "ready" and not _status_reason_blocks_actionable(signal):
         if _confirmation_candle(signal, features):
+            if _funding_blocks_confirmation(signal, features) is not None:
+                return None
             return _LifecycleDecision(
                 status="actionable",
                 reason="Confirmation candle closed after READY setup; entry still requires risk/reward gate",
+                signal_updates=_confirmation_signal_updates(signal, features),
             )
 
     if signal.status == "watchlist" and _entry_zone_touched(signal, features):
@@ -162,16 +189,77 @@ def _entry_zone_touched(signal: RadarSignal, features: Features) -> bool:
 
 
 def _confirmation_candle(signal: RadarSignal, features: Features) -> bool:
-    volume_ok = features.volume_spike >= 1.0
+    volume_ok = features.volume_spike >= 1.1
     if signal.direction == "long":
-        entry_floor = signal.entry_min if signal.entry_min is not None else signal.entry_max
-        if entry_floor is None:
-            return False
-        return volume_ok and features.close >= entry_floor and features.close > features.open
-    entry_ceiling = signal.entry_max if signal.entry_max is not None else signal.entry_min
-    if entry_ceiling is None:
-        return False
-    return volume_ok and features.close <= entry_ceiling and features.close < features.open
+        micro_break = features.previous_high is not None and features.close > features.previous_high
+        return volume_ok and micro_break and features.close > features.open
+    micro_break = features.previous_low is not None and features.close < features.previous_low
+    return volume_ok and micro_break and features.close < features.open
+
+
+def _funding_blocks_confirmation(signal: RadarSignal, features: Features) -> str | None:
+    if signal.strategy != "trend_pullback_continuation" or features.funding_rate is None:
+        return None
+    if signal.direction == "long" and features.funding_rate >= FUNDING_ENTRY_BLOCK_THRESHOLD:
+        return "Funding became extreme against long continuation; auto-entry waits for funding to normalize"
+    if signal.direction == "short" and features.funding_rate <= -FUNDING_ENTRY_BLOCK_THRESHOLD:
+        return "Funding became extreme against short continuation; auto-entry waits for funding to normalize"
+    return None
+
+
+def _confirmation_signal_updates(signal: RadarSignal, features: Features) -> dict[str, Any]:
+    entry = features.close
+    updates: dict[str, Any] = {
+        "entry_min": entry,
+        "entry_max": entry,
+    }
+    if signal.stop_loss is None:
+        return updates
+    risk = abs(entry - signal.stop_loss)
+    if risk <= 0:
+        return updates
+    if signal.direction == "long":
+        tp1 = entry + risk
+        tp2 = entry + risk * 2
+    else:
+        tp1 = entry - risk
+        tp2 = entry - risk * 2
+    selected_target = signal.selected_rr_target or "final"
+    updates.update(
+        {
+            "take_profit_1": round(tp1, 8),
+            "take_profit_2": round(tp2, 8),
+            "risk_reward": 2.0,
+            "first_target_rr": 1.0,
+            "final_target_rr": 2.0,
+            "selected_rr": 1.0 if selected_target == "nearest" else 2.0,
+            "selected_rr_target": selected_target,
+            "confirmation": _confirmation_snapshot(signal, features),
+        }
+    )
+    return updates
+
+
+def _confirmation_snapshot(signal: RadarSignal, features: Features) -> dict[str, Any]:
+    checks = signal.confirmation.model_dump(mode="json").get("checks", []) if signal.confirmation else []
+    trigger_name = "previous_high_trigger" if signal.direction == "long" else "previous_low_trigger"
+    trigger_level = features.previous_high if signal.direction == "long" else features.previous_low
+    checks.append(
+        {
+            "name": trigger_name,
+            "status": "passed",
+            "score": trigger_level,
+            "reason": "Closed confirmation candle broke the previous candle with >=1.1x volume",
+            "metadata": {
+                "close": features.close,
+                "open": features.open,
+                "volume_spike": features.volume_spike,
+                "previous_high": features.previous_high,
+                "previous_low": features.previous_low,
+            },
+        }
+    )
+    return {"passed": True, "checks": checks}
 
 
 def _status_reason_blocks_actionable(signal: RadarSignal) -> bool:

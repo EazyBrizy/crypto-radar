@@ -1050,7 +1050,25 @@ coverage, and analytics depth rather than missing base plumbing.
      Trades prompt;
    - remaining: real exchange market-close order integration.
 
-7. Cross-cutting production tails:
+7. Trend Pullback continuation hardening:
+   - implemented: Bybit derivative snapshot background runner writes funding
+     context to PostgreSQL and Redis hot cache; scanner and closed-candle
+     lifecycle read the hot snapshot only, so strategy evaluation does not call
+     REST;
+   - implemented: funding sign semantics now block long continuation on
+     extreme positive funding and short continuation on extreme negative
+     funding; auto-entry confirmation checks funding again before becoming
+     actionable;
+   - implemented: candle `FeatureEngine` uses Wilder ADX 14 on OHLCV candles,
+     exposes `adx_rising_bars`/`adx_slope_5`, and keeps tick-stream ADX as
+     fallback only;
+   - implemented: EMA200 chop metrics are computed from candle history and
+     surfaced in `MarketRegimeFilter`; severe chop hides Trend Pullback, while
+     borderline chop downgrades it to watchlist with a score penalty;
+   - remaining: collect production samples to tune funding thresholds,
+     EMA200-chop score cutoffs, and ADX rising-bar defaults per timeframe.
+
+8. Cross-cutting production tails:
    - persist strategy configs per real user instead of relying on global/demo
      assumptions;
    - add analytics aggregation for `analytics.strategy_performance_daily`;
@@ -1064,10 +1082,12 @@ coverage, and analytics depth rather than missing base plumbing.
    overextension ATR limits, lifecycle transitions, and RR target choice.
 2. Add non-Bybit exchange adapters before exposing multi-exchange strategy
    scopes as real subscriptions.
-3. Decide whether scanner-time orderbook-depth quality is needed before risk
+3. Tune derivative/funding freshness, EMA200-chop thresholds, and Wilder ADX
+   rising-bar defaults after live samples and backtests.
+4. Decide whether scanner-time orderbook-depth quality is needed before risk
    preview; if yes, write/read `market.liquidity_snapshots`.
-4. Persist/aggregate S/R snapshots if runtime recomputation becomes a scanner
+5. Persist/aggregate S/R snapshots if runtime recomputation becomes a scanner
    bottleneck.
-5. Wire real exchange execution for invalidation `Close market`.
-6. Add strategy performance aggregation and analytics once lifecycle outcomes
+6. Wire real exchange execution for invalidation `Close market`.
+7. Add strategy performance aggregation and analytics once lifecycle outcomes
    are calibrated.

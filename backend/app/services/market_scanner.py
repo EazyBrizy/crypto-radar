@@ -11,6 +11,10 @@ from app.schemas.market import Features, MarketData
 from app.schemas.signal import StrategySignal
 from app.schemas.trade import VirtualTrade
 from app.services.candle_service import CandleService, candle_service
+from app.services.derivative_market import (
+    DerivativeMarketSnapshotService,
+    derivative_market_snapshot_service,
+)
 from app.services.feature_engine import FeatureEngine
 from app.services.market_persistence import (
     MarketDataPersistenceService,
@@ -90,6 +94,7 @@ class MarketScanner:
         trade_invalidation: TradeInvalidationMonitor | None = trade_invalidation_monitor,
         strategy_configs: StrategyConfigService | None = strategy_config_service,
         virtual_trading: VirtualTradingPriceUpdater | None = virtual_trading_service,
+        derivative_market: DerivativeMarketSnapshotService | None = derivative_market_snapshot_service,
     ) -> None:
         self._symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
         self._exchanges = [exchange.lower() for exchange in (exchanges or ["bybit"])]
@@ -102,6 +107,7 @@ class MarketScanner:
         self._trade_invalidation = trade_invalidation
         self._strategy_configs = strategy_configs
         self._virtual_trading = virtual_trading
+        self._derivative_market = derivative_market
         self._feature_engine = FeatureEngine()
         self._strategy_engine = StrategyEngine()
         self._stats = ScannerRuntimeStats()
@@ -160,6 +166,7 @@ class MarketScanner:
             )
             if features is None:
                 continue
+            features = await self._enrich_derivative_context(features)
             context_features_by_timeframe = await self._context_features_for(candle)
             primary_context_timeframe = context_timeframe_for(candle.timeframe)
             context_features = (
@@ -304,6 +311,7 @@ class MarketScanner:
         features = await asyncio.to_thread(self._feature_engine.process_candles, candle_series)
         if features is None:
             return
+        features = await self._enrich_derivative_context(features)
         if self._signal_lifecycle is not None:
             try:
                 transitions = await self._signal_lifecycle.process_closed_candle(features)
@@ -363,6 +371,18 @@ class MarketScanner:
             symbol=features.symbol,
         )
         return _quality_input(snapshot)
+
+    async def _enrich_derivative_context(self, features: Features) -> Features:
+        if self._derivative_market is None:
+            return features
+        snapshot = await asyncio.to_thread(
+            self._derivative_market.hot_snapshot,
+            exchange=features.exchange,
+            symbol=features.symbol,
+        )
+        if snapshot is None:
+            return features
+        return features.model_copy(update={"funding_rate": snapshot.funding_rate})
 
     def _strategy_configs_for(self, features: Features):
         if self._strategy_configs is None:

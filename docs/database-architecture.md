@@ -68,6 +68,17 @@ The `metadata` columns remain `jsonb` for provider-specific details. SQLAlchemy
 models expose them as `metadata_` because `metadata` is reserved by the
 declarative base.
 
+Derivative market context is implemented by migration
+`202605310002_create_market_derivative_snapshots`:
+
+- `market_derivative_snapshots`: latest FK-backed derivative ticker context per
+  exchange/symbol/category, including mark price, funding rate, 24h volume,
+  turnover, raw payload, and `fetched_at`.
+
+This table is a small business snapshot, not candle/tick history. Redis remains
+the hot runtime source for scanner-time strategy evaluation; PostgreSQL keeps
+the durable latest snapshot for audit, warm restart, and observability.
+
 ## Users And Subscriptions
 
 The user/access/subscription block is implemented by migration
@@ -225,9 +236,10 @@ manually synced and are also refreshed by the FastAPI in-process
 risk gate. Bybit maker/taker fee-rate cache lives in the active
 `user_exchange_connections.metadata.fee_rates` payload, scoped by user,
 exchange connection/account type, category, and symbol. Bybit
-ticker/orderbook/live position data is collected at decision time and stored in
-the JSON risk snapshots rather than in a dedicated market context table for
-now. Bootstrap seeds the primary `asset_risk_groups` taxonomy for majors, L1,
+orderbook/live position data is collected at decision time and stored in the
+JSON risk snapshots; funding/mark ticker context also has the latest
+`market_derivative_snapshots` cache for scanner-time strategy filters.
+Bootstrap seeds the primary `asset_risk_groups` taxonomy for majors, L1,
 L2, meme, DeFi, AI, exchange-token, and BTC-beta-high clusters. Virtual trade
 closes update `risk_protection_state`, and user-timezone daily/weekly windows
 reset the loss counters without resetting peak equity.
@@ -345,7 +357,8 @@ by month.
 PostgreSQL MVP:
 
 - `app_users`, `subscription_plans`, `user_subscriptions`
-- `market_exchanges`, `market_assets`, `market_pairs`
+- `market_exchanges`, `market_assets`, `market_pairs`,
+  `market_derivative_snapshots`
 - `strategy_templates`, `strategy_versions`, `user_strategy_configs`
 - `trading_signals`, `trading_signal_events`
 - `portfolios`, `portfolio_balances`, `portfolio_balance_ledger`

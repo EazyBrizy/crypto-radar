@@ -2,7 +2,7 @@ from app.models.audit import AuditLog
 from app.models.ai import SignalAIExplanation
 from app.models.external_exchange import ExternalExchangeOrder, ExternalExchangeTrade
 from app.models.exchange_connection import UserExchangeConnection
-from app.models.market import MarketAsset, MarketExchange, MarketPair
+from app.models.market import MarketAsset, MarketDerivativeSnapshot, MarketExchange, MarketPair
 from app.models.notification import Notification, NotificationDelivery
 from app.models.outbox import OutboxEvent
 from app.models.portfolio import Order, OrderFill, Portfolio, PortfolioBalance
@@ -23,6 +23,7 @@ __all__ = [
     "ExternalExchangeOrder",
     "ExternalExchangeTrade",
     "MarketAsset",
+    "MarketDerivativeSnapshot",
     "MarketExchange",
     "MarketPair",
     "Notification",

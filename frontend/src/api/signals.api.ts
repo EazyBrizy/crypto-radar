@@ -22,13 +22,16 @@ export const signalsApi = {
     const response = await request(() => openApiClient.GET("/api/v1/radar"));
     return { signals: response.signals.map(normalizeSignal) };
   },
-  async confirmVirtual(signalId: string) {
+  async confirmVirtual(input: string | { signalId: string; waitForConfirmation?: boolean }) {
+    const signalId = typeof input === "string" ? input : input.signalId;
+    const waitForConfirmation = typeof input === "string" ? false : Boolean(input.waitForConfirmation);
     return request(() =>
       openApiClient.POST("/api/v1/signals/{signal_id}/confirm", {
         params: { path: { signal_id: signalId } },
         body: {
           mode: "virtual",
           user_id: "demo_user",
+          auto_enter_on_confirmation: waitForConfirmation,
           account_balance: 100,
           risk_percent: 10,
           leverage: 3,

@@ -61,7 +61,7 @@ Derived:
 - SMA 20
 - RSI 14
 - ATR 14
-- ADX proxy
+- Wilder ADX 14 with `adx_rising_bars` and `adx_slope_5`
 - Bollinger Band Width
 - Bollinger Band Width Percentile
 - Donchian Channel 20
@@ -75,6 +75,12 @@ Derivatives:
 - open interest
 - liquidations
 ```
+
+Funding rate is supplied by the production derivative snapshot path:
+`DerivativeSnapshotSyncRunner` refreshes Bybit ticker snapshots into PostgreSQL
+and Redis every 30-60 seconds, while scanner-time strategy evaluation only reads
+the Redis hot snapshot. If the snapshot is absent or stale, `funding_rate`
+remains `None` and funding filters become non-blocking.
 
 Derivatives поля пока могут быть `None`, но стратегия должна быть готова использовать их позже.
 
@@ -91,25 +97,46 @@ Derivatives поля пока могут быть `None`, но стратеги�
 - EMA 200.
 - RSI 14.
 - ATR 14.
+- Wilder ADX 14.
 - Volume MA 20.
+- Funding rate from hot derivative snapshot.
+- EMA200 chop metrics.
 
 Long:
 
 - `close > EMA200`
 - `EMA50 > EMA200`
+- `EMA20 > EMA50`
+- `ADX >= 18` or `ADX >= 15` with at least 3 rising ADX bars
 - цена в зоне отката к `EMA20` или `EMA50`
-- `RSI` между `45` и `60`
+- `RSI` between `40` and `55`
 - текущий close bullish
 - `volume >= volume_ma * 1.1`
+- actual trigger uses `close > previous_high`, `close > open`,
+  `volume >= volume_ma * 1.1`
+- extreme positive funding blocks long continuation
 
 Short:
 
 - `close < EMA200`
 - `EMA50 < EMA200`
+- `EMA20 < EMA50`
+- `ADX >= 18` or `ADX >= 15` with at least 3 rising ADX bars
 - цена в зоне отката к `EMA20` или `EMA50`
-- `RSI` между `40` и `55`
+- `RSI` between `45` and `60`
 - текущий close bearish
 - `volume >= volume_ma * 1.1`
+- actual trigger uses `close < previous_low`, `close < open`,
+  `volume >= volume_ma * 1.1`
+- extreme negative funding blocks short continuation
+
+Regime filters:
+
+- severe EMA200 chop hides Trend Pullback ideas;
+- borderline EMA200 chop downgrades Trend Pullback to watchlist and applies a
+  score penalty;
+- funding is checked again on lifecycle confirmation, so an armed auto-entry
+  will not become actionable if funding turns extreme before the trigger candle.
 
 Risk:
 

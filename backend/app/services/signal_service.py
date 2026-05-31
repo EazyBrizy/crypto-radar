@@ -210,6 +210,7 @@ class SignalService:
         event_type: str,
         reason: str | None = None,
         lifecycle: dict[str, Any] | None = None,
+        signal_updates: dict[str, Any] | None = None,
     ) -> RadarSignal | None:
         transition = getattr(self._repository, "transition_signal", None)
         if transition is None:
@@ -220,6 +221,43 @@ class SignalService:
             event_type=event_type,
             reason=reason,
             lifecycle=lifecycle,
+            signal_updates=signal_updates,
+        )
+        if result is None:
+            return None
+        self._after_write(result)
+        return result.signal
+
+    def arm_auto_entry(self, signal_id: str, request: dict[str, Any]) -> RadarSignal | None:
+        arm = getattr(self._repository, "arm_auto_entry", None)
+        if arm is None:
+            return None
+        result = arm(signal_id, request=request)
+        if result is None:
+            return None
+        self._after_write(result)
+        return result.signal
+
+    def update_auto_entry(
+        self,
+        signal_id: str,
+        *,
+        status: str,
+        message: str | None = None,
+        trade_id: str | None = None,
+        real_execution: dict[str, Any] | None = None,
+        event_type: str = "signal.updated",
+    ) -> RadarSignal | None:
+        update = getattr(self._repository, "update_auto_entry", None)
+        if update is None:
+            return None
+        result = update(
+            signal_id,
+            status=status,
+            message=message,
+            trade_id=trade_id,
+            real_execution=real_execution,
+            event_type=event_type,
         )
         if result is None:
             return None

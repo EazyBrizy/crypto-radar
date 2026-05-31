@@ -758,6 +758,7 @@ h3 { font-size: 15px; line-height: 1.3; }
 .decision-block,
 .pullback-guidance-block,
 .risk-reward-detail-block,
+.auto-entry-block,
 .execution-quality-block,
 .strategy-layers-block,
 .confidence-breakdown,
@@ -815,6 +816,22 @@ h3 { font-size: 15px; line-height: 1.3; }
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   margin-top: 12px;
+}
+
+.auto-entry-block {
+  border-color: #1d4ed8;
+  background: #0b1730;
+}
+
+.auto-entry-block .section-title {
+  justify-content: flex-start;
+}
+
+.auto-entry-block p {
+  margin: 8px 0 0;
+  color: #bfdbfe;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .execution-quality-block .section-title {

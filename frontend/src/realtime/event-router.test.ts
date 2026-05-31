@@ -42,6 +42,14 @@ const baseSignal: RadarSignal = {
     news_event_risk_penalty: 0,
     total: 84
   },
+  status_reason: null,
+  quality: null,
+  regime: null,
+  setup: null,
+  confirmation: null,
+  invalidation: null,
+  exit_plan: null,
+  auto_entry: null,
   created_at: "2026-05-25T10:12:41.231Z",
   updated_at: "2026-05-25T10:12:41.231Z",
   expires_at: "2099-05-25T11:12:41.231Z"

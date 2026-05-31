@@ -5,6 +5,7 @@ from decimal import Decimal
 from app.schemas.candle import OHLCVCandle
 from app.schemas.market import Features, MarketData
 from app.services.candle_service import CandleService
+from app.services.derivative_market import DerivativeMarketSnapshot
 from app.services.market_persistence import MarketDataPersistenceService
 from app.services.market_scanner import MarketScanner
 
@@ -45,6 +46,16 @@ class FakeMarketPersistence:
 
     def persist_features(self, features: Features) -> None:
         self.features.append(features)
+
+
+class FakeDerivativeMarket:
+    def hot_snapshot(self, *, exchange: str, symbol: str) -> DerivativeMarketSnapshot:
+        return DerivativeMarketSnapshot(
+            exchange=exchange,
+            symbol=symbol,
+            funding_rate=0.001,
+            source="test",
+        )
 
 
 class MarketDataPersistenceContractTest(unittest.TestCase):
@@ -167,7 +178,9 @@ class MarketScannerPersistenceIntegrationTest(unittest.IsolatedAsyncioTestCase):
             exchanges=["bybit"],
             candle_store=CandleService(timeframes=["1m"]),
             market_persistence=persistence,
+            market_quality=None,
             virtual_trading=None,
+            derivative_market=FakeDerivativeMarket(),  # type: ignore[arg-type]
         )
 
         await scanner.process_tick(
@@ -185,6 +198,7 @@ class MarketScannerPersistenceIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(persistence.candle_batches[0]), 1)
         self.assertEqual(len(persistence.features), 1)
         self.assertEqual(persistence.features[0].timeframe, "1m")
+        self.assertEqual(persistence.features[0].funding_rate, 0.001)
 
 
 if __name__ == "__main__":

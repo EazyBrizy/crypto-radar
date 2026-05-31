@@ -31,6 +31,46 @@ class FeatureEngineTest(unittest.TestCase):
         self.assertIsNotNone(features)
         self.assertIsNone(features.vwap)
 
+    def test_candle_features_use_wilder_adx_stats(self) -> None:
+        engine = FeatureEngine()
+        start = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp() * 1000)
+        candles = []
+        price = 100.0
+        for index in range(80):
+            if index < 40:
+                price += 0.3 if index % 2 == 0 else -0.25
+            else:
+                price += 0.45 + index * 0.01
+            candles.append(_candle(start + index * 60_000, high=price + 0.8, low=price - 0.6, close=price, volume=10))
+
+        features = engine.process_candles(candles)
+
+        self.assertIsNotNone(features)
+        self.assertIsNotNone(features.adx)
+        self.assertGreaterEqual(features.adx_rising_bars, 0)
+        self.assertIsNotNone(features.adx_slope_5)
+
+    def test_candle_features_include_ema200_chop_metrics(self) -> None:
+        engine = FeatureEngine()
+        start = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp() * 1000)
+        candles = [
+            _candle(
+                start + index * 60_000,
+                high=101.5 if index % 6 < 3 else 100.5,
+                low=99.5 if index % 6 < 3 else 98.5,
+                close=101.0 if index % 6 < 3 else 99.0,
+                volume=10,
+            )
+            for index in range(260)
+        ]
+
+        features = engine.process_candles(candles)
+
+        self.assertIsNotNone(features)
+        self.assertGreaterEqual(features.ema_200_cross_count_50, 3)
+        self.assertIsNotNone(features.ema_200_near_ratio_50)
+        self.assertIsNotNone(features.ema_200_chop_score)
+
 
 def _candle(
     open_time: int,

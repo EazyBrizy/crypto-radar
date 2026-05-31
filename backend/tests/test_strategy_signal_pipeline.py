@@ -370,10 +370,10 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
     async def test_trend_pullback_approach_is_watchlist(self) -> None:
         features = _breakout_features().model_copy(
             update={
-                "close": 101.0,
-                "price": 101.0,
-                "high": 101.2,
-                "low": 100.7,
+                "close": 100.8,
+                "price": 100.8,
+                "high": 101.0,
+                "low": 100.6,
                 "history_length": 220,
                 "candle_bullish": False,
             }
@@ -388,6 +388,85 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal.status, "watchlist")
         self.assertEqual(signal.setup.stage if signal and signal.setup else None, "forming")
+
+    async def test_trend_pullback_trigger_is_actionable_after_healthy_pullback(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.6,
+                "price": 100.6,
+                "open": 100.1,
+                "high": 100.8,
+                "low": 99.8,
+                "ema_20": 100.0,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 50.0,
+                "volume_spike": 1.2,
+                "volume_ma_20": 70.0,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "history_length": 220,
+                "candle_bullish": True,
+            }
+        )
+
+        signals = await StrategyEngine().generate_signals(
+            features,
+            context_features=_bullish_context_features(),
+        )
+
+        trend_signal = next(signal for signal in signals if signal.strategy == "trend_pullback_continuation")
+        self.assertEqual(trend_signal.status, "actionable")
+        self.assertEqual(trend_signal.entry_min, 100.6)
+        self.assertEqual(trend_signal.entry_max, 100.6)
+        self.assertGreaterEqual(trend_signal.score, 75)
+        self.assertEqual(trend_signal.exit_plan.trailing.get("source") if trend_signal.exit_plan else None, "EMA20")
+
+    async def test_trend_pullback_far_from_ema_waits_for_new_pullback(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 102.0,
+                "price": 102.0,
+                "open": 101.2,
+                "high": 102.2,
+                "low": 101.0,
+                "ema_20": 100.0,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 58.0,
+                "history_length": 220,
+            }
+        )
+
+        candidates = await TrendPullbackContinuationStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].status, "wait_for_pullback")
+        self.assertIn("entry is late", candidates[0].status_reason or "")
+
+    async def test_trend_pullback_blocks_extreme_positive_funding_for_long(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.6,
+                "price": 100.6,
+                "open": 100.1,
+                "high": 100.8,
+                "low": 99.8,
+                "ema_20": 100.0,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 50.0,
+                "volume_spike": 1.2,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "funding_rate": 0.0016,
+                "history_length": 220,
+            }
+        )
+
+        candidates = await TrendPullbackContinuationStrategy().evaluate(features)
+
+        self.assertEqual(candidates, [])
 
     async def test_liquidity_sweep_without_reclaim_is_ready(self) -> None:
         features = _breakout_features().model_copy(
@@ -470,6 +549,79 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal.regime.alignment if signal and signal.regime else None, "aligned")
         self.assertGreater(signal.score if signal else 0, candidate.score)
+
+    def test_trend_pullback_severe_ema200_chop_is_hidden(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "history_length": 260,
+                "ema_200_chop_score": 78.0,
+                "ema_200_cross_count_50": 4,
+                "ema_200_near_ratio_50": 0.4,
+                "ema_200_slope_atr_20": 0.1,
+            }
+        )
+        candidate = build_signal(
+            features=features,
+            strategy="trend_pullback_continuation",
+            direction="LONG",
+            scoring=score_breakdown(
+                trend_score=45,
+                volume_score=15,
+                volatility_score=15,
+                risk_reward_score=15,
+            ),
+            reasons=["Trend pullback setup"],
+            entry=features.close,
+            stop_loss=features.close - 1.0,
+            take_profit_1=features.close + 1.0,
+            take_profit_2=features.close + 2.0,
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(signal_features=features),
+        )
+
+        self.assertIsNone(signal)
+
+    def test_trend_pullback_borderline_ema200_chop_becomes_watchlist(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "history_length": 260,
+                "ema_200_chop_score": 52.0,
+                "ema_200_cross_count_50": 3,
+                "ema_200_near_ratio_50": 0.32,
+                "ema_200_slope_atr_20": 0.2,
+            }
+        )
+        candidate = build_signal(
+            features=features,
+            strategy="trend_pullback_continuation",
+            direction="LONG",
+            scoring=score_breakdown(
+                trend_score=45,
+                volume_score=15,
+                volatility_score=15,
+                risk_reward_score=15,
+            ),
+            reasons=["Trend pullback setup"],
+            entry=features.close,
+            stop_loss=features.close - 1.0,
+            take_profit_1=features.close + 1.0,
+            take_profit_2=features.close + 2.0,
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(signal_features=features),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "watchlist")
+        self.assertLess(signal.score if signal else 100, candidate.score)
+        self.assertTrue(
+            any(check.name == "ema200_chop" and check.status == "warning" for check in (signal.regime.checks if signal and signal.regime else []))
+        )
 
     def test_breakout_near_context_resistance_is_not_actionable(self) -> None:
         features = _breakout_features()

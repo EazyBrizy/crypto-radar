@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     exchange_instrument_sync_interval_seconds: int = 21_600
     exchange_instrument_rules_ttl_seconds: int = 86_400
     bybit_instrument_rule_categories: str = "linear"
+    derivative_snapshot_sync_enabled: bool = True
+    derivative_snapshot_sync_interval_seconds: int = 60
+    derivative_snapshot_ttl_seconds: int = 120
+    bybit_derivative_snapshot_categories: str = "linear"
     signal_active_ttl_seconds: int = 3_600
 
 

@@ -72,7 +72,7 @@ export function RadarRoute() {
     [selectedSignalId, sourceSignals, visibleSignals]
   );
   const executionPreviewQuery = useSignalExecutionPreviewQuery(selectedSignal?.id ?? null, {
-    enabled: Boolean(selectedSignal) && signalView === "open" && !tradingActionsDisabled
+    enabled: shouldRequestExecutionPreview(selectedSignal, signalView, tradingActionsDisabled)
   });
   const loading = [healthQuery, radarStatusQuery, openSignalsQuery].some((query) => query.isLoading)
     || (signalView === "history" && historicalSignalsQuery.isLoading);
@@ -95,14 +95,19 @@ export function RadarRoute() {
   async function handlePaperTrade(signal: RadarSignal) {
     try {
       if (tradingActionsDisabled) return;
-      if (!isActionableSignal(signal)) {
-        setActionError("Only actionable strategy signals can be sent to Paper Trade.");
+      if (!isActionableSignal(signal) && !canArmAutoEntry(signal)) {
+        setActionError("Only open strategy ideas can be armed or sent to Paper Trade.");
         return;
       }
       setActionError(null);
-      await confirmVirtualMutation.mutateAsync(signal.id);
+      await confirmVirtualMutation.mutateAsync({
+        signalId: signal.id,
+        waitForConfirmation: !isActionableSignal(signal)
+      });
       await refreshData();
-      router.push("/dashboard/trades/active");
+      if (isActionableSignal(signal)) {
+        router.push("/dashboard/trades/active");
+      }
     } catch (exc) {
       setActionError(errorMessage(exc, "Virtual trade was rejected by execution quality checks."));
     }
@@ -150,6 +155,32 @@ export function RadarRoute() {
 
 function isActionableSignal(signal: RadarSignal): boolean {
   return signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
+}
+
+export function shouldRequestExecutionPreview(
+  signal: RadarSignal | null,
+  signalView: "open" | "history",
+  tradingActionsDisabled: boolean
+): boolean {
+  return signal != null && signalView === "open" && !tradingActionsDisabled && isPreviewableSignal(signal);
+}
+
+function isPreviewableSignal(signal: RadarSignal): boolean {
+  return (
+    signal.status === "new"
+    || signal.status === "actionable"
+    || signal.status === "active"
+    || signal.status === "entry_touched"
+    || signal.status === "watchlist"
+    || signal.status === "ready"
+    || signal.status === "wait_for_pullback"
+  );
+}
+
+function canArmAutoEntry(signal: RadarSignal | null): boolean {
+  if (!signal) return false;
+  if (signal.auto_entry?.status === "pending") return false;
+  return signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback";
 }
 
 function errorMessage(exc: unknown, fallback: string): string {

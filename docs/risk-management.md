@@ -158,9 +158,11 @@ while the module is being built step by step.
   order size, min notional, max leverage, and rule freshness, but execution
   paths do not yet round outgoing quantities/prices by these filters.
 - Add fee-rate retrieval for exchanges beyond Bybit.
-- Add full funding checks for futures. The gate now includes a one-interval
-  Bybit funding buffer from ticker `fundingRate` when available, but it does not
-  yet model holding horizon, funding schedule accrual, or realized funding
+- Add full funding checks for futures. A production derivative snapshot runner
+  now refreshes Bybit ticker `fundingRate` into PostgreSQL and Redis hot cache
+  for strategy/lifecycle funding filters, and the risk gate still includes a
+  one-interval funding buffer when ticker context is available. It does not yet
+  model holding horizon, funding schedule accrual, or realized funding
   debits/credits.
 - Calculate projected liquidation prices for new futures orders. The gate can
   now consume live Bybit `liqPrice` for an already-open matching real futures

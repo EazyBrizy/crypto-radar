@@ -23,6 +23,11 @@ class Features(BaseModel):
     low: float
     close: float
     price_change_1m: float
+    previous_open: Optional[float] = None
+    previous_high: Optional[float] = None
+    previous_low: Optional[float] = None
+    previous_close: Optional[float] = None
+    previous_volume: Optional[float] = None
 
     volume: float
     volume_spike: float
@@ -40,6 +45,13 @@ class Features(BaseModel):
     atr_14: Optional[float] = None
     adx: Optional[float] = None
     adx_rising: bool = False
+    adx_slope_5: Optional[float] = None
+    adx_rising_bars: int = 0
+
+    ema_200_cross_count_50: int = 0
+    ema_200_near_ratio_50: Optional[float] = None
+    ema_200_slope_atr_20: Optional[float] = None
+    ema_200_chop_score: Optional[float] = None
 
     bb_width: Optional[float] = None
     bb_width_percentile: Optional[float] = None

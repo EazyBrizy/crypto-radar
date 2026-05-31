@@ -73,7 +73,7 @@ function getRealtimeStatusView(status: RealtimeConnectionStatus): {
     return {
       className: "live-dot",
       icon: Wifi,
-      primary: "Live · Connected",
+      primary: "Online · Connected",
       title: "Realtime stream is connected."
     };
   }

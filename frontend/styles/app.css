@@ -476,6 +476,33 @@ a {
   background: #1e293b;
 }
 
+.locale-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 9px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+  color: #cbd5e1;
+}
+
+.locale-switcher select {
+  min-width: 48px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  outline: 0;
+}
+
+.locale-switcher option {
+  color: #0f172a;
+}
+
 .live-dot {
   border-color: #14532d !important;
   color: #86efac !important;

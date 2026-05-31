@@ -53,7 +53,7 @@ export function RadarPage(props: RadarPageProps) {
         </div>
 
         <div className="metrics-grid">
-          <Metric label="Market Status" value={props.health?.scanner_running ? "Live" : "Offline"} hint="scanner" />
+          <Metric label="Market Status" value={props.health?.scanner_running ? "Online" : "Offline"} hint="scanner" />
           <Metric label="Active Signals" value={String(activeSignals)} hint="actionable" />
           <Metric label="High Confidence" value={String(highConfidence)} hint="score 80+" />
           <Metric label="Ticks" value={String(props.radarStatus?.ticks_processed ?? props.health?.ticks_processed ?? 0)} hint="market data" />

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { WebVitalsReporter } from "@/components/monitoring/WebVitalsReporter";
+import { I18nProvider } from "@/i18n";
 import { QueryProvider } from "@/providers/query-provider";
 import "./globals.css";
 
@@ -15,10 +16,12 @@ export default function RootLayout({
   children: ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="ru" suppressHydrationWarning>
       <body>
-        <QueryProvider>{children}</QueryProvider>
-        <WebVitalsReporter />
+        <I18nProvider>
+          <QueryProvider>{children}</QueryProvider>
+          <WebVitalsReporter />
+        </I18nProvider>
       </body>
     </html>
   );

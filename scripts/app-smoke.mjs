@@ -119,7 +119,11 @@ try {
   const requireFromFrontend = createRequire(path.join(frontendDir, "package.json"));
   const { chromium } = requireFromFrontend("@playwright/test");
   browser = await chromium.launch({ headless: !headed });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
+  await context.addInitScript(() => {
+    window.localStorage.setItem("crypto-radar:locale", "en");
+  });
+  const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${frontendPort}/dashboard/radar`, { waitUntil: "networkidle" });
 
   const hasSignals = Array.isArray(openSignals) && openSignals.length > 0;

@@ -137,8 +137,8 @@ export function SignalDetails({
       <div className="checklist-block">
         <h3>Confirmation Checklist</h3>
         <CheckRow done text="Сетап соответствует стратегии" />
-        <CheckRow done text="Entry, SL и TP рассчитаны" />
-        <CheckRow done text="Risk/Reward указан" />
+        <CheckRow done text="Entry, SL and TP are calculated" />
+        <CheckRow done text="Risk/Reward is set" />
         <CheckRow done={statusAllowsTrade} text={`Strategy status: ${signal.status.replaceAll("_", " ")}`} />
       </div>
 

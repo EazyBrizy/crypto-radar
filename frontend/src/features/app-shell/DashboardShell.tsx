@@ -11,6 +11,7 @@ import { FastApiRealtimeGateway } from "@/features/realtime/FastApiRealtimeGatew
 import { NotificationCenter } from "./NotificationCenter";
 import { NotificationRuntime } from "./NotificationRuntime";
 import { RealtimeStatusBadge } from "./RealtimeStatusBadge";
+import { LocaleSwitcher } from "@/i18n";
 import {
   useHealthQuery,
   useRadarConfigQuery,
@@ -123,6 +124,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
               <ScannerButtonIcon size={15} />
               {scannerButtonText}
             </button>
+            <LocaleSwitcher />
             <NotificationCenter />
             <button className="icon-button" onClick={() => void refreshData()} type="button" title="Refresh"><RefreshCw size={18} /></button>
           </div>

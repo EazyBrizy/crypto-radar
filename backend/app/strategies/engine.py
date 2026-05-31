@@ -54,7 +54,7 @@ class StrategyEngine:
                 strategy_params=strategy_params,
                 pair_scope_configured=bool(getattr(runtime_config, "pair_scope_configured", False)),
             )
-            candidates = await strategy.evaluate(features)
+            candidates = await strategy.evaluate(features, strategy_params)
             for candidate in candidates:
                 finalized = self._pipeline.finalize(candidate, context)
                 if finalized is not None:

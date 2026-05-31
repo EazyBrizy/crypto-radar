@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Any, Mapping, Protocol
 
 from app.schemas.market import Features
 from app.schemas.signal import StrategySignal
@@ -9,5 +9,9 @@ class Strategy(Protocol):
     version: str
     required_data: list[str]
 
-    async def evaluate(self, features: Features) -> list[StrategySignal]:
+    async def evaluate(
+        self,
+        features: Features,
+        params: Mapping[str, Any] | None = None,
+    ) -> list[StrategySignal]:
         ...

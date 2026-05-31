@@ -1,4 +1,7 @@
-from typing import List, Literal, Optional
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, List, Literal, Mapping, Optional
 
 from app.schemas.market import Features
 from app.schemas.signal import SignalScoreBreakdown, StrategySignal
@@ -7,12 +10,48 @@ from app.strategies.common import build_signal, has_minimum_market_data, score_b
 STRATEGY_NAME = "volatility_squeeze_breakout"
 MIN_VISIBLE_SETUP_SCORE = 45
 
+DEFAULT_MIN_HISTORY = 60
+DEFAULT_BB_WIDTH_PERCENTILE_THRESHOLD = 20.0
+DEFAULT_VOLUME_SPIKE_MULTIPLIER = 1.5
+DEFAULT_MIN_CLOSE_POSITION = 0.7
+DEFAULT_MAX_REJECTION_WICK_RATIO = 0.35
+DEFAULT_MAX_SQUEEZE_RANGE_ATR = 5.0
+DEFAULT_WATCHLIST_DISTANCE_ATR = 0.6
+DEFAULT_STOP_ATR_MULTIPLIER = 1.0
+DEFAULT_NARROW_RANGE_STOP_ATR_MULTIPLIER = 0.5
+NARROW_RANGE_ATR = 2.0
+MAX_BREAKOUT_BODY_ATR = 2.5
+
+
+@dataclass(frozen=True)
+class _SqueezeState:
+    direction: Literal["LONG", "SHORT"]
+    status: str
+    reason: str
+    range_high: float
+    range_low: float
+    range_size: float
+    range_size_atr: float
+    bb_squeeze: bool
+    atr_compressed: bool
+    range_contracting: bool
+    breakout_closed: bool
+    wick_returned_inside: bool
+    volume_confirmed: bool
+    strong_close: bool
+    atr_expanding: bool
+    close_position: float
+    rejection_wick_ratio: float
+
 
 class VolatilitySqueezeBreakoutStrategy:
     name = STRATEGY_NAME
     version = "1.0"
     required_data = [
         "bb_width_percentile",
+        "atr_sma_50",
+        "range_20",
+        "range_50_average",
         "donchian_high_20",
         "donchian_low_20",
         "volume_spike",
@@ -20,159 +59,442 @@ class VolatilitySqueezeBreakoutStrategy:
         "rsi_14",
     ]
 
-    async def evaluate(self, features: Features) -> List[StrategySignal]:
-        if not has_minimum_market_data(features, min_history=60):
+    async def evaluate(
+        self,
+        features: Features,
+        params: Mapping[str, Any] | None = None,
+    ) -> List[StrategySignal]:
+        strategy_params = params or {}
+        min_history = int(_numeric_param(strategy_params, "min_history", DEFAULT_MIN_HISTORY))
+        if not has_minimum_market_data(features, min_history=min_history):
             return []
 
-        setup = self._setup_state(features)
+        setup = self._setup_state(features, strategy_params)
         if setup is None:
             return []
-        direction, stage_status, status_reason = setup
 
-        scoring, reasons, risks = self._score(features, direction, stage_status)
+        scoring, reasons, risks = self._score(features, setup, strategy_params)
+        atr = self._atr(features)
+        stop_multiplier = _numeric_param(
+            strategy_params,
+            "narrow_range_stop_atr",
+            DEFAULT_NARROW_RANGE_STOP_ATR_MULTIPLIER,
+        ) if setup.range_size_atr <= NARROW_RANGE_ATR else _numeric_param(
+            strategy_params,
+            "breakout_stop_atr",
+            DEFAULT_STOP_ATR_MULTIPLIER,
+        )
+        breakout_level = setup.range_high if setup.direction == "LONG" else setup.range_low
+        if setup.direction == "LONG":
+            stop_loss = breakout_level - atr * stop_multiplier
+        else:
+            stop_loss = breakout_level + atr * stop_multiplier
 
         entry = features.close
-        atr = features.atr_14 or 0
-        if direction == "LONG":
-            breakout_level = features.donchian_high_20 or entry
-            stop_loss = breakout_level - atr
+        risk = abs(entry - stop_loss)
+        if risk <= 0:
+            risk = max(atr, abs(entry) * 0.001, 1e-8)
+        if setup.direction == "LONG":
+            take_profit_1 = entry + risk * 1.5
+            take_profit_2 = entry + risk * 2.5
+            measured_target = setup.range_high + setup.range_size
         else:
-            breakout_level = features.donchian_low_20 or entry
-            stop_loss = breakout_level + atr
+            take_profit_1 = entry - risk * 1.5
+            take_profit_2 = entry - risk * 2.5
+            measured_target = setup.range_low - setup.range_size
+        reasons.append(f"Measured move target: {measured_target:.8f}")
 
         signal = build_signal(
             features=features,
             strategy=self.name,
-            direction=direction,
+            direction=setup.direction,
             scoring=scoring,
             reasons=reasons,
             risks=risks,
             entry=entry,
             stop_loss=stop_loss,
+            take_profit_1=take_profit_1,
+            take_profit_2=take_profit_2,
         )
+        if setup.status == "actionable":
+            signal = signal.model_copy(update={"entry_min": entry, "entry_max": entry})
         if signal.score < MIN_VISIBLE_SETUP_SCORE:
             return []
-        return [signal.model_copy(update={"status": stage_status, "status_reason": status_reason})]
+        return [signal.model_copy(update={"status": setup.status, "status_reason": setup.reason})]
 
     def _direction(self, features: Features) -> Optional[Literal["LONG", "SHORT"]]:
-        setup = self._setup_state(features)
-        return setup[0] if setup is not None else None
+        setup = self._setup_state(features, {})
+        return setup.direction if setup is not None else None
 
     def _setup_state(
         self,
         features: Features,
-    ) -> Optional[tuple[Literal["LONG", "SHORT"], str, str]]:
-        upper = features.donchian_high_20
-        lower = features.donchian_low_20
-        atr = features.atr_14 or max(abs(features.close) * 0.002, 1e-8)
-        if (
-            upper is not None
-            and features.close > upper
-        ):
-            if features.volume_spike > 1.5 and features.atr_increasing:
-                return (
-                    "LONG",
-                    "actionable",
-                    "Breakout closed above range with volume and ATR expansion",
-                )
-            return (
-                "LONG",
-                "ready",
-                "Breakout exists, but volume or ATR expansion is not confirmed yet",
-            )
-        if (
-            lower is not None
-            and features.close < lower
-        ):
-            if features.volume_spike > 1.5 and features.atr_increasing:
-                return (
-                    "SHORT",
-                    "actionable",
-                    "Breakdown closed below range with volume and ATR expansion",
-                )
-            return (
-                "SHORT",
-                "ready",
-                "Breakdown exists, but volume or ATR expansion is not confirmed yet",
-            )
-        if features.bb_width_percentile is None or features.bb_width_percentile >= 20:
+        params: Mapping[str, Any],
+    ) -> _SqueezeState | None:
+        range_high = features.donchian_high_20
+        range_low = features.donchian_low_20
+        if range_high is None or range_low is None or range_high <= range_low:
             return None
-        if upper is not None and 0 <= upper - features.close <= atr * 0.6:
-            return (
-                "LONG",
-                "watchlist",
-                "Volatility is compressed and price is near the upper range boundary; waiting for breakout volume",
+
+        atr = self._atr(features)
+        range_size = range_high - range_low
+        range_size_atr = range_size / atr if atr > 0 else 0.0
+        max_range_atr = _numeric_param(params, "max_squeeze_range_atr", DEFAULT_MAX_SQUEEZE_RANGE_ATR)
+        range_tight = range_size_atr <= max_range_atr
+        if not range_tight:
+            return None
+
+        bb_squeeze = self._bb_squeeze(features, params)
+        atr_compressed = self._atr_compressed(features)
+        range_contracting = self._range_contracting(features, fallback_range=range_size)
+        if not (bb_squeeze and atr_compressed and range_contracting):
+            return None
+
+        long_closed = features.close > range_high
+        short_closed = features.close < range_low
+        long_wick_returned = features.high > range_high and features.close <= range_high
+        short_wick_returned = features.low < range_low and features.close >= range_low
+
+        if long_closed:
+            return self._breakout_state(
+                features=features,
+                direction="LONG",
+                range_high=range_high,
+                range_low=range_low,
+                range_size=range_size,
+                range_size_atr=range_size_atr,
+                bb_squeeze=bb_squeeze,
+                atr_compressed=atr_compressed,
+                range_contracting=range_contracting,
+                wick_returned_inside=False,
+                params=params,
             )
-        if lower is not None and 0 <= features.close - lower <= atr * 0.6:
-            return (
-                "SHORT",
-                "watchlist",
-                "Volatility is compressed and price is near the lower range boundary; waiting for breakdown volume",
+        if short_closed:
+            return self._breakout_state(
+                features=features,
+                direction="SHORT",
+                range_high=range_high,
+                range_low=range_low,
+                range_size=range_size,
+                range_size_atr=range_size_atr,
+                bb_squeeze=bb_squeeze,
+                atr_compressed=atr_compressed,
+                range_contracting=range_contracting,
+                wick_returned_inside=False,
+                params=params,
+            )
+        if long_wick_returned:
+            return self._breakout_state(
+                features=features,
+                direction="LONG",
+                range_high=range_high,
+                range_low=range_low,
+                range_size=range_size,
+                range_size_atr=range_size_atr,
+                bb_squeeze=bb_squeeze,
+                atr_compressed=atr_compressed,
+                range_contracting=range_contracting,
+                wick_returned_inside=True,
+                params=params,
+            )
+        if short_wick_returned:
+            return self._breakout_state(
+                features=features,
+                direction="SHORT",
+                range_high=range_high,
+                range_low=range_low,
+                range_size=range_size,
+                range_size_atr=range_size_atr,
+                bb_squeeze=bb_squeeze,
+                atr_compressed=atr_compressed,
+                range_contracting=range_contracting,
+                wick_returned_inside=True,
+                params=params,
+            )
+
+        watchlist_distance_atr = _numeric_param(
+            params,
+            "watchlist_distance_atr",
+            DEFAULT_WATCHLIST_DISTANCE_ATR,
+        )
+        if 0 <= range_high - features.close <= atr * watchlist_distance_atr:
+            return self._watchlist_state(
+                features=features,
+                direction="LONG",
+                range_high=range_high,
+                range_low=range_low,
+                range_size=range_size,
+                range_size_atr=range_size_atr,
+                bb_squeeze=bb_squeeze,
+                atr_compressed=atr_compressed,
+                range_contracting=range_contracting,
+            )
+        if 0 <= features.close - range_low <= atr * watchlist_distance_atr:
+            return self._watchlist_state(
+                features=features,
+                direction="SHORT",
+                range_high=range_high,
+                range_low=range_low,
+                range_size=range_size,
+                range_size_atr=range_size_atr,
+                bb_squeeze=bb_squeeze,
+                atr_compressed=atr_compressed,
+                range_contracting=range_contracting,
             )
         return None
+
+    def _breakout_state(
+        self,
+        *,
+        features: Features,
+        direction: Literal["LONG", "SHORT"],
+        range_high: float,
+        range_low: float,
+        range_size: float,
+        range_size_atr: float,
+        bb_squeeze: bool,
+        atr_compressed: bool,
+        range_contracting: bool,
+        wick_returned_inside: bool,
+        params: Mapping[str, Any],
+    ) -> _SqueezeState:
+        volume_threshold = _numeric_param(params, "volume_spike_multiplier", DEFAULT_VOLUME_SPIKE_MULTIPLIER)
+        min_close_position = _numeric_param(params, "min_close_position", DEFAULT_MIN_CLOSE_POSITION)
+        max_rejection_wick = _numeric_param(
+            params,
+            "max_breakout_wick_ratio",
+            DEFAULT_MAX_REJECTION_WICK_RATIO,
+        )
+        close_position = _directional_close_position(direction, features)
+        rejection_wick = _rejection_wick_ratio(direction, features)
+        volume_confirmed = features.volume_spike >= volume_threshold
+        strong_close = close_position >= min_close_position
+        wick_ok = rejection_wick <= max_rejection_wick
+        breakout_closed = not wick_returned_inside
+        atr_expanding = features.atr_increasing
+
+        if wick_returned_inside:
+            action = "Breakout" if direction == "LONG" else "Breakdown"
+            status = "ready"
+            reason = f"{action} only wicked outside the range and closed back inside; wait for a real candle close"
+        elif volume_confirmed and strong_close and atr_expanding and wick_ok:
+            action = "Breakout" if direction == "LONG" else "Breakdown"
+            status = "actionable"
+            reason = f"{action} closed outside the compressed range with volume, strong close and ATR expansion"
+        else:
+            missing: list[str] = []
+            if not volume_confirmed:
+                missing.append("volume")
+            if not strong_close:
+                missing.append("close strength")
+            if not atr_expanding:
+                missing.append("ATR expansion")
+            if not wick_ok:
+                missing.append("clean wick profile")
+            status = "ready"
+            reason = "Breakout closed outside the range, but confirmation is incomplete: " + ", ".join(missing)
+
+        return _SqueezeState(
+            direction=direction,
+            status=status,
+            reason=reason,
+            range_high=range_high,
+            range_low=range_low,
+            range_size=range_size,
+            range_size_atr=range_size_atr,
+            bb_squeeze=bb_squeeze,
+            atr_compressed=atr_compressed,
+            range_contracting=range_contracting,
+            breakout_closed=breakout_closed,
+            wick_returned_inside=wick_returned_inside,
+            volume_confirmed=volume_confirmed,
+            strong_close=strong_close,
+            atr_expanding=atr_expanding,
+            close_position=close_position,
+            rejection_wick_ratio=rejection_wick,
+        )
+
+    def _watchlist_state(
+        self,
+        *,
+        features: Features,
+        direction: Literal["LONG", "SHORT"],
+        range_high: float,
+        range_low: float,
+        range_size: float,
+        range_size_atr: float,
+        bb_squeeze: bool,
+        atr_compressed: bool,
+        range_contracting: bool,
+    ) -> _SqueezeState:
+        side_text = "upper" if direction == "LONG" else "lower"
+        return _SqueezeState(
+            direction=direction,
+            status="watchlist",
+            reason=(
+                f"Volatility is compressed and price is near the {side_text} Donchian boundary; "
+                "waiting for breakout volume and a candle close outside the range"
+            ),
+            range_high=range_high,
+            range_low=range_low,
+            range_size=range_size,
+            range_size_atr=range_size_atr,
+            bb_squeeze=bb_squeeze,
+            atr_compressed=atr_compressed,
+            range_contracting=range_contracting,
+            breakout_closed=False,
+            wick_returned_inside=False,
+            volume_confirmed=False,
+            strong_close=False,
+            atr_expanding=features.atr_increasing,
+            close_position=_directional_close_position(direction, features),
+            rejection_wick_ratio=_rejection_wick_ratio(direction, features),
+        )
 
     def _score(
         self,
         features: Features,
-        direction: Literal["LONG", "SHORT"],
-        stage_status: str,
+        setup: _SqueezeState,
+        params: Mapping[str, Any],
     ) -> tuple[SignalScoreBreakdown, list[str], list[str]]:
         trend_score = 0
         volume_score = 0
+        liquidity_score = 0
         volatility_score = 0
         overheat_penalty = 0
         reasons: list[str] = []
         risks: list[str] = []
 
-        if (
-            features.bb_width_percentile is not None
-            and features.bb_width_percentile < 20
-        ):
+        if setup.bb_squeeze:
+            volatility_score += 20
+            reasons.append(
+                f"BB width percentile is compressed below {_numeric_param(params, 'bb_width_percentile_threshold', DEFAULT_BB_WIDTH_PERCENTILE_THRESHOLD):.0f}"
+            )
+        if setup.atr_compressed:
             volatility_score += 15
-            reasons.append("Волатильность сжата: BB width percentile ниже 20")
+            reasons.append("ATR is below its 50-candle average")
+        if setup.range_contracting:
+            volatility_score += 10
+            reasons.append("20-candle range is below its recent average")
 
-        if stage_status == "watchlist":
+        if setup.breakout_closed:
             trend_score += 20
-            reasons.append("Price is near the Donchian boundary, but breakout has not confirmed yet")
-        elif direction == "LONG" and features.donchian_high_20 is not None:
-            trend_score += 25
-            reasons.append("Цена закрылась выше Donchian high 20")
-        elif direction == "SHORT" and features.donchian_low_20 is not None:
-            trend_score += 25
-            reasons.append("Цена закрылась ниже Donchian low 20")
+            level_name = "range high" if setup.direction == "LONG" else "range low"
+            reasons.append(f"Close finished outside the Donchian {level_name}")
+        elif setup.wick_returned_inside:
+            trend_score += 8
+            risks.append("Price pierced the range but closed back inside")
+            overheat_penalty += 20
+        else:
+            trend_score += 10
+            reasons.append("Price is pressing the Donchian boundary before confirmation")
 
-        if features.volume_spike > 1.5:
-            volume_score += 20
-            reasons.append(f"Объем выше среднего: {features.volume_spike:.2f}x")
+        if setup.volume_confirmed:
+            volume_score += 15
+            reasons.append(f"Breakout volume is {features.volume_spike:.2f}x average")
+        elif setup.status != "watchlist":
+            risks.append("Breakout volume is below the configured confirmation multiplier")
 
-        if features.atr_increasing:
-            volatility_score += 15
-            reasons.append("ATR расширяется после сжатия")
+        if setup.strong_close:
+            liquidity_score += 10
+            reasons.append(f"Close is in the directional part of the candle: {setup.close_position:.0%}")
+        elif setup.status != "watchlist":
+            risks.append("Close is not strong enough inside the breakout candle")
 
-        if direction == "LONG":
+        if setup.atr_expanding:
+            volatility_score += 10
+            reasons.append("ATR is expanding after compression")
+        elif setup.status != "watchlist":
+            risks.append("ATR has not started expanding yet")
+
+        if setup.range_size_atr >= 3:
+            risks.append(f"Squeeze range uses {setup.range_size_atr:.2f} ATR; wider ranges are less clean")
+
+        body_atr = _body_atr(features)
+        if body_atr > MAX_BREAKOUT_BODY_ATR:
+            risks.append(f"Breakout candle body is {body_atr:.2f} ATR")
+            overheat_penalty += 15
+
+        max_rejection_wick = _numeric_param(
+            params,
+            "max_breakout_wick_ratio",
+            DEFAULT_MAX_REJECTION_WICK_RATIO,
+        )
+        if setup.rejection_wick_ratio > max_rejection_wick:
+            risks.append(f"Rejection wick is {setup.rejection_wick_ratio:.0%} of the candle range")
+            overheat_penalty += 15
+
+        if setup.direction == "LONG":
             if features.rsi_14 is not None and 55 <= features.rsi_14 <= 70:
-                reasons.append(f"RSI {features.rsi_14:.1f}, импульс без перегрева")
+                reasons.append(f"RSI {features.rsi_14:.1f} supports upside momentum without extreme heat")
             elif features.rsi_14 is not None and features.rsi_14 > 75:
-                risks.append("RSI выше 75: риск позднего входа")
+                risks.append("RSI above 75: late long breakout risk")
                 overheat_penalty += 10
         else:
             if features.rsi_14 is not None and 30 <= features.rsi_14 <= 45:
-                reasons.append(f"RSI {features.rsi_14:.1f}, шорт-импульс без перегрева")
+                reasons.append(f"RSI {features.rsi_14:.1f} supports downside momentum without extreme heat")
             elif features.rsi_14 is not None and features.rsi_14 < 25:
-                risks.append("RSI ниже 25: риск входа после сильного движения")
+                risks.append("RSI below 25: late short breakdown risk")
                 overheat_penalty += 10
-
-        if features.atr_14 is not None and abs(features.close - features.open) > features.atr_14 * 2.5:
-            risks.append("Тело текущего движения больше 2.5 ATR")
-            overheat_penalty += 15
 
         return (
             score_breakdown(
                 trend_score=trend_score,
                 volume_score=volume_score,
+                liquidity_score=liquidity_score,
                 volatility_score=volatility_score,
                 overheat_penalty=overheat_penalty,
             ),
             reasons,
             risks,
         )
+
+    def _bb_squeeze(self, features: Features, params: Mapping[str, Any]) -> bool:
+        threshold = _numeric_param(
+            params,
+            "bb_width_percentile_threshold",
+            DEFAULT_BB_WIDTH_PERCENTILE_THRESHOLD,
+        )
+        return bool(features.bb_width_percentile is not None and features.bb_width_percentile < threshold)
+
+    def _atr_compressed(self, features: Features) -> bool:
+        return bool(
+            features.atr_14 is not None
+            and features.atr_sma_50 is not None
+            and features.atr_14 < features.atr_sma_50
+        )
+
+    def _range_contracting(self, features: Features, *, fallback_range: float) -> bool:
+        range_20 = features.range_20 if features.range_20 is not None else fallback_range
+        return bool(features.range_50_average is not None and range_20 < features.range_50_average)
+
+    def _atr(self, features: Features) -> float:
+        return features.atr_14 or max(abs(features.close) * 0.002, 1e-8)
+
+
+def _numeric_param(params: Mapping[str, Any], key: str, default: float) -> float:
+    try:
+        value = params.get(key)
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _directional_close_position(direction: Literal["LONG", "SHORT"], features: Features) -> float:
+    candle_range = max(features.high - features.low, 0.0)
+    if candle_range <= 0:
+        return 0.0
+    if direction == "LONG":
+        return max(0.0, min(1.0, (features.close - features.low) / candle_range))
+    return max(0.0, min(1.0, (features.high - features.close) / candle_range))
+
+
+def _rejection_wick_ratio(direction: Literal["LONG", "SHORT"], features: Features) -> float:
+    if direction == "LONG":
+        return features.upper_wick_ratio or 0.0
+    return features.lower_wick_ratio or 0.0
+
+
+def _body_atr(features: Features) -> float:
+    atr = features.atr_14 or max(abs(features.close) * 0.002, 1e-8)
+    return abs(features.close - features.open) / atr if atr > 0 else 0.0

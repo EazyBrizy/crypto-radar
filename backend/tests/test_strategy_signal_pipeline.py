@@ -30,6 +30,10 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(signal.exit_plan)
         self.assertEqual(signal.invalidation.metadata.get("breakout_level") if signal.invalidation else None, 100.8)
         self.assertEqual(signal.invalidation.metadata.get("signal_open") if signal.invalidation else None, 100.6)
+        self.assertEqual(signal.invalidation.metadata.get("conservative_entry") if signal.invalidation else None, 100.8)
+        self.assertEqual(signal.exit_plan.targets[-1].get("source") if signal.exit_plan else None, "range_measured_move")
+        self.assertAlmostEqual(signal.first_target_rr or 0, 1.5)
+        self.assertAlmostEqual(signal.final_target_rr or 0, 2.5)
         self.assertEqual(signal.regime.context_timeframe if signal.regime else None, "1h")
         self.assertEqual(signal.regime.alignment if signal.regime else None, "aligned")
         self.assertTrue(signal.explanation[0].startswith("Status:"))
@@ -43,6 +47,9 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
                 "low": 99.8,
                 "close": 103.0,
                 "donchian_high_20": 102.0,
+                "donchian_low_20": 98.0,
+                "range_20": 4.0,
+                "range_20_atr": 4.0,
             }
         )
 
@@ -366,6 +373,66 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal.status, "ready")
         self.assertEqual(signal.setup.stage if signal and signal.setup else None, "ready")
+
+    async def test_squeeze_breakout_requires_full_compression(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "atr_sma_50": 0.8,
+                "range_20": 5.0,
+                "range_50_average": 4.0,
+            }
+        )
+
+        signals = await StrategyEngine().generate_signals(
+            features,
+            context_features=_bullish_context_features(),
+        )
+
+        self.assertEqual(signals, [])
+
+    async def test_squeeze_breakout_weak_close_stays_ready(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "open": 100.9,
+                "high": 103.2,
+                "low": 100.7,
+                "close": 101.1,
+                "price": 101.1,
+                "upper_wick_ratio": 0.84,
+            }
+        )
+
+        signals = await StrategyEngine().generate_signals(
+            features,
+            context_features=_bullish_context_features(),
+        )
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].status, "ready")
+        self.assertIn("close strength", signals[0].status_reason or "")
+
+    async def test_squeeze_settings_can_raise_volume_confirmation_threshold(self) -> None:
+        features = _breakout_features()
+
+        signals = await StrategyEngine().generate_signals(
+            features,
+            context_features=_bullish_context_features(),
+            strategy_configs={
+                "volatility_squeeze_breakout": type(
+                    "RuntimeConfig",
+                    (),
+                    {
+                        "params": {"volume_spike_multiplier": 2.0},
+                        "risk_settings": {"min_rr_ratio": 1.5, "rr_target": "final"},
+                        "pair_scope_configured": False,
+                    },
+                )(),
+            },
+        )
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].status, "ready")
+        self.assertIn("volume", signals[0].status_reason or "")
 
     async def test_trend_pullback_approach_is_watchlist(self) -> None:
         features = _breakout_features().model_copy(
@@ -771,11 +838,15 @@ def _breakout_features() -> Features:
         ema_200=95.0,
         rsi_14=60.0,
         atr_14=1.0,
+        atr_sma_50=1.3,
         adx=28.0,
         adx_rising=True,
         bb_width_percentile=12.0,
         donchian_high_20=100.8,
-        donchian_low_20=95.0,
+        donchian_low_20=96.2,
+        range_20=4.6,
+        range_50_average=6.0,
+        range_20_atr=4.6,
         swing_high=104.0,
         swing_low=96.0,
         candle_bullish=True,

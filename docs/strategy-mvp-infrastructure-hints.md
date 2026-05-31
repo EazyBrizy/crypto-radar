@@ -606,6 +606,40 @@ Exit:
 - TP2: `2.5R` or next context level;
 - optional trailing after TP1 while ATR expands.
 
+Implementation status after Strategy 2 hardening:
+
+- `FeatureEngine` now exposes squeeze-specific candle metrics:
+  `atr_sma_50`, `range_20`, `range_50_average`, and `range_20_atr`.
+- `VolatilitySqueezeBreakoutStrategy` requires measurable compression before
+  it emits a setup: BB width percentile below threshold, ATR below ATR SMA 50,
+  current 20-candle range below recent average, and Donchian range not wider
+  than the configured ATR limit.
+- Breakouts are candle-close based. Wick-only breaks remain `ready`, not
+  `actionable`.
+- Confirmation checks include configurable volume impulse, close location in
+  the breakout candle, ATR expansion, and rejection-wick limit.
+- Strategy params for Squeeze Breakout are persisted in
+  `user_strategy_configs.params`: `bb_width_percentile_threshold`,
+  `volume_spike_multiplier`, `min_close_position`,
+  `max_breakout_wick_ratio`, `max_squeeze_range_atr`,
+  `watchlist_distance_atr`, `breakout_stop_atr`, and
+  `narrow_range_stop_atr`.
+- Signal snapshots now include aggressive entry, conservative retest entry
+  zone, Donchian range metadata, close/wick quality, and measured-move target.
+- Exit management adds measured-move TP3 for Squeeze Breakout, while TP1/TP2
+  use 1.5R/2.5R.
+- Settings UI exposes the most useful Squeeze Breakout knobs without adding
+  new DB columns.
+
+Remaining tails:
+
+- Backtest and tune squeeze thresholds per timeframe and symbol tier.
+- Add BTC/macro shock filter before promoting opposite-side alt breakouts.
+- Persist/aggregate S/R snapshots only if runtime S/R recomputation becomes a
+  scanner bottleneck.
+- Add production analytics for false-breakout rate after the daily strategy
+  performance aggregator exists.
+
 ### Liquidity Sweep Reversal
 
 Что уже есть:
@@ -1068,7 +1102,17 @@ coverage, and analytics depth rather than missing base plumbing.
    - remaining: collect production samples to tune funding thresholds,
      EMA200-chop score cutoffs, and ADX rising-bar defaults per timeframe.
 
-8. Cross-cutting production tails:
+8. Volatility Squeeze Breakout hardening:
+   - implemented: FeatureEngine squeeze metrics, strict compression
+     requirement, Donchian range ATR cap, candle-close breakout confirmation,
+     volume/close-position/ATR-expansion/wick filters, wick-only ready stage,
+     retest-zone metadata, measured-move target, 1.5R/2.5R exits, and Settings
+     knobs for the main squeeze thresholds;
+   - remaining: backtest threshold calibration per timeframe/symbol tier,
+     BTC/macro shock filter for opposite-side alt breakouts, and false-breakout
+     analytics after the strategy performance aggregator is wired.
+
+9. Cross-cutting production tails:
    - persist strategy configs per real user instead of relying on global/demo
      assumptions;
    - add analytics aggregation for `analytics.strategy_performance_daily`;
@@ -1082,7 +1126,8 @@ coverage, and analytics depth rather than missing base plumbing.
    overextension ATR limits, lifecycle transitions, and RR target choice.
 2. Add non-Bybit exchange adapters before exposing multi-exchange strategy
    scopes as real subscriptions.
-3. Tune derivative/funding freshness, EMA200-chop thresholds, and Wilder ADX
+3. Tune derivative/funding freshness, EMA200-chop thresholds, Squeeze Breakout
+   compression/confirmation defaults, and Wilder ADX
    rising-bar defaults after live samples and backtests.
 4. Decide whether scanner-time orderbook-depth quality is needed before risk
    preview; if yes, write/read `market.liquidity_snapshots`.

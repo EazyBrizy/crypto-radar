@@ -47,6 +47,19 @@ DEFAULT_STRATEGY_QUALITY_PARAMS: dict[str, Any] = {
     },
 }
 
+DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
+    "volatility_squeeze_breakout": {
+        "bb_width_percentile_threshold": 20.0,
+        "volume_spike_multiplier": 1.5,
+        "min_close_position": 0.7,
+        "max_breakout_wick_ratio": 0.35,
+        "max_squeeze_range_atr": 5.0,
+        "watchlist_distance_atr": 0.6,
+        "breakout_stop_atr": 1.0,
+        "narrow_range_stop_atr": 0.5,
+    },
+}
+
 
 @dataclass(frozen=True)
 class StrategyRuntimeConfig:
@@ -225,6 +238,7 @@ def _ensure_default_configs(session: Session, user: AppUser) -> None:
         params = dict(version.default_params or {})
         params.update(DEFAULT_STRATEGY_QUALITY_PARAMS)
         params.update(_default_overextension_params(version.strategy.code))
+        params.update(DEFAULT_STRATEGY_PARAMS_BY_CODE.get(version.strategy.code, {}))
         risk_settings = _persisted_risk_settings_for_strategy(version.strategy.code)
         session.add(
             UserStrategyConfig(
@@ -340,7 +354,13 @@ def _normalize_existing_strategy_defaults(configs: list[UserStrategyConfig]) -> 
     for config in configs:
         strategy_code = config.strategy_version.strategy.code
         risk_settings = dict(config.risk_settings or {})
+        params = dict(getattr(config, "params", {}) or {})
         config_changed = False
+        params_changed = False
+        for key, value in DEFAULT_STRATEGY_PARAMS_BY_CODE.get(strategy_code, {}).items():
+            if key not in params:
+                params[key] = value
+                params_changed = True
         if "hide_failed_rr_signals" not in risk_settings:
             risk_settings["hide_failed_rr_signals"] = False
             config_changed = True
@@ -355,6 +375,10 @@ def _normalize_existing_strategy_defaults(configs: list[UserStrategyConfig]) -> 
             config_changed = True
         if config_changed:
             config.risk_settings = risk_settings
+            config.updated_at = now
+            changed = True
+        if params_changed:
+            config.params = params
             config.updated_at = now
             changed = True
     return changed

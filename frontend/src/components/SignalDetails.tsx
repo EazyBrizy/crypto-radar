@@ -80,6 +80,7 @@ export function SignalDetails({
       </div>
 
       <PullbackGuidanceBlock signal={signal} />
+      <BreakoutEntryPlanBlock signal={signal} />
       <AutoEntryBlock signal={signal} />
 
       <div className="trade-setup">
@@ -216,6 +217,52 @@ function PullbackGuidanceBlock({ signal }: { signal: RadarSignal }) {
       </div>
     </div>
   );
+}
+
+function BreakoutEntryPlanBlock({ signal }: { signal: RadarSignal }) {
+  const plan = breakoutEntryPlan(signal);
+  if (!plan) return null;
+  return (
+    <div className="risk-reward-detail-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Breakout Entries</h3>
+      </div>
+      <p>{plan.actionableMode}</p>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Aggressive" value={formatPrice(plan.aggressiveEntry)} />
+        <MetricLine label="Retest zone" value={plan.conservativeZone} />
+        <MetricLine label="Measured move" value={formatPrice(plan.measuredMoveTarget)} />
+      </div>
+    </div>
+  );
+}
+
+function breakoutEntryPlan(signal: RadarSignal): {
+  aggressiveEntry: number | null;
+  conservativeZone: string;
+  measuredMoveTarget: number | null;
+  actionableMode: string;
+} | null {
+  if (signal.strategy !== "volatility_squeeze_breakout") return null;
+  const metadata = signal.invalidation?.metadata ?? {};
+  const aggressiveEntry = numberMetadata(metadata, "aggressive_entry") ?? signal.entry_min ?? signal.entry_max;
+  const conservativeMin = numberMetadata(metadata, "conservative_entry_min");
+  const conservativeMax = numberMetadata(metadata, "conservative_entry_max");
+  const conservativeEntry = numberMetadata(metadata, "conservative_entry");
+  const measuredMoveTarget = numberMetadata(metadata, "measured_move_target");
+  if (aggressiveEntry == null && conservativeEntry == null && measuredMoveTarget == null) return null;
+  const conservativeZone = conservativeMin == null && conservativeMax == null
+    ? formatPrice(conservativeEntry)
+    : `${formatPrice(conservativeMin)} - ${formatPrice(conservativeMax)}`;
+  return {
+    aggressiveEntry,
+    conservativeZone,
+    measuredMoveTarget,
+    actionableMode: signal.status === "wait_for_pullback"
+      ? "Actionable entry is the retest zone while the breakout candle cools off."
+      : "Actionable entry follows the current strategy status; retest is the conservative alternative."
+  };
 }
 
 function pullbackGuidance(signal: RadarSignal): {

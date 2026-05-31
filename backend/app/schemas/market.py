@@ -43,6 +43,7 @@ class Features(BaseModel):
     vwap: Optional[float] = None
     rsi_14: Optional[float] = None
     atr_14: Optional[float] = None
+    atr_sma_50: Optional[float] = None
     adx: Optional[float] = None
     adx_rising: bool = False
     adx_slope_5: Optional[float] = None
@@ -57,6 +58,9 @@ class Features(BaseModel):
     bb_width_percentile: Optional[float] = None
     donchian_high_20: Optional[float] = None
     donchian_low_20: Optional[float] = None
+    range_20: Optional[float] = None
+    range_50_average: Optional[float] = None
+    range_20_atr: Optional[float] = None
 
     swing_high: Optional[float] = None
     swing_low: Optional[float] = None

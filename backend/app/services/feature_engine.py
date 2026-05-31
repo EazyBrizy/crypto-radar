@@ -17,7 +17,9 @@ EMA_MID = 50
 EMA_LONG = 200
 RSI_LOOKBACK = 14
 ATR_LOOKBACK = 14
+ATR_SMA_LOOKBACK = 50
 DONCHIAN_LOOKBACK = 20
+RANGE_CONTRACTION_LOOKBACK = 50
 EMA200_CHOP_LOOKBACK = 50
 EMA200_SLOPE_LOOKBACK = 20
 EMA200_NEAR_ATR_MULTIPLIER = 0.5
@@ -195,6 +197,55 @@ class FeatureEngine:
         if len(true_ranges) < period:
             return None
         return sum(true_ranges[-period:]) / period
+
+    @staticmethod
+    def _atr_series_from_candles(
+        candles: List[OHLCVCandle],
+        period: int = ATR_LOOKBACK,
+    ) -> List[Optional[float]]:
+        series: List[Optional[float]] = [None] * len(candles)
+        if len(candles) <= period:
+            return series
+        true_ranges = FeatureEngine._true_ranges(candles)
+        if len(true_ranges) < period:
+            return series
+        for tr_index in range(period - 1, len(true_ranges)):
+            candle_index = tr_index + 1
+            series[candle_index] = sum(true_ranges[tr_index - period + 1 : tr_index + 1]) / period
+        return series
+
+    @staticmethod
+    def _atr_sma_from_series(
+        atr_series: List[Optional[float]],
+        period: int = ATR_SMA_LOOKBACK,
+    ) -> Optional[float]:
+        values = [value for value in atr_series if value is not None]
+        if len(values) < period:
+            return None
+        return sum(values[-period:]) / period
+
+    @staticmethod
+    def _range_compression_stats(
+        candles: List[OHLCVCandle],
+        period: int = DONCHIAN_LOOKBACK,
+        lookback: int = RANGE_CONTRACTION_LOOKBACK,
+    ) -> tuple[Optional[float], Optional[float]]:
+        previous_candles = candles[:-1]
+        if len(previous_candles) < period:
+            return None, None
+
+        rolling_ranges: list[float] = []
+        for end_index in range(period, len(previous_candles) + 1):
+            window = previous_candles[end_index - period : end_index]
+            rolling_ranges.append(max(candle.high for candle in window) - min(candle.low for candle in window))
+
+        if not rolling_ranges:
+            return None, None
+        current_range = rolling_ranges[-1]
+        comparison_window = rolling_ranges[-lookback:]
+        if not comparison_window:
+            return current_range, None
+        return current_range, sum(comparison_window) / len(comparison_window)
 
     @staticmethod
     def _adx_series_from_candles(
@@ -462,7 +513,10 @@ class FeatureEngine:
         volume_ma_20 = self._sma(volumes, VOLUME_LOOKBACK) or latest.volume
         volume_spike = latest.volume / (volume_ma_20 + VOLUME_EPSILON)
         volume_spike = min(volume_spike, VOLUME_SPIKE_MAX)
-        atr_14 = self._atr_from_candles(ordered, ATR_LOOKBACK)
+        atr_series = self._atr_series_from_candles(ordered, ATR_LOOKBACK)
+        atr_14 = atr_series[-1] if atr_series else None
+        atr_sma_50 = self._atr_sma_from_series(atr_series, ATR_SMA_LOOKBACK)
+        range_20, range_50_average = self._range_compression_stats(ordered)
         adx, adx_rising, adx_slope_5, adx_rising_bars = self._adx_stats(
             self._adx_series_from_candles(ordered, ATR_LOOKBACK)
         )
@@ -518,6 +572,7 @@ class FeatureEngine:
             vwap=self._session_vwap(ordered),
             rsi_14=self._rsi(closes, RSI_LOOKBACK),
             atr_14=atr_14,
+            atr_sma_50=atr_sma_50,
             adx=adx,
             adx_rising=adx_rising,
             adx_slope_5=adx_slope_5,
@@ -530,6 +585,9 @@ class FeatureEngine:
             bb_width_percentile=self._bb_width_percentile(closes),
             donchian_high_20=donchian_high,
             donchian_low_20=donchian_low,
+            range_20=range_20,
+            range_50_average=range_50_average,
+            range_20_atr=range_20 / atr_14 if range_20 is not None and atr_14 is not None and atr_14 > 0 else None,
             swing_high=donchian_high,
             swing_low=donchian_low,
             candle_bullish=candle_bullish,
@@ -623,6 +681,7 @@ class FeatureEngine:
                 vwap=self._rolling_vwap(values, volumes),
                 rsi_14=rsi_14,
                 atr_14=atr_14,
+                atr_sma_50=None,
                 adx=adx,
                 adx_rising=self._adx_rising(values),
                 adx_slope_5=None,
@@ -635,6 +694,9 @@ class FeatureEngine:
                 bb_width_percentile=bb_width_percentile,
                 donchian_high_20=donchian_high,
                 donchian_low_20=donchian_low,
+                range_20=None,
+                range_50_average=None,
+                range_20_atr=None,
                 swing_high=donchian_high,
                 swing_low=donchian_low,
                 candle_bullish=pseudo_close > pseudo_open,

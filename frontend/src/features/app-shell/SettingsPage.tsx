@@ -99,6 +99,20 @@ const RR_TARGET_DEFAULTS: Record<string, "final" | "nearest"> = {
   volatility_squeeze_breakout: "final",
   liquidity_sweep_reversal: "nearest"
 };
+const SQUEEZE_BREAKOUT_FIELD_LABELS: Array<{
+  key: string;
+  label: string;
+  step: string;
+  min: string;
+  max?: string;
+  defaultValue: number;
+}> = [
+  { key: "bb_width_percentile_threshold", label: "BB squeeze %", step: "1", min: "0", max: "100", defaultValue: 20 },
+  { key: "volume_spike_multiplier", label: "Volume x", step: "0.1", min: "0", defaultValue: 1.5 },
+  { key: "min_close_position", label: "Close strength", step: "0.05", min: "0", max: "1", defaultValue: 0.7 },
+  { key: "max_breakout_wick_ratio", label: "Max wick", step: "0.05", min: "0", max: "1", defaultValue: 0.35 },
+  { key: "max_squeeze_range_atr", label: "Range ATR", step: "0.1", min: "1", defaultValue: 5 }
+];
 
 type RiskNumericField =
   | "risk_per_trade_percent"
@@ -1109,6 +1123,24 @@ export function SettingsPage({
                       type="number"
                     />
                   </label>
+                  {strategyConfig.strategy_code === "volatility_squeeze_breakout"
+                    ? SQUEEZE_BREAKOUT_FIELD_LABELS.map((field) => (
+                        <label key={`${strategyConfig.id}:${field.key}`}>
+                          <span>{field.label}</span>
+                          <input
+                            defaultValue={String(Number(strategyConfig.params[field.key] ?? field.defaultValue))}
+                            disabled={busy}
+                            inputMode="decimal"
+                            key={`${strategyConfig.id}:${field.key}:${String(strategyConfig.params[field.key] ?? "")}`}
+                            max={field.max}
+                            min={field.min}
+                            onBlur={(event) => handleStrategyParamBlur(strategyConfig, field.key, event.target.value)}
+                            step={field.step}
+                            type="number"
+                          />
+                        </label>
+                      ))
+                    : null}
                   <label>
                     <span>Min RR</span>
                     <input

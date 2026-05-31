@@ -718,11 +718,39 @@ class InvalidationLayer:
                 ]
         elif signal.strategy == "volatility_squeeze_breakout":
             breakout_level = features.donchian_high_20 if direction == "long" else features.donchian_low_20
+            range_high = features.donchian_high_20
+            range_low = features.donchian_low_20
+            range_height = (
+                range_high - range_low
+                if range_high is not None and range_low is not None and range_high > range_low
+                else None
+            )
+            measured_move_target = None
+            if range_height is not None:
+                measured_move_target = (
+                    range_high + range_height
+                    if direction == "long" and range_high is not None
+                    else range_low - range_height if range_low is not None else None
+                )
+            retest_zone = _entry_zone_around_level(breakout_level, features.atr_14)
             metadata.update(
                 {
-                    "range_high": features.donchian_high_20,
-                    "range_low": features.donchian_low_20,
+                    "range_high": range_high,
+                    "range_low": range_low,
+                    "range_height": range_height,
+                    "range_20": features.range_20,
+                    "range_50_average": features.range_50_average,
+                    "range_20_atr": features.range_20_atr,
                     "breakout_level": breakout_level,
+                    "aggressive_entry": features.close,
+                    "conservative_entry": breakout_level,
+                    "conservative_entry_min": retest_zone[0],
+                    "conservative_entry_max": retest_zone[1],
+                    "measured_move_target": measured_move_target,
+                    "bb_width_percentile": features.bb_width_percentile,
+                    "atr_sma_50": features.atr_sma_50,
+                    "close_position": _directional_close_location(signal.direction, features),
+                    "rejection_wick_ratio": _rejection_wick_ratio(signal.direction, features),
                     "volume_disappears_below": 1.0,
                 }
             )
@@ -807,6 +835,20 @@ class ExitManagementLayer:
                     "source": "EMA20" if context.signal_features.ema_20 is not None else "ATR",
                 }
             )
+        elif signal.strategy == "volatility_squeeze_breakout":
+            measured_target = _measured_move_target(signal, context.signal_features)
+            if measured_target is not None:
+                r_multiple = abs(measured_target - entry) / risk if entry is not None and risk and risk > 0 else None
+                targets.append(
+                    {
+                        "label": "TP3",
+                        "price": measured_target,
+                        "r_multiple": r_multiple,
+                        "action": "measured_move_runner",
+                        "close_percent": "runner",
+                        "source": "range_measured_move",
+                    }
+                )
 
         breakeven = {}
         if entry is not None and targets:
@@ -1562,6 +1604,24 @@ def _target_from_price(price: float | None, source: str, label: str, atr: float 
         entry_min=price - buffer,
         entry_max=price + buffer,
     )
+
+
+def _entry_zone_around_level(level: float | None, atr: float | None) -> tuple[float | None, float | None]:
+    if level is None:
+        return None, None
+    buffer = max((atr or 0.0) * 0.1, abs(level) * 0.0005)
+    return level - buffer, level + buffer
+
+
+def _measured_move_target(signal: StrategySignal, features: Features) -> float | None:
+    range_high = features.donchian_high_20
+    range_low = features.donchian_low_20
+    if range_high is None or range_low is None or range_high <= range_low:
+        return None
+    range_height = range_high - range_low
+    if signal.direction.lower() == "long":
+        return range_high + range_height
+    return range_low - range_height
 
 
 def _number_or_none(value: Any) -> float | None:

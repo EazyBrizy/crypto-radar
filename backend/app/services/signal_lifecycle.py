@@ -218,21 +218,23 @@ def _confirmation_signal_updates(signal: RadarSignal, features: Features) -> dic
     risk = abs(entry - signal.stop_loss)
     if risk <= 0:
         return updates
+    tp1_multiple = 1.5 if signal.strategy == "volatility_squeeze_breakout" else 1.0
+    tp2_multiple = 2.5 if signal.strategy == "volatility_squeeze_breakout" else 2.0
     if signal.direction == "long":
-        tp1 = entry + risk
-        tp2 = entry + risk * 2
+        tp1 = entry + risk * tp1_multiple
+        tp2 = entry + risk * tp2_multiple
     else:
-        tp1 = entry - risk
-        tp2 = entry - risk * 2
+        tp1 = entry - risk * tp1_multiple
+        tp2 = entry - risk * tp2_multiple
     selected_target = signal.selected_rr_target or "final"
     updates.update(
         {
             "take_profit_1": round(tp1, 8),
             "take_profit_2": round(tp2, 8),
-            "risk_reward": 2.0,
-            "first_target_rr": 1.0,
-            "final_target_rr": 2.0,
-            "selected_rr": 1.0 if selected_target == "nearest" else 2.0,
+            "risk_reward": tp2_multiple,
+            "first_target_rr": tp1_multiple,
+            "final_target_rr": tp2_multiple,
+            "selected_rr": tp1_multiple if selected_target == "nearest" else tp2_multiple,
             "selected_rr_target": selected_target,
             "confirmation": _confirmation_snapshot(signal, features),
         }

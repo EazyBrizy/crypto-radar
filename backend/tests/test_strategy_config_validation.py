@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from app.schemas.strategy import StrategyPairScope
 from app.services.strategy_config_service import (
+    DEFAULT_STRATEGY_PARAMS_BY_CODE,
     RR_TARGET_DEFAULT_VERSION,
     StrategyConfigValidationError,
     _default_rr_target_for_strategy,
@@ -93,6 +94,22 @@ class StrategyConfigValidationTest(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(config.risk_settings["rr_target"], "nearest")
         self.assertEqual(config.risk_settings["rr_target_default_version"], RR_TARGET_DEFAULT_VERSION)
+
+    def test_squeeze_defaults_are_added_to_existing_params(self) -> None:
+        config = SimpleNamespace(
+            params={},
+            risk_settings={},
+            strategy_version=SimpleNamespace(
+                strategy=SimpleNamespace(code="volatility_squeeze_breakout")
+            ),
+            updated_at=None,
+        )
+
+        changed = _normalize_existing_strategy_defaults([config])
+
+        self.assertTrue(changed)
+        for key in DEFAULT_STRATEGY_PARAMS_BY_CODE["volatility_squeeze_breakout"]:
+            self.assertIn(key, config.params)
 
 
 if __name__ == "__main__":

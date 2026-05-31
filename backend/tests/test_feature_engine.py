@@ -71,6 +71,33 @@ class FeatureEngineTest(unittest.TestCase):
         self.assertIsNotNone(features.ema_200_near_ratio_50)
         self.assertIsNotNone(features.ema_200_chop_score)
 
+    def test_candle_features_include_squeeze_compression_metrics(self) -> None:
+        engine = FeatureEngine()
+        start = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp() * 1000)
+        candles = []
+        price = 100.0
+        for index in range(90):
+            width = 3.0 if index < 45 else 1.0
+            price += 0.05
+            candles.append(
+                _candle(
+                    start + index * 60_000,
+                    high=price + width,
+                    low=price - width,
+                    close=price,
+                    volume=10,
+                )
+            )
+
+        features = engine.process_candles(candles)
+
+        self.assertIsNotNone(features)
+        self.assertIsNotNone(features.atr_sma_50)
+        self.assertIsNotNone(features.range_20)
+        self.assertIsNotNone(features.range_50_average)
+        self.assertIsNotNone(features.range_20_atr)
+        self.assertLess(features.range_20 or 0, features.range_50_average or 0)
+
 
 def _candle(
     open_time: int,

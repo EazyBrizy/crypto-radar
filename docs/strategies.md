@@ -187,6 +187,25 @@ Risk:
 - Short stop = breakout level + `1 ATR`
 - TP1 = `1.5R`
 - TP2 = `2.5R`
+- TP3 = measured move of the Donchian range
+
+Runtime implementation notes:
+
+- The strategy now requires full compression before a setup is visible:
+  `bb_width_percentile < threshold`, `ATR14 < ATR_SMA50`,
+  `range_20 < range_50_average`, and `range_20_atr <= max_squeeze_range_atr`.
+- Long/short breakout confirmation is based on candle close outside the
+  Donchian range, not wick penetration.
+- Strong candle close is configurable with `min_close_position`: long expects
+  close in the upper part of the candle, short in the lower part.
+- False-breakout filters include wick-only break, rejection wick ratio, weak
+  close, overlarge body, nearby higher-timeframe S/R from the shared regime
+  layer, and RR guard from strategy risk settings.
+- Signal metadata exposes both entries:
+  aggressive entry at breakout close, and conservative retest zone around the
+  Donchian breakout/breakdown level.
+- User-tunable params live in `user_strategy_configs.params`; no extra DB
+  columns are required for this MVP.
 
 ## Strategy 3: Liquidity Sweep Reversal
 

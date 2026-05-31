@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Mapping, Optional
 
 from app.schemas.market import Features
 from app.schemas.signal import SignalScoreBreakdown, StrategySignal
@@ -54,7 +54,11 @@ class TrendPullbackContinuationStrategy:
         "previous_low",
     ]
 
-    async def evaluate(self, features: Features) -> List[StrategySignal]:
+    async def evaluate(
+        self,
+        features: Features,
+        params: Mapping[str, Any] | None = None,
+    ) -> List[StrategySignal]:
         if not has_minimum_market_data(features, min_history=200):
             return []
 

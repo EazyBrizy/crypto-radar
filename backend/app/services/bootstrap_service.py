@@ -310,6 +310,17 @@ DEFAULT_STRATEGY_QUALITY_PARAMS: dict[str, Any] = {
     },
 }
 
+DEFAULT_SQUEEZE_BREAKOUT_PARAMS: dict[str, Any] = {
+    "bb_width_percentile_threshold": 20.0,
+    "volume_spike_multiplier": 1.5,
+    "min_close_position": 0.7,
+    "max_breakout_wick_ratio": 0.35,
+    "max_squeeze_range_atr": 5.0,
+    "watchlist_distance_atr": 0.6,
+    "breakout_stop_atr": 1.0,
+    "narrow_range_stop_atr": 0.5,
+}
+
 SEED_STRATEGY_VERSIONS: list[dict[str, Any]] = [
     {
         "strategy_code": "trend_pullback_continuation",
@@ -335,6 +346,7 @@ SEED_STRATEGY_VERSIONS: list[dict[str, Any]] = [
             "active_score": 70,
             "max_body_atr": 2.5,
             "max_range_atr": 3.5,
+            **DEFAULT_SQUEEZE_BREAKOUT_PARAMS,
             **DEFAULT_STRATEGY_QUALITY_PARAMS,
         },
         "required_data": [
@@ -588,6 +600,14 @@ def _seed_strategy_versions(
                 "max_spread_bps": {"type": "number", "minimum": 0},
                 "allow_low_liquidity": {"type": "boolean"},
                 "quality_tiers": {"type": "object"},
+                "bb_width_percentile_threshold": {"type": "number", "minimum": 0, "maximum": 100},
+                "volume_spike_multiplier": {"type": "number", "minimum": 0},
+                "min_close_position": {"type": "number", "minimum": 0, "maximum": 1},
+                "max_breakout_wick_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+                "max_squeeze_range_atr": {"type": "number", "minimum": 0},
+                "watchlist_distance_atr": {"type": "number", "minimum": 0},
+                "breakout_stop_atr": {"type": "number", "minimum": 0},
+                "narrow_range_stop_atr": {"type": "number", "minimum": 0},
             },
             "additionalProperties": True,
             "required_data": spec["required_data"],

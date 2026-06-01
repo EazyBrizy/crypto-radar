@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     derivative_snapshot_ttl_seconds: int = 120
     bybit_derivative_snapshot_categories: str = "linear"
     signal_active_ttl_seconds: int = 3_600
+    signal_outcome_tracking_min_score: int = 70
+    signal_outcome_same_candle_resolution: str = "stop_first"
 
 
 settings = Settings()

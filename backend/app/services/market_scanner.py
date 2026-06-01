@@ -37,6 +37,7 @@ from app.services.support_resistance import (
 from app.services.signal_lifecycle import SignalLifecycleWorker, signal_lifecycle_worker
 from app.services.trade_invalidation import TradeInvalidationMonitor, trade_invalidation_monitor
 from app.services.virtual_trading import virtual_trading_service
+from app.workers.signal_outcome_worker import SignalOutcomeWorker, signal_outcome_worker
 from app.strategies.engine import StrategyEngine
 from app.strategies.pipeline import MarketQualityInput, context_timeframe_for, context_timeframes_for
 
@@ -91,6 +92,7 @@ class MarketScanner:
         market_quality: MarketQualityService | None = market_quality_service,
         support_resistance: SupportResistanceService | None = support_resistance_service,
         signal_lifecycle: SignalLifecycleWorker | None = signal_lifecycle_worker,
+        signal_outcomes: SignalOutcomeWorker | None = signal_outcome_worker,
         trade_invalidation: TradeInvalidationMonitor | None = trade_invalidation_monitor,
         strategy_configs: StrategyConfigService | None = strategy_config_service,
         virtual_trading: VirtualTradingPriceUpdater | None = virtual_trading_service,
@@ -104,6 +106,7 @@ class MarketScanner:
         self._market_quality = market_quality
         self._support_resistance = support_resistance
         self._signal_lifecycle = signal_lifecycle
+        self._signal_outcomes = signal_outcomes
         self._trade_invalidation = trade_invalidation
         self._strategy_configs = strategy_configs
         self._virtual_trading = virtual_trading
@@ -306,6 +309,26 @@ class MarketScanner:
             include_open=False,
             limit=250,
         )
+        if candle_series and self._signal_outcomes is not None:
+            try:
+                updated_outcomes = await self._signal_outcomes.process_closed_candle(candle_series[-1])
+            except Exception as exc:
+                logger.warning(
+                    "Signal outcome lifecycle failed for %s:%s:%s: %s",
+                    candle.exchange,
+                    candle.symbol,
+                    candle.timeframe,
+                    exc,
+                )
+            else:
+                if updated_outcomes:
+                    logger.info(
+                        "Signal outcomes updated for %s:%s:%s: %s",
+                        candle.exchange,
+                        candle.symbol,
+                        candle.timeframe,
+                        len(updated_outcomes),
+                    )
         if len(candle_series) < 2:
             return
         features = await asyncio.to_thread(self._feature_engine.process_candles, candle_series)

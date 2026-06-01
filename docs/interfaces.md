@@ -66,6 +66,57 @@ from accumulated lifecycle PnL.
 Lifecycle state is persisted through the virtual trade metadata snapshot stored
 on the entry order. No database migration is required for v1.
 
+## Signal Outcome Labeling v1
+
+`SignalOutcome` records the observed result of every relevant strategy signal,
+independent from whether a user confirmed a real or virtual trade. Outcomes are
+stored in `signal_outcomes` and are keyed one-to-one by `signal_id` to avoid
+duplicate tracking for refreshed signals.
+
+Tracking is created only after a strategy signal is persisted and all of these
+conditions hold:
+
+- `score >= settings.signal_outcome_tracking_min_score`;
+- entry zone, stop loss, and at least one directional target are valid;
+- no outcome exists for the same persisted signal.
+
+`SignalOutcome.status` values:
+
+- `tracking`
+- `entry_touched`
+- `tp1`
+- `tp2`
+- `tp3`
+- `stop_loss`
+- `expired`
+- `invalidated`
+- `time_stop`
+
+`SignalOutcome.outcome` values:
+
+- `win`
+- `loss`
+- `breakeven`
+- `expired`
+- `invalidated`
+- `open`
+
+Closed candles update open outcomes by `exchange`, `symbol`, and `timeframe`.
+Entry touch is detected when candle high/low intersects the signal entry zone
+for both long and short signals. After entry is touched, MFE and MAE are stored
+in R units using the persisted entry price and stop distance. `bars_to_entry`
+and `bars_to_outcome` count processed closed candles since tracking started.
+
+Target/stop collisions inside the same candle use
+`settings.signal_outcome_same_candle_resolution`. The v1 default is
+`stop_first`; supported values are `stop_first`, `target_first`, and
+`ignore_ambiguous`.
+
+Expiry before entry closes the outcome as `expired` with `realized_r = 0`.
+Time stop metadata may be supplied by `trade_plan.metadata`,
+`trade_plan.risk_rules.metadata`, or `trade_plan.invalidation.metadata` via
+`time_stop`, `time_stop_at`, `expires_at`, `at`, or `max_holding_seconds`.
+
 ---
 
 # Rules

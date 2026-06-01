@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Numeric, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, Text
 from sqlalchemy import UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -88,6 +88,11 @@ class TradingSignal(Base):
         back_populates="signal",
         cascade="all, delete-orphan",
     )
+    outcome: Mapped["SignalOutcome | None"] = relationship(
+        back_populates="signal",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class TradingSignalEvent(Base):
@@ -123,6 +128,84 @@ class TradingSignalEvent(Base):
     signal: Mapped[TradingSignal] = relationship(back_populates="events")
 
 
+class SignalOutcome(Base):
+    __tablename__ = "signal_outcomes"
+    __table_args__ = (
+        CheckConstraint("length(trim(exchange)) > 0", name="ck_signal_outcomes_exchange_not_blank"),
+        CheckConstraint("length(trim(symbol)) > 0", name="ck_signal_outcomes_symbol_not_blank"),
+        CheckConstraint("length(trim(timeframe)) > 0", name="ck_signal_outcomes_timeframe_not_blank"),
+        CheckConstraint("length(trim(strategy)) > 0", name="ck_signal_outcomes_strategy_not_blank"),
+        CheckConstraint("direction IN ('long', 'short')", name="ck_signal_outcomes_direction"),
+        CheckConstraint(
+            "status IN ("
+            "'tracking', 'entry_touched', 'tp1', 'tp2', 'tp3', "
+            "'stop_loss', 'expired', 'invalidated', 'time_stop'"
+            ")",
+            name="ck_signal_outcomes_status",
+        ),
+        CheckConstraint(
+            "outcome IN ('win', 'loss', 'breakeven', 'expired', 'invalidated', 'open')",
+            name="ck_signal_outcomes_outcome",
+        ),
+        CheckConstraint("signal_score >= 0 AND signal_score <= 100", name="ck_signal_outcomes_signal_score"),
+        CheckConstraint("entry_price > 0", name="ck_signal_outcomes_entry_price_positive"),
+        CheckConstraint("stop_loss > 0", name="ck_signal_outcomes_stop_loss_positive"),
+        UniqueConstraint("signal_id", name="uq_signal_outcomes_signal_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    signal_id: Mapped[UUID] = mapped_column(
+        ForeignKey("trading_signals.id", name="fk_signal_outcomes_signal_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    exchange: Mapped[str] = mapped_column(Text, nullable=False)
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    timeframe: Mapped[str] = mapped_column(Text, nullable=False)
+    strategy: Mapped[str] = mapped_column(Text, nullable=False)
+    direction: Mapped[str] = mapped_column(Text, nullable=False)
+    signal_score: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    entry_min: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    entry_max: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    stop_loss: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    targets: Mapped[list[Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    selected_rr: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    realized_r: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, server_default=text("0"))
+    mfe_r: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, server_default=text("0"))
+    mae_r: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, server_default=text("0"))
+    bars_to_entry: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bars_to_outcome: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+
+    signal: Mapped[TradingSignal] = relationship(back_populates="outcome")
+
+
 Index("idx_trading_signals_active", TradingSignal.status, TradingSignal.detected_at.desc())
 Index(
     "idx_trading_signals_pair_time",
@@ -142,3 +225,11 @@ Index(
     TradingSignalEvent.event_type,
     TradingSignalEvent.created_at.desc(),
 )
+Index(
+    "idx_signal_outcomes_open_series",
+    SignalOutcome.exchange,
+    SignalOutcome.symbol,
+    SignalOutcome.timeframe,
+    SignalOutcome.outcome,
+)
+Index("idx_signal_outcomes_created_at", SignalOutcome.created_at.desc())

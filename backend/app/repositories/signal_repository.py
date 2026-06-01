@@ -17,6 +17,7 @@ from app.models.signal import TradingSignal, TradingSignalEvent
 from app.models.strategy import StrategyTemplate, StrategyVersion
 from app.schemas.signal import RadarSignal, SignalScoreBreakdown, StrategySignal
 from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
+from app.services.signal_outcome_service import SignalOutcomeService
 
 MAX_STORED_SIGNALS = 200
 OPEN_SIGNAL_STATUSES = (
@@ -134,8 +135,13 @@ class SignalRepository(Protocol):
 
 
 class PostgresSignalRepository:
-    def __init__(self, session_factory: sessionmaker[Session] = SessionLocal) -> None:
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session] = SessionLocal,
+        signal_outcomes: SignalOutcomeService | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._signal_outcomes = signal_outcomes or SignalOutcomeService(session_factory)
 
     def list_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
         with self._session_factory() as session:
@@ -351,6 +357,9 @@ class PostgresSignalRepository:
                 record.explanation = _explanation_text(explanation or signal.explanation)
                 record.updated_at = now
                 session.flush()
+
+            if record.status in OPEN_SIGNAL_STATUSES:
+                self._signal_outcomes.create_tracking_for_signal(record, session=session)
 
             result = _persist_signal_event(
                 session,

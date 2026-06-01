@@ -9,7 +9,7 @@ from app.models.portfolio import Order, OrderFill, Portfolio, PortfolioBalance
 from app.models.portfolio import PortfolioBalanceLedger, Position
 from app.models.risk import AssetRiskGroup, ExchangeInstrumentRule
 from app.models.risk import PositionRiskSnapshot, RiskDecisionRecord, RiskProtectionState
-from app.models.signal import TradingSignal, TradingSignalEvent
+from app.models.signal import SignalOutcome, TradingSignal, TradingSignalEvent
 from app.models.strategy import StrategyTemplate, StrategyVersion, UserStrategyConfig
 from app.models.trade_invalidation import TradeInvalidationAction
 from app.models.user import AppUser, SubscriptionPlan, UserProfile, UserSubscription
@@ -39,6 +39,7 @@ __all__ = [
     "RiskDecisionRecord",
     "RiskProtectionState",
     "SignalAIExplanation",
+    "SignalOutcome",
     "StrategyTemplate",
     "StrategyVersion",
     "SubscriptionPlan",

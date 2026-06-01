@@ -89,6 +89,8 @@ export function riskRewardWarningReason(signal: RadarSignal): string | null {
   if (isRiskRewardBlocked(signal)) return null;
   const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
   const metadata = check?.metadata ?? {};
+  const guardMode = stringMetadata(metadata, "risk_reward_guard_mode");
+  if (guardMode?.toLowerCase() === "off") return null;
   const selectedRr = signal.trade_plan?.risk_rules.selected_rr
     ?? signal.selected_rr
     ?? numberMetadata(metadata, "selected_rr");

@@ -412,8 +412,17 @@ class VirtualTradingService:
         open_user_positions: list[VirtualTrade],
     ) -> VirtualTrade:
         raw_entry = self._entry_price(signal)
-        rr_warning = signal_rr_warning_reason(signal)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
+        virtual_rr_guard_mode = resolve_rr_guard_mode(
+            risk_settings,
+            context="virtual",
+            strategy=signal.strategy,
+        )
+        rr_warning = (
+            None
+            if virtual_rr_guard_mode == "off"
+            else signal_rr_warning_reason(signal, respect_guard_mode=False)
+        )
         market_data = self._risk_market_snapshot(signal, request, raw_entry)
         fee_rate = self._risk_fee_snapshot(signal, request, risk_settings)
         gate_request = request.model_copy(
@@ -650,8 +659,17 @@ class VirtualTradingService:
         request: ManualConfirmRequest,
     ) -> _VirtualEntrySimulation:
         raw_entry = self._entry_price(signal)
-        rr_warning = signal_rr_warning_reason(signal)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
+        virtual_rr_guard_mode = resolve_rr_guard_mode(
+            risk_settings,
+            context="virtual",
+            strategy=signal.strategy,
+        )
+        rr_warning = (
+            None
+            if virtual_rr_guard_mode == "off"
+            else signal_rr_warning_reason(signal, respect_guard_mode=False)
+        )
         market_data = self._risk_market_snapshot(signal, request, raw_entry)
         fee_rate = self._risk_fee_snapshot(signal, request, risk_settings)
         gate_request = request.model_copy(

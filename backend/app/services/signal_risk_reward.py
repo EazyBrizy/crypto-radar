@@ -51,9 +51,16 @@ def signal_no_trade_block_reason(signal: SignalLike) -> str | None:
     return metadata_reason or check.reason or "No-trade filter blocked this entry."
 
 
-def signal_rr_warning_reason(signal: SignalLike) -> str | None:
+def signal_rr_warning_reason(
+    signal: SignalLike,
+    *,
+    respect_guard_mode: bool = True,
+) -> str | None:
     check = _confirmation_check(signal, "risk_reward_guard")
     metadata = check.metadata if check is not None else {}
+    guard_mode = _metadata_string(metadata, "risk_reward_guard_mode")
+    if respect_guard_mode and guard_mode is not None and _normalize_rr_guard_mode(guard_mode, "soft") == "off":
+        return None
 
     selected_rr = _first_number(
         metadata.get("selected_rr") if isinstance(metadata, Mapping) else None,
@@ -106,7 +113,7 @@ def ensure_signal_execution_eligible(
     if guard_mode != "hard":
         return
 
-    rr_reason = signal_rr_warning_reason(signal)
+    rr_reason = signal_rr_warning_reason(signal, respect_guard_mode=False)
     if rr_reason:
         raise StrategyRiskRewardBlocked(f"Execution RR policy rejected: {rr_reason}")
 
@@ -117,7 +124,7 @@ strategy_no_trade_block_reason = signal_no_trade_block_reason
 def strategy_rr_block_reason(signal: SignalLike, guard_mode: str = "hard") -> str | None:
     if _normalize_rr_guard_mode(guard_mode, "hard") != "hard":
         return None
-    return signal_rr_warning_reason(signal)
+    return signal_rr_warning_reason(signal, respect_guard_mode=False)
 
 
 def ensure_strategy_rr_eligible(signal: SignalLike, guard_mode: str = "hard") -> None:

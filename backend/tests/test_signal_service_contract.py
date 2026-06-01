@@ -133,6 +133,34 @@ class SignalServiceContractTest(unittest.TestCase):
         self.assertIn("0.80R", reason or "")
         self.assertIn("1.50R", reason or "")
 
+    def test_off_rr_guard_metadata_does_not_emit_warning_but_hard_execution_can_reject(self) -> None:
+        signal = _low_rr_signal().model_copy(
+            update={
+                "confirmation": SignalConfirmationSnapshot(
+                    passed=True,
+                    checks=[
+                        SignalLayerCheck(
+                            name="risk_reward_guard",
+                            status="skipped",
+                            metadata={
+                                "selected_rr": 0.8,
+                                "selected_rr_target": "nearest",
+                                "min_rr_ratio": 1.5,
+                                "risk_reward_guard_mode": "off",
+                                "risk_reward_warning": False,
+                                "risk_reward_blocked": False,
+                            },
+                        )
+                    ],
+                )
+            }
+        )
+
+        self.assertIsNone(signal_rr_warning_reason(signal))
+        ensure_signal_execution_eligible(signal, mode="virtual", rr_guard_mode="off")
+        with self.assertRaises(StrategyRiskRewardBlocked):
+            ensure_signal_execution_eligible(signal, mode="real", rr_guard_mode="hard")
+
     def test_radar_signal_keeps_legacy_fields_with_trade_plan(self) -> None:
         signal = RadarSignal(
             id=str(uuid4()),

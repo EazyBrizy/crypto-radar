@@ -99,6 +99,29 @@ class VirtualTradingServiceBoundaryTest(unittest.TestCase):
         self.assertIn("Execution RR policy rejected", exc.exception.reason)
         self.assertEqual(service.list_virtual_trades(), [])
 
+    def test_off_virtual_rr_guard_keeps_low_rr_metadata_without_warning(self) -> None:
+        service = _service(
+            RiskManagementSettings(
+                virtual_rr_guard_mode="off",
+                max_price_deviation_bps=0,
+            )
+        )
+
+        trade = service.open_virtual_trade(_low_rr_signal("sig_low_rr_off"), _request())
+
+        self.assertIsNotNone(trade.execution)
+        assert trade.execution is not None
+        self.assertIsNotNone(trade.execution.risk_decision)
+        assert trade.execution.risk_decision is not None
+        warning_text = " ".join([
+            *trade.execution.notes,
+            *trade.execution.risk_decision.warnings,
+        ])
+        self.assertNotIn("Risk/reward warning", warning_text)
+        self.assertFalse(trade.execution.risk_decision.risk_check.risk_reward_warning)
+        self.assertFalse(trade.execution.risk_decision.risk_check.risk_reward_blocked)
+        self.assertEqual(trade.execution.risk_decision.risk_check.risk_reward_guard_mode, "off")
+
     def test_legacy_failed_rr_guard_metadata_is_soft_warning_for_virtual_execution(self) -> None:
         service = _service(
             RiskManagementSettings(

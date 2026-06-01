@@ -139,4 +139,33 @@ describe("risk/reward display utilities", () => {
     expect(isRiskRewardBlocked(signal)).toBe(true);
     expect(riskRewardWarningReason(signal)).toBeNull();
   });
+
+  it("treats explicit off RR guard as metadata-only", () => {
+    const signal: RadarSignal = {
+      ...baseSignal,
+      selected_rr: 0.8,
+      min_rr_ratio: 1.5,
+      confirmation: {
+        passed: true,
+        checks: [
+          {
+            name: "risk_reward_guard",
+            status: "skipped",
+            score: 0.8,
+            reason: "Risk/reward guard is off: nearest target is 0.80R",
+            metadata: {
+              risk_reward_guard_mode: "off",
+              risk_reward_warning: false,
+              risk_reward_blocked: false,
+              selected_rr: 0.8,
+              min_rr_ratio: 1.5
+            }
+          }
+        ]
+      }
+    };
+
+    expect(isRiskRewardBlocked(signal)).toBe(false);
+    expect(riskRewardWarningReason(signal)).toBeNull();
+  });
 });

@@ -3,6 +3,8 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.trade_plan import TradePlan
+
 
 class SignalScoreBreakdown(BaseModel):
     trend_score: int = Field(default=0, ge=0)
@@ -139,7 +141,9 @@ class StrategySignal(BaseModel):
     confirmation: Optional[SignalConfirmationSnapshot] = None
     invalidation: Optional[SignalInvalidationSnapshot] = None
     exit_plan: Optional[SignalExitPlanSnapshot] = None
+    trade_plan: Optional[TradePlan] = None
     auto_entry: Optional[SignalAutoEntrySnapshot] = None
+
 
 class RadarSignal(BaseModel):
     id: str
@@ -175,6 +179,7 @@ class RadarSignal(BaseModel):
     confirmation: Optional[SignalConfirmationSnapshot] = None
     invalidation: Optional[SignalInvalidationSnapshot] = None
     exit_plan: Optional[SignalExitPlanSnapshot] = None
+    trade_plan: Optional[TradePlan] = None
     auto_entry: Optional[SignalAutoEntrySnapshot] = None
     created_at: datetime
     updated_at: datetime

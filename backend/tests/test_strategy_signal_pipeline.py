@@ -1,6 +1,7 @@
 import unittest
 
 from app.schemas.market import Features
+from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanTarget
 from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
 from app.strategies.common import build_signal, score_breakdown
 from app.strategies.engine import StrategyEngine
@@ -11,6 +12,85 @@ from app.services.support_resistance import SupportResistanceLevel, SupportResis
 
 
 class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
+    def test_strategy_signal_has_trade_plan_from_legacy_fields(self) -> None:
+        features = _breakout_features()
+
+        signal = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            scoring=score_breakdown(
+                trend_score=35,
+                volume_score=20,
+                volatility_score=20,
+                risk_reward_score=15,
+            ),
+            reasons=["Breakout setup"],
+            entry=features.close,
+            stop_loss=100.2,
+            take_profit_1=102.2,
+            take_profit_2=104.2,
+        )
+
+        self.assertIsNotNone(signal.trade_plan)
+        self.assertEqual(signal.trade_plan.entry.min_price if signal.trade_plan else None, signal.entry_min)
+        self.assertEqual(signal.trade_plan.entry.max_price if signal.trade_plan else None, signal.entry_max)
+        self.assertEqual(signal.trade_plan.stop_loss if signal.trade_plan else None, signal.stop_loss)
+        self.assertEqual(
+            [target.price for target in signal.trade_plan.targets] if signal.trade_plan else [],
+            [signal.take_profit_1, signal.take_profit_2],
+        )
+
+    def test_pipeline_creates_trade_plan_when_missing(self) -> None:
+        features = _breakout_features()
+        candidate = _quality_candidate(features).model_copy(update={"trade_plan": None})
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(signal_features=features, context_features=_bullish_context_features()),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertIsNotNone(signal.trade_plan if signal else None)
+        self.assertEqual(signal.trade_plan.stop_loss if signal and signal.trade_plan else None, signal.stop_loss)
+        self.assertEqual(
+            [target.label for target in signal.trade_plan.targets[:2]] if signal and signal.trade_plan else [],
+            ["TP1", "TP2"],
+        )
+        self.assertEqual(signal.trade_plan.targets[0].action if signal and signal.trade_plan else None, "partial_close")
+
+    def test_pipeline_enriches_existing_trade_plan_targets(self) -> None:
+        features = _breakout_features()
+        candidate = _quality_candidate(features).model_copy(
+            update={
+                "trade_plan": TradePlan(
+                    entry=TradePlanEntry(
+                        price=features.close,
+                        min_price=features.close,
+                        max_price=features.close,
+                        source="test",
+                    ),
+                    stop_loss=features.close - 1.0,
+                    targets=[
+                        TradePlanTarget(label="TP1", price=features.close + 2.0, source="test"),
+                        TradePlanTarget(label="TP2", price=features.close + 3.0, source="test"),
+                    ],
+                )
+            }
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(signal_features=features, context_features=_bullish_context_features()),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertIsNotNone(signal.trade_plan if signal else None)
+        targets = signal.trade_plan.targets if signal and signal.trade_plan else []
+        self.assertEqual(targets[0].action, "partial_close")
+        self.assertEqual(targets[0].close_percent, 40)
+        self.assertEqual(targets[-1].source, "range_measured_move")
+
     async def test_breakout_signal_is_enriched_with_six_layers(self) -> None:
         signals = await StrategyEngine().generate_signals(
             _breakout_features(),

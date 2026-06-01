@@ -107,6 +107,14 @@ from app.schemas.trade import (
     VirtualTrade,
     VirtualTradeResponse,
 )
+from app.schemas.trade_plan import (
+    TradePlan,
+    TradePlanEntry,
+    TradePlanInvalidation,
+    TradePlanRiskRules,
+    TradePlanTarget,
+    build_trade_plan_from_legacy_fields,
+)
 from app.schemas.user import (
     RiskManagementPatch,
     RiskManagementSettings,
@@ -196,6 +204,11 @@ __all__ = [
     "TradeInvalidationAlert",
     "TradeJournalEntry",
     "TradeJournalResponse",
+    "TradePlan",
+    "TradePlanEntry",
+    "TradePlanInvalidation",
+    "TradePlanRiskRules",
+    "TradePlanTarget",
     "TradeRequest",
     "Timeframe",
     "TrailingStopPlan",
@@ -207,6 +220,7 @@ __all__ = [
     "VirtualTrade",
     "VirtualTradeLifecycleEvent",
     "VirtualTradeResponse",
+    "build_trade_plan_from_legacy_fields",
     "normalized_topic_for",
     "raw_topic_for",
 ]

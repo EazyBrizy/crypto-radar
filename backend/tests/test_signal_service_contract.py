@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.repositories.signal_repository import OPEN_SIGNAL_STATUSES, SignalWriteResult
 from app.schemas.signal import RadarSignal
+from app.schemas.trade_plan import build_trade_plan_from_legacy_fields
 from app.services.signal_service import SignalService
 
 
@@ -62,6 +63,43 @@ class SpyHotStore:
 
 
 class SignalServiceContractTest(unittest.TestCase):
+    def test_radar_signal_keeps_legacy_fields_with_trade_plan(self) -> None:
+        signal = RadarSignal(
+            id=str(uuid4()),
+            symbol="BTCUSDT",
+            exchange="bybit",
+            strategy="trend_pullback_continuation",
+            direction="long",
+            confidence=0.82,
+            status="active",
+            score=82,
+            entry_min=100.0,
+            entry_max=101.0,
+            stop_loss=98.0,
+            take_profit_1=103.0,
+            take_profit_2=105.0,
+            risk_reward=2.5,
+            trade_plan=build_trade_plan_from_legacy_fields(
+                entry_min=100.0,
+                entry_max=101.0,
+                stop_loss=98.0,
+                take_profit_1=103.0,
+                take_profit_2=105.0,
+                risk_reward=2.5,
+            ),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        payload = signal.model_dump(mode="json")
+
+        self.assertEqual(payload["entry_min"], 100.0)
+        self.assertEqual(payload["entry_max"], 101.0)
+        self.assertEqual(payload["stop_loss"], 98.0)
+        self.assertEqual(payload["take_profit_1"], 103.0)
+        self.assertEqual(payload["take_profit_2"], 105.0)
+        self.assertEqual(payload["trade_plan"]["targets"][0]["label"], "TP1")
+
     def test_signal_writes_fan_out_to_analytics_and_hot_store(self) -> None:
         signal = RadarSignal(
             id=str(uuid4()),

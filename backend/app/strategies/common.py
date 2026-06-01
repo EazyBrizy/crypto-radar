@@ -2,6 +2,7 @@ from typing import Literal, Optional
 
 from app.schemas.market import Features
 from app.schemas.signal import SignalScoreBreakdown, StrategySignal
+from app.schemas.trade_plan import build_trade_plan_from_legacy_fields
 
 ACTIONABLE_SCORE = 70
 WATCHLIST_SCORE = 60
@@ -139,8 +140,11 @@ def build_signal(
     entry_padding = atr * 0.15
     entry_min = entry_price - entry_padding
     entry_max = entry_price + entry_padding
+    first_reward = max(0.0, _target_reward(direction, entry_price, take_profit_1))
     final_reward = max(0.0, _target_reward(direction, entry_price, take_profit_2))
-    risk_reward = final_reward / risk
+    first_target_rr = first_reward / risk
+    final_target_rr = final_reward / risk
+    risk_reward = final_target_rr
     if scoring is None:
         scoring = legacy_score_breakdown(score or 0)
     if scoring.risk_reward_score == 0:
@@ -149,6 +153,23 @@ def build_signal(
         )
     score = score_from_breakdown(scoring)
     scoring = scoring.model_copy(update={"total": score})
+
+    rounded_entry_min = _round_price(entry_min)
+    rounded_entry_max = _round_price(entry_max)
+    rounded_stop_loss = _round_price(stop_loss)
+    rounded_take_profit_1 = _round_price(take_profit_1)
+    rounded_take_profit_2 = _round_price(take_profit_2)
+    rounded_risk_reward = round(risk_reward, 2)
+    trade_plan = build_trade_plan_from_legacy_fields(
+        entry_min=rounded_entry_min,
+        entry_max=rounded_entry_max,
+        stop_loss=rounded_stop_loss,
+        take_profit_1=rounded_take_profit_1,
+        take_profit_2=rounded_take_profit_2,
+        risk_reward=rounded_risk_reward,
+        first_target_rr=round(first_target_rr, 2),
+        final_target_rr=rounded_risk_reward,
+    )
 
     return StrategySignal(
         exchange=features.exchange,
@@ -159,16 +180,17 @@ def build_signal(
         timestamp=features.timestamp,
         score=score,
         timeframe=timeframe or features.timeframe,
-        entry_min=_round_price(entry_min),
-        entry_max=_round_price(entry_max),
-        stop_loss=_round_price(stop_loss),
-        take_profit_1=_round_price(take_profit_1),
-        take_profit_2=_round_price(take_profit_2),
-        risk_reward=round(risk_reward, 2),
+        entry_min=rounded_entry_min,
+        entry_max=rounded_entry_max,
+        stop_loss=rounded_stop_loss,
+        take_profit_1=rounded_take_profit_1,
+        take_profit_2=rounded_take_profit_2,
+        risk_reward=rounded_risk_reward,
         urgency=urgency_from_score(score),
         explanation=reasons,
         risks=risks or [],
         score_breakdown=scoring,
+        trade_plan=trade_plan,
     )
 
 

@@ -15,6 +15,12 @@ from app.schemas.signal import (
     StrategySetupSnapshot,
     StrategySignal,
 )
+from app.schemas.trade_plan import (
+    TradePlan,
+    TradePlanInvalidation,
+    TradePlanTarget,
+    build_trade_plan_from_legacy_fields,
+)
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
@@ -159,6 +165,7 @@ class StrategySignalPipeline:
         signal: StrategySignal,
         context: StrategyEvaluationContext,
     ) -> StrategySignal | None:
+        signal = _ensure_trade_plan(signal)
         quality = MarketQualityFilter().evaluate(signal, context)
         if not quality.passed:
             return None
@@ -173,7 +180,14 @@ class StrategySignalPipeline:
             return None
         confirmation = ConfirmationLayer().evaluate(signal, context, risk_reward)
         invalidation = InvalidationLayer().build(signal, context)
-        exit_plan = ExitManagementLayer().build(signal, context)
+        exit_management = ExitManagementLayer()
+        exit_plan = exit_management.build(signal, context)
+        trade_plan = exit_management.enrich_trade_plan(
+            signal=signal,
+            exit_plan=exit_plan,
+            invalidation=invalidation,
+            risk_reward=risk_reward,
+        )
 
         status, status_reason = RiskInvalidationLayer().status(
             signal=signal,
@@ -226,12 +240,18 @@ class StrategySignalPipeline:
             if target is not None:
                 updates["entry_min"] = target.entry_min
                 updates["entry_max"] = target.entry_max
+                trade_plan = _sync_trade_plan_entry(
+                    trade_plan=trade_plan,
+                    entry_min=target.entry_min,
+                    entry_max=target.entry_max,
+                )
         if not risk_reward.passed:
             updates["auto_entry"] = SignalAutoEntrySnapshot(
                 enabled=False,
                 status="cancelled",
                 message=risk_reward.reason,
             )
+        updates["trade_plan"] = trade_plan
 
         return signal.model_copy(update=updates)
 
@@ -926,6 +946,101 @@ class ExitManagementLayer:
             ),
         }
         return SignalExitPlanSnapshot(targets=targets, breakeven=breakeven, trailing=trailing)
+
+    def enrich_trade_plan(
+        self,
+        *,
+        signal: StrategySignal,
+        exit_plan: SignalExitPlanSnapshot,
+        invalidation: SignalInvalidationSnapshot,
+        risk_reward: RiskRewardAssessment,
+    ) -> TradePlan:
+        trade_plan = signal.trade_plan or _trade_plan_from_signal(signal)
+        targets = [_trade_plan_target_from_exit_target(target) for target in exit_plan.targets]
+        risk_rules = trade_plan.risk_rules.model_copy(
+            update={
+                "risk_reward": signal.risk_reward,
+                "first_target_rr": risk_reward.first_target_rr,
+                "final_target_rr": risk_reward.final_target_rr,
+                "selected_rr": risk_reward.rr,
+                "selected_rr_target": risk_reward.target_key,
+                "min_rr_ratio": risk_reward.min_rr,
+            }
+        )
+        return trade_plan.model_copy(
+            update={
+                "targets": targets or trade_plan.targets,
+                "invalidation": TradePlanInvalidation.model_validate(
+                    invalidation.model_dump(mode="json")
+                ),
+                "risk_rules": risk_rules,
+            },
+            deep=True,
+        )
+
+
+def _ensure_trade_plan(signal: StrategySignal) -> StrategySignal:
+    if signal.trade_plan is not None:
+        return signal
+    return signal.model_copy(update={"trade_plan": _trade_plan_from_signal(signal)})
+
+
+def _trade_plan_from_signal(signal: StrategySignal) -> TradePlan:
+    return build_trade_plan_from_legacy_fields(
+        entry_min=signal.entry_min,
+        entry_max=signal.entry_max,
+        stop_loss=signal.stop_loss,
+        take_profit_1=signal.take_profit_1,
+        take_profit_2=signal.take_profit_2,
+        risk_reward=signal.risk_reward,
+        first_target_rr=signal.first_target_rr,
+        final_target_rr=signal.final_target_rr,
+        selected_rr=signal.selected_rr,
+        selected_rr_target=signal.selected_rr_target,
+        min_rr_ratio=signal.min_rr_ratio,
+    )
+
+
+def _sync_trade_plan_entry(
+    *,
+    trade_plan: TradePlan,
+    entry_min: float | None,
+    entry_max: float | None,
+) -> TradePlan:
+    entry = trade_plan.entry.model_copy(
+        update={
+            "price": _entry_price_from_bounds(entry_min, entry_max),
+            "min_price": entry_min,
+            "max_price": entry_max,
+        }
+    )
+    return trade_plan.model_copy(update={"entry": entry}, deep=True)
+
+
+def _entry_price_from_bounds(entry_min: float | None, entry_max: float | None) -> float | None:
+    if entry_min is not None and entry_max is not None:
+        return (entry_min + entry_max) / 2
+    return entry_min if entry_min is not None else entry_max
+
+
+def _trade_plan_target_from_exit_target(target: dict[str, Any]) -> TradePlanTarget:
+    metadata = {
+        key: value
+        for key, value in target.items()
+        if key not in {"label", "price", "r_multiple", "action", "close_percent", "source"}
+    }
+    existing_metadata = target.get("metadata")
+    if isinstance(existing_metadata, dict):
+        metadata.update(existing_metadata)
+    return TradePlanTarget(
+        label=str(target.get("label") or "target"),
+        price=_number_or_none(target.get("price")),
+        r_multiple=_number_or_none(target.get("r_multiple")),
+        action=str(target["action"]) if target.get("action") is not None else None,
+        close_percent=target.get("close_percent"),
+        source=str(target["source"]) if target.get("source") is not None else None,
+        metadata=metadata,
+    )
 
 
 def _apply_regime_score(signal: StrategySignal, regime: MarketRegimeSnapshot) -> StrategySignal:

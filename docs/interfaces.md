@@ -1,6 +1,17 @@
 # System Flow
 
-MarketData → Features → StrategySignal → ScoredSignal → Execution
+MarketData → Features → StrategySignal → TradePlan → RiskGate → Execution
+
+`TradePlan` is a backward-compatible v1 signal contract generated from the
+legacy signal entry/stop/target fields. Existing signal fields remain available:
+`entry_min`, `entry_max`, `stop_loss`, `take_profit_1`, `take_profit_2`,
+`risk_reward`, `first_target_rr`, `final_target_rr`, `selected_rr`,
+`selected_rr_target`, and `min_rr_ratio`.
+
+`TradePlan` is persisted in `features_snapshot.trade_plan` and restored to
+`StrategySignal.trade_plan` / `RadarSignal.trade_plan` when present. Risk gate
+and execution behavior continues to read the existing legacy fields in this
+patch.
 
 ---
 

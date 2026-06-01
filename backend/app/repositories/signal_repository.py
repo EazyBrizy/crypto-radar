@@ -16,6 +16,7 @@ from app.models.outbox import OutboxEvent
 from app.models.signal import TradingSignal, TradingSignalEvent
 from app.models.strategy import StrategyTemplate, StrategyVersion
 from app.schemas.signal import RadarSignal, SignalScoreBreakdown, StrategySignal
+from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
 
 MAX_STORED_SIGNALS = 200
 OPEN_SIGNAL_STATUSES = (
@@ -708,6 +709,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
     explanation = snapshot.get("explanation")
     risks = snapshot.get("risks")
     take_profit = record.take_profit or []
+    trade_plan = _trade_plan_from_snapshot_or_record(snapshot, record, take_profit)
     created_at = _as_utc(record.created_at or record.detected_at)
     updated_at = _as_utc(record.updated_at or created_at)
     status = record.status
@@ -743,6 +745,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         confirmation=snapshot.get("confirmation") if isinstance(snapshot.get("confirmation"), dict) else None,
         invalidation=snapshot.get("invalidation") if isinstance(snapshot.get("invalidation"), dict) else None,
         exit_plan=snapshot.get("exit_plan") if isinstance(snapshot.get("exit_plan"), dict) else None,
+        trade_plan=trade_plan,
         auto_entry=snapshot.get("auto_entry") if isinstance(snapshot.get("auto_entry"), dict) else None,
         created_at=created_at,
         updated_at=updated_at,
@@ -752,6 +755,29 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         decision_mode=decision.get("decision_mode"),
         decision_note=decision.get("decision_note"),
         confirmed_trade_id=decision.get("confirmed_trade_id"),
+    )
+
+
+def _trade_plan_from_snapshot_or_record(
+    snapshot: dict[str, Any],
+    record: TradingSignal,
+    take_profit: list[Any],
+) -> TradePlan:
+    trade_plan = snapshot.get("trade_plan")
+    if isinstance(trade_plan, dict):
+        return TradePlan.model_validate(trade_plan)
+    return build_trade_plan_from_legacy_fields(
+        entry_min=_float(snapshot.get("entry_min")),
+        entry_max=_float(snapshot.get("entry_max")),
+        stop_loss=_float(record.stop_loss),
+        take_profit_1=_float(take_profit[0]) if len(take_profit) > 0 else None,
+        take_profit_2=_float(take_profit[1]) if len(take_profit) > 1 else None,
+        risk_reward=_float(record.risk_reward),
+        first_target_rr=_float(snapshot.get("first_target_rr")),
+        final_target_rr=_float(snapshot.get("final_target_rr")),
+        selected_rr=_float(snapshot.get("selected_rr")),
+        selected_rr_target=_string_or_none(snapshot.get("selected_rr_target")),
+        min_rr_ratio=_float(snapshot.get("min_rr_ratio")),
     )
 
 
@@ -825,6 +851,8 @@ def _apply_signal_updates(
     record.take_profit = [price for price in take_profit if price is not None]
     if "risk_reward" in updates:
         record.risk_reward = _decimal(updates["risk_reward"])
+    if "trade_plan" in updates:
+        snapshot["trade_plan"] = _model_dump_optional(updates["trade_plan"])
     for key in (
         "confirmation",
         "first_target_rr",
@@ -865,6 +893,7 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "confirmation": _model_dump_optional(signal.confirmation),
         "invalidation": _model_dump_optional(signal.invalidation),
         "exit_plan": _model_dump_optional(signal.exit_plan),
+        "trade_plan": _trade_plan_snapshot(signal),
         "auto_entry": _model_dump_optional(signal.auto_entry),
         "decision": {
             "confirmed_trade_id": signal.confirmed_trade_id,
@@ -899,6 +928,7 @@ def _snapshot_from_strategy_signal(
         "confirmation": _model_dump_optional(signal.confirmation),
         "invalidation": _model_dump_optional(signal.invalidation),
         "exit_plan": _model_dump_optional(signal.exit_plan),
+        "trade_plan": _trade_plan_snapshot(signal),
         "auto_entry": _model_dump_optional(signal.auto_entry),
     }
 
@@ -970,6 +1000,23 @@ def _take_profit(signal: RadarSignal) -> list[float]:
 
 def _take_profit_from_strategy_signal(signal: StrategySignal) -> list[float]:
     return [price for price in (signal.take_profit_1, signal.take_profit_2) if price is not None]
+
+
+def _trade_plan_snapshot(signal: RadarSignal | StrategySignal) -> dict[str, Any]:
+    trade_plan = signal.trade_plan or build_trade_plan_from_legacy_fields(
+        entry_min=signal.entry_min,
+        entry_max=signal.entry_max,
+        stop_loss=signal.stop_loss,
+        take_profit_1=signal.take_profit_1,
+        take_profit_2=signal.take_profit_2,
+        risk_reward=signal.risk_reward,
+        first_target_rr=signal.first_target_rr,
+        final_target_rr=signal.final_target_rr,
+        selected_rr=signal.selected_rr,
+        selected_rr_target=signal.selected_rr_target,
+        min_rr_ratio=signal.min_rr_ratio,
+    )
+    return trade_plan.model_dump(mode="json")
 
 
 def _decimal(value: Any) -> Decimal | None:

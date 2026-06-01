@@ -9,12 +9,13 @@ import urllib.parse
 import urllib.request
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import websockets
 
 from app.schemas.candle import OHLCVCandle, Timeframe
 from app.schemas.market import MarketData
+from app.schemas.trade import ExecutionPlannedOrder
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,53 @@ class BybitPositionInfo:
     size: float | None
     liquidation_price: float | None
     raw_payload: dict
+
+
+class BybitRealExecutionAdapter:
+    """Future real Bybit execution adapter.
+
+    This skeleton intentionally does not submit, cancel, or fetch private order
+    state. Wire it only after real order submission has explicit tests and
+    secret handling.
+    """
+
+    name = "bybit_real"
+    is_dry_run = False
+
+    async def place_order(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
+        raise NotImplementedError("Bybit real order submission is not implemented")
+
+    async def place_protective_stop(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
+        raise NotImplementedError("Bybit protective stop submission is not implemented")
+
+    async def place_take_profit(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
+        raise NotImplementedError("Bybit take-profit submission is not implemented")
+
+    async def cancel_order(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        client_order_id: str,
+    ) -> ExecutionPlannedOrder | None:
+        raise NotImplementedError("Bybit real order cancellation is not implemented")
+
+    async def get_order(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        client_order_id: str,
+    ) -> ExecutionPlannedOrder | None:
+        raise NotImplementedError("Bybit real order lookup is not implemented")
+
+    async def get_position(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+    ) -> dict[str, Any] | None:
+        raise NotImplementedError("Bybit real position lookup is not implemented")
 
 
 def fetch_bybit_fee_rates(

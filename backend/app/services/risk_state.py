@@ -26,6 +26,8 @@ class RiskReferenceSnapshot:
     exchange_min_order_size: float | None = None
     exchange_max_order_size: float | None = None
     exchange_min_notional: float | None = None
+    exchange_qty_step: float | None = None
+    exchange_tick_size: float | None = None
     exchange_max_leverage: int | None = None
     exchange_rule_status: str = "unknown"
     exchange_rule_age_seconds: float | None = None
@@ -208,6 +210,8 @@ def _reference_from_session(
         exchange_min_order_size=_float_or_none(rule.min_order_size if rule else None),
         exchange_max_order_size=_float_or_none(rule.max_order_size if rule else None),
         exchange_min_notional=_float_or_none(rule.min_notional if rule else None),
+        exchange_qty_step=_float_or_none(rule.qty_step if rule else None),
+        exchange_tick_size=_float_or_none(rule.tick_size if rule else None),
         exchange_max_leverage=rule.max_leverage if rule else None,
         exchange_rule_status=rule_status,
         exchange_rule_age_seconds=rule_age_seconds,

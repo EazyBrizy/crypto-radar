@@ -339,6 +339,59 @@ Virtual execution does not hard-block on explicit unknown, insufficient, or
 weak edge snapshots, but the risk decision warns:
 `Edge is insufficient/unknown; virtual-only recommended.`
 
+## Real Execution Adapter v1
+
+Real execution keeps the existing backend risk-gate boundary and now adds a
+safe adapter layer before any production exchange integration:
+
+```text
+RealExecutionService -> ExchangeExecutionAdapter -> DryRunExecutionAdapter
+```
+
+`ExchangeExecutionAdapter` is an async protocol with these methods:
+
+- `place_order(order)`
+- `place_protective_stop(order)`
+- `place_take_profit(order)`
+- `cancel_order(exchange, symbol, client_order_id)`
+- `get_order(exchange, symbol, client_order_id)`
+- `get_position(exchange, symbol)`
+
+The default adapter is `DryRunExecutionAdapter`. It never sends exchange orders.
+It returns the planned entry, protective stop, and take-profit orders with
+stable `client_order_id` values and idempotency keys.
+
+`RealExecutionResult.status` keeps the existing `not_implemented` and
+`risk_failed` values and adds:
+
+- `dry_run`: the risk gate passed, a complete order plan was built, and the
+  dry-run adapter returned planned orders;
+- `submitted`: reserved for a future real adapter after explicit implementation.
+
+`RealExecutionResult` remains backward compatible and may include:
+
+- `execution_plan`: full real execution plan;
+- `planned_orders`: flattened list of planned adapter orders;
+- `idempotency_key`: stable key for the same signal/order intent;
+- `adapter`: adapter name such as `dry_run`;
+- `validation_errors`: execution-plan validation failures when present.
+
+`ExecutionPlannedOrder` records:
+
+- `role`: `entry`, `protective_stop`, or `take_profit`;
+- `side`: exchange order side, `buy` or `sell`;
+- `order_type`: `market`, `limit`, `stop`, or `take_profit`;
+- `quantity`, optional `price`, optional `stop_price`;
+- `reduce_only` for protective stop and take-profit orders;
+- optional `close_percent`;
+- `client_order_id`, `idempotency_key`, `status`, and `metadata`.
+
+Real execution must not place an order when no adapter is configured. In that
+case it returns `not_implemented` after the risk decision and execution plan are
+available. If exchange rule step sizes are available, quantity must align with
+`qty_step` and entry/stop/take-profit prices must align with `tick_size` before
+adapter methods are called.
+
 ## L2 Orderbook Market Quality v1
 
 `OrderbookSnapshotWorker` refreshes configured/watchlist Bybit symbols and

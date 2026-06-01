@@ -85,6 +85,9 @@ class SignalAutoEntryService:
         elif real_execution.status == "risk_failed":
             message = real_execution.message
             status = "failed"
+        elif real_execution.status == "dry_run":
+            message = real_execution.message
+            status = "failed"
         else:
             message = "Real auto-entry attempt finished"
             status = "triggered"

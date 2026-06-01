@@ -42,6 +42,17 @@ VirtualSimulationCapabilityStatus = Literal["active", "planned", "stub"]
 VirtualExecutionStatus = Literal["filled", "partially_filled", "rejected_virtual_execution"]
 ImpactRisk = Literal["low", "medium", "high"]
 ExecutionGateStatus = Literal["passed", "warning", "blocked"]
+ExecutionOrderRole = Literal["entry", "protective_stop", "take_profit"]
+ExecutionOrderSide = Literal["buy", "sell"]
+ExecutionOrderType = Literal["market", "limit", "stop", "take_profit"]
+ExecutionOrderStatus = Literal[
+    "planned",
+    "dry_run",
+    "submitted",
+    "cancelled",
+    "rejected",
+    "unknown",
+]
 
 
 class OrderBookLevel(BaseModel):
@@ -92,6 +103,38 @@ class ExecutionQualityGate(BaseModel):
     blockers: list[str] = Field(default_factory=list)
     suggested_max_size_usd: Optional[float] = Field(default=None, ge=0)
     message: Optional[str] = None
+
+
+class ExecutionPlannedOrder(BaseModel):
+    role: ExecutionOrderRole
+    exchange: str
+    symbol: str
+    side: ExecutionOrderSide
+    order_type: ExecutionOrderType
+    quantity: float = Field(..., gt=0)
+    price: Optional[float] = Field(default=None, gt=0)
+    stop_price: Optional[float] = Field(default=None, gt=0)
+    reduce_only: bool = False
+    close_percent: Optional[float] = Field(default=None, ge=0, le=100)
+    time_in_force: Optional[str] = None
+    client_order_id: str = Field(..., min_length=1)
+    idempotency_key: str = Field(..., min_length=1)
+    status: ExecutionOrderStatus = "planned"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RealExecutionPlan(BaseModel):
+    exchange: str
+    symbol: str
+    side: TradeSide
+    entry_price: float = Field(..., gt=0)
+    quantity: float = Field(..., gt=0)
+    notional: float = Field(..., gt=0)
+    leverage: int = Field(..., ge=1)
+    idempotency_key: str = Field(..., min_length=1)
+    client_order_id: str = Field(..., min_length=1)
+    planned_orders: list[ExecutionPlannedOrder] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class VirtualSimulationCapability(BaseModel):
@@ -336,12 +379,17 @@ class VirtualTrade(BaseModel):
 
 class RealExecutionResult(BaseModel):
     mode: Literal["real"] = "real"
-    status: Literal["not_implemented", "risk_failed"] = "not_implemented"
+    status: Literal["not_implemented", "risk_failed", "dry_run", "submitted"] = "not_implemented"
     exchange: str
     symbol: str
     message: str
     risk_decision: Optional[RiskDecision] = None
     risk_decision_id: Optional[str] = None
+    execution_plan: Optional[RealExecutionPlan] = None
+    planned_orders: list[ExecutionPlannedOrder] = Field(default_factory=list)
+    idempotency_key: Optional[str] = None
+    adapter: Optional[str] = None
+    validation_errors: list[str] = Field(default_factory=list)
 
 
 class ManualDecisionResponse(BaseModel):

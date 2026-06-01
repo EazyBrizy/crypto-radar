@@ -1,6 +1,59 @@
 # System Flow
 
-MarketData → Features → StrategySignal → TradePlan → RiskGate → Execution
+MarketData -> Features -> StrategySignal -> TradePlan -> Pipeline checks -> RiskGate -> Virtual/Real Execution -> Outcome Labeling -> Strategy Performance -> EV Gate
+
+## Operating Flow v3.4
+
+The canonical trading flow is:
+
+```text
+MarketData
+-> Features
+-> StrategySignal
+-> TradePlan
+-> Pipeline checks
+-> RiskGate
+-> Virtual/Real Execution
+-> Outcome Labeling
+-> Strategy Performance
+-> EV Gate
+```
+
+Boundary rules:
+
+- `MarketData` is raw exchange/watchlist data and must not contain strategy or
+  risk decisions.
+- `Features` are deterministic derived values calculated from market data only.
+- `StrategySignal` is pure strategy output: setup, direction, score,
+  explanation, entry/stop/target candidates, confirmations, and no-trade
+  context. Strategies must not read/write DB, call APIs, or execute trades.
+- `TradePlan` normalizes executable entry, stop, target, invalidation, and risk
+  metadata from a strategy signal while keeping legacy signal fields available.
+- Pipeline checks apply shared quality gates such as RR guard, regime,
+  confirmation, freshness, no-trade filters, market quality, and actionability.
+- `RiskGate` is the single business boundary for virtual and real entry
+  decisions. It consumes `RiskContext`, `TradePlan`, market quality, edge, and
+  configured user risk settings.
+- Virtual execution may be used for research and simulation after the risk gate
+  decision. Real execution requires all real-entry gates to pass before any
+  adapter can submit an order.
+- `Outcome Labeling` observes persisted signals on closed candles and records
+  entry touch, TP/SL/invalidation/expiry, R outcome, MFE, and MAE.
+- `Strategy Performance` aggregates closed outcomes into daily strategy,
+  regime, score-bucket, and direction analytics.
+- `EV Gate` calibrates future signals from historical/forward outcomes. It does
+  not rewrite the heuristic score; it produces the `edge` snapshot consumed by
+  real-entry risk checks.
+
+Real execution eligibility is stricter than virtual research. A real entry must
+have: `risk passed`, `RR passed`, no hard no-trade result, positive edge,
+sufficient edge sample size, fresh market data, valid orderbook, a valid
+liquidation price/buffer for futures, available protective orders, and valid
+exchange rules.
+
+Virtual execution may continue to surface research warnings for unknown or weak
+edge, but it must not be confused with production permission to send exchange
+orders.
 
 ## Backtest Runner v1
 

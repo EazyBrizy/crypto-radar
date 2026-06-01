@@ -312,3 +312,207 @@ TP1
 TP2
 Invalidation
 ```
+
+## Strategy Operating Playbook v3.4
+
+All strategies remain pure trading logic. They read `Features`, return
+`StrategySignal` plus optional `TradePlan` metadata, and do not call DB, API,
+execution adapters, or risk services.
+
+Shared lifecycle:
+
+```text
+MarketData -> Features -> StrategySignal -> TradePlan -> Pipeline checks
+-> RiskGate -> Virtual/Real Execution -> Outcome Labeling
+-> Strategy Performance -> EV Gate
+```
+
+### trend_pullback_continuation
+
+Idea:
+
+- Join an established trend after a controlled pullback instead of chasing the
+  impulse candle.
+
+Entry model:
+
+- Long setup expects trend alignment above EMA200 with EMA20 above EMA50 and a
+  pullback into the EMA20/EMA50 zone.
+- Short setup mirrors that structure below EMA200 with EMA20 below EMA50.
+- Preferred executable entry is a confirmation/retest entry from the pullback
+  zone; aggressive entry metadata may exist but must be explicit.
+
+Invalidation:
+
+- Long invalidates when price loses the pullback structure or breaks below the
+  recent swing low/structure stop.
+- Short invalidates when price reclaims above the recent swing high/structure
+  stop.
+- Time stop may be supplied through `TradePlan.risk_rules.metadata` when the
+  pullback does not continue within the configured holding window.
+
+Targets:
+
+- TP1: first structure-aware target, usually around `1R` or nearby liquidity.
+- TP2: continuation target around `2R` or the next structure level.
+- Optional runner/trailing metadata can be used after continuation is confirmed.
+
+Good regime:
+
+- Directional trend, EMA stack aligned, ADX stable or rising, healthy volume,
+  and no extreme funding against the trade.
+
+Bad regime:
+
+- EMA200 chop, flat/mean-reverting range, exhausted extension far from EMA20/50,
+  crowded funding/open-interest conditions, or major HTF obstacle directly in
+  front of entry.
+
+Required confirmations:
+
+- Trend alignment.
+- Pullback zone touched or reclaimed.
+- Directional candle confirmation.
+- Volume confirmation.
+- RR guard passed.
+- HTF alignment when configured.
+
+No-trade filters:
+
+- overextended entry;
+- near higher-timeframe obstacle;
+- extreme funding in the trade direction;
+- crowded open-interest warning/block when configured;
+- low liquidity, high spread, or high slippage;
+- negative/insufficient edge for real entry.
+
+Expected holding period:
+
+- Multi-candle continuation; usually longer than squeeze breakouts and shorter
+  than broad position-trend systems. Use configured time-stop metadata instead
+  of hardcoded bars.
+
+### volatility_squeeze_breakout
+
+Idea:
+
+- Trade expansion after volatility compression, only when the breakout has
+  enough close quality, volume, and RR to avoid random wick breaks.
+
+Entry model:
+
+- Aggressive entry: breakout candle closes beyond the Donchian/compression
+  boundary with required volume and close-position quality.
+- Conservative entry: wait for retest of the broken level after a large candle
+  or when strategy params require retest.
+- Entry metadata must identify whether the executable plan is
+  `aggressive_breakout` or `conservative_retest`.
+
+Invalidation:
+
+- Breakout closes back inside the compression range.
+- Retest fails and accepts price back inside the old range.
+- Follow-through candle reverses through the breakout level.
+- Overlarge candle requires retest or blocks the setup, depending on params.
+
+Targets:
+
+- TP1: around `1.5R` or first post-breakout liquidity.
+- TP2: around `2.5R`.
+- TP3: measured move from the Donchian/compression range when enabled and valid.
+
+Good regime:
+
+- Clear compression, low BB width percentile, range contraction, ATR ready to
+  expand, volume expansion, and no immediate HTF obstacle.
+
+Bad regime:
+
+- News-like oversized candle, wick-only breakout, low-liquidity symbols, wide
+  spread, choppy fakeout environment, or breakout directly into major
+  resistance/support.
+
+Required confirmations:
+
+- Compression passed.
+- Directional close outside range.
+- Volume spike.
+- Close in directional candle area.
+- ATR expansion or configured volatility confirmation.
+- RR guard passed.
+
+No-trade filters:
+
+- candle body above configured ATR threshold;
+- wick-only or weak-close breakout;
+- nearby HTF obstacle;
+- high spread/slippage or insufficient depth;
+- no open-interest expansion when configured as required;
+- negative/insufficient edge for real entry.
+
+Expected holding period:
+
+- Short to medium momentum burst. Conservative retest entries can hold longer
+  than aggressive breakout entries; exact limits should come from params.
+
+### liquidity_sweep_reversal
+
+Idea:
+
+- Trade a failed break of visible liquidity when price sweeps a swing/equal
+  high or low and then reclaims back into the range.
+
+Entry model:
+
+- Aggressive entry: sweep plus reclaim/rejection on the same candle with wick,
+  volume, and close-quality confirmation.
+- Conservative entry: next candle breaks micro-structure in the reversal
+  direction after the sweep.
+- The plan should expose swept level, sweep extreme, reclaim state, and
+  confirmation zone in metadata.
+
+Invalidation:
+
+- Price accepts beyond the swept level instead of reclaiming.
+- Next candle continues the breakout.
+- Reversal fails before reaching midpoint target.
+- Opposing trend pressure or HTF structure invalidates the reversal thesis.
+
+Targets:
+
+- TP1: range midpoint.
+- TP2: opposite range boundary.
+- TP3/runner: optional micro-BOS/ATR trailing target when continuation develops.
+
+Good regime:
+
+- Range or late-trend liquidity event, visible swing/equal highs/lows, strong
+  rejection wick, absorption/flush evidence, and room back to range midpoint.
+
+Bad regime:
+
+- Clean trend breakout, weak wick/reclaim, no visible liquidity level, thin
+  orderbook, high spread, or strong HTF trend directly against the reversal.
+
+Required confirmations:
+
+- Valid visible liquidity level.
+- Sweep of that level.
+- Reclaim or configured absorption confirmation.
+- Directional wick and close quality.
+- Volume confirmation.
+- RR guard passed.
+
+No-trade filters:
+
+- no reclaim when reclaim is required;
+- no absorption when absorption is required;
+- obstacle too close relative to R;
+- strong trend continuation against the reversal;
+- low liquidity, high spread, or high slippage;
+- negative/insufficient edge for real entry.
+
+Expected holding period:
+
+- Usually mean-reversion back into the range. TP1 can be fast; runners should be
+  controlled by configured trailing/time-stop metadata.

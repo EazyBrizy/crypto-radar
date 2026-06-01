@@ -10,6 +10,43 @@ are now auditable through `risk_decisions`. `risk_protection_state`,
 `asset_risk_groups`, and cached exchange instrument rules are wired into the
 backend risk context, with some production automation still outstanding below.
 
+## Virtual Vs Real Gates
+
+Virtual and real entries share the same `RiskGateService`, but they do not have
+the same operating meaning.
+
+Virtual trading:
+
+- is allowed as a research/simulation path after the risk decision is recorded;
+- may surface warnings for weak, unknown, or insufficient edge;
+- may be used to study lifecycle behavior, fill assumptions, and strategy
+  outcomes;
+- must still respect hard blockers such as invalid trade plans, failed RR guard,
+  blocked no-trade filters, impossible stops/targets, and account protection
+  states that block virtual entries.
+
+Real trading:
+
+- requires the risk decision to pass;
+- requires the strategy RR guard to pass;
+- requires no hard no-trade filter;
+- requires `edge.status == positive`;
+- requires edge `sample_size >= edge_min_sample_size`;
+- requires `expectancy_after_costs_r` to be greater than the configured minimum;
+- requires fresh market data when `real_requires_fresh_market_data` is enabled;
+- requires a valid orderbook/depth snapshot for liquidity and spread checks;
+- requires fresh exchange rules and valid order-size/price constraints;
+- requires protective stop/take-profit orders to be available in the execution
+  plan;
+- for futures, requires a valid liquidation price or liquidation-buffer check
+  before entry can be treated as production-safe;
+- for spot, enforces the configured `spot_max_position_size_percent` cap.
+
+Real execution must never downgrade these failures into research warnings. If a
+real gate fails, the adapter must not submit an exchange order. Virtual can help
+generate evidence for strategy calibration, but positive EV with enough sample
+size is required before a signal is eligible for real entry.
+
 ## Storage
 
 PostgreSQL remains the source of truth:
@@ -188,15 +225,10 @@ while the module is being built step by step.
 - Implement real structure-stop detection instead of using only the signal stop:
   swing low/high, liquidity zone, order block, support/resistance, VWAP
   deviation, and local extrema.
-- Execute partial take-profit exits. TP1/TP2/TP3 plans include close percentages
-  and actions, but virtual trades still close fully on the final take-profit
-  target.
-- Actually move stop to breakeven after the configured R trigger. The
-  `BreakevenPlan` is calculated and exposed, but open trades do not yet mutate
-  their stop-loss automatically.
-- Actually apply trailing stop after TP2 or another activation rule. The
-  `TrailingStopPlan` is calculated and exposed, but open trades do not yet trail
-  their stop-loss.
+- Wire the same protective-order lifecycle into a future real exchange adapter.
+  Virtual lifecycle already records partial take-profit, breakeven, trailing,
+  and time-stop events; real trading still needs exchange-native protective
+  order placement and reconciliation before production submission.
 
 ### Real Trading
 
@@ -564,7 +596,10 @@ Current behavior:
 - structure stop uses the signal stop-loss as the structure source when one is
   available;
 - ATR stop calculation is available to callers that pass `atr_value`;
-- open virtual trades store TP1/TP2/TP3 risk-multiple target prices.
+- open virtual trades store TP1/TP2/TP3 risk-multiple target prices;
+- lifecycle-aware virtual trades store target states and record partial
+  take-profit, breakeven-stop, trailing-stop, and time-stop events when the
+  candle path reaches those rules.
 
 ## Breakeven, Trailing Stop, And Futures Guard
 
@@ -581,6 +616,8 @@ Current behavior:
 
 - virtual execution previews and opened virtual trades include these plans in
   the execution report;
+- virtual lifecycle can move `current_stop_loss`, mark breakeven/trailing state,
+  and persist lifecycle events on the entry-order metadata snapshot;
 - `max_leverage` is enforced for virtual entries;
 - if `liquidation_price` is provided, the guard blocks trades where liquidation
   can happen before stop-loss or where the stop-to-liquidation buffer is below

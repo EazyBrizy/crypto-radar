@@ -22,6 +22,88 @@ Rules:
 - `60-69`: visible watchlist/ready setup.
 - `<60`: usually hidden unless a strategy has a lower visible setup threshold.
 
+## Heuristic Score Vs EV
+
+The 0-100 score is a heuristic quality score. It ranks how well the current
+setup matches the strategy model, market regime, confirmations, liquidity, and
+RR quality. It is useful for sorting, UI explanation, watchlist state, and
+pipeline gating.
+
+Expected value is a separate calibration layer. The EV gate reads historical
+and forward outcomes from strategy performance analytics and produces a
+`SignalEdgeSnapshot`. EV must not rewrite the heuristic `score`; it answers a
+different question: whether similar signals have enough evidence of positive
+expectancy after costs.
+
+Real entries require both layers:
+
+- heuristic score high enough for the pipeline and strategy status;
+- RR guard passed;
+- no hard no-trade filter;
+- positive edge after costs;
+- enough edge sample size;
+- fresh market data and valid execution context.
+
+Virtual research may continue with unknown or insufficient edge warnings, but
+real execution must not.
+
+## Edge Snapshot
+
+`SignalEdgeSnapshot` is the per-signal EV summary attached to
+`StrategySignal.edge` and `RadarSignal.edge`.
+
+Fields:
+
+- `status`: `unknown`, `positive`, `negative`, or `insufficient_sample`;
+- `sample_size` and `min_sample_size`;
+- `winrate`;
+- `avg_win_r` and `avg_loss_r`;
+- `expectancy_r`;
+- `expectancy_after_costs_r`;
+- `profit_factor`;
+- `confidence_score`;
+- `source`: `outcome`, `backtest`, `mixed`, or `none`;
+- `score_bucket`;
+- `metadata`.
+
+`expectancy_after_costs_r` is the value consumed by the real EV gate. Missing
+cost conversion should be explicit in metadata rather than silently treated as a
+production-quality estimate.
+
+## Score Buckets
+
+Strategy performance aggregation groups signals into score buckets:
+
+- `0-49`
+- `50-59`
+- `60-69`
+- `70-79`
+- `80-89`
+- `90-100`
+
+The EV lookup should prefer the most specific available profile:
+strategy/exchange/symbol/timeframe/regime/score bucket first, then broader
+fallbacks when the exact sample is insufficient.
+
+## Real Entry Requirements
+
+A real entry is eligible only when:
+
+- the signal is actionable after shared pipeline checks;
+- RR passed against the selected `TradePlan` target;
+- `no_trade_filter.blocked` is false;
+- edge exists and is positive;
+- edge sample size meets `edge_min_sample_size`;
+- `expectancy_after_costs_r > min_expectancy_after_costs_r`;
+- market data is fresh;
+- orderbook spread/depth/slippage checks pass;
+- exchange rules are fresh and valid;
+- futures liquidation buffer is valid when trading futures;
+- protective orders are available in the execution plan.
+
+These requirements are business rules in services/risk gates, not strategy
+formulas and not frontend-only checks.
+
 ## Volatility Squeeze Breakout
 
 Target score budget is 100 max.

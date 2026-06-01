@@ -79,12 +79,40 @@ Strategy runtime params include:
 - `volatility_squeeze_breakout.require_retest_after_large_candle`
 - `volatility_squeeze_breakout.large_candle_body_atr`
 - `volatility_squeeze_breakout.measured_move_target_enabled`
+- `volatility_squeeze_breakout.oi_expansion_threshold`
+- `volatility_squeeze_breakout.oi_expansion_bonus`
+- `volatility_squeeze_breakout.oi_no_expansion_penalty`
 - `liquidity_sweep_reversal.require_reclaim`
 - `liquidity_sweep_reversal.require_absorption`
 - `liquidity_sweep_reversal.max_obstacle_distance_r`
+- `liquidity_sweep_reversal.oi_flush_threshold`
+- `liquidity_sweep_reversal.oi_flush_bonus`
+- `trend_pullback_continuation.funding_warning_threshold`
+- `trend_pullback_continuation.funding_block_threshold`
+- `trend_pullback_continuation.crowded_oi_change_threshold`
+- `trend_pullback_continuation.crowded_oi_penalty`
 
 `Features` may expose intraday range context for level-aware strategies:
 `session_high`, `session_low`, `previous_day_high`, and `previous_day_low`.
+
+`Features` may expose derivative context when a hot derivative snapshot is
+available:
+
+- `funding_rate`: current exchange funding rate;
+- `oi_change`: fractional open-interest change versus the previous derivative
+  snapshot, or `None` when current or previous open interest is unavailable.
+
+`DerivativeMarketSnapshot` keeps backward-compatible market context fields and
+may include:
+
+- `open_interest`
+- `open_interest_value`
+- `oi_change`
+
+`oi_change` is calculated only from real exchange-provided open interest:
+`(current_open_interest - previous_open_interest) / previous_open_interest`.
+It remains `None` when the exchange omits open interest or no previous open
+interest exists.
 
 Risk gate consumes `RiskContext.trade_plan` when it is present. Take-profit
 precedence is:

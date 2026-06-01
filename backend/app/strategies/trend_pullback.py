@@ -22,6 +22,8 @@ MAX_ENTRY_CANDLE_ATR = 2.5
 STOP_ATR_BUFFER = 0.5
 FUNDING_WARNING_THRESHOLD = 0.00075
 FUNDING_BLOCK_THRESHOLD = 0.0015
+DEFAULT_CROWDED_OI_CHANGE_THRESHOLD = 0.02
+DEFAULT_CROWDED_OI_PENALTY = 15
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,8 @@ class _TrendPullbackState:
     pullback_volume_contracting: bool
     structure_intact: bool
     funding_warning: bool
+    funding_extreme: bool
+    crowded_oi: bool
     late_entry: bool
     entry_candle_too_large: bool
     nearest_ema: float | None
@@ -71,7 +75,7 @@ class TrendPullbackContinuationStrategy:
         if setup is None:
             return []
 
-        scoring, reasons, risks = self._score(features, setup)
+        scoring, reasons, risks = self._score(features, setup, strategy_params)
         atr = self._atr(features)
         entry = self._entry_anchor(features, setup)
         stop_loss = self._stop_loss(features, setup.direction, atr)
@@ -138,7 +142,8 @@ class TrendPullbackContinuationStrategy:
             return None
         if self._ema_stack_is_tangled(features):
             return None
-        if self._funding_extremely_against(features, direction):
+        funding_extreme = self._funding_extremely_against(features, direction, params)
+        if funding_extreme and features.oi_change is None:
             return None
         if self._two_sided_wicks_are_noisy(features):
             return None
@@ -148,7 +153,8 @@ class TrendPullbackContinuationStrategy:
         rsi_cooled = self._rsi_cooled(features, direction)
         pullback_volume_contracting = self._pullback_volume_contracting(features)
         structure_intact = self._structure_intact(features, direction)
-        funding_warning = self._funding_against_warning(features, direction)
+        funding_warning = self._funding_against_warning(features, direction, params)
+        crowded_oi = self._crowded_oi(features, params)
         trigger = self._trigger(features, direction)
         max_overextension_atr = _numeric_param(params, "max_overextension_atr", LATE_ENTRY_EMA20_ATR)
         late_entry = self._late_entry(features, max_overextension_atr)
@@ -174,6 +180,8 @@ class TrendPullbackContinuationStrategy:
                 pullback_volume_contracting=pullback_volume_contracting,
                 structure_intact=structure_intact,
                 funding_warning=funding_warning,
+                funding_extreme=funding_extreme,
+                crowded_oi=crowded_oi,
                 late_entry=late_entry,
                 entry_candle_too_large=entry_candle_too_large,
                 nearest_ema=nearest_ema,
@@ -193,6 +201,8 @@ class TrendPullbackContinuationStrategy:
                 pullback_volume_contracting=True,
                 structure_intact=True,
                 funding_warning=funding_warning,
+                funding_extreme=funding_extreme,
+                crowded_oi=crowded_oi,
                 late_entry=False,
                 entry_candle_too_large=entry_candle_too_large,
                 nearest_ema=nearest_ema,
@@ -219,6 +229,8 @@ class TrendPullbackContinuationStrategy:
                 pullback_volume_contracting=pullback_volume_contracting,
                 structure_intact=True,
                 funding_warning=funding_warning,
+                funding_extreme=funding_extreme,
+                crowded_oi=crowded_oi,
                 late_entry=False,
                 entry_candle_too_large=entry_candle_too_large,
                 nearest_ema=nearest_ema,
@@ -238,6 +250,8 @@ class TrendPullbackContinuationStrategy:
                 pullback_volume_contracting=pullback_volume_contracting,
                 structure_intact=True,
                 funding_warning=funding_warning,
+                funding_extreme=funding_extreme,
+                crowded_oi=crowded_oi,
                 late_entry=False,
                 entry_candle_too_large=entry_candle_too_large,
                 nearest_ema=nearest_ema,
@@ -256,6 +270,8 @@ class TrendPullbackContinuationStrategy:
             pullback_volume_contracting=pullback_volume_contracting,
             structure_intact=True,
             funding_warning=funding_warning,
+            funding_extreme=funding_extreme,
+            crowded_oi=crowded_oi,
             late_entry=False,
             entry_candle_too_large=entry_candle_too_large,
             nearest_ema=nearest_ema,
@@ -298,19 +314,41 @@ class TrendPullbackContinuationStrategy:
             and abs(features.ema_50 - features.ema_200) < atr * 0.1
         )
 
-    def _funding_extremely_against(self, features: Features, direction: Literal["LONG", "SHORT"]) -> bool:
+    def _funding_extremely_against(
+        self,
+        features: Features,
+        direction: Literal["LONG", "SHORT"],
+        params: Mapping[str, Any],
+    ) -> bool:
         if features.funding_rate is None:
             return False
+        threshold = _numeric_param(params, "funding_block_threshold", FUNDING_BLOCK_THRESHOLD)
         if direction == "LONG":
-            return features.funding_rate >= FUNDING_BLOCK_THRESHOLD
-        return features.funding_rate <= -FUNDING_BLOCK_THRESHOLD
+            return features.funding_rate >= threshold
+        return features.funding_rate <= -threshold
 
-    def _funding_against_warning(self, features: Features, direction: Literal["LONG", "SHORT"]) -> bool:
+    def _funding_against_warning(
+        self,
+        features: Features,
+        direction: Literal["LONG", "SHORT"],
+        params: Mapping[str, Any],
+    ) -> bool:
         if features.funding_rate is None:
             return False
+        threshold = _numeric_param(params, "funding_warning_threshold", FUNDING_WARNING_THRESHOLD)
         if direction == "LONG":
-            return features.funding_rate >= FUNDING_WARNING_THRESHOLD
-        return features.funding_rate <= -FUNDING_WARNING_THRESHOLD
+            return features.funding_rate >= threshold
+        return features.funding_rate <= -threshold
+
+    def _crowded_oi(self, features: Features, params: Mapping[str, Any]) -> bool:
+        if features.oi_change is None:
+            return False
+        threshold = _numeric_param(
+            params,
+            "crowded_oi_change_threshold",
+            DEFAULT_CROWDED_OI_CHANGE_THRESHOLD,
+        )
+        return features.oi_change >= threshold
 
     def _two_sided_wicks_are_noisy(self, features: Features) -> bool:
         return (features.upper_wick_ratio or 0.0) >= 0.35 and (features.lower_wick_ratio or 0.0) >= 0.35
@@ -517,6 +555,7 @@ class TrendPullbackContinuationStrategy:
         self,
         features: Features,
         setup: _TrendPullbackState,
+        params: Mapping[str, Any],
     ) -> tuple[SignalScoreBreakdown, list[str], list[str]]:
         direction = setup.direction
         trend_score = 0
@@ -594,6 +633,15 @@ class TrendPullbackContinuationStrategy:
         if setup.funding_warning:
             overheat_penalty += 10
             risks.append("Funding is elevated against the planned direction")
+        if setup.funding_extreme and setup.crowded_oi:
+            crowded_penalty = int(
+                _numeric_param(params, "crowded_oi_penalty", DEFAULT_CROWDED_OI_PENALTY)
+            )
+            overheat_penalty += crowded_penalty
+            risks.append(
+                "Extreme funding is paired with crowded open interest: "
+                f"funding {features.funding_rate:.4%}, OI change {features.oi_change:.2%}"
+            )
 
         return (
             score_breakdown(

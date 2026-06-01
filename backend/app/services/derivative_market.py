@@ -39,6 +39,9 @@ class DerivativeMarketSnapshot:
     category: str = DEFAULT_DERIVATIVE_CATEGORY
     mark_price: float | None = None
     funding_rate: float | None = None
+    open_interest: float | None = None
+    open_interest_value: float | None = None
+    oi_change: float | None = None
     volume_24h: float | None = None
     turnover_24h: float | None = None
     source: str | None = None
@@ -74,12 +77,19 @@ class DerivativeMarketSnapshotService:
         ticker = tickers[0] if tickers else None
         if ticker is None:
             return None
+        previous_snapshot = self.hot_snapshot(exchange="bybit", symbol=ticker.symbol)
         snapshot = DerivativeMarketSnapshot(
             exchange="bybit",
             symbol=ticker.symbol.upper(),
             category=ticker.category.lower(),
             mark_price=ticker.mark_price,
             funding_rate=ticker.funding_rate,
+            open_interest=ticker.open_interest,
+            open_interest_value=ticker.open_interest_value,
+            oi_change=_calculate_oi_change(
+                previous_snapshot.open_interest if previous_snapshot is not None else None,
+                ticker.open_interest,
+            ),
             volume_24h=ticker.volume_24h,
             turnover_24h=ticker.turnover_24h,
             source="bybit_v5_tickers",
@@ -157,6 +167,9 @@ class DerivativeMarketSnapshotService:
                 "pair_id": pair.id if pair is not None else None,
                 "mark_price": _decimal(snapshot.mark_price),
                 "funding_rate": _decimal(snapshot.funding_rate),
+                "open_interest": _decimal(snapshot.open_interest),
+                "open_interest_value": _decimal(snapshot.open_interest_value),
+                "oi_change": _decimal(snapshot.oi_change),
                 "volume_24h": _decimal(snapshot.volume_24h),
                 "turnover_24h": _decimal(snapshot.turnover_24h),
                 "source": snapshot.source or "bybit_v5_tickers",
@@ -198,6 +211,15 @@ def _decimal(value: float | None) -> Decimal | None:
     if value is None:
         return None
     return Decimal(str(value))
+
+
+def _calculate_oi_change(
+    previous_open_interest: float | None,
+    current_open_interest: float | None,
+) -> float | None:
+    if previous_open_interest and current_open_interest:
+        return (current_open_interest - previous_open_interest) / previous_open_interest
+    return None
 
 
 def _snapshot_to_json(snapshot: DerivativeMarketSnapshot) -> dict[str, Any]:

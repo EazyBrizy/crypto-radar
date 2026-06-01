@@ -2,7 +2,10 @@ import unittest
 from datetime import datetime, timezone
 
 from app.schemas.candle import OHLCVCandle
+from app.schemas.market import Features
+from app.services.derivative_market import DerivativeMarketSnapshot
 from app.services.feature_engine import FeatureEngine
+from app.services.market_scanner import MarketScanner
 
 
 class FeatureEngineTest(unittest.TestCase):
@@ -138,6 +141,51 @@ class FeatureEngineTest(unittest.TestCase):
         self.assertGreaterEqual(features.swing_low_touch_count, 2)
         self.assertIsNotNone(features.swing_high_volume_score)
         self.assertIsNotNone(features.swing_low_volume_score)
+
+
+class FeatureDerivativeEnrichmentTest(unittest.IsolatedAsyncioTestCase):
+    async def test_derivative_enrichment_sets_funding_and_oi_change(self) -> None:
+        scanner = MarketScanner(
+            symbols=["BTCUSDT"],
+            exchanges=["bybit"],
+            market_persistence=None,
+            market_quality=None,
+            virtual_trading=None,
+            derivative_market=_FakeDerivativeMarket(),  # type: ignore[arg-type]
+        )
+        features = Features(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            timeframe="1m",
+            timestamp=1_779_796_859_999,
+            price=100,
+            open=99,
+            high=101,
+            low=98,
+            close=100,
+            price_change_1m=0.01,
+            volume=10,
+            volume_spike=1.0,
+            volume_ma_20=10,
+            volatility=1,
+            history_length=20,
+        )
+
+        enriched = await scanner._enrich_derivative_context(features)  # noqa: SLF001
+
+        self.assertEqual(enriched.funding_rate, 0.0003)
+        self.assertEqual(enriched.oi_change, -0.04)
+
+
+class _FakeDerivativeMarket:
+    def hot_snapshot(self, *, exchange: str, symbol: str) -> DerivativeMarketSnapshot:
+        return DerivativeMarketSnapshot(
+            exchange=exchange,
+            symbol=symbol,
+            funding_rate=0.0003,
+            oi_change=-0.04,
+            fetched_at=datetime.now(timezone.utc),
+        )
 
 
 def _candle(

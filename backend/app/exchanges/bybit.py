@@ -86,6 +86,8 @@ class BybitTicker:
     volume_24h: float | None
     turnover_24h: float | None
     raw_payload: dict
+    open_interest: float | None = None
+    open_interest_value: float | None = None
 
 
 @dataclass(frozen=True)
@@ -255,6 +257,8 @@ def fetch_bybit_tickers(
                 volume_24h=_float_or_none(row.get("volume24h")),
                 turnover_24h=_float_or_none(row.get("turnover24h")),
                 raw_payload=row,
+                open_interest=_float_or_none(row.get("openInterest")),
+                open_interest_value=_float_or_none(row.get("openInterestValue")),
             )
         )
     return tickers

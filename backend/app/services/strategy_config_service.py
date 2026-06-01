@@ -53,6 +53,10 @@ DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
         "max_overextension_atr": 1.5,
         "require_htf_alignment": True,
         "time_stop_bars": 8,
+        "funding_warning_threshold": 0.00075,
+        "funding_block_threshold": 0.0015,
+        "crowded_oi_change_threshold": 0.02,
+        "crowded_oi_penalty": 15,
     },
     "volatility_squeeze_breakout": {
         "bb_width_percentile_threshold": 20.0,
@@ -67,6 +71,9 @@ DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
         "require_retest_after_large_candle": True,
         "large_candle_body_atr": 2.5,
         "measured_move_target_enabled": True,
+        "oi_expansion_threshold": 0.01,
+        "oi_expansion_bonus": 5,
+        "oi_no_expansion_penalty": 10,
     },
     "liquidity_sweep_reversal": {
         "min_sweep_wick_ratio": 0.45,
@@ -80,6 +87,8 @@ DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
         "require_reclaim": True,
         "require_absorption": True,
         "max_obstacle_distance_r": 1.0,
+        "oi_flush_threshold": -0.01,
+        "oi_flush_bonus": 8,
     },
 }
 

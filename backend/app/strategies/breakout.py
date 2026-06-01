@@ -25,6 +25,9 @@ MAX_BREAKOUT_BODY_ATR = 2.5
 DEFAULT_ALLOW_AGGRESSIVE_ENTRY = True
 DEFAULT_REQUIRE_RETEST_AFTER_LARGE_CANDLE = True
 DEFAULT_MEASURED_MOVE_TARGET_ENABLED = True
+DEFAULT_OI_EXPANSION_THRESHOLD = 0.01
+DEFAULT_OI_EXPANSION_BONUS = 5
+DEFAULT_OI_NO_EXPANSION_PENALTY = 10
 
 
 @dataclass(frozen=True)
@@ -448,6 +451,30 @@ class VolatilitySqueezeBreakoutStrategy:
             reasons.append(f"Breakout volume is {features.volume_spike:.2f}x average")
         elif setup.status != "watchlist":
             risks.append("Breakout volume is below the configured confirmation multiplier")
+
+        if setup.breakout_closed and features.oi_change is not None:
+            oi_expansion_threshold = _numeric_param(
+                params,
+                "oi_expansion_threshold",
+                DEFAULT_OI_EXPANSION_THRESHOLD,
+            )
+            if features.oi_change >= oi_expansion_threshold:
+                oi_bonus = int(_numeric_param(params, "oi_expansion_bonus", DEFAULT_OI_EXPANSION_BONUS))
+                liquidity_score += oi_bonus
+                reasons.append(f"Open interest expanded with breakout: {features.oi_change:.2%}")
+            else:
+                oi_penalty = int(
+                    _numeric_param(
+                        params,
+                        "oi_no_expansion_penalty",
+                        DEFAULT_OI_NO_EXPANSION_PENALTY,
+                    )
+                )
+                overheat_penalty += oi_penalty
+                risks.append(
+                    "Breakout lacks open-interest expansion: "
+                    f"{features.oi_change:.2%} vs {oi_expansion_threshold:.2%} threshold"
+                )
 
         if setup.strong_close:
             liquidity_score += 10

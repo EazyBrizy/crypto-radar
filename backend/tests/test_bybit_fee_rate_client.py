@@ -134,6 +134,8 @@ class BybitFeeRateClientTest(unittest.TestCase):
                                 "ask1Price": "50001",
                                 "markPrice": "50000.5",
                                 "fundingRate": "0.0001",
+                                "openInterest": "1200.5",
+                                "openInterestValue": "60025000.25",
                                 "volume24h": "123.4",
                                 "turnover24h": "6170000",
                             }
@@ -148,6 +150,8 @@ class BybitFeeRateClientTest(unittest.TestCase):
         self.assertEqual(tickers[0].ask1_price, 50001)
         self.assertEqual(tickers[0].mark_price, 50000.5)
         self.assertEqual(tickers[0].funding_rate, 0.0001)
+        self.assertEqual(tickers[0].open_interest, 1200.5)
+        self.assertEqual(tickers[0].open_interest_value, 60025000.25)
         self.assertEqual(tickers[0].volume_24h, 123.4)
         self.assertEqual(tickers[0].turnover_24h, 6170000)
 

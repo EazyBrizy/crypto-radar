@@ -405,7 +405,12 @@ class MarketScanner:
         )
         if snapshot is None:
             return features
-        return features.model_copy(update={"funding_rate": snapshot.funding_rate})
+        return features.model_copy(
+            update={
+                "funding_rate": snapshot.funding_rate,
+                "oi_change": snapshot.oi_change,
+            }
+        )
 
     def _strategy_configs_for(self, features: Features):
         if self._strategy_configs is None:

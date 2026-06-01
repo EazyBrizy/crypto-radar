@@ -724,6 +724,14 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signals[0].status, "ready")
         self.assertIn("volume", signals[0].status_reason or "")
 
+    async def test_squeeze_breakout_records_oi_expansion_when_available(self) -> None:
+        features = _breakout_features().model_copy(update={"oi_change": 0.03})
+
+        candidates = await VolatilitySqueezeBreakoutStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertIn("Open interest expanded", " ".join(candidates[0].explanation))
+
     async def test_trend_pullback_approach_is_watchlist(self) -> None:
         features = _breakout_features().model_copy(
             update={
@@ -870,6 +878,43 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(candidates, [])
 
+    async def test_trend_pullback_penalizes_extreme_funding_with_crowded_oi(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.6,
+                "price": 100.6,
+                "open": 100.1,
+                "high": 100.8,
+                "low": 99.8,
+                "ema_20": 100.0,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 50.0,
+                "volume_spike": 1.2,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "funding_rate": 0.0016,
+                "oi_change": 0.03,
+                "history_length": 220,
+            }
+        )
+
+        candidates = await TrendPullbackContinuationStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertIn("crowded open interest", " ".join(candidates[0].risks))
+
+    async def test_strategies_accept_missing_oi_context(self) -> None:
+        features = _breakout_features().model_copy(update={"history_length": 220, "oi_change": None})
+
+        for strategy in (
+            VolatilitySqueezeBreakoutStrategy(),
+            LiquiditySweepReversalStrategy(),
+            TrendPullbackContinuationStrategy(),
+        ):
+            candidates = await strategy.evaluate(features)
+            self.assertIsInstance(candidates, list)
+
     async def test_liquidity_sweep_without_reclaim_is_ready(self) -> None:
         features = _breakout_features().model_copy(
             update={
@@ -918,6 +963,27 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(targets[1].source, "swing_high")
         self.assertAlmostEqual(targets[0].price or 0, 101.0)
         self.assertAlmostEqual(targets[1].price or 0, 104.0)
+
+    async def test_liquidity_sweep_records_oi_flush_when_available(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 98.8,
+                "open": 99.2,
+                "high": 100.5,
+                "low": 96.2,
+                "close": 98.8,
+                "swing_low": 98.0,
+                "lower_wick_ratio": 0.6,
+                "upper_wick_ratio": 0.3,
+                "volume_spike": 1.8,
+                "oi_change": -0.04,
+            }
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertIn("Open interest flushed", " ".join(candidates[0].explanation))
 
     async def test_liquidity_sweep_blocks_against_strong_trend_without_confirmation(self) -> None:
         features = _breakout_features().model_copy(

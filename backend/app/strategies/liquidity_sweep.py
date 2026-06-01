@@ -16,6 +16,8 @@ DEFAULT_WATCHLIST_DISTANCE_ATR = 0.6
 DEFAULT_SWEEP_STOP_ATR = 0.3
 DEFAULT_AGGRESSIVE_CLOSE_POSITION = 0.6
 DEFAULT_MIN_LEVEL_RETESTS = 2
+DEFAULT_OI_FLUSH_THRESHOLD = -0.01
+DEFAULT_OI_FLUSH_BONUS = 8
 
 
 @dataclass(frozen=True)
@@ -430,6 +432,13 @@ class LiquiditySweepReversalStrategy:
         else:
             liquidity_score += 15
             reasons.append("Price is close to visible liquidity")
+
+        if setup.swept and setup.reclaimed and features.oi_change is not None:
+            oi_flush_threshold = _numeric_param(params, "oi_flush_threshold", DEFAULT_OI_FLUSH_THRESHOLD)
+            if features.oi_change <= oi_flush_threshold:
+                oi_bonus = int(_numeric_param(params, "oi_flush_bonus", DEFAULT_OI_FLUSH_BONUS))
+                orderbook_score += oi_bonus
+                reasons.append(f"Open interest flushed during reclaim: {features.oi_change:.2%}")
 
         if setup.strong_wick:
             orderbook_score += 15

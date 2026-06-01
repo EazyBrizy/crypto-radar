@@ -365,15 +365,10 @@ class VirtualExecutionEngine:
             return report.model_copy(update={"quality_gate": gate})
 
         notes = list(report.notes)
-        notes.append("Execution Quality Gate blocked this virtual trade.")
+        notes.append("Execution Quality Gate flagged severe simulated execution risk.")
         return report.model_copy(
             update={
-                "status": "rejected_virtual_execution",
-                "filled_size_usd": 0.0,
-                "unfilled_size_usd": report.requested_size_usd,
-                "fill_ratio": 0.0,
                 "quality_gate": gate,
-                "rejected_reason": "execution_quality_gate",
                 "notes": notes,
             }
         )

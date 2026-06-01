@@ -41,17 +41,10 @@ class UserService:
                 user.risk_profile,
             )
             if patch.virtual_simulation_level is not None:
-                virtual_trading = dict(settings.get("virtual_trading") or {})
-                virtual_trading["simulation_level"] = patch.virtual_simulation_level
-                virtual_trading["simulation_level_status"] = (
-                    "active" if patch.virtual_simulation_level == "mvp" else "stub"
+                settings = _apply_virtual_simulation_level_patch(
+                    settings,
+                    patch.virtual_simulation_level,
                 )
-                virtual_trading["effective_simulation_level"] = (
-                    patch.virtual_simulation_level
-                    if patch.virtual_simulation_level == "mvp"
-                    else "mvp"
-                )
-                settings["virtual_trading"] = virtual_trading
             risk_management = apply_risk_management_patch(
                 current_settings=settings.get("risk_management"),
                 current_user_profile=user.risk_profile,
@@ -143,6 +136,22 @@ def _settings_with_defaults(settings: dict, risk_profile: str | None = None) -> 
         merged.get("risk_management"),
         risk_profile,
     )
+    return merged
+
+
+def _apply_virtual_simulation_level_patch(settings: dict, simulation_level: str) -> dict:
+    merged = dict(settings or {})
+    virtual_trading = dict(merged.get("virtual_trading") or {})
+    virtual_trading["simulation_level"] = simulation_level
+    virtual_trading["simulation_level_status"] = (
+        "active" if simulation_level == "mvp" else "stub"
+    )
+    virtual_trading["effective_simulation_level"] = (
+        simulation_level
+        if simulation_level == "mvp"
+        else "mvp"
+    )
+    merged["virtual_trading"] = virtual_trading
     return merged
 
 

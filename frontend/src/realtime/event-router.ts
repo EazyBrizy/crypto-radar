@@ -46,7 +46,11 @@ export function createRealtimeEventRouter(options: {
       }
 
       if (isSignalEvent(message)) {
-        applySignalCreated(options.queryClient, message.signal);
+        if (message.type === "signal.updated" || message.type === "signals.updated") {
+          applySignalUpdated(options.queryClient, message.signal);
+        } else {
+          applySignalCreated(options.queryClient, message.signal);
+        }
         warnIfRealtimeEventExceedsBudget(message.type, startedAt);
         return;
       }
@@ -127,7 +131,7 @@ function routeStandardEvent(
 
   if (event.type === "signal.updated") {
     if (event.payload.signal) {
-      applySignalCreated(options.queryClient, event.payload.signal);
+      applySignalUpdated(options.queryClient, event.payload.signal);
       return;
     }
     applySignalPatch(options.queryClient, event.payload.signalId, event.payload.patch ?? {});
@@ -226,6 +230,24 @@ function applySignalCreated(queryClient: QueryClient, signal: RadarSignal) {
   queryClient.setQueryData<RadarResponse>(queryKeys.radar, (current) => ({
     signals: isOpenFeedSignal(signal)
       ? insertSignalToTop(current?.signals ?? [], signal)
+      : (current?.signals ?? []).filter((item) => item.id !== signal.id)
+  }));
+}
+
+function applySignalUpdated(queryClient: QueryClient, signal: RadarSignal) {
+  if (isOpenFeedSignal(signal)) {
+    useSignalStore.getState().upsertSignal(signal);
+  } else {
+    useSignalStore.getState().removeSignal(signal.id);
+  }
+
+  queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, (current = []) => {
+    return isOpenFeedSignal(signal) ? upsertById(current, signal).filter(isOpenFeedSignal) : current.filter((item) => item.id !== signal.id);
+  });
+  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), (current = []) => upsertById(current, signal));
+  queryClient.setQueryData<RadarResponse>(queryKeys.radar, (current) => ({
+    signals: isOpenFeedSignal(signal)
+      ? upsertById(current?.signals ?? [], signal).filter(isOpenFeedSignal)
       : (current?.signals ?? []).filter((item) => item.id !== signal.id)
   }));
 }

@@ -336,6 +336,9 @@ Current behavior:
 - spread-too-high, expected-slippage-too-high, price-moved-too-far, and
   insufficient visible orderbook liquidity are hard blockers in the backend
   gate;
+- Settings `Simulation` / `virtual_simulation_level` does not change these
+  hard blockers; it only controls virtual execution realism and Reality Check
+  diagnostics;
 - `risk_protection_state` uses user-timezone daily/weekly windows, resets the
   daily and weekly loss counters at new windows, applies weekly loss limits, and
   keeps peak equity separate from those resets;

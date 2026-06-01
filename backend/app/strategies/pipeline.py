@@ -182,6 +182,8 @@ class StrategySignalPipeline:
             confirmation=confirmation,
             risk_reward=risk_reward,
         )
+        if _show_only_active_setups(context.strategy_params) and not _is_active_setup_status(status):
+            return None
 
         explanation = [
             f"Status: {status_reason}",
@@ -843,12 +845,13 @@ class ExitManagementLayer:
         context: StrategyEvaluationContext,
     ) -> SignalExitPlanSnapshot:
         entry = _entry_price(signal)
-        risk = abs(entry - signal.stop_loss) if entry is not None and signal.stop_loss is not None else None
         targets: list[dict[str, Any]] = []
         for label, price in (("TP1", signal.take_profit_1), ("TP2", signal.take_profit_2)):
             if price is None:
                 continue
-            r_multiple = abs(price - entry) / risk if entry is not None and risk and risk > 0 else None
+            r_multiple = _target_rr(signal, price)
+            if r_multiple is None:
+                continue
             action = "partial_close" if label == "TP1" else "reduce_and_keep_runner"
             close_percent = 40 if label == "TP1" else 30
             targets.append(
@@ -874,17 +877,18 @@ class ExitManagementLayer:
         elif signal.strategy == "volatility_squeeze_breakout":
             measured_target = _measured_move_target(signal, context.signal_features)
             if measured_target is not None:
-                r_multiple = abs(measured_target - entry) / risk if entry is not None and risk and risk > 0 else None
-                targets.append(
-                    {
-                        "label": "TP3",
-                        "price": measured_target,
-                        "r_multiple": r_multiple,
-                        "action": "measured_move_runner",
-                        "close_percent": "runner",
-                        "source": "range_measured_move",
-                    }
-                )
+                r_multiple = _target_rr(signal, measured_target)
+                if r_multiple is not None:
+                    targets.append(
+                        {
+                            "label": "TP3",
+                            "price": measured_target,
+                            "r_multiple": r_multiple,
+                            "action": "measured_move_runner",
+                            "close_percent": "runner",
+                            "source": "range_measured_move",
+                        }
+                    )
         elif signal.strategy == "liquidity_sweep_reversal":
             targets.append(
                 {
@@ -899,7 +903,12 @@ class ExitManagementLayer:
 
         breakeven = {}
         if entry is not None and targets:
-            breakeven = {"after": "TP1", "stop_price": entry, "close_percent_before_move": 40}
+            first_target = targets[0]
+            breakeven = {
+                "after": first_target.get("label", "TP1"),
+                "stop_price": entry,
+                "close_percent_before_move": first_target.get("close_percent", 40),
+            }
 
         trailing = {
             "enabled_after": "TP1" if signal.strategy != "volatility_squeeze_breakout" else "ATR expansion",
@@ -1796,13 +1805,16 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
     final_target_rr = _target_rr(signal, signal.take_profit_2 or signal.take_profit_1)
     rr_target = _rr_target_key(params, signal.strategy)
     if rr_target == "nearest":
-        selected_rr = first_target_rr
-        target_label = "nearest target"
+        selected_rr = first_target_rr if first_target_rr is not None else final_target_rr
+        target_label = "nearest target" if first_target_rr is not None else "nearest valid target"
     else:
         selected_rr = final_target_rr if final_target_rr is not None else signal.risk_reward
         target_label = "planned final target"
 
     if selected_rr is None:
+        reason = "Risk/reward blocked: entry, stop or target is missing"
+        if _has_unusable_profit_target(signal):
+            reason = "Risk/reward blocked: no planned target is beyond the entry price"
         return RiskRewardAssessment(
             passed=False,
             rr=None,
@@ -1811,12 +1823,21 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
             target_label=target_label,
             first_target_rr=first_target_rr,
             final_target_rr=final_target_rr,
-            reason="Risk/reward blocked: entry, stop or target is missing",
+            reason=reason,
         )
 
     if selected_rr < min_rr:
-        nearest_text = "-" if first_target_rr is None else f"{first_target_rr:.2f}R"
+        nearest_text = (
+            "not beyond entry"
+            if first_target_rr is None and signal.take_profit_1 is not None
+            else "-" if first_target_rr is None else f"{first_target_rr:.2f}R"
+        )
         final_text = "-" if final_target_rr is None else f"{final_target_rr:.2f}R"
+        target_context = (
+            f"(TP1 {nearest_text}, final {final_text})"
+            if rr_target == "nearest" and first_target_rr is None and signal.take_profit_1 is not None
+            else f"(nearest {nearest_text}, final {final_text})"
+        )
         return RiskRewardAssessment(
             passed=False,
             rr=selected_rr,
@@ -1828,7 +1849,7 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
             reason=(
                 f"Risk/reward blocked: {target_label} is {selected_rr:.2f}R, "
                 f"below configured minimum {min_rr:.2f}R "
-                f"(nearest {nearest_text}, final {final_text})"
+                f"{target_context}"
             ),
         )
 
@@ -1859,15 +1880,41 @@ def _target_rr(signal: StrategySignal, target: float | None) -> float | None:
     risk = abs(entry - stop)
     if risk <= 0:
         return None
+    reward = _target_reward(signal, target, entry)
+    if reward <= 0:
+        return None
+    return round(reward / risk, 4)
+
+
+def _target_reward(signal: StrategySignal, target: float, entry: float | None = None) -> float:
+    entry = _entry_price(signal) if entry is None else entry
+    if entry is None:
+        return 0.0
     if signal.direction.lower() == "long":
-        reward = target - entry
-    else:
-        reward = entry - target
-    return round(max(0.0, reward) / risk, 4)
+        return target - entry
+    return entry - target
+
+
+def _has_unusable_profit_target(signal: StrategySignal) -> bool:
+    entry = _entry_price(signal)
+    if entry is None or signal.stop_loss is None:
+        return False
+    return any(
+        target is not None and _target_reward(signal, target, entry) <= 0
+        for target in (signal.take_profit_1, signal.take_profit_2)
+    )
 
 
 def _hide_failed_rr_signals(params: Mapping[str, Any]) -> bool:
     return bool(params.get("hide_failed_rr_signals") or params.get("hide_low_rr_signals"))
+
+
+def _show_only_active_setups(params: Mapping[str, Any]) -> bool:
+    return bool(params.get("show_only_active_setups") or params.get("only_active_setups"))
+
+
+def _is_active_setup_status(status: str) -> bool:
+    return status in {"actionable", "active", "entry_touched"}
 
 
 def _entry_price(signal: StrategySignal) -> float | None:

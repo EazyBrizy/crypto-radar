@@ -135,7 +135,7 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertEqual(report.rejected_reason, "insufficient_liquidity")
         self.assertEqual(report.quality_gate.status, "blocked")
 
-    def test_quality_gate_blocks_trade_and_suggests_realistic_max_size(self) -> None:
+    def test_quality_gate_flags_trade_and_suggests_realistic_max_size(self) -> None:
         report = VirtualExecutionEngine().simulate_entry(
             signal=_signal(),
             request=ManualConfirmRequest(
@@ -147,8 +147,8 @@ class VirtualExecutionEngineTest(unittest.TestCase):
             requested_size_usd=2_000.0,
         )
 
-        self.assertEqual(report.status, "rejected_virtual_execution")
-        self.assertEqual(report.rejected_reason, "execution_quality_gate")
+        self.assertEqual(report.status, "filled")
+        self.assertIsNone(report.rejected_reason)
         self.assertEqual(report.quality_gate.status, "blocked")
         self.assertIn("position_above_50_percent_depth_1", report.quality_gate.blockers)
         self.assertIn("position_above_30_percent_volume_5m", report.quality_gate.blockers)
@@ -157,6 +157,34 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertAlmostEqual(report.quality_gate.suggested_max_size_usd or 0, 450.0)
         self.assertIn("$2,000.00", report.quality_gate.message or "")
         self.assertIn("$450.00", report.quality_gate.message or "")
+
+    def test_trade_service_opens_trade_when_quality_gate_flags_simulation(self) -> None:
+        service = TradeService(
+            repository=EphemeralTradeRepository(),
+            risk_settings_provider=_loose_virtual_risk_settings,
+        )
+
+        trade = service.open_virtual_trade(
+            _signal(),
+            ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                size_usd=1_000.0,
+                leverage=10,
+                market_snapshot=_thin_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+        )
+
+        self.assertEqual(trade.status, "open")
+        self.assertEqual(trade.execution_status, "filled")
+        self.assertIsNotNone(trade.execution)
+        assert trade.execution is not None
+        self.assertEqual(trade.execution.quality_gate.status, "blocked")
+        self.assertIn("position_above_50_percent_depth_1", trade.execution.quality_gate.blockers)
+        self.assertIn(
+            "Execution Quality Gate flagged severe simulated execution risk.",
+            trade.execution.notes,
+        )
 
     def test_trade_service_persists_partial_execution_snapshot(self) -> None:
         service = TradeService(

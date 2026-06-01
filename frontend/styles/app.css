@@ -1218,6 +1218,72 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .watch-card { min-height: 180px; }
 
+.watchlist-strategy-grid,
+.watch-pair-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.watchlist-strategy-grid {
+  margin-bottom: 14px;
+}
+
+.watch-strategy-card,
+.watch-pair-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #0f172a;
+  text-align: left;
+}
+
+.watch-strategy-card {
+  display: grid;
+  gap: 2px;
+}
+
+.watch-strategy-card.selected,
+.watch-strategy-card:hover {
+  border-color: #2563eb;
+  background: #111d33;
+}
+
+.watch-strategy-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #0b1220;
+}
+
+.watch-strategy-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.watch-pair-card {
+  min-height: 148px;
+}
+
+.watch-pair-card.all-pairs {
+  display: grid;
+  min-height: 120px;
+  align-content: center;
+  justify-items: start;
+  gap: 6px;
+  color: #cbd5e1;
+}
+
+.watch-pair-card.all-pairs span {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
 .watch-meta {
   display: flex;
   align-items: center;
@@ -1929,20 +1995,59 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   text-overflow: ellipsis;
 }
 
+.settings-accordion-section {
+  padding: 0;
+  overflow: hidden;
+}
+
+.settings-accordion-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  width: 100%;
+  gap: 10px;
+  align-items: center;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.settings-section-summary {
+  color: #9ca3af;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.settings-chevron {
+  color: #93c5fd;
+  transition: transform 140ms ease;
+}
+
+.settings-accordion-section.open > .settings-accordion-trigger .settings-chevron,
+.strategy-config-row.open .strategy-config-summary .settings-chevron {
+  transform: rotate(180deg);
+}
+
+.settings-accordion-content {
+  padding: 0 12px 12px;
+}
+
 .strategy-config-list {
   display: grid;
   gap: 10px;
-  margin-top: 12px;
 }
 
 .strategy-config-row {
   display: grid;
-  gap: 12px;
+  gap: 0;
   min-width: 0;
-  padding: 12px;
+  padding: 0;
   border: 1px solid #1f2937;
   border-radius: 8px;
   background: #111827;
+  overflow: hidden;
 }
 
 .strategy-config-header {
@@ -1950,6 +2055,42 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
+}
+
+.strategy-config-summary {
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.strategy-config-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 10px 10px;
+}
+
+.strategy-summary-badges,
+.strategy-switch-strip,
+.strategy-apply-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.strategy-summary-badges {
+  justify-content: flex-end;
+}
+
+.strategy-switch-strip {
+  flex-wrap: wrap;
+}
+
+.strategy-apply-row {
+  justify-content: space-between;
+  padding-top: 2px;
 }
 
 .strategy-pair-toolbar {
@@ -2063,8 +2204,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .strategy-quality-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
 }
 
 .strategy-quality-grid label {
@@ -2082,7 +2223,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .strategy-quality-grid select {
   width: 100%;
   min-width: 0;
-  min-height: 36px;
+  min-height: 32px;
   border: 1px solid #263449;
   border-radius: 8px;
   background: #0f172a;
@@ -2208,7 +2349,9 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .auth-grid,
   .trade-row,
   .settings-grid,
-  .watchlist-grid {
+  .watchlist-grid,
+  .watchlist-strategy-grid,
+  .watch-pair-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2239,6 +2382,11 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .risk-profile-footer {
     grid-template-columns: 1fr;
     width: 100%;
+  }
+
+  .settings-accordion-trigger,
+  .watch-strategy-panel-head {
+    grid-template-columns: 1fr;
   }
 
   .segmented,
@@ -2288,6 +2436,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .risk-guide-snapshot,
   .risk-guide-blocker-grid,
   .risk-guide-item-list,
+  .watchlist-strategy-grid,
+  .watch-pair-grid,
   .strategy-pair-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2312,6 +2462,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .strategy-scope-grid,
   .strategy-pair-toolbar,
   .strategy-pair-grid,
+  .watchlist-strategy-grid,
+  .watch-pair-grid,
   .risk-guide-intro,
   .risk-guide-playbook,
   .risk-guide-snapshot,

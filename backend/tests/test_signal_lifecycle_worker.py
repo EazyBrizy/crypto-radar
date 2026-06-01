@@ -97,6 +97,32 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(auto_entry.signals), 1)
         self.assertEqual(auto_entry.signals[0].status, "actionable")
 
+    async def test_failed_strategy_rr_does_not_become_actionable(self) -> None:
+        signal = _signal(
+            status="ready",
+            selected_rr=0.32,
+            min_rr_ratio=1.5,
+            selected_rr_target="nearest",
+            auto_entry=SignalAutoEntrySnapshot(
+                enabled=True,
+                status="pending",
+                mode="virtual",
+                user_id="demo_user",
+                request={"mode": "virtual", "user_id": "demo_user", "auto_enter_on_confirmation": True},
+            ),
+        )
+        store = _FakeSignalStore([signal])
+        auto_entry = _FakeAutoEntry()
+        worker = SignalLifecycleWorker(signals=store, publisher=_FakePublisher(), auto_entry=auto_entry)
+
+        transitions = await worker.process_closed_candle(
+            _features(close=101.8, open=100.8, low=100.4, high=102.0, previous_high=101.4, volume_spike=1.2)
+        )
+
+        self.assertEqual(transitions, [])
+        self.assertEqual(store.signals[signal.id].status, "ready")
+        self.assertEqual(auto_entry.signals, [])
+
     async def test_ready_signal_waits_without_micro_break(self) -> None:
         signal = _signal(status="ready")
         store = _FakeSignalStore([signal])
@@ -192,6 +218,9 @@ def _signal(
     status: str,
     invalidation: SignalInvalidationSnapshot | None = None,
     auto_entry: SignalAutoEntrySnapshot | None = None,
+    selected_rr: float | None = 2.0,
+    min_rr_ratio: float | None = 1.5,
+    selected_rr_target: str | None = "final",
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
@@ -211,6 +240,9 @@ def _signal(
         stop_loss=98.0,
         take_profit_1=103.0,
         take_profit_2=105.0,
+        selected_rr=selected_rr,
+        selected_rr_target=selected_rr_target,
+        min_rr_ratio=min_rr_ratio,
         status_reason="Strategy setup exists; waiting for confirmation",
         invalidation=invalidation,
         auto_entry=auto_entry,

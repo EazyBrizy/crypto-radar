@@ -11,6 +11,8 @@ class VirtualSimulationModelContractTest(unittest.TestCase):
 
         self.assertEqual(info.current_tier, "advanced")
         self.assertIn("orderbook_depth_simulation", active_codes)
+        self.assertIn("execution_realism_check", active_codes)
+        self.assertNotIn("reject_unrealistic_trades", active_codes)
         self.assertIn("impact_decay", active_codes)
         self.assertIn("queue_position_limit_orders", planned_codes)
         self.assertIn("agent_based_market_simulator", planned_codes)

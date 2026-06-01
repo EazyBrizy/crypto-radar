@@ -335,12 +335,14 @@ def _default_strategy_risk_settings(user_id: str) -> dict[str, Any]:
     return {
         "min_rr_ratio": min_rr_ratio,
         "hide_failed_rr_signals": False,
+        "show_only_active_setups": False,
     }
 
 
 def _risk_settings_for_strategy(strategy_code: str, base_settings: dict[str, Any]) -> dict[str, Any]:
     settings = dict(base_settings)
     settings.setdefault("hide_failed_rr_signals", False)
+    settings.setdefault("show_only_active_setups", False)
     settings["rr_target"] = _default_rr_target_for_strategy(strategy_code)
     settings["rr_target_default_version"] = RR_TARGET_DEFAULT_VERSION
     return settings
@@ -351,6 +353,7 @@ def _persisted_risk_settings_for_strategy(strategy_code: str) -> dict[str, Any]:
         "rr_target": _default_rr_target_for_strategy(strategy_code),
         "rr_target_default_version": RR_TARGET_DEFAULT_VERSION,
         "hide_failed_rr_signals": False,
+        "show_only_active_setups": False,
     }
 
 
@@ -373,6 +376,9 @@ def _normalize_existing_strategy_defaults(configs: list[UserStrategyConfig]) -> 
                 params_changed = True
         if "hide_failed_rr_signals" not in risk_settings:
             risk_settings["hide_failed_rr_signals"] = False
+            config_changed = True
+        if "show_only_active_setups" not in risk_settings:
+            risk_settings["show_only_active_setups"] = False
             config_changed = True
         if "rr_target" not in risk_settings:
             risk_settings["rr_target"] = _default_rr_target_for_strategy(strategy_code)
@@ -401,7 +407,7 @@ def _is_legacy_default_rr_target(strategy_code: str, risk_settings: dict[str, An
         return False
     if str(risk_settings.get("rr_target") or "").lower() != "final":
         return False
-    allowed_legacy_keys = {"rr_target", "hide_failed_rr_signals"}
+    allowed_legacy_keys = {"rr_target", "hide_failed_rr_signals", "show_only_active_setups"}
     return set(risk_settings).issubset(allowed_legacy_keys) and not bool(risk_settings.get("hide_failed_rr_signals"))
 
 

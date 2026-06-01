@@ -15,6 +15,7 @@ const phrases: Record<string, TranslationMap> = {
   "All pairs - quality filter on": { ru: "Все пары, фильтр качества включен", zh: "全部交易对，质量过滤已开启" },
   "All seeded pairs added": { ru: "Все загруженные пары добавлены", zh: "已添加全部预置交易对" },
   "Allowed": { ru: "Разрешён", zh: "允许" },
+  "Not realistic": { ru: "Нереалистично", zh: "不现实" },
   "Analytics": { ru: "Аналитика", zh: "分析" },
   "API key": { ru: "API-ключ", zh: "API 密钥" },
   "API passphrase": { ru: "API passphrase", zh: "API 口令" },
@@ -209,6 +210,7 @@ const phrases: Record<string, TranslationMap> = {
   "Off": { ru: "Off", zh: "关" },
   "Online": { ru: "Online", zh: "在线" },
   "Open": { ru: "Открытые", zh: "开放" },
+  "Opened": { ru: "Открыт", zh: "已打开" },
   "Open Exchange": { ru: "Открыть биржу", zh: "打开交易所" },
   "Open positions": { ru: "Открытые позиции", zh: "持仓" },
   "Open risk": { ru: "Открытый риск", zh: "持仓风险" },
@@ -359,7 +361,9 @@ const phrases: Record<string, TranslationMap> = {
   "Use smaller size": { ru: "Уменьшить размер", zh: "使用更小规模" },
   "Virtual": { ru: "Virtual", zh: "模拟" },
   "Virtual balance": { ru: "Virtual баланс", zh: "模拟余额" },
+  "Virtual depth, spread, slippage": { ru: "Virtual глубина, spread, slippage", zh: "模拟深度、价差、滑点" },
   "Virtual execution": { ru: "Virtual исполнение", zh: "模拟执行" },
+  "Virtual queue, fees, liquidity": { ru: "Virtual очередь, комиссии, ликвидность", zh: "模拟队列、费用、流动性" },
   "Virtual risk": { ru: "Virtual риск", zh: "模拟风险" },
   "Virtual risk budget": { ru: "Virtual риск-бюджет", zh: "模拟风险预算" },
   "Virtual Trading": { ru: "Virtual trading", zh: "模拟交易" },
@@ -523,9 +527,13 @@ function translateDynamicText(value: string, locale: Locale): string {
     [/^Entry candidate inside (.+)$/u, (match) => `${translatePhrase("Entry candidate inside", locale)} ${match[1] ?? ""}`],
     [/^Features built: (.+)$/u, (match) => `${translatePhrase("Features", locale)}: ${match[1] ?? ""}`],
     [/^Last update: (.+)$/u, (match) => `${translatePhrase("Last update", locale)}: ${translateAge(match[1] ?? "", locale)}`],
-    [/^Open (.+)$/u, (match) => `${translatePhrase("Open", locale)} ${match[1] ?? ""}`],
+    [/^Open (.+)$/u, (match) => `${translatePhrase("Open", locale)} ${translateAge(match[1] ?? "", locale)}`],
+    [/^Opened (.+)$/u, (match) => `${translatePhrase("Opened", locale)} ${translateAge(match[1] ?? "", locale)}`],
     [/^Pairs: (.+)$/u, (match) => `${translatePhrase("Pairs", locale)}: ${match[1] ?? ""}`],
     [/^Protection: (.+)$/u, (match) => `${translatePhrase("Protection", locale)}: ${translatePhrase(match[1] ?? "", locale)}`],
+    [/^Risk: (Low|Medium|High|Speculative) \| Opened (.+) \| Updated (.+)$/u, (match) => (
+      `${translatePhrase("Risk", locale)}: ${translatePhrase(match[1] ?? "", locale)} | ${translatePhrase("Opened", locale)} ${translateAge(match[2] ?? "", locale)} | ${translatePhrase("Updated", locale)} ${translateAge(match[3] ?? "", locale)}`
+    )],
     [/^Risk: (.+)$/u, (match) => `${translatePhrase("Risk", locale)}: ${translatePhrase(match[1] ?? "", locale)}`],
     [/^Seeded candles: (.+)$/u, (match) => `${translatePhrase("Seeded candles", locale)}: ${match[1] ?? ""}`],
     [/^Signal: (.+)$/u, (match) => `${translatePhrase("Signal", locale)}: ${translatePhrase(match[1] ?? "", locale)}`],
@@ -537,7 +545,7 @@ function translateDynamicText(value: string, locale: Locale): string {
     [/^TTL expired$/u, () => (locale === "zh" ? "TTL 已过期" : locale === "ru" ? "TTL истёк" : "TTL expired")],
     [/^TTL n\/a$/u, () => (locale === "zh" ? "TTL 不可用" : locale === "ru" ? "TTL н/д" : "TTL n/a")],
     [/^TTL (.+)$/u, (match) => `TTL ${translateAge(match[1] ?? "", locale)}`],
-    [/^Updated (.+)$/u, (match) => `${translatePhrase("Updated", locale)} ${match[1] ?? ""}`],
+    [/^Updated (.+)$/u, (match) => `${translatePhrase("Updated", locale)} ${translateAge(match[1] ?? "", locale)}`],
     [/^Weekly (.+)$/u, (match) => `${translatePhrase("Weekly", locale)} ${match[1] ?? ""}`],
     [/^(\d+) candles$/u, (match) => (locale === "zh" ? `${match[1]} 根K线` : locale === "ru" ? `${match[1]} свечей` : value)],
     [/^(\d+) rows$/u, (match) => (locale === "zh" ? `${match[1]} 行` : locale === "ru" ? `${match[1]} строк` : value)],
@@ -606,19 +614,19 @@ function translateTradingText(value: string, locale: Locale): string {
       return `状态强度: 高周期趋势强度为 ${strength}`;
     }
 
-    const sizeConsumeZh = value.match(/^Your size would consume (.+)\. Real entry could be worse by about (.+), and stop execution could add about (.+) friction\.$/u);
+    const sizeConsumeZh = value.match(/^Your virtual size would consume (.+)\. The simulated entry could be worse by about (.+), and simulated stop execution could add about (.+) friction\.$/u);
     if (sizeConsumeZh) {
-      return `你的规模会消耗 ${translateLiquidityDepth(sizeConsumeZh[1] ?? "", locale)}。真实入场可能恶化约 ${sizeConsumeZh[2]}，止损执行可能额外增加约 ${sizeConsumeZh[3]} 摩擦。`;
+      return `你的 virtual 规模会消耗 ${translateLiquidityDepth(sizeConsumeZh[1] ?? "", locale)}。模拟入场可能恶化约 ${sizeConsumeZh[2]}，模拟止损执行可能额外增加约 ${sizeConsumeZh[3]} 摩擦。`;
     }
 
-    const reduceRecommendationZh = value.match(/^Recommendation: reduce position size to about \$(.+), use a limit order, or skip the trade\.$/u);
+    const reduceRecommendationZh = value.match(/^Recommendation: reduce virtual size to about \$(.+), use a limit order, or treat this simulation as unrealistic\.$/u);
     if (reduceRecommendationZh) {
-      return `建议: 将仓位规模降至约 $${reduceRecommendationZh[1]}，使用限价单，或跳过这笔交易。`;
+      return `建议: 将 virtual 规模降至约 $${reduceRecommendationZh[1]}，使用限价单，或将这次模拟视为不现实。`;
     }
 
-    const skipRecommendationZh = value.match(/^Recommendation: skip this trade or use a much smaller (.+) setup\.$/u);
+    const skipRecommendationZh = value.match(/^Recommendation: use a much smaller virtual (.+) setup or treat this simulation as unrealistic\.$/u);
     if (skipRecommendationZh) {
-      return `建议: 跳过这笔交易，或使用更小的 ${skipRecommendationZh[1]} setup。`;
+      return `建议: 使用更小的 virtual ${skipRecommendationZh[1]} setup，或将这次模拟视为不现实。`;
     }
 
     const preferRecommendationZh = value.match(/^Recommendation: prefer (.+), reduce size if the book thins out, and avoid chasing a market order\.$/u);
@@ -676,24 +684,24 @@ function translateTradingText(value: string, locale: Locale): string {
       : `Сила режима: тренд старшего TF ${strength}`;
   }
 
-  const sizeConsume = value.match(/^Your size would consume (.+)\. Real entry could be worse by about (.+), and stop execution could add about (.+) friction\.$/u);
+  const sizeConsume = value.match(/^Your virtual size would consume (.+)\. The simulated entry could be worse by about (.+), and simulated stop execution could add about (.+) friction\.$/u);
   if (sizeConsume) {
     if (locale === "zh") {
-      return `Ваш размер занял бы ${translateLiquidityDepth(sizeConsume[1] ?? "", locale)}. Реальный вход может быть хуже примерно на ${sizeConsume[2]}, а исполнение стопа может добавить около ${sizeConsume[3]} трения.`;
+      return `Ваш virtual-размер занял бы ${translateLiquidityDepth(sizeConsume[1] ?? "", locale)}. Симулированный вход может быть хуже примерно на ${sizeConsume[2]}, а симулированный стоп может добавить около ${sizeConsume[3]} трения.`;
     }
-    return `Ваш размер занял бы ${translateLiquidityDepth(sizeConsume[1] ?? "", locale)}. Реальный вход может быть хуже примерно на ${sizeConsume[2]}, а исполнение стопа может добавить около ${sizeConsume[3]} трения.`;
+    return `Ваш virtual-размер занял бы ${translateLiquidityDepth(sizeConsume[1] ?? "", locale)}. Симулированный вход может быть хуже примерно на ${sizeConsume[2]}, а симулированный стоп может добавить около ${sizeConsume[3]} трения.`;
   }
 
-  const reduceRecommendation = value.match(/^Recommendation: reduce position size to about \$(.+), use a limit order, or skip the trade\.$/u);
+  const reduceRecommendation = value.match(/^Recommendation: reduce virtual size to about \$(.+), use a limit order, or treat this simulation as unrealistic\.$/u);
   if (reduceRecommendation) {
-    if (locale === "zh") return `Рекомендация: уменьшить размер позиции примерно до $${reduceRecommendation[1]}, использовать limit-ордер или пропустить сделку.`;
-    return `Рекомендация: уменьшить размер позиции примерно до $${reduceRecommendation[1]}, использовать limit-ордер или пропустить сделку.`;
+    if (locale === "zh") return `Рекомендация: уменьшить virtual-размер примерно до $${reduceRecommendation[1]}, использовать limit-ордер или считать эту симуляцию нереалистичной.`;
+    return `Рекомендация: уменьшить virtual-размер примерно до $${reduceRecommendation[1]}, использовать limit-ордер или считать эту симуляцию нереалистичной.`;
   }
 
-  const skipRecommendation = value.match(/^Recommendation: skip this trade or use a much smaller (.+) setup\.$/u);
+  const skipRecommendation = value.match(/^Recommendation: use a much smaller virtual (.+) setup or treat this simulation as unrealistic\.$/u);
   if (skipRecommendation) {
-    if (locale === "zh") return `Рекомендация: пропустить сделку или использовать намного меньший ${skipRecommendation[1]} setup.`;
-    return `Рекомендация: пропустить сделку или использовать намного меньший ${skipRecommendation[1]} setup.`;
+    if (locale === "zh") return `Рекомендация: использовать намного меньший virtual ${skipRecommendation[1]} setup или считать эту симуляцию нереалистичной.`;
+    return `Рекомендация: использовать намного меньший virtual ${skipRecommendation[1]} setup или считать эту симуляцию нереалистичной.`;
   }
 
   const preferRecommendation = value.match(/^Recommendation: prefer (.+), reduce size if the book thins out, and avoid chasing a market order\.$/u);
@@ -708,11 +716,11 @@ function translateTradingText(value: string, locale: Locale): string {
     return `Запрошенный размер помещается в текущую ликвидность; ожидаемое slippage входа около ${realisticSize[1]}.`;
   }
 
-  const sensitiveSetup = value.match(/^The setup is tradable, but execution is sensitive: expected entry slippage is (.+) and impact risk is (.+)\.$/u);
+  const sensitiveSetup = value.match(/^The virtual fill is usable, but execution is sensitive: expected entry slippage is (.+) and impact risk is (.+)\.$/u);
   if (sensitiveSetup) {
     const impact = translatePhrase(sensitiveSetup[2] ?? "", locale);
-    if (locale === "zh") return `Setup 可交易，但执行较敏感：预期入场滑点 ${sensitiveSetup[1]}，impact 风险 ${impact}。`;
-    return `Setup можно торговать, но исполнение чувствительно: ожидаемое slippage входа ${sensitiveSetup[1]}, impact-риск ${impact}.`;
+    if (locale === "zh") return `Virtual fill 可用，但执行较敏感：预期入场滑点 ${sensitiveSetup[1]}，impact 风险 ${impact}。`;
+    return `Virtual fill usable, но исполнение чувствительно: ожидаемое slippage входа ${sensitiveSetup[1]}, impact-риск ${impact}.`;
   }
 
   const rejectionWick = value.match(/^Rejection wick ratio is (.+)$/u);

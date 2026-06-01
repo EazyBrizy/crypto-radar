@@ -4,11 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import { WatchlistPage } from "@/features/app-shell/WatchlistPage";
 import {
-  useAddWatchlistPairMutation,
   useMarketPairsQuery,
   useOpenSignalsQuery,
-  useRemoveWatchlistPairMutation,
-  useWatchlistQuery
+  useStrategyConfigsQuery,
+  useUpdateStrategyConfigMutation
 } from "@/hooks/use-radar-queries";
 import { useSignalStore } from "@/stores/signal-store";
 import type { RadarSignal } from "@/types";
@@ -16,10 +15,9 @@ import { isOpenFeedSignal } from "@/utils";
 
 export function WatchlistRoute() {
   const openSignalsQuery = useOpenSignalsQuery();
-  const watchlistQuery = useWatchlistQuery();
   const marketPairsQuery = useMarketPairsQuery();
-  const addPairMutation = useAddWatchlistPairMutation();
-  const removePairMutation = useRemoveWatchlistPairMutation();
+  const strategyConfigsQuery = useStrategyConfigsQuery();
+  const updateStrategyConfigMutation = useUpdateStrategyConfigMutation();
   const [nowMs, setNowMs] = useState(() => Date.now());
   const signalIds = useSignalStore((state) => state.signalIds);
   const signalsById = useSignalStore((state) => state.signalsById);
@@ -42,12 +40,13 @@ export function WatchlistRoute() {
   return (
     <WatchlistPage
       signals={signals}
-      watchlist={watchlistQuery.data ?? null}
+      strategyConfigs={strategyConfigsQuery.data ?? []}
       availablePairs={marketPairsQuery.data ?? []}
-      loading={watchlistQuery.isLoading || marketPairsQuery.isLoading}
-      busy={addPairMutation.isPending || removePairMutation.isPending}
-      onAddPair={(pairId) => addPairMutation.mutateAsync(pairId)}
-      onRemovePair={(pairId) => removePairMutation.mutateAsync(pairId)}
+      loading={strategyConfigsQuery.isLoading || marketPairsQuery.isLoading}
+      busy={updateStrategyConfigMutation.isPending}
+      onUpdateStrategyConfig={(configId, patch) =>
+        updateStrategyConfigMutation.mutateAsync({ configId, patch })
+      }
     />
   );
 }

@@ -16,7 +16,18 @@ export function entryZone(signal: RadarSignal): string {
 }
 
 export function signalAge(signal: RadarSignal): string {
-  const diffMinutes = Math.max(0, Math.floor((Date.now() - new Date(signal.created_at).getTime()) / 60_000));
+  return ageFromTimestamp(signal.created_at);
+}
+
+export function signalUpdatedAge(signal: RadarSignal): string {
+  return ageFromTimestamp(signal.updated_at || signal.created_at);
+}
+
+function ageFromTimestamp(value: string): string {
+  const timestamp = Date.parse(value);
+  const diffMinutes = Number.isFinite(timestamp)
+    ? Math.max(0, Math.floor((Date.now() - timestamp) / 60_000))
+    : 0;
   if (diffMinutes < 1) return "just now";
   if (diffMinutes < 60) return `${diffMinutes}m ago`;
   return `${Math.floor(diffMinutes / 60)}h ago`;

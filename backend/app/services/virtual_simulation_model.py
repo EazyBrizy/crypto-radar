@@ -9,7 +9,7 @@ MVP_CAPABILITY_CODES = [
     "partial_fill",
     "max_executable_size",
     "liquidity_score",
-    "reject_unrealistic_trades",
+    "execution_realism_check",
 ]
 
 ADVANCED_ACTIVE_CAPABILITY_CODES = [
@@ -48,7 +48,7 @@ _CAPABILITIES = {
         name="Spread check",
         tier="mvp",
         status="active",
-        description="Scores and blocks poor market-order execution when spread is too wide.",
+        description="Scores poor virtual market-order execution when spread is too wide.",
     ),
     "slippage_calculation": VirtualSimulationCapability(
         code="slippage_calculation",
@@ -69,7 +69,7 @@ _CAPABILITIES = {
         name="Max executable size",
         tier="mvp",
         status="active",
-        description="Suggests realistic max size when quality gate blocks a trade.",
+        description="Suggests realistic max virtual size when simulated execution quality is poor.",
     ),
     "liquidity_score": VirtualSimulationCapability(
         code="liquidity_score",
@@ -78,12 +78,12 @@ _CAPABILITIES = {
         status="active",
         description="Scores spread, depth, volume, and average trade size against requested position size.",
     ),
-    "reject_unrealistic_trades": VirtualSimulationCapability(
-        code="reject_unrealistic_trades",
-        name="Reject unrealistic trades",
+    "execution_realism_check": VirtualSimulationCapability(
+        code="execution_realism_check",
+        name="Execution realism check",
         tier="mvp",
         status="active",
-        description="Blocks trades that exceed spread, depth, volume, or slippage gates.",
+        description="Flags unrealistic virtual execution without deciding whether entry is allowed.",
     ),
     "impact_decay": VirtualSimulationCapability(
         code="impact_decay",
@@ -206,9 +206,8 @@ def get_virtual_simulation_model_info() -> VirtualSimulationModelInfo:
             "is stored only inside the virtual execution snapshot for a specific position."
         ),
         notes=[
-            "MVP execution quality is active for depth, spread, slippage, partial fills, max size, liquidity score, and rejection gates.",
+            "MVP simulation quality is active for virtual depth, spread, slippage, partial fills, max size, liquidity score, and realism warnings.",
             "Advanced impact decay is active for private virtual position paths.",
             "Advanced limit-order queueing, replenishment, fees, funding, cross-exchange checks, fake liquidity, spoofing, and Pro simulators are planned.",
         ],
     )
-

@@ -95,6 +95,10 @@ export function RadarRoute() {
   async function handlePaperTrade(signal: RadarSignal) {
     try {
       if (tradingActionsDisabled) return;
+      if (isStrategyRiskRewardFailed(signal)) {
+        setActionError("Strategy Risk/Reward is below the configured minimum.");
+        return;
+      }
       if (!isActionableSignal(signal) && !canArmAutoEntry(signal)) {
         setActionError("Only open strategy ideas can be armed or sent to Paper Trade.");
         return;
@@ -180,7 +184,15 @@ function isPreviewableSignal(signal: RadarSignal): boolean {
 function canArmAutoEntry(signal: RadarSignal | null): boolean {
   if (!signal) return false;
   if (signal.auto_entry?.status === "pending") return false;
+  if (isStrategyRiskRewardFailed(signal)) return false;
   return signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback";
+}
+
+function isStrategyRiskRewardFailed(signal: RadarSignal): boolean {
+  if (signal.selected_rr != null && signal.min_rr_ratio != null && signal.min_rr_ratio > 0) {
+    return signal.selected_rr < signal.min_rr_ratio;
+  }
+  return signal.confirmation?.checks.some((item) => item.name === "risk_reward_guard" && item.status === "failed") ?? false;
 }
 
 function errorMessage(exc: unknown, fallback: string): string {

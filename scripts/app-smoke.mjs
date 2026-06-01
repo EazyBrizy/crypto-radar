@@ -71,14 +71,16 @@ try {
 
   let previewSummary = "skipped:no-open-signals";
   if (Array.isArray(openSignals) && openSignals.length > 0) {
+    const firstSignal = openSignals.find(isExecutionPreviewCandidate) ?? openSignals[0];
     const preview = await postJson(
-      `http://127.0.0.1:${backendPort}/api/v1/signals/${openSignals[0].id}/execution-preview`,
+      `http://127.0.0.1:${backendPort}/api/v1/signals/${firstSignal.id}/execution-preview`,
       {
         mode: "virtual",
         user_id: "demo_user",
         account_balance: 100,
         risk_percent: 10,
         leverage: 1,
+        size_usd: 100,
         fee_rate: 0,
         slippage_bps: 0,
         simulation_mode: "auto",
@@ -86,6 +88,7 @@ try {
         allow_partial_fill: true,
         min_fill_ratio: 0.25,
         max_open_positions: 3,
+        market_snapshot: deterministicMarketSnapshot(firstSignal),
       },
     );
     if (preview.mode === "impact_aware" && !preview.simulated_path) {
@@ -321,6 +324,51 @@ async function postJson(url, body) {
   return response.json();
 }
 
+function deterministicMarketSnapshot(signal) {
+  const entryMin = Number(signal.entry_min);
+  const entryMax = Number(signal.entry_max);
+  const referencePrice = Number.isFinite(entryMin) && Number.isFinite(entryMax)
+    ? (entryMin + entryMax) / 2
+    : Number(
+      signal.entry_min
+      ?? signal.entry_max
+      ?? signal.take_profit_1
+      ?? signal.stop_loss
+      ?? 100,
+    );
+  const price = Number.isFinite(referencePrice) && referencePrice > 0 ? referencePrice : 100;
+  const tick = Math.max(price * 0.0005, 0.000001);
+
+  return {
+    best_bid: price - tick,
+    best_ask: price + tick,
+    bids: [
+      { price: price - tick, notional_usd: 1_000 },
+      { price: price - tick * 2, notional_usd: 2_000 },
+      { price: price - tick * 4, notional_usd: 4_000 },
+    ],
+    asks: [
+      { price: price + tick, notional_usd: 1_000 },
+      { price: price + tick * 2, notional_usd: 2_000 },
+      { price: price + tick * 4, notional_usd: 4_000 },
+    ],
+    volume_1m_usd: 5_000,
+    volume_5m_usd: 30_000,
+    volume_15m_usd: 120_000,
+    average_trade_size_usd: 250,
+    volatility_1m_percent: 0.4,
+  };
+}
+
+function isExecutionPreviewCandidate(signal) {
+  return (
+    Number(signal.score ?? 0) >= 65
+    && signal.entry_min != null
+    && signal.entry_max != null
+    && signal.stop_loss != null
+  );
+}
+
 async function isPortBusy(port) {
   return new Promise((resolve) => {
     const server = net.createServer();
@@ -341,12 +389,22 @@ async function nextFreePort(start) {
 
 async function killPort(port) {
   if (process.platform !== "win32") return;
-  const command = [
-    "$ErrorActionPreference='SilentlyContinue'",
-    `$pids = Get-NetTCPConnection -LocalPort ${port} -State Listen | Select-Object -ExpandProperty OwningProcess -Unique`,
-    "foreach ($pid in $pids) { if ($pid) { taskkill.exe /PID $pid /T /F | Out-Null } }",
-  ].join("; ");
-  spawnSync("powershell", ["-NoProfile", "-Command", command], { stdio: "ignore" });
+  const netstat = spawnSync("netstat.exe", ["-ano"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (netstat.status !== 0 || !netstat.stdout) return;
+  const processIds = new Set();
+  for (const line of netstat.stdout.split(/\r?\n/)) {
+    const columns = line.trim().split(/\s+/);
+    if (columns.length < 5 || columns[0] !== "TCP") continue;
+    const [, localAddress, , state, processId] = columns;
+    if (state !== "LISTENING" || !localAddress.endsWith(`:${port}`) || !processId) continue;
+    processIds.add(processId);
+  }
+  for (const processId of processIds) {
+    spawnSync("taskkill.exe", ["/PID", String(processId), "/T", "/F"], { stdio: "ignore" });
+  }
 }
 
 async function cleanup() {

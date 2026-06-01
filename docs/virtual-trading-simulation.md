@@ -4,6 +4,12 @@
 
 Global market data stays immutable. Virtual execution can create a private simulated path for one position, but it must not write synthetic candles, ticks, or orderbook data into the shared market storage.
 
+The Settings `Simulation` block controls only virtual-trade simulation realism:
+fill model, spread/slippage estimate, partial fill, max realistic size,
+liquidity score, and private impact path. It must not decide whether a trade is
+allowed to enter. Entry permission belongs to the backend risk gate and
+`user_profiles.settings.risk_management`.
+
 ## Service Boundary
 
 Primary module:
@@ -45,7 +51,7 @@ Status: active.
 - partial fill
 - max executable size
 - liquidity score
-- reject unrealistic trades
+- flag unrealistic execution with warnings and suggested max size
 
 ### Advanced
 
@@ -120,8 +126,11 @@ The product surface for execution simulation is `Reality Check`.
 
 It should answer:
 
-- whether the signal is good;
-- whether the chart setup looks strong;
-- whether the position size is actually executable;
-- why execution is good, risky, or blocked;
-- what the user should do next.
+- how a virtual market/impact-aware fill would look;
+- whether the requested virtual size is realistic for the current spread, depth, volume, and slippage;
+- how much of the virtual size would fill and what would remain unfilled;
+- what private simulated impact path applies to that virtual position;
+- what smaller virtual size would look more realistic.
+
+It must not be used as the final entry permission. A blocked `quality_gate`
+status is a simulation warning, not a trade-entry veto.

@@ -334,6 +334,73 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(signal.selected_rr or 0, 1.0)
         self.assertIn("nearest target", signal.status_reason or "")
 
+    def test_sweep_ignores_nearest_target_that_is_behind_entry(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 82.63,
+                "price": 82.63,
+                "open": 82.63,
+                "high": 82.64,
+                "low": 82.62,
+                "swing_high": 82.66,
+                "swing_low": 82.62,
+                "atr_14": 0.21,
+            }
+        )
+        candidate = build_signal(
+            features=features,
+            strategy="liquidity_sweep_reversal",
+            direction="SHORT",
+            scoring=score_breakdown(
+                trend_score=35,
+                volume_score=20,
+                liquidity_score=15,
+                risk_reward_score=15,
+            ),
+            reasons=["Liquidity sweep short setup"],
+            entry=82.63,
+            stop_loss=82.66078571,
+            take_profit_1=82.64,
+            take_profit_2=82.62,
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertIsNone(signal.first_target_rr)
+        self.assertAlmostEqual(signal.final_target_rr or 0, 0.3248)
+        self.assertAlmostEqual(signal.selected_rr or 0, 0.3248)
+        self.assertIn("nearest valid target", signal.status_reason or "")
+        self.assertIn("TP1 not beyond entry", signal.status_reason or "")
+        self.assertEqual([target.get("label") for target in signal.exit_plan.targets[:1]] if signal and signal.exit_plan else [], ["TP2"])
+
+    def test_short_signal_reward_is_directional_not_absolute(self) -> None:
+        features = _breakout_features().model_copy(update={"close": 100.0, "price": 100.0})
+        candidate = build_signal(
+            features=features,
+            strategy="liquidity_sweep_reversal",
+            direction="SHORT",
+            scoring=score_breakdown(
+                trend_score=35,
+                volume_score=20,
+                liquidity_score=15,
+            ),
+            reasons=["Liquidity sweep short setup"],
+            entry=100.0,
+            stop_loss=101.0,
+            take_profit_1=100.5,
+            take_profit_2=100.5,
+        )
+
+        self.assertEqual(candidate.risk_reward, 0)
+        self.assertEqual(candidate.score_breakdown.risk_reward_score, 0)
+
     def test_strategy_pipeline_can_hide_low_rr_cards_by_strategy_setting(self) -> None:
         features = _breakout_features()
         candidate = build_signal(
@@ -359,6 +426,38 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
                 signal_features=features,
                 context_features=_bullish_context_features(),
                 strategy_params={"hide_failed_rr_signals": True},
+            ),
+        )
+
+        self.assertIsNone(signal)
+
+    def test_strategy_pipeline_can_show_only_active_setups_by_strategy_setting(self) -> None:
+        features = _breakout_features()
+        candidate = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            scoring=score_breakdown(
+                trend_score=25,
+                volume_score=20,
+                liquidity_score=15,
+                orderbook_score=10,
+                risk_reward_score=15,
+                volatility_score=15,
+            ),
+            reasons=["Breakout setup is still forming"],
+            entry=features.close,
+            stop_loss=100.0,
+            take_profit_1=104.0,
+            take_profit_2=106.0,
+        ).model_copy(update={"status": "watchlist"})
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"show_only_active_setups": True},
             ),
         )
 

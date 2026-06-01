@@ -42,6 +42,26 @@ class UserProfileContractTest(unittest.TestCase):
 
         self.assertEqual(request.virtual_simulation_level, "advanced")
 
+    def test_virtual_simulation_level_patch_preserves_risk_management(self) -> None:
+        settings = {
+            "virtual_trading": {"simulation_level": "mvp"},
+            "risk_management": {
+                "risk_profile": "custom",
+                "max_spread_bps": 25,
+                "max_slippage_bps": 80,
+            },
+        }
+
+        updated = user_service_module._apply_virtual_simulation_level_patch(
+            settings,
+            "advanced",
+        )
+
+        self.assertEqual(updated["virtual_trading"]["simulation_level"], "advanced")
+        self.assertEqual(updated["virtual_trading"]["simulation_level_status"], "stub")
+        self.assertEqual(updated["virtual_trading"]["effective_simulation_level"], "mvp")
+        self.assertEqual(updated["risk_management"], settings["risk_management"])
+
     def test_user_settings_patch_accepts_risk_management(self) -> None:
         request = UserSettingsPatchRequest(
             risk_profile="custom",

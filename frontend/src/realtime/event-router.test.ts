@@ -4,7 +4,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { queryKeys, serverStateKeys } from "@/features/server-state/query-keys";
 import { useNotificationStore } from "@/stores/notification-store";
 import { useSignalStore } from "@/stores/signal-store";
-import type { RadarSignal, TradeJournalEntry } from "@/types";
+import type { RadarResponse, RadarSignal, TradeJournalEntry } from "@/types";
 import { createRealtimeEventRouter } from "./event-router";
 
 const baseSignal: RadarSignal = {
@@ -154,6 +154,32 @@ describe("createRealtimeEventRouter signal feed updates", () => {
 
     expect(useSignalStore.getState().signalsById.sig_1.score).toBe(91);
     expect(queryClient.getQueryData<RadarSignal[]>(queryKeys.signals)?.[0]?.score).toBe(91);
+  });
+
+  it("updates full signal.updated payloads without moving an old signal to the top", () => {
+    const queryClient = new QueryClient();
+    const topSignal = { ...baseSignal, id: "sig_top", symbol: "ETHUSDT" };
+    const updatedSignal = { ...baseSignal, score: 91, updated_at: "2026-05-25T10:13:43.231Z" };
+    queryClient.setQueryData(queryKeys.signals, [topSignal, baseSignal]);
+    queryClient.setQueryData(queryKeys.radar, { signals: [topSignal, baseSignal] });
+    useSignalStore.getState().replaceSignals([topSignal, baseSignal]);
+    const router = createRealtimeEventRouter({ queryClient, onRealtimeEvent: () => undefined });
+
+    router.route({
+      id: "evt_updated_full",
+      type: "signal.updated",
+      version: 1,
+      timestamp: "2026-05-25T10:13:43.231Z",
+      payload: {
+        signal: updatedSignal,
+        signalId: "sig_1"
+      }
+    });
+
+    expect(useSignalStore.getState().signalIds).toEqual(["sig_top", "sig_1"]);
+    expect(useSignalStore.getState().signalsById.sig_1.score).toBe(91);
+    expect(queryClient.getQueryData<RadarSignal[]>(queryKeys.signals)?.map((signal) => signal.id)).toEqual(["sig_top", "sig_1"]);
+    expect(queryClient.getQueryData<RadarResponse>(queryKeys.radar)?.signals.map((signal) => signal.id)).toEqual(["sig_top", "sig_1"]);
   });
 
   it("marks entry touched and pushes a notification", () => {

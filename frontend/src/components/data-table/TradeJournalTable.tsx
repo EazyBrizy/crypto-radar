@@ -175,7 +175,7 @@ function formatExecutionDetail(trade: TradeJournalEntry): string {
   const execution = trade.execution;
   if (!execution) return `${trade.slippage_bps.toFixed(1)} bps`;
   if (execution.quality_gate.status === "blocked" && execution.quality_gate.suggested_max_size_usd != null) {
-    return `max $${execution.quality_gate.suggested_max_size_usd.toFixed(0)}`;
+    return `low realism · max $${execution.quality_gate.suggested_max_size_usd.toFixed(0)}`;
   }
   const fill = trade.execution_status === "partially_filled" ? `${Math.round(execution.fill_ratio * 100)}% fill` : `${execution.entry_slippage_bps.toFixed(1)} bps`;
   return `${fill} · ${execution.quality_gate.status}`;

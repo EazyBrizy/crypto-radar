@@ -150,7 +150,7 @@ function formatUsd(value: number): string {
 function formatExecutionSummary(trade: TradeJournalEntry): string {
   if (!trade.execution) return trade.simulation_mode === "impact_aware" ? "Impact" : "Passive";
   if (trade.execution.quality_gate.status === "blocked" && trade.execution.quality_gate.suggested_max_size_usd != null) {
-    return `Blocked / max $${trade.execution.quality_gate.suggested_max_size_usd.toFixed(0)}`;
+    return `Low realism / max $${trade.execution.quality_gate.suggested_max_size_usd.toFixed(0)}`;
   }
   const mode = trade.simulation_mode === "impact_aware" ? "Impact" : "Passive";
   const risk = trade.execution.quality_gate.status;

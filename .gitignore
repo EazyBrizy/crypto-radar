@@ -37,6 +37,7 @@ pnpm-debug.log*
 # OS / editor
 .DS_Store
 Thumbs.db
+%SystemDrive%/
 .idea/
 .vscode/
 .codex-*.png

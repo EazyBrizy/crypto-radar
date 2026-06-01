@@ -51,12 +51,15 @@ export function SignalDetails({
 
   const isLong = signal.direction === "long";
   const riskFailed = executionPreview?.risk_check?.status === "failed";
+  const strategyRiskFailed = isStrategyRiskRewardFailed(signal);
   const statusAllowsTrade = signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
   const autoEntryPending = signal.auto_entry?.status === "pending";
   const canArmAutoEntry = signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback";
-  const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || (!statusAllowsTrade && !canArmAutoEntry) || (statusAllowsTrade && riskFailed);
+  const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || strategyRiskFailed || (!statusAllowsTrade && !canArmAutoEntry) || (statusAllowsTrade && riskFailed);
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const breakdown = signal.score_breakdown;
+  const tradePlanComplete = (signal.entry_min != null || signal.entry_max != null) && signal.stop_loss != null && (signal.take_profit_1 != null || signal.take_profit_2 != null);
+  const riskRewardOk = !strategyRiskFailed && (signal.selected_rr != null || signal.risk_reward != null);
   const reasons = signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."];
 
   return (
@@ -137,8 +140,8 @@ export function SignalDetails({
       <div className="checklist-block">
         <h3>Confirmation Checklist</h3>
         <CheckRow done text="Сетап соответствует стратегии" />
-        <CheckRow done text="Entry, SL and TP are calculated" />
-        <CheckRow done text="Risk/Reward is set" />
+        <CheckRow done={tradePlanComplete} text="Entry, SL and TP are calculated" />
+        <CheckRow done={riskRewardOk} text="Risk/Reward is set" />
         <CheckRow done={statusAllowsTrade} text={`Strategy status: ${signal.status.replaceAll("_", " ")}`} />
       </div>
 
@@ -166,7 +169,10 @@ export function SignalDetails({
       {riskFailed ? (
         <p className="form-description">Entry is blocked by backend risk gate.</p>
       ) : null}
-      {!statusAllowsTrade && !autoEntryPending ? (
+      {strategyRiskFailed ? (
+        <p className="form-description">Strategy Risk/Reward is below the configured minimum, so Paper Trade is disabled for this idea.</p>
+      ) : null}
+      {!statusAllowsTrade && !autoEntryPending && !strategyRiskFailed ? (
         <p className="form-description">Use Auto Paper to wait for confirmation and enter automatically after the trigger candle.</p>
       ) : null}
     </section>
@@ -358,6 +364,15 @@ function stringMetadata(metadata: Record<string, unknown>, key: string): string 
   return typeof value === "string" && value ? value : null;
 }
 
+function isStrategyRiskRewardFailed(signal: RadarSignal): boolean {
+  const selectedRr = signal.selected_rr;
+  const minRr = signal.min_rr_ratio;
+  if (selectedRr != null && minRr != null && minRr > 0) {
+    return selectedRr < minRr;
+  }
+  return signal.confirmation?.checks.some((item) => item.name === "risk_reward_guard" && item.status === "failed") ?? false;
+}
+
 function RiskRewardDetailBlock({ signal }: { signal: RadarSignal }) {
   const details = riskRewardDetails(signal);
   if (!details) return null;
@@ -505,7 +520,7 @@ function ExecutionQualityBlock({
   const tone = gateTone(gateStatus, impactRisk);
   const executionLabel = loading && !execution ? "Checking" : executionQualityLabel(gateStatus, impactRisk);
   const marketOrder = gateStatus === "blocked" || impactRisk === "high"
-    ? "Not recommended"
+    ? "Not realistic"
     : gateStatus === "warning"
       ? "Use smaller size"
       : "Allowed";
@@ -630,10 +645,10 @@ function realityCheckReason(execution: VirtualExecutionReport): string {
 
   if (execution.quality_gate.status === "blocked") {
     const depthText = depthRatio == null ? "current depth" : `${formatCompactPercent(depthRatio)} of liquidity inside 1%`;
-    return `Your size would consume ${depthText}. Real entry could be worse by about ${formatCompactPercent(slippagePercent)}, and stop execution could add about ${formatCompactPercent(exitSlippagePercent)} friction.`;
+    return `Your virtual size would consume ${depthText}. The simulated entry could be worse by about ${formatCompactPercent(slippagePercent)}, and simulated stop execution could add about ${formatCompactPercent(exitSlippagePercent)} friction.`;
   }
   if (execution.quality_gate.status === "warning" || execution.liquidity.impact_risk !== "low") {
-    return `The setup is tradable, but execution is sensitive: expected entry slippage is ${formatCompactPercent(slippagePercent)} and impact risk is ${impactRiskLabel(execution.liquidity.impact_risk)}.`;
+    return `The virtual fill is usable, but execution is sensitive: expected entry slippage is ${formatCompactPercent(slippagePercent)} and impact risk is ${impactRiskLabel(execution.liquidity.impact_risk)}.`;
   }
   return `The requested size fits current liquidity with expected entry slippage around ${formatCompactPercent(slippagePercent)}.`;
 }
@@ -642,8 +657,8 @@ function realityCheckRecommendation(execution: VirtualExecutionReport, orderType
   const suggestedMax = execution.quality_gate.suggested_max_size_usd;
   if (execution.quality_gate.status === "blocked") {
     return suggestedMax == null
-      ? `Recommendation: skip this trade or use a much smaller ${orderType.toLowerCase()} setup.`
-      : `Recommendation: reduce position size to about $${suggestedMax.toFixed(0)}, use a limit order, or skip the trade.`;
+      ? `Recommendation: use a much smaller virtual ${orderType.toLowerCase()} setup or treat this simulation as unrealistic.`
+      : `Recommendation: reduce virtual size to about $${suggestedMax.toFixed(0)}, use a limit order, or treat this simulation as unrealistic.`;
   }
   if (execution.quality_gate.status === "warning" || execution.liquidity.impact_risk !== "low") {
     return `Recommendation: prefer ${orderType.toLowerCase()}, reduce size if the book thins out, and avoid chasing a market order.`;

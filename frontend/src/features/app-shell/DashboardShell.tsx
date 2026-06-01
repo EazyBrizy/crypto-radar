@@ -6,7 +6,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Activity, LayoutDashboard, PanelLeft, Play, RefreshCw, Settings, Square, Star, WalletCards } from "lucide-react";
 
-import { API_ORIGIN_LABEL } from "@/api";
 import { FastApiRealtimeGateway } from "@/features/realtime/FastApiRealtimeGateway";
 import { NotificationCenter } from "./NotificationCenter";
 import { NotificationRuntime } from "./NotificationRuntime";
@@ -112,7 +111,6 @@ export function DashboardShell({ children }: { children: ReactNode }) {
             <span>Risk: Balanced</span>
             <span className={scannerStatusClass}>{scannerStatusText}</span>
             <RealtimeStatusBadge />
-            <span>{API_ORIGIN_LABEL}</span>
           </div>
           <div className="topbar-actions">
             <button

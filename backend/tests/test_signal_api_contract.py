@@ -2,6 +2,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from app.api.v1.signals import confirm_signal, list_active_signals, list_open_signals
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest
@@ -180,6 +182,35 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.signal.auto_entry.mode if response.signal.auto_entry else None, "virtual")
         self.assertIn("Auto-entry armed", response.message)
         self.assertEqual(broker.events[0]["type"], "signal.updated")
+
+    async def test_confirm_endpoint_rejects_auto_entry_when_strategy_rr_failed(self) -> None:
+        now = datetime.now(timezone.utc)
+        signal = RadarSignal(
+            id="sig_low_rr",
+            symbol="SOL/USDT:PERP",
+            exchange="bybit",
+            strategy="liquidity_sweep_reversal",
+            direction="short",
+            confidence=0.7,
+            status="ready",
+            score=70,
+            selected_rr=0.32,
+            selected_rr_target="nearest",
+            min_rr_ratio=1.5,
+            created_at=now,
+            updated_at=now,
+        )
+        self.signal_service.add_signal(signal)
+
+        with patch("app.api.v1.signals.signal_service", self.signal_service):
+            with self.assertRaises(HTTPException) as exc:
+                await confirm_signal(
+                    signal.id,
+                    ManualConfirmRequest(mode="virtual", user_id="demo_user", auto_enter_on_confirmation=True),
+                )
+
+        self.assertEqual(exc.exception.status_code, 409)
+        self.assertIn("Risk/reward blocked", str(exc.exception.detail))
 
 
 if __name__ == "__main__":

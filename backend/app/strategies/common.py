@@ -37,6 +37,16 @@ def risk_reward_score(risk_reward: float) -> int:
     return 0
 
 
+def _target_reward(
+    direction: Literal["LONG", "SHORT"],
+    entry_price: float,
+    target_price: float,
+) -> float:
+    if direction == "LONG":
+        return target_price - entry_price
+    return entry_price - target_price
+
+
 def score_from_breakdown(breakdown: SignalScoreBreakdown) -> int:
     positive = (
         breakdown.trend_score
@@ -129,7 +139,8 @@ def build_signal(
     entry_padding = atr * 0.15
     entry_min = entry_price - entry_padding
     entry_max = entry_price + entry_padding
-    risk_reward = abs(take_profit_2 - entry_price) / risk
+    final_reward = max(0.0, _target_reward(direction, entry_price, take_profit_2))
+    risk_reward = final_reward / risk
     if scoring is None:
         scoring = legacy_score_breakdown(score or 0)
     if scoring.risk_reward_score == 0:

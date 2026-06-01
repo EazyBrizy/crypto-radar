@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RadarSignal } from "./types";
-import { isOpenFeedSignal, isSignalExpired, signalTtlLabel } from "./utils";
+import { isOpenFeedSignal, isSignalExpired, signalAge, signalTtlLabel, signalUpdatedAge } from "./utils";
 
 const baseSignal: RadarSignal = {
   id: "sig_1",
@@ -52,6 +52,10 @@ const baseSignal: RadarSignal = {
 };
 
 describe("signal expiry utilities", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("keeps fresh open signals actionable", () => {
     const now = Date.parse("2026-05-29T09:30:00.000Z");
 
@@ -66,5 +70,18 @@ describe("signal expiry utilities", () => {
     expect(isSignalExpired(baseSignal, now)).toBe(true);
     expect(isOpenFeedSignal(baseSignal, now)).toBe(false);
     expect(signalTtlLabel(baseSignal, now)).toBe("TTL expired");
+  });
+
+  it("separates original signal age from latest update age", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-29T09:58:00.000Z"));
+
+    const refreshedSignal = {
+      ...baseSignal,
+      updated_at: "2026-05-29T09:57:30.000Z"
+    };
+
+    expect(signalAge(refreshedSignal)).toBe("58m ago");
+    expect(signalUpdatedAge(refreshedSignal)).toBe("just now");
   });
 });

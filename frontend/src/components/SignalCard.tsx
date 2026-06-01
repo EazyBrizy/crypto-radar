@@ -5,7 +5,7 @@ import { Badge } from "./Badge";
 import { useSignalPrice } from "@/stores/price-store";
 import { useSignalStore } from "@/stores/signal-store";
 import type { RadarSignal } from "../types";
-import { entryZone, formatPrice, isSignalExpired, riskLabel, signalAge, signalTtlLabel } from "../utils";
+import { entryZone, formatPrice, isSignalExpired, riskLabel, signalAge, signalTtlLabel, signalUpdatedAge } from "../utils";
 
 interface SignalCardProps {
   signal: RadarSignal;
@@ -17,6 +17,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
   const isLong = signal.direction === "long";
   const price = useSignalPrice(signal.symbol);
   const expired = isSignalExpired(signal);
+  const riskMeta = `Risk: ${riskLabel(signal)} | Opened ${signalAge(signal)} | Updated ${signalUpdatedAge(signal)}`;
 
   return (
     <button className={`signal-card ${selected ? "selected" : ""}`} onClick={() => onSelect(signal)} type="button">
@@ -43,7 +44,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
         </div>
         <div className="signal-score-meta">
           <strong>{Math.round(signal.confidence * 100)}% Confidence</strong>
-          <span className="muted">Risk: {riskLabel(signal)} | {signalAge(signal)}</span>
+          <span className="muted">{riskMeta}</span>
           <span className={`signal-ttl ${expired ? "expired" : ""}`}>
             <Clock3 size={13} />
             {signalTtlLabel(signal)}

@@ -20,7 +20,17 @@ ExecutionMode = Literal["virtual", "real"]
 TradeSide = Literal["long", "short"]
 TradeStatus = Literal["open", "closed", "cancelled"]
 TradeResult = Literal["win", "loss", "breakeven"]
-CloseReason = Literal["take_profit", "stop_loss", "manual_close", "invalidation", "cancelled"]
+CloseReason = Literal[
+    "take_profit",
+    "stop_loss",
+    "manual_close",
+    "invalidation",
+    "cancelled",
+    "partial_take_profit",
+    "breakeven_stop",
+    "trailing_stop",
+    "time_stop",
+]
 CloseMarketTradeStatus = Literal["closed", "not_implemented"]
 TradeInvalidationStatus = Literal["valid", "invalidated", "unavailable"]
 TradeInvalidationAction = Literal["none", "close_market_or_wait_stop"]
@@ -236,6 +246,33 @@ class TradeInvalidationActionResponse(BaseModel):
     message: str
 
 
+class VirtualTradeTargetState(BaseModel):
+    label: str
+    price: float = Field(..., gt=0)
+    close_percent: float = Field(default=0.0, ge=0, le=100)
+    action: Optional[str] = None
+    hit: bool = False
+    hit_at: Optional[datetime] = None
+    closed_quantity: float = Field(default=0.0, ge=0)
+    closed_size_usd: float = Field(default=0.0, ge=0)
+    realized_pnl: float = 0.0
+    exit_fee: float = Field(default=0.0, ge=0)
+
+
+class VirtualTradeLifecycleEvent(BaseModel):
+    event_type: str
+    reason: Optional[CloseReason] = None
+    target_label: Optional[str] = None
+    price: Optional[float] = Field(default=None, gt=0)
+    quantity: Optional[float] = Field(default=None, ge=0)
+    size_usd: Optional[float] = Field(default=None, ge=0)
+    realized_pnl: Optional[float] = None
+    exit_fee: Optional[float] = Field(default=None, ge=0)
+    stop_loss: Optional[float] = Field(default=None, gt=0)
+    created_at: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class VirtualTrade(BaseModel):
     id: str
     user_id: str
@@ -253,14 +290,25 @@ class VirtualTrade(BaseModel):
     exit_price: Optional[float] = None
     size_usd: float
     quantity: float
+    initial_quantity: Optional[float] = Field(default=None, ge=0)
+    remaining_quantity: Optional[float] = Field(default=None, ge=0)
+    closed_quantity: float = Field(default=0.0, ge=0)
+    initial_size_usd: Optional[float] = Field(default=None, ge=0)
+    remaining_size_usd: Optional[float] = Field(default=None, ge=0)
     leverage: int
     risk_percent: float
     risk_amount: float = 0.0
     risk_reward: float = 3.0
 
     stop_loss: float
+    current_stop_loss: Optional[float] = Field(default=None, gt=0)
+    stop_moved_to_breakeven: bool = False
+    trailing_active: bool = False
     take_profit: list[float] = Field(default_factory=list)
     fees: float = 0.0
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    exit_fees: float = Field(default=0.0, ge=0)
     slippage_bps: float = 0.0
     simulation_mode: VirtualSimulationMode = "passive"
     execution_status: VirtualExecutionStatus = "filled"
@@ -282,6 +330,8 @@ class VirtualTrade(BaseModel):
     closed_at: Optional[datetime] = None
     ai_review: Optional[str] = None
     screenshots: list[str] = Field(default_factory=list)
+    target_states: list[VirtualTradeTargetState] = Field(default_factory=list)
+    lifecycle_events: list[VirtualTradeLifecycleEvent] = Field(default_factory=list)
 
 
 class RealExecutionResult(BaseModel):
@@ -322,14 +372,25 @@ class TradeJournalEntry(BaseModel):
     exit_price: Optional[float] = None
     size_usd: float
     quantity: float
+    initial_quantity: Optional[float] = Field(default=None, ge=0)
+    remaining_quantity: Optional[float] = Field(default=None, ge=0)
+    closed_quantity: float = Field(default=0.0, ge=0)
+    initial_size_usd: Optional[float] = Field(default=None, ge=0)
+    remaining_size_usd: Optional[float] = Field(default=None, ge=0)
     leverage: int
     risk_percent: float
     risk_amount: float = 0.0
     risk_reward: float = 3.0
 
     stop_loss: float
+    current_stop_loss: Optional[float] = Field(default=None, gt=0)
+    stop_moved_to_breakeven: bool = False
+    trailing_active: bool = False
     take_profit: list[float] = Field(default_factory=list)
     fees: float = 0.0
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    exit_fees: float = Field(default=0.0, ge=0)
     slippage_bps: float = 0.0
     simulation_mode: VirtualSimulationMode = "passive"
     execution_status: VirtualExecutionStatus = "filled"
@@ -352,6 +413,8 @@ class TradeJournalEntry(BaseModel):
     opened_at: datetime
     updated_at: datetime
     closed_at: Optional[datetime] = None
+    target_states: list[VirtualTradeTargetState] = Field(default_factory=list)
+    lifecycle_events: list[VirtualTradeLifecycleEvent] = Field(default_factory=list)
 
 
 class RealTrade(TradeJournalEntry):

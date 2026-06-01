@@ -259,6 +259,7 @@ class PostgresVirtualTradeRepository:
                     Position.status == "open",
                 )
             ).all()
+            open_trades = [_position_to_virtual_trade(position) for position in open_positions]
             closed_positions = session.scalars(
                 _position_select().where(
                     Position.user_id == user.id,
@@ -267,9 +268,10 @@ class PostgresVirtualTradeRepository:
                 )
             ).all()
             unrealized_pnl = sum(
-                _gross_pnl(_position_to_virtual_trade(position), _position_current_price(position))
-                for position in open_positions
+                _gross_pnl(trade, trade.current_price)
+                for trade in open_trades
             )
+            open_realized_pnl = sum(trade.realized_pnl for trade in open_trades)
             wins = losses = breakeven = 0
             realized_pnl = Decimal("0")
             for position in closed_positions:
@@ -291,8 +293,8 @@ class PostgresVirtualTradeRepository:
                 user_id=user_id,
                 starting_balance=float(starting_balance),
                 balance=float(balance.available),
-                equity=float(balance.available + balance.locked + _decimal(unrealized_pnl)),
-                realized_pnl=float(realized_pnl),
+                equity=float(balance.available + balance.locked + _decimal(open_realized_pnl + unrealized_pnl)),
+                realized_pnl=float(realized_pnl + _decimal(open_realized_pnl)),
                 unrealized_pnl=float(unrealized_pnl),
                 open_positions=len(open_positions),
                 closed_trades=len(closed_positions),
@@ -540,6 +542,7 @@ class PostgresVirtualTradeRepository:
             position.user_id,
             f"virtual-close:{position.id}",
         )
+        close_quantity = _close_order_quantity(trade, position.quantity)
         if close_order is None:
             close_order = Order(
                 user_id=position.user_id,
@@ -551,7 +554,7 @@ class PostgresVirtualTradeRepository:
                 side="sell" if position.side == "long" else "buy",
                 order_type="market",
                 status="filled",
-                quantity=position.quantity,
+                quantity=close_quantity,
                 price=_decimal(trade.exit_price or trade.current_price),
                 idempotency_key=f"virtual-close:{position.id}",
                 metadata_={
@@ -570,7 +573,7 @@ class PostgresVirtualTradeRepository:
                 OrderFill(
                     order_id=close_order.id,
                     price=_decimal(trade.exit_price or trade.current_price),
-                    quantity=position.quantity,
+                    quantity=close_quantity,
                     fee_amount=max(_decimal(trade.fees) - (position.fees_total or Decimal("0")), Decimal("0")),
                     fee_asset_id=quote_asset.id,
                     liquidity="simulated",
@@ -788,7 +791,20 @@ def _external_trade_to_real_trade(trade: ExternalExchangeTrade) -> RealTrade:
         slippage_bps=float(metadata.get("slippage_bps") or 0),
         status="closed",
         result=_optional_value(metadata.get("result"), {"win", "loss", "breakeven"}),
-        close_reason=_optional_value(metadata.get("close_reason"), {"take_profit", "stop_loss", "manual_close", "cancelled"}),
+        close_reason=_optional_value(
+            metadata.get("close_reason"),
+            {
+                "take_profit",
+                "stop_loss",
+                "manual_close",
+                "invalidation",
+                "cancelled",
+                "partial_take_profit",
+                "breakeven_stop",
+                "trailing_stop",
+                "time_stop",
+            },
+        ),
         pnl=float(metadata["pnl"]) if metadata.get("pnl") is not None else None,
         pnl_percent=float(metadata["pnl_percent"]) if metadata.get("pnl_percent") is not None else None,
         mfe=float(metadata.get("mfe") or 0),
@@ -1167,12 +1183,37 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
     metadata = entry_order.metadata_ if entry_order is not None else {}
     snapshot = metadata.get("virtual_trade", {}) if isinstance(metadata, dict) else {}
     entry_price = float(position.entry_avg_price)
-    quantity = float(position.quantity)
-    size_usd = entry_price * quantity
+    snapshot_quantity = _optional_float(snapshot.get("quantity"))
+    quantity = snapshot_quantity if snapshot_quantity is not None else float(position.quantity)
+    initial_quantity = _optional_float(snapshot.get("initial_quantity"))
+    if initial_quantity is None:
+        initial_quantity = quantity
+    remaining_quantity = _optional_float(snapshot.get("remaining_quantity"))
+    if remaining_quantity is None:
+        remaining_quantity = 0.0 if position.status == "closed" else quantity
+    closed_quantity = _optional_float(snapshot.get("closed_quantity"))
+    if closed_quantity is None:
+        closed_quantity = max(initial_quantity - remaining_quantity, 0.0)
+    size_usd = _optional_float(snapshot.get("size_usd"))
+    if size_usd is None:
+        size_usd = entry_price * quantity
+    initial_size_usd = _optional_float(snapshot.get("initial_size_usd"))
+    if initial_size_usd is None:
+        initial_size_usd = size_usd
+    remaining_size_usd = _optional_float(snapshot.get("remaining_size_usd"))
+    if remaining_size_usd is None:
+        remaining_size_usd = entry_price * remaining_quantity
     pnl = float(position.realized_pnl or 0) if position.status == "closed" else None
     pnl_percent = snapshot.get("pnl_percent")
     if pnl_percent is None and pnl is not None and size_usd:
         pnl_percent = pnl / size_usd * 100
+    current_stop_loss = _optional_float(snapshot.get("current_stop_loss"))
+    if current_stop_loss is None and position.stop_loss is not None and float(position.stop_loss) > 0:
+        current_stop_loss = float(position.stop_loss)
+    snapshot_fees = _optional_float(snapshot.get("fees"))
+    realized_pnl = _optional_float(snapshot.get("realized_pnl"))
+    if realized_pnl is None:
+        realized_pnl = pnl if pnl is not None else 0.0
     return VirtualTrade(
         id=str(position.id),
         user_id=snapshot.get("user_id") or (position.user.username or str(position.user_id)),
@@ -1185,15 +1226,26 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
         entry_price=entry_price,
         current_price=float(snapshot.get("current_price") or position.exit_avg_price or position.entry_avg_price),
         exit_price=float(position.exit_avg_price) if position.exit_avg_price is not None else None,
-        size_usd=float(snapshot.get("size_usd") or size_usd),
+        size_usd=size_usd,
         quantity=quantity,
+        initial_quantity=initial_quantity,
+        remaining_quantity=remaining_quantity,
+        closed_quantity=closed_quantity,
+        initial_size_usd=initial_size_usd,
+        remaining_size_usd=remaining_size_usd,
         leverage=int(snapshot.get("leverage") or 1),
         risk_percent=float(snapshot.get("risk_percent") or 0),
         risk_amount=float(snapshot.get("risk_amount") or 0),
         risk_reward=float(snapshot.get("risk_reward") or 3),
         stop_loss=float(position.stop_loss or 0),
+        current_stop_loss=current_stop_loss,
+        stop_moved_to_breakeven=bool(snapshot.get("stop_moved_to_breakeven") or False),
+        trailing_active=bool(snapshot.get("trailing_active") or False),
         take_profit=[float(value) for value in (position.take_profit or [])],
-        fees=float(position.fees_total or snapshot.get("fees") or 0),
+        fees=float(snapshot_fees if snapshot_fees is not None else position.fees_total or 0),
+        realized_pnl=realized_pnl,
+        unrealized_pnl=float(snapshot.get("unrealized_pnl") or 0),
+        exit_fees=float(snapshot.get("exit_fees") or 0),
         slippage_bps=float(snapshot.get("slippage_bps") or 0),
         simulation_mode=snapshot.get("simulation_mode") or (snapshot.get("execution") or {}).get("mode") or "passive",
         execution_status=snapshot.get("execution_status") or (snapshot.get("execution") or {}).get("status") or "filled",
@@ -1221,6 +1273,8 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
         opened_at=position.opened_at,
         updated_at=position.updated_at,
         closed_at=position.closed_at,
+        target_states=snapshot.get("target_states") or [],
+        lifecycle_events=snapshot.get("lifecycle_events") or [],
     )
 
 
@@ -1239,15 +1293,27 @@ def _snapshot_decimal(order: Order, key: str, default: Decimal) -> Decimal:
     return _decimal(snapshot.get(key, default))
 
 
-def _position_current_price(position: Position) -> float:
-    trade = _position_to_virtual_trade(position)
-    return trade.current_price
+def _close_order_quantity(trade: VirtualTrade, fallback_quantity: Decimal) -> Decimal:
+    for event in reversed(trade.lifecycle_events):
+        if event.reason in {
+            "take_profit",
+            "stop_loss",
+            "manual_close",
+            "invalidation",
+            "cancelled",
+            "breakeven_stop",
+            "trailing_stop",
+            "time_stop",
+        } and event.quantity is not None:
+            return _decimal(event.quantity)
+    return _decimal(fallback_quantity)
 
 
 def _gross_pnl(trade: VirtualTrade, price: float) -> float:
+    quantity = trade.remaining_quantity if trade.remaining_quantity is not None else trade.quantity
     if trade.side == "long":
-        return (price - trade.entry_price) * trade.quantity
-    return (trade.entry_price - price) * trade.quantity
+        return (price - trade.entry_price) * quantity
+    return (trade.entry_price - price) * quantity
 
 
 def _trade_result(pnl: Decimal | None) -> str:
@@ -1260,6 +1326,15 @@ def _decimal(value: Any) -> Decimal:
     if isinstance(value, Decimal):
         return value
     return Decimal(str(value))
+
+
+def _optional_float(value: Any | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _optional_decimal(value: Any | None) -> Decimal | None:

@@ -100,6 +100,7 @@ def trade_invalidation_event(alert: TradeInvalidationAlert) -> dict[str, Any]:
 
 
 def take_profit_hit_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any]:
+    target_event = _latest_lifecycle_event(trade, {"partial_take_profit", "take_profit"})
     return create_realtime_event(
         "take_profit.hit",
         {
@@ -108,8 +109,10 @@ def take_profit_hit_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, 
             "pair": trade.symbol,
             "exchange": trade.exchange,
             "price": trade.exit_price or trade.current_price,
-            "target": "TP1",
-            "targetPrice": trade.take_profit[-1] if trade.take_profit else None,
+            "target": target_event.get("target_label") or "TP1",
+            "targetPrice": target_event.get("metadata", {}).get("trigger_price")
+            if target_event
+            else (trade.take_profit[-1] if trade.take_profit else None),
             "trade": trade,
         },
     )
@@ -124,7 +127,7 @@ def stop_loss_hit_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, An
             "pair": trade.symbol,
             "exchange": trade.exchange,
             "price": trade.exit_price or trade.current_price,
-            "stopLoss": trade.stop_loss,
+            "stopLoss": trade.current_stop_loss or trade.stop_loss,
             "trade": trade,
         },
     )
@@ -223,13 +226,37 @@ def _trade_payload(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any]:
         "entryPrice": trade.entry_price,
         "currentPrice": trade.current_price,
         "stopLoss": trade.stop_loss,
+        "currentStopLoss": trade.current_stop_loss,
         "takeProfit": trade.take_profit,
+        "initialQuantity": trade.initial_quantity,
+        "remainingQuantity": trade.remaining_quantity,
+        "closedQuantity": trade.closed_quantity,
+        "initialSizeUsd": trade.initial_size_usd,
+        "remainingSizeUsd": trade.remaining_size_usd,
+        "realizedPnl": trade.realized_pnl,
+        "unrealizedPnl": trade.unrealized_pnl,
+        "exitFees": trade.exit_fees,
+        "stopMovedToBreakeven": trade.stop_moved_to_breakeven,
+        "trailingActive": trade.trailing_active,
+        "targetStates": trade.target_states,
+        "lifecycleEvents": trade.lifecycle_events,
         "riskAmount": trade.risk_amount,
         "riskReward": trade.risk_reward,
         "pnl": trade.pnl,
         "pnlPercent": trade.pnl_percent,
         "closeReason": trade.close_reason,
     }
+
+
+def _latest_lifecycle_event(
+    trade: VirtualTrade | TradeJournalEntry,
+    event_types: set[str],
+) -> dict[str, Any]:
+    for event in reversed(trade.lifecycle_events):
+        payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else event
+        if isinstance(payload, dict) and payload.get("event_type") in event_types:
+            return payload
+    return {}
 
 
 def _utc_timestamp() -> str:

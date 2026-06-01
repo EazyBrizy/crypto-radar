@@ -35,6 +35,37 @@ silently falling back to risk-settings targets. Validation rules:
 `trade_plan`, `selected_rr_target` is read from
 `TradePlan.risk_rules.selected_rr_target` when provided.
 
+## Virtual Trade Lifecycle v1
+
+`VirtualTrade` keeps the legacy execution fields (`size_usd`, `quantity`,
+`stop_loss`, `take_profit`, `fees`, `pnl`, `close_reason`) for backward
+compatibility. `take_profit` remains `list[float]` and continues to represent
+the legacy target price list.
+
+Lifecycle-aware virtual trades also expose:
+
+- `initial_quantity`, `remaining_quantity`, `closed_quantity`
+- `initial_size_usd`, `remaining_size_usd`
+- `current_stop_loss`, `stop_moved_to_breakeven`, `trailing_active`
+- `realized_pnl`, `unrealized_pnl`, `exit_fees`
+- `target_states: list[VirtualTradeTargetState]`
+- `lifecycle_events: list[VirtualTradeLifecycleEvent]`
+
+`target_states` records executable take-profit targets from
+`VirtualExecutionReport.take_profit_plan` when available. Legacy virtual trades
+without `target_states` must still work by using the final legacy
+`take_profit` price as a full-close target.
+
+Lifecycle close reasons extend the legacy set with
+`partial_take_profit`, `breakeven_stop`, `trailing_stop`, and `time_stop`.
+Partial take-profit events keep the trade open, update remaining/closed
+quantities, account proportional entry fees plus exit fees in `realized_pnl`,
+and append a lifecycle event. Final closes set legacy `pnl` / `pnl_percent`
+from accumulated lifecycle PnL.
+
+Lifecycle state is persisted through the virtual trade metadata snapshot stored
+on the entry order. No database migration is required for v1.
+
 ---
 
 # Rules

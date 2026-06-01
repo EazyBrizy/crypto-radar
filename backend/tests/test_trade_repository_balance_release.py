@@ -4,7 +4,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.services.trade_repository import _release_risk_balance
+from app.schemas.trade import VirtualTradeLifecycleEvent
+from app.services.trade_repository import _close_order_quantity, _release_risk_balance
 
 
 class CapturingSession:
@@ -55,6 +56,26 @@ class TradeRepositoryBalanceReleaseTest(unittest.TestCase):
         self.assertEqual(balance.locked, Decimal("0"))
         self.assertEqual(session.added[0].delta_available, Decimal("30"))
         self.assertEqual(session.added[0].delta_locked, Decimal("-25"))
+
+    def test_close_order_quantity_uses_final_lifecycle_event_quantity(self) -> None:
+        trade = SimpleNamespace(
+            lifecycle_events=[
+                VirtualTradeLifecycleEvent(
+                    event_type="partial_take_profit",
+                    reason="partial_take_profit",
+                    quantity=Decimal("0.30"),
+                    created_at=datetime.now(timezone.utc),
+                ),
+                VirtualTradeLifecycleEvent(
+                    event_type="take_profit",
+                    reason="take_profit",
+                    quantity=Decimal("0.70"),
+                    created_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+
+        self.assertEqual(_close_order_quantity(trade, Decimal("1.00")), Decimal("0.7"))
 
 
 if __name__ == "__main__":

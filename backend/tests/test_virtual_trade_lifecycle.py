@@ -5,9 +5,17 @@ from unittest.mock import patch
 
 from app.api.v1.trades import close_market_trade
 from app.schemas.signal import RadarSignal
-from app.schemas.trade import CloseMarketTradeRequest, ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualTrade
+from app.schemas.trade import (
+    CloseMarketTradeRequest,
+    ManualConfirmRequest,
+    RealTrade,
+    TradeJournalEntry,
+    VirtualTrade,
+    VirtualTradeLifecycleEvent,
+)
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_fee_rate import RiskFeeRateSnapshot
+from app.services.risk_market_data import RiskMarketDataSnapshot
 from app.services.trade_service import TradeService
 
 
@@ -78,6 +86,27 @@ class CapturingFeeRateService:
         )
 
 
+class StableMarketDataService:
+    def build_snapshot(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        fallback_entry_price: float,
+        manual_slippage_bps: float = 0.0,
+        **_kwargs,
+    ) -> RiskMarketDataSnapshot:
+        return RiskMarketDataSnapshot(
+            exchange=exchange,
+            symbol=symbol,
+            category=None,
+            entry_price=fallback_entry_price,
+            slippage_bps=manual_slippage_bps,
+            market_data_status="missing",
+            market_data_source="test",
+        )
+
+
 class CapturingBroker:
     def __init__(self) -> None:
         self.events: list[dict] = []
@@ -109,8 +138,8 @@ class RealOnlyTradeRepository(EphemeralTradeRepository):
 
 
 class VirtualTradeLifecycleTest(unittest.TestCase):
-    def test_long_position_closes_on_take_profit_and_updates_account(self) -> None:
-        service = TradeService(repository=EphemeralTradeRepository())
+    def test_final_take_profit_closes_remaining_position_and_updates_account(self) -> None:
+        service = self._service()
         trade = service.open_virtual_trade(
             self._signal(direction="long", stop_loss=90.0),
             ManualConfirmRequest(),
@@ -123,18 +152,108 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
         self.assertEqual(updated[0].status, "closed")
         self.assertEqual(updated[0].close_reason, "take_profit")
-        entry_fee_rate = trade.fees / trade.size_usd
-        expected_pnl = (130.0 - trade.entry_price) * trade.quantity
-        expected_pnl -= trade.fees + trade.quantity * 130.0 * entry_fee_rate
+        expected_pnl = sum(
+            event.realized_pnl or 0.0
+            for event in updated[0].lifecycle_events
+            if event.reason in {"partial_take_profit", "take_profit"}
+        )
         self.assertAlmostEqual(updated[0].pnl or 0.0, expected_pnl)
+        self.assertAlmostEqual(updated[0].remaining_quantity or 0.0, 0.0)
+        self.assertAlmostEqual(updated[0].closed_quantity, trade.initial_quantity or trade.quantity)
+        self.assertTrue(all(target.hit for target in updated[0].target_states))
 
         account = service.get_virtual_account()
         self.assertAlmostEqual(account.balance, 100 + expected_pnl)
         self.assertAlmostEqual(account.realized_pnl, expected_pnl)
         self.assertEqual(account.wins, 1)
 
+    def test_tp1_partially_closes_position(self) -> None:
+        service = self._service()
+        trade = service.open_virtual_trade(
+            self._signal(direction="long", stop_loss=90.0),
+            ManualConfirmRequest(),
+        )
+
+        updated = service.update_market_price("bybit", "BTCUSDT", 110.0)[0]
+
+        self.assertEqual(updated.status, "open")
+        self.assertEqual(updated.close_reason, "partial_take_profit")
+        expected_closed_quantity = (trade.initial_quantity or trade.quantity) * 0.30
+        self.assertAlmostEqual(updated.closed_quantity, expected_closed_quantity)
+        self.assertAlmostEqual(
+            updated.remaining_quantity or 0.0,
+            (trade.initial_quantity or trade.quantity) - expected_closed_quantity,
+        )
+        self.assertTrue(updated.target_states[0].hit)
+        self.assertFalse(updated.target_states[1].hit)
+        account = service.get_virtual_account()
+        self.assertAlmostEqual(account.realized_pnl, updated.realized_pnl)
+        self.assertAlmostEqual(account.equity, 100 + updated.realized_pnl + updated.unrealized_pnl)
+
+    def test_tp1_moves_stop_to_breakeven_when_target_action_says_so(self) -> None:
+        service = self._service()
+        trade = service.open_virtual_trade(
+            self._signal(direction="long", stop_loss=90.0),
+            ManualConfirmRequest(),
+        )
+        assert trade.execution is not None
+        assert trade.execution.breakeven_plan is not None
+
+        updated = service.update_market_price("bybit", "BTCUSDT", 110.0)[0]
+
+        self.assertTrue(updated.stop_moved_to_breakeven)
+        self.assertAlmostEqual(
+            updated.current_stop_loss or 0.0,
+            trade.execution.breakeven_plan.breakeven_stop_price,
+        )
+        self.assertEqual(
+            updated.lifecycle_events[-1].event_type,
+            "stop_moved_to_breakeven",
+        )
+
+    def test_breakeven_stop_closes_remaining_position(self) -> None:
+        service = self._service()
+        service.open_virtual_trade(
+            self._signal(direction="long", stop_loss=90.0),
+            ManualConfirmRequest(),
+        )
+        after_tp1 = service.update_market_price("bybit", "BTCUSDT", 110.0)[0]
+
+        updated = service.update_market_price(
+            "bybit",
+            "BTCUSDT",
+            after_tp1.current_stop_loss or after_tp1.entry_price,
+        )[0]
+
+        self.assertEqual(updated.status, "closed")
+        self.assertEqual(updated.close_reason, "breakeven_stop")
+        self.assertAlmostEqual(updated.remaining_quantity or 0.0, 0.0)
+        self.assertGreater(updated.realized_pnl, 0.0)
+
+    def test_partial_fees_are_accounted(self) -> None:
+        service = self._service()
+        trade = service.open_virtual_trade(
+            self._signal(direction="long", stop_loss=90.0),
+            ManualConfirmRequest(fee_rate=0.001),
+        )
+        target = trade.target_states[0]
+        initial_quantity = trade.initial_quantity or trade.quantity
+        initial_size = trade.initial_size_usd or trade.size_usd
+        close_quantity = initial_quantity * target.close_percent / 100
+        entry_fee_rate = trade.fees / initial_size
+
+        updated = service.update_market_price("bybit", "BTCUSDT", target.price)[0]
+
+        expected_exit_fee = close_quantity * target.price * entry_fee_rate
+        expected_entry_fee = trade.fees * target.close_percent / 100
+        expected_realized = (target.price - trade.entry_price) * close_quantity
+        expected_realized -= expected_entry_fee + expected_exit_fee
+        self.assertAlmostEqual(updated.exit_fees, expected_exit_fee)
+        self.assertAlmostEqual(updated.fees, trade.fees + expected_exit_fee)
+        self.assertAlmostEqual(updated.realized_pnl, expected_realized)
+
     def test_long_position_closes_on_stop_loss_and_updates_account(self) -> None:
-        service = TradeService(repository=EphemeralTradeRepository())
+        service = self._service()
         service.open_virtual_trade(
             self._signal(direction="long", stop_loss=90.0),
             ManualConfirmRequest(),
@@ -151,9 +270,87 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertAlmostEqual(account.realized_pnl, -7.5)
         self.assertEqual(account.losses, 1)
 
+    def test_legacy_virtual_trade_without_target_states_still_works(self) -> None:
+        repository = EphemeralTradeRepository()
+        now = datetime.now(timezone.utc)
+        repository.save_virtual_trade(
+            VirtualTrade(
+                id="legacy_trade",
+                user_id="demo_user",
+                signal_id="legacy_signal",
+                exchange="bybit",
+                symbol="BTCUSDT",
+                strategy="legacy",
+                timeframe="15m",
+                side="long",
+                entry_price=100.0,
+                current_price=100.0,
+                size_usd=100.0,
+                quantity=1.0,
+                leverage=1,
+                risk_percent=1.0,
+                risk_amount=10.0,
+                stop_loss=90.0,
+                take_profit=[110.0, 120.0],
+                status="open",
+                opened_at=now,
+                updated_at=now,
+            )
+        )
+        service = self._service(repository=repository)
+
+        updated = service.update_market_price("bybit", "BTCUSDT", 120.0)[0]
+
+        self.assertEqual(updated.status, "closed")
+        self.assertEqual(updated.close_reason, "take_profit")
+        self.assertEqual(updated.take_profit, [110.0, 120.0])
+        self.assertEqual(updated.target_states[0].label, "TP2")
+        self.assertAlmostEqual(updated.pnl or 0.0, 20.0)
+
+    def test_time_stop_hook_closes_when_armed(self) -> None:
+        repository = EphemeralTradeRepository()
+        now = datetime.now(timezone.utc)
+        repository.save_virtual_trade(
+            VirtualTrade(
+                id="time_stop_trade",
+                user_id="demo_user",
+                signal_id="time_stop_signal",
+                exchange="bybit",
+                symbol="BTCUSDT",
+                strategy="legacy",
+                timeframe="15m",
+                side="long",
+                entry_price=100.0,
+                current_price=100.0,
+                size_usd=100.0,
+                quantity=1.0,
+                leverage=1,
+                risk_percent=1.0,
+                risk_amount=10.0,
+                stop_loss=90.0,
+                take_profit=[120.0],
+                status="open",
+                opened_at=now,
+                updated_at=now,
+                lifecycle_events=[
+                    VirtualTradeLifecycleEvent(
+                        event_type="time_stop_armed",
+                        created_at=now,
+                        metadata={"max_holding_seconds": 0},
+                    )
+                ],
+            )
+        )
+        service = self._service(repository=repository)
+
+        updated = service.update_market_price("bybit", "BTCUSDT", 101.0)[0]
+
+        self.assertEqual(updated.status, "closed")
+        self.assertEqual(updated.close_reason, "time_stop")
+        self.assertAlmostEqual(updated.exit_price or 0.0, 101.0)
+
     def test_virtual_trade_uses_risk_profile_position_sizing(self) -> None:
-        service = TradeService(
-            repository=EphemeralTradeRepository(),
+        service = self._service(
             risk_settings_provider=lambda _user_id: RiskManagementSettings(
                 risk_profile="balanced",
                 risk_per_trade_percent=1.0,
@@ -162,6 +359,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
                 max_account_drawdown_percent=10.0,
                 max_open_risk_percent=5.0,
                 stop_loss_mode="structure",
+                virtual_starting_balance=100.0,
             ),
         )
         trade = service.open_virtual_trade(
@@ -187,8 +385,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertLess(trade.execution.position_sizing.position_size_base, 0.1)
 
     def test_virtual_trade_can_use_fixed_percent_stop_from_user_settings(self) -> None:
-        service = TradeService(
-            repository=EphemeralTradeRepository(),
+        service = self._service(
             risk_settings_provider=lambda _user_id: RiskManagementSettings(
                 risk_profile="balanced",
                 risk_per_trade_percent=1.0,
@@ -209,8 +406,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertEqual(trade.take_profit, [101.5, 103.0, 104.5])
 
     def test_virtual_trade_rejects_leverage_above_user_max(self) -> None:
-        service = TradeService(
-            repository=EphemeralTradeRepository(),
+        service = self._service(
             risk_settings_provider=lambda _user_id: RiskManagementSettings(
                 risk_profile="balanced",
                 risk_per_trade_percent=1.0,
@@ -230,8 +426,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
             )
 
     def test_virtual_trade_rejects_liquidation_before_stop(self) -> None:
-        service = TradeService(
-            repository=EphemeralTradeRepository(),
+        service = self._service(
             risk_settings_provider=lambda _user_id: RiskManagementSettings(
                 risk_profile="balanced",
                 risk_per_trade_percent=1.0,
@@ -252,8 +447,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
     def test_virtual_fee_cache_uses_spot_or_futures_from_leverage(self) -> None:
         spot_fee_service = CapturingFeeRateService()
-        TradeService(
-            repository=EphemeralTradeRepository(),
+        self._service(
             fee_rate_service=spot_fee_service,
         ).open_virtual_trade(
             self._signal(direction="long", stop_loss=90.0),
@@ -261,8 +455,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         )
 
         futures_fee_service = CapturingFeeRateService()
-        TradeService(
-            repository=EphemeralTradeRepository(),
+        self._service(
             fee_rate_service=futures_fee_service,
         ).open_virtual_trade(
             self._signal(direction="long", stop_loss=90.0),
@@ -271,6 +464,17 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
         self.assertEqual(spot_fee_service.instrument_types, ["spot"])
         self.assertEqual(futures_fee_service.instrument_types, ["futures"])
+
+    @staticmethod
+    def _service(
+        repository: EphemeralTradeRepository | None = None,
+        **kwargs,
+    ) -> TradeService:
+        return TradeService(
+            repository=repository or EphemeralTradeRepository(),
+            market_data_service=StableMarketDataService(),
+            **kwargs,
+        )
 
     @staticmethod
     def _signal(direction: str, stop_loss: float) -> RadarSignal:
@@ -300,7 +504,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
 class TradeApiMarketCloseTest(unittest.IsolatedAsyncioTestCase):
     async def test_market_close_endpoint_closes_virtual_trade_at_current_price(self) -> None:
-        service = TradeService(repository=EphemeralTradeRepository())
+        service = VirtualTradeLifecycleTest._service()
         trade = service.open_virtual_trade(
             VirtualTradeLifecycleTest._signal(direction="long", stop_loss=90.0),
             ManualConfirmRequest(fee_rate=0.001),
@@ -323,7 +527,7 @@ class TradeApiMarketCloseTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event["type"] for event in broker.events], ["trade.closed"])
 
     async def test_market_close_endpoint_preserves_invalidation_close_reason(self) -> None:
-        service = TradeService(repository=EphemeralTradeRepository())
+        service = VirtualTradeLifecycleTest._service()
         trade = service.open_virtual_trade(
             VirtualTradeLifecycleTest._signal(direction="long", stop_loss=90.0),
             ManualConfirmRequest(fee_rate=0.001),
@@ -365,7 +569,7 @@ class TradeApiMarketCloseTest(unittest.IsolatedAsyncioTestCase):
             opened_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
-        service = TradeService(repository=RealOnlyTradeRepository(real_trade))
+        service = VirtualTradeLifecycleTest._service(repository=RealOnlyTradeRepository(real_trade))
         broker = CapturingBroker()
 
         with (

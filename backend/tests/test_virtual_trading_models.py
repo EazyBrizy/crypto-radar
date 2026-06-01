@@ -1,10 +1,12 @@
 import unittest
+from datetime import datetime, timezone
 
 from sqlalchemy import Numeric
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.models.portfolio import Order, OrderFill, Portfolio
 from app.models.portfolio import PortfolioBalance, PortfolioBalanceLedger, Position
+from app.schemas.trade import VirtualTrade
 
 
 class VirtualTradingModelsTest(unittest.TestCase):
@@ -51,6 +53,39 @@ class VirtualTradingModelsTest(unittest.TestCase):
         self.assertIn("ck_positions_mode", constraint_names)
         self.assertIn("ck_positions_side", constraint_names)
         self.assertIn("ck_positions_status", constraint_names)
+
+    def test_virtual_trade_lifecycle_fields_are_backward_compatible(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = VirtualTrade(
+            id="legacy_trade",
+            user_id="demo_user",
+            signal_id="legacy_signal",
+            exchange="bybit",
+            symbol="BTCUSDT",
+            strategy="legacy",
+            timeframe="15m",
+            side="long",
+            entry_price=100.0,
+            current_price=100.0,
+            size_usd=100.0,
+            quantity=1.0,
+            leverage=1,
+            risk_percent=1.0,
+            stop_loss=90.0,
+            take_profit=[120.0],
+            status="open",
+            opened_at=now,
+            updated_at=now,
+        )
+
+        self.assertIsNone(trade.initial_quantity)
+        self.assertIsNone(trade.remaining_quantity)
+        self.assertEqual(trade.closed_quantity, 0.0)
+        self.assertIsNone(trade.current_stop_loss)
+        self.assertEqual(trade.realized_pnl, 0.0)
+        self.assertEqual(trade.exit_fees, 0.0)
+        self.assertEqual(trade.target_states, [])
+        self.assertEqual(trade.lifecycle_events, [])
 
 
 if __name__ == "__main__":

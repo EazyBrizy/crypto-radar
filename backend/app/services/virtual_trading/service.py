@@ -30,7 +30,6 @@ from app.schemas.trade import (
     CloseReason,
     CloseVirtualTradeRequest,
     ManualConfirmRequest,
-    TradeResult,
     TradeJournalEntry,
     VirtualAccount,
     VirtualExecutionReport,
@@ -50,6 +49,12 @@ from app.services.trade_repository import (
     TradeRepository,
     VirtualTradeConfirmationResult,
     VirtualTradePersistenceEvent,
+)
+from app.services.virtual_trade_lifecycle import (
+    apply_virtual_trade_market_price,
+    arm_virtual_trade_time_stop,
+    close_virtual_trade_lifecycle,
+    initialize_virtual_trade_lifecycle,
 )
 from app.services.virtual_trading.execution_engine import (
     VirtualExecutionEngine,
@@ -193,6 +198,7 @@ class VirtualTradingService:
             for trade in self._repository.list_virtual_trades(status="open")
             if trade.user_id == user_id and trade.status == "open"
         ]
+        open_realized_pnl = sum(trade.realized_pnl for trade in open_trades)
         unrealized_pnl = sum(
             self._gross_pnl(trade, trade.current_price)
             for trade in open_trades
@@ -205,8 +211,8 @@ class VirtualTradingService:
             user_id=user_id,
             starting_balance=starting_balance,
             balance=balance,
-            equity=balance + unrealized_pnl,
-            realized_pnl=realized_pnl,
+            equity=balance + open_realized_pnl + unrealized_pnl,
+            realized_pnl=realized_pnl + open_realized_pnl,
             unrealized_pnl=unrealized_pnl,
             risk_per_trade=VIRTUAL_RISK_PER_TRADE,
             risk_reward=VIRTUAL_RISK_REWARD,
@@ -572,7 +578,7 @@ class VirtualTradingService:
         execution = self._execution_with_risk_decision(execution, filled_decision)
         quantity = size_usd / entry_price
         now = datetime.now(timezone.utc)
-        return VirtualTrade(
+        trade = VirtualTrade(
             id=f"vtr_{uuid4().hex[:12]}",
             user_id=gate_request.user_id,
             signal_id=signal.id,
@@ -601,6 +607,12 @@ class VirtualTradingService:
             execution=execution,
             opened_at=now,
             updated_at=now,
+        )
+        trade = initialize_virtual_trade_lifecycle(trade)
+        return arm_virtual_trade_time_stop(
+            trade,
+            _trade_plan_time_stop_metadata(signal),
+            now,
         )
 
     def _simulate_entry_execution_through_risk_gate(
@@ -863,49 +875,17 @@ class VirtualTradingService:
 
             now = datetime.now(timezone.utc)
             simulated_price = self._private_simulated_price(trade, price, now)
-            updated_trade = self._mark_price(trade, simulated_price, now)
-            close_target = self._close_target(updated_trade, simulated_price)
-            if close_target is not None:
-                exit_price, reason = close_target
-                updated_trade = self._close_trade(updated_trade, exit_price, reason)
+            lifecycle_result = apply_virtual_trade_market_price(
+                trade,
+                simulated_price,
+                now,
+            )
+            updated_trade = self._repository.save_virtual_trade(lifecycle_result.trade)
+            if lifecycle_result.closed:
+                self._after_virtual_trade_events(self._consume_repository_events())
+                self._apply_account_close(updated_trade, updated_trade.pnl or 0.0)
             updated.append(updated_trade)
         return updated
-
-    def _mark_price(
-        self,
-        trade: VirtualTrade,
-        price: float,
-        now: datetime | None = None,
-    ) -> VirtualTrade:
-        unrealized = self._gross_pnl(trade, price)
-        updated = trade.model_copy(
-            update={
-                "current_price": price,
-                "mfe": max(trade.mfe, unrealized),
-                "mae": min(trade.mae, unrealized),
-                "updated_at": now or datetime.now(timezone.utc),
-            }
-        )
-        self._repository.save_virtual_trade(updated)
-        return updated
-
-    def _close_target(
-        self,
-        trade: VirtualTrade,
-        price: float,
-    ) -> Optional[tuple[float, CloseReason]]:
-        final_take_profit = trade.take_profit[-1] if trade.take_profit else None
-        if trade.side == "long":
-            if price <= trade.stop_loss:
-                return trade.stop_loss, "stop_loss"
-            if final_take_profit is not None and price >= final_take_profit:
-                return final_take_profit, "take_profit"
-        else:
-            if price >= trade.stop_loss:
-                return trade.stop_loss, "stop_loss"
-            if final_take_profit is not None and price <= final_take_profit:
-                return final_take_profit, "take_profit"
-        return None
 
     def _close_trade(
         self,
@@ -915,37 +895,16 @@ class VirtualTradingService:
     ) -> VirtualTrade:
         if trade.status != "open":
             return trade
-
-        exit_slippage_bps = self._exit_slippage_bps_for_trade(trade, reason)
-        slipped_exit = self._apply_exit_slippage(
+        lifecycle_result = close_virtual_trade_lifecycle(
+            trade,
             exit_price,
-            trade.side,
-            exit_slippage_bps,
+            reason,
+            datetime.now(timezone.utc),
         )
-        exit_fee = trade.quantity * slipped_exit * (trade.fees / trade.size_usd)
-        gross_pnl = self._gross_pnl(trade, slipped_exit)
-        total_fees = trade.fees + exit_fee
-        net_pnl = gross_pnl - total_fees
-        pnl_percent = net_pnl / trade.size_usd * 100 if trade.size_usd else 0.0
-        now = datetime.now(timezone.utc)
-
-        updated = trade.model_copy(
-            update={
-                "current_price": slipped_exit,
-                "exit_price": slipped_exit,
-                "fees": total_fees,
-                "status": "closed",
-                "result": self._result(net_pnl),
-                "close_reason": reason,
-                "pnl": net_pnl,
-                "pnl_percent": pnl_percent,
-                "updated_at": now,
-                "closed_at": now,
-            }
-        )
-        updated = self._repository.save_virtual_trade(updated)
+        updated = self._repository.save_virtual_trade(lifecycle_result.trade)
         self._after_virtual_trade_events(self._consume_repository_events())
-        self._apply_account_close(updated, net_pnl)
+        if lifecycle_result.closed:
+            self._apply_account_close(updated, updated.pnl or 0.0)
         return updated
 
     def _after_signal_write(self, result: SignalWriteResult) -> None:
@@ -1030,36 +989,6 @@ class VirtualTradingService:
         raise ValueError("У сигнала нет entry zone")
 
     @staticmethod
-    def _apply_entry_slippage(
-        price: float,
-        side: str,
-        slippage_bps: float,
-    ) -> float:
-        multiplier = slippage_bps / 10_000
-        return price * (1 + multiplier) if side == "long" else price * (1 - multiplier)
-
-    @staticmethod
-    def _apply_exit_slippage(
-        price: float,
-        side: str,
-        slippage_bps: float,
-    ) -> float:
-        multiplier = slippage_bps / 10_000
-        return price * (1 - multiplier) if side == "long" else price * (1 + multiplier)
-
-    @staticmethod
-    def _exit_slippage_bps_for_trade(
-        trade: VirtualTrade,
-        reason: CloseReason,
-    ) -> float:
-        if trade.execution is None:
-            return trade.slippage_bps
-        exit_slippage_bps = max(trade.execution.exit_slippage_bps, trade.slippage_bps)
-        if reason == "stop_loss" and trade.execution.mode == "impact_aware":
-            return exit_slippage_bps * 1.1
-        return exit_slippage_bps
-
-    @staticmethod
     def _private_simulated_price(
         trade: VirtualTrade,
         real_price: float,
@@ -1078,17 +1007,10 @@ class VirtualTradingService:
 
     @staticmethod
     def _gross_pnl(trade: VirtualTrade, price: float) -> float:
+        quantity = trade.remaining_quantity if trade.remaining_quantity is not None else trade.quantity
         if trade.side == "long":
-            return (price - trade.entry_price) * trade.quantity
-        return (trade.entry_price - price) * trade.quantity
-
-    @staticmethod
-    def _result(pnl: float) -> TradeResult:
-        if pnl > 0:
-            return "win"
-        if pnl < 0:
-            return "loss"
-        return "breakeven"
+            return (price - trade.entry_price) * quantity
+        return (trade.entry_price - price) * quantity
 
 
 virtual_trading_service = VirtualTradingService(
@@ -1194,6 +1116,23 @@ def _fee_context_kwargs(fee_rate: RiskFeeRateSnapshot) -> dict[str, Any]:
 
 def _virtual_fee_instrument_type(request: ManualConfirmRequest) -> str:
     return "futures" if request.leverage > 1 else "spot"
+
+
+def _trade_plan_time_stop_metadata(signal: RadarSignal) -> dict[str, Any] | None:
+    trade_plan = signal.trade_plan
+    if trade_plan is None:
+        return None
+    metadata: dict[str, Any] = {}
+    sources = [trade_plan.metadata, trade_plan.risk_rules.metadata]
+    if trade_plan.invalidation is not None:
+        sources.append(trade_plan.invalidation.metadata)
+    for source in sources:
+        if not source:
+            continue
+        for key in ("time_stop", "time_stop_at", "expires_at", "at", "max_holding_seconds"):
+            if source.get(key) is not None:
+                metadata[key] = source[key]
+    return metadata or None
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:

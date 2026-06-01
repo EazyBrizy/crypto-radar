@@ -392,6 +392,78 @@ available. If exchange rule step sizes are available, quantity must align with
 `qty_step` and entry/stop/take-profit prices must align with `tick_size` before
 adapter methods are called.
 
+## Real Position Reconciliation v1
+
+After a real execution adapter submits orders, exchange order/position state is
+the source of truth for local live `Order` and `Position` records.
+
+`RealPositionSyncWorker` periodically uses a configured real sync client to:
+
+- fetch exchange open orders;
+- fetch exchange positions;
+- look up terminal state for local open live orders by `client_order_id`;
+- pass normalized snapshots to `RealTradeImportService.reconcile_connection`.
+
+The sync client must not submit or cancel orders. It only reads exchange state.
+
+`ExchangeOrderSnapshot` is the normalized order contract consumed by
+reconciliation:
+
+- `exchange`, `symbol`
+- `exchange_order_id | None`
+- `client_order_id | None`
+- `side`: `buy` or `sell`
+- `order_type | None`: `market`, `limit`, `stop`, or `take_profit`
+- `status`: normalized exchange status such as `submitted`,
+  `partially_filled`, `filled`, `cancelled`, or `rejected`
+- `quantity | None`
+- `filled_quantity | None`
+- `price | None`, `stop_price | None`, `avg_price | None`
+- `reduce_only`
+- optional `role`: `entry`, `protective_stop`, or `take_profit`
+- optional `signal_id`, `position_id`
+- optional `updated_at`
+- `raw`
+
+`ExchangePositionSnapshot` is the normalized position contract:
+
+- `exchange`, `symbol`
+- `side`: `long` or `short`
+- `quantity`
+- `entry_avg_price`
+- optional `signal_id`, `position_id`, `exchange_position_id`
+- optional `mark_price`, `unrealized_pnl`, `updated_at`
+- `raw`
+
+Idempotency is based on available identity fields in this order:
+
+- `client_order_id`
+- `exchange_order_id`
+- `signal_id`
+- `position_id`
+
+Reconciliation behavior:
+
+- partial entry fills update local order status and local live position
+  quantity/entry price to the exchange-reported actual position;
+- cancelled or rejected entry orders close any unmatched local live position so
+  it no longer contributes to real open risk;
+- filled reduce-only stop/TP orders close the matched local live position when
+  the exchange no longer reports an open position;
+- exchange position size mismatches update local live position quantity;
+- local live positions missing from exchange positions are closed and audited;
+- unmatched exchange positions are audited as manual/external positions and are
+  not silently inserted as local strategy positions.
+
+`external_exchange_orders` remains idempotent by
+`connection_id + exchange_order_id`; client order ids, reduce-only flags,
+filled quantities, and local identity fields are stored in order metadata for
+backward compatibility.
+
+Real risk state continues to read open live risk from local `positions`, but
+after reconciliation those positions reflect actual exchange positions rather
+than only local execution intent.
+
 ## L2 Orderbook Market Quality v1
 
 `OrderbookSnapshotWorker` refreshes configured/watchlist Bybit symbols and

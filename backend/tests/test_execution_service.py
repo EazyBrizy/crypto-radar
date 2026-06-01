@@ -117,6 +117,10 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             ["entry", "protective_stop", "take_profit", "take_profit"],
         )
         self.assertTrue(all(order.status == "dry_run" for order in result.planned_orders))
+        for order in result.planned_orders:
+            self.assertEqual(order.metadata["role"], order.role)
+            self.assertEqual(order.metadata["client_order_id"], order.client_order_id)
+            self.assertEqual(order.metadata["reduce_only"], order.reduce_only)
 
     async def test_no_adapter_returns_not_implemented_without_placing_order(self) -> None:
         service = _service(_decision(), execution_adapter=None)

@@ -316,6 +316,8 @@ def _build_execution_plan(
     )
     idempotency_key = f"real-exec:{digest}"
     client_order_id = f"cr-{digest[:20]}"
+    entry_client_order_id = _order_client_id(digest, "entry")
+    stop_client_order_id = _order_client_id(digest, "sl")
     orders = [
         ExecutionPlannedOrder(
             role="entry",
@@ -326,12 +328,15 @@ def _build_execution_plan(
             quantity=sizing.position_size_base,
             price=sizing.entry_price,
             reduce_only=False,
-            client_order_id=_order_client_id(digest, "entry"),
+            client_order_id=entry_client_order_id,
             idempotency_key=f"{idempotency_key}:entry",
             metadata={
                 "signal_id": signal.id,
                 "strategy": signal.strategy,
                 "timeframe": signal.timeframe,
+                "role": "entry",
+                "client_order_id": entry_client_order_id,
+                "reduce_only": False,
             },
         ),
         ExecutionPlannedOrder(
@@ -343,17 +348,21 @@ def _build_execution_plan(
             quantity=sizing.position_size_base,
             stop_price=risk_decision.stop_loss_plan.stop_loss_price,
             reduce_only=True,
-            client_order_id=_order_client_id(digest, "sl"),
+            client_order_id=stop_client_order_id,
             idempotency_key=f"{idempotency_key}:sl",
             metadata={
                 "signal_id": signal.id,
                 "stop_loss_source": risk_decision.stop_loss_plan.source,
+                "role": "protective_stop",
+                "client_order_id": stop_client_order_id,
+                "reduce_only": True,
             },
         ),
     ]
     for index, target in enumerate(risk_decision.take_profit_plan.targets, start=1):
         if target.close_percent <= 0:
             continue
+        tp_client_order_id = _order_client_id(digest, f"tp{index}")
         orders.append(
             ExecutionPlannedOrder(
                 role="take_profit",
@@ -365,7 +374,7 @@ def _build_execution_plan(
                 price=target.price,
                 reduce_only=True,
                 close_percent=target.close_percent,
-                client_order_id=_order_client_id(digest, f"tp{index}"),
+                client_order_id=tp_client_order_id,
                 idempotency_key=f"{idempotency_key}:tp{index}",
                 metadata={
                     "signal_id": signal.id,
@@ -373,6 +382,9 @@ def _build_execution_plan(
                     "r_multiple": target.r_multiple,
                     "action": target.action,
                     "take_profit_source": risk_decision.take_profit_plan.source,
+                    "role": "take_profit",
+                    "client_order_id": tp_client_order_id,
+                    "reduce_only": True,
                 },
             )
         )

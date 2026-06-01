@@ -12,7 +12,7 @@ from app.repositories.signal_repository import (
 )
 from app.schemas.signal import RadarSignal, StrategySignal
 from app.services.risk_management import default_rr_guard_mode_for_context
-from app.services.signal_risk_reward import ensure_strategy_rr_eligible
+from app.services.signal_risk_reward import ensure_signal_execution_eligible
 
 logger = logging.getLogger(__name__)
 
@@ -237,9 +237,12 @@ class SignalService:
         signal = self._repository.get_signal(signal_id)
         if signal is None:
             return None
-        ensure_strategy_rr_eligible(
+        raw_mode = str(request.get("mode") or "virtual").strip().lower()
+        mode = "real" if raw_mode == "real" else "virtual"
+        ensure_signal_execution_eligible(
             signal,
-            guard_mode=default_rr_guard_mode_for_context(str(request.get("mode") or "virtual")),
+            mode=mode,
+            rr_guard_mode=default_rr_guard_mode_for_context(mode),
         )
         result = arm(signal_id, request=request)
         if result is None:

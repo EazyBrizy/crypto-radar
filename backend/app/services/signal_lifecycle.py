@@ -8,7 +8,7 @@ from app.schemas.market import Features
 from app.schemas.signal import RadarSignal
 from app.services.message_broker import realtime_event_broker
 from app.services.realtime_events import signal_invalidated_event, signal_updated_event
-from app.services.signal_risk_reward import strategy_rr_block_reason
+from app.services.signal_risk_reward import signal_rr_warning_reason
 from app.services.signal_service import SignalService, signal_service
 from app.services.trade_invalidation import signal_invalidation_conditions
 
@@ -149,10 +149,10 @@ def _lifecycle_decision(signal: RadarSignal, features: Features) -> _LifecycleDe
             )
 
     if signal.status == "watchlist" and _entry_zone_touched(signal, features):
-        rr_block_reason = strategy_rr_block_reason(signal)
+        rr_warning_reason = signal_rr_warning_reason(signal)
         return _LifecycleDecision(
             status="ready",
-            reason=rr_block_reason or "Watchlist idea reached the planned entry area; waiting for confirmation",
+            reason=rr_warning_reason or "Watchlist idea reached the planned entry area; waiting for confirmation",
         )
 
     return None
@@ -267,7 +267,7 @@ def _confirmation_snapshot(signal: RadarSignal, features: Features) -> dict[str,
 
 
 def _status_reason_blocks_actionable(signal: RadarSignal) -> bool:
-    if strategy_rr_block_reason(signal) is not None:
+    if _hard_rr_guard_blocked(signal):
         return True
     reason = (signal.status_reason or "").lower()
     blockers = (
@@ -278,6 +278,19 @@ def _status_reason_blocks_actionable(signal: RadarSignal) -> bool:
         "low-liquidity asset needs",
     )
     return any(blocker in reason for blocker in blockers)
+
+
+def _hard_rr_guard_blocked(signal: RadarSignal) -> bool:
+    if signal.confirmation is None:
+        return False
+    for check in signal.confirmation.checks:
+        if check.name != "risk_reward_guard":
+            continue
+        if check.metadata.get("risk_reward_blocked") is True:
+            return True
+        if check.status == "failed" and check.metadata.get("risk_reward_guard_mode") == "hard":
+            return True
+    return False
 
 
 signal_lifecycle_worker = SignalLifecycleWorker()

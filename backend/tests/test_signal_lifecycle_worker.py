@@ -97,7 +97,7 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(auto_entry.signals), 1)
         self.assertEqual(auto_entry.signals[0].status, "actionable")
 
-    async def test_failed_strategy_rr_does_not_become_actionable(self) -> None:
+    async def test_low_rr_warning_does_not_block_actionable_transition(self) -> None:
         signal = _signal(
             status="ready",
             selected_rr=0.32,
@@ -119,9 +119,9 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
             _features(close=101.8, open=100.8, low=100.4, high=102.0, previous_high=101.4, volume_spike=1.2)
         )
 
-        self.assertEqual(transitions, [])
-        self.assertEqual(store.signals[signal.id].status, "ready")
-        self.assertEqual(auto_entry.signals, [])
+        self.assertEqual(len(transitions), 1)
+        self.assertEqual(store.signals[signal.id].status, "actionable")
+        self.assertEqual(len(auto_entry.signals), 1)
 
     async def test_ready_signal_waits_without_micro_break(self) -> None:
         signal = _signal(status="ready")

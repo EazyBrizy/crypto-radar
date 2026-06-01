@@ -23,7 +23,7 @@ class _FakeRealtimeBroker:
 
 class _ExplodingRiskGateService:
     def evaluate(self, *args, **kwargs):
-        raise AssertionError("risk gate should not run when strategy RR blocks first")
+        raise AssertionError("risk gate should not run when execution RR policy rejects first")
 
 
 class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
@@ -228,8 +228,8 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, "risk_failed")
         self.assertIsNone(result.risk_decision)
-        self.assertIn("Strategy risk/reward blocked real order", result.message)
-        self.assertIn("Risk/reward blocked", result.message)
+        self.assertIn("Execution policy rejected real order", result.message)
+        self.assertIn("Execution RR policy rejected", result.message)
 
     async def test_real_confirm_endpoint_cannot_bypass_strategy_rr_block(self) -> None:
         now = datetime.now(timezone.utc)
@@ -244,7 +244,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(exc.exception.status_code, 422)
         self.assertEqual(exc.exception.detail["status"], "risk_failed")
-        self.assertIn("Strategy risk/reward blocked real order", exc.exception.detail["message"])
+        self.assertIn("Execution policy rejected real order", exc.exception.detail["message"])
 
 
 def _rr_failed_signal(signal_id: str, *, now: datetime, status: str) -> RadarSignal:

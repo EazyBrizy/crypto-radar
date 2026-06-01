@@ -138,7 +138,7 @@ class VirtualTradeConfirmationContractTest(unittest.TestCase):
         with self.assertRaises(StrategyRiskRewardBlocked) as exc:
             service.confirm_signal(_rr_failed_signal(), ManualConfirmRequest())
 
-        self.assertIn("Risk/reward blocked", exc.exception.reason)
+        self.assertIn("Execution RR policy rejected", exc.exception.reason)
         self.assertIsNone(repository.received_trade)
 
 

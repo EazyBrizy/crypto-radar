@@ -19,7 +19,7 @@ from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.risk_management import get_user_risk_management_settings, resolve_rr_guard_mode
 from app.services.risk_market_data import RiskMarketDataService, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
-from app.services.signal_risk_reward import strategy_rr_block_reason
+from app.services.signal_risk_reward import StrategyRiskRewardBlocked, ensure_signal_execution_eligible
 
 
 _DEFAULT_EXECUTION_ADAPTER = object()
@@ -64,20 +64,22 @@ class RealExecutionService:
         request: ManualConfirmRequest,
     ) -> RealExecutionResult:
         risk_settings = self._risk_settings_provider(request.user_id)
-        rr_block_reason = strategy_rr_block_reason(
-            signal,
-            guard_mode=resolve_rr_guard_mode(
-                risk_settings,
-                context="real",
-                strategy=signal.strategy,
-            ),
-        )
-        if rr_block_reason is not None:
+        try:
+            ensure_signal_execution_eligible(
+                signal,
+                mode="real",
+                rr_guard_mode=resolve_rr_guard_mode(
+                    risk_settings,
+                    context="real",
+                    strategy=signal.strategy,
+                ),
+            )
+        except StrategyRiskRewardBlocked as exc:
             return RealExecutionResult(
                 status="risk_failed",
                 exchange=signal.exchange,
                 symbol=signal.symbol,
-                message=f"Strategy risk/reward blocked real order: {rr_block_reason}",
+                message=f"Execution policy rejected real order: {exc.reason}",
             )
 
         instrument_type = "futures" if request.leverage > 1 else "spot"

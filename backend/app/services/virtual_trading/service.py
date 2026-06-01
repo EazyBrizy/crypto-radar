@@ -43,7 +43,7 @@ from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.risk_management import get_user_risk_management_settings, resolve_rr_guard_mode
 from app.services.risk_market_data import RiskMarketDataService, RiskMarketDataSnapshot, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
-from app.services.signal_risk_reward import ensure_strategy_rr_eligible
+from app.services.signal_risk_reward import ensure_signal_execution_eligible
 from app.services.signal_service import ClickHouseSignalAnalyticsWriter, RedisSignalHotStore
 from app.services.trade_repository import (
     PostgresVirtualTradeRepository,
@@ -291,9 +291,10 @@ class VirtualTradingService:
         existing = self.get_virtual_trade_by_signal(signal.id)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
         if existing is None or signal.status != "confirmed":
-            ensure_strategy_rr_eligible(
+            ensure_signal_execution_eligible(
                 signal,
-                guard_mode=resolve_rr_guard_mode(
+                mode="virtual",
+                rr_guard_mode=resolve_rr_guard_mode(
                     risk_settings,
                     context="virtual",
                     strategy=signal.strategy,
@@ -347,9 +348,10 @@ class VirtualTradingService:
         if existing is not None:
             return existing
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
-        ensure_strategy_rr_eligible(
+        ensure_signal_execution_eligible(
             signal,
-            guard_mode=resolve_rr_guard_mode(
+            mode="virtual",
+            rr_guard_mode=resolve_rr_guard_mode(
                 risk_settings,
                 context="virtual",
                 strategy=signal.strategy,

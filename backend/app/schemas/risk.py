@@ -3,6 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.signal import SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan
 
 StopLossMode = Literal["fixed_percent", "atr", "structure"]
@@ -258,6 +259,7 @@ class RiskContext(BaseModel):
     user_mode_multiplier: float = Field(default=1.0, ge=0)
     manual_take_profit_price: float | None = Field(default=None, gt=0)
     trade_plan: TradePlan | None = None
+    signal_edge: SignalEdgeSnapshot | None = None
 
 
 class RiskDecision(BaseModel):

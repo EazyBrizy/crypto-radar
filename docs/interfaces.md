@@ -229,6 +229,60 @@ The minimum sample threshold is configured by
 threshold return `confidence = "low"`. No matching data returns
 `confidence = "insufficient_sample"`.
 
+## Edge Calibration / EV Gate v1
+
+`StrategySignal` and `RadarSignal` expose optional `edge:
+SignalEdgeSnapshot | None` for historical/forward-performance calibration.
+The heuristic `score` remains backward-compatible and is not recalculated by
+the EV gate.
+
+`SignalEdgeSnapshot` fields:
+
+- `status`: `unknown`, `positive`, `negative`, or `insufficient_sample`
+- `sample_size`
+- `min_sample_size`
+- `winrate`
+- `avg_win_r`
+- `avg_loss_r`
+- `expectancy_r`
+- `expectancy_after_costs_r`
+- `profit_factor`
+- `confidence_score`
+- `source`: `outcome`, `backtest`, `mixed`, or `none`
+- `score_bucket`
+- `metadata`
+
+`EdgeCalibrationService.evaluate_signal_edge(signal)` reads
+`StrategyPerformanceService.get_edge_profile()` and calculates:
+
+```python
+expectancy_r = winrate * avg_win_r - (1 - winrate) * abs(avg_loss_r)
+expectancy_after_costs_r = expectancy_r - estimated_costs_r
+```
+
+`estimated_costs_r` is derived from the profile cost bps and the signal
+entry/stop distance when available; otherwise it is recorded as `0` with
+metadata indicating that R-based cost conversion was unavailable.
+
+`RiskManagementSettings` adds:
+
+- `real_requires_positive_edge: bool = True`
+- `edge_min_sample_size: int = 50`
+- `min_expectancy_after_costs_r: float = 0.05`
+
+Real execution must be blocked when `real_requires_positive_edge` is enabled
+and any of these conditions is true:
+
+- signal edge is missing;
+- edge status is not `positive`;
+- edge `sample_size` is below `edge_min_sample_size`;
+- `expectancy_after_costs_r` is missing or not greater than
+  `min_expectancy_after_costs_r`.
+
+Virtual execution does not hard-block on explicit unknown, insufficient, or
+weak edge snapshots, but the risk decision warns:
+`Edge is insufficient/unknown; virtual-only recommended.`
+
 ---
 
 # Rules

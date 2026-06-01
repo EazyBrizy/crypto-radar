@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.schemas.signal import RadarSignal
+from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanRiskRules, TradePlanTarget
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
 from app.schemas.user import RiskManagementSettings
@@ -208,6 +208,101 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertEqual(decision.status, "failed")
         self.assertFalse(decision.can_enter)
         self.assertIn("Signal score is virtual-only; real execution is blocked.", decision.blockers)
+
+    def test_real_gate_blocks_missing_edge(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(edge=None),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn(
+            "Signal edge is missing; real execution requires positive historical edge.",
+            decision.blockers,
+        )
+
+    def test_real_gate_blocks_insufficient_edge_sample(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(edge=_edge(status="insufficient_sample", sample_size=20, expectancy_after_costs_r=0.25)),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn("Signal edge has insufficient sample size for real execution.", decision.blockers)
+
+    def test_real_gate_blocks_negative_edge_expectancy(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(edge=_edge(status="negative", sample_size=75, expectancy_after_costs_r=-0.05)),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn("Signal edge is negative; real execution is blocked.", decision.blockers)
+
+    def test_real_gate_allows_positive_edge_with_enough_sample(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(edge=_edge(status="positive", sample_size=75, expectancy_after_costs_r=0.12)),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "passed")
+        self.assertTrue(decision.can_enter)
+
+    def test_virtual_gate_allows_unknown_edge_with_warning(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(edge=_edge(status="unknown", sample_size=0, expectancy_after_costs_r=None)),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertNotEqual(decision.status, "failed")
+        self.assertTrue(decision.can_enter)
+        self.assertIn("Edge is insufficient/unknown; virtual-only recommended.", decision.warnings)
 
     def test_virtual_gate_does_not_hard_block_virtual_only_signal_score(self) -> None:
         decision = RiskGateService().evaluate(
@@ -577,6 +672,7 @@ def _signal(
     take_profit_1: float = 120.0,
     take_profit_2: float = 130.0,
     trade_plan: TradePlan | None = None,
+    edge: SignalEdgeSnapshot | None = None,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
@@ -598,8 +694,31 @@ def _signal(
         explanation=[],
         risks=[],
         trade_plan=trade_plan,
+        edge=edge,
         created_at=now,
         updated_at=now,
+    )
+
+
+def _edge(
+    *,
+    status: str,
+    sample_size: int,
+    expectancy_after_costs_r: float | None,
+) -> SignalEdgeSnapshot:
+    return SignalEdgeSnapshot(
+        status=status,
+        sample_size=sample_size,
+        min_sample_size=50,
+        winrate=0.55,
+        avg_win_r=1.2,
+        avg_loss_r=-1.0,
+        expectancy_r=0.21,
+        expectancy_after_costs_r=expectancy_after_costs_r,
+        profit_factor=1.4,
+        confidence_score=0.8,
+        source="outcome" if status != "unknown" else "none",
+        score_bucket="70-79",
     )
 
 

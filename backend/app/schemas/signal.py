@@ -18,6 +18,22 @@ class SignalScoreBreakdown(BaseModel):
     total: int = Field(default=0, ge=0, le=100)
 
 
+class SignalEdgeSnapshot(BaseModel):
+    status: Literal["unknown", "positive", "negative", "insufficient_sample"]
+    sample_size: int = Field(default=0, ge=0)
+    min_sample_size: int = Field(ge=0)
+    winrate: Optional[float] = None
+    avg_win_r: Optional[float] = None
+    avg_loss_r: Optional[float] = None
+    expectancy_r: Optional[float] = None
+    expectancy_after_costs_r: Optional[float] = None
+    profit_factor: Optional[float] = None
+    confidence_score: float = Field(default=0.0, ge=0, le=1)
+    source: Literal["outcome", "backtest", "mixed", "none"] = "none"
+    score_bucket: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 LayerCheckStatus = Literal["passed", "warning", "failed", "skipped"]
 
 
@@ -143,6 +159,7 @@ class StrategySignal(BaseModel):
     exit_plan: Optional[SignalExitPlanSnapshot] = None
     trade_plan: Optional[TradePlan] = None
     auto_entry: Optional[SignalAutoEntrySnapshot] = None
+    edge: Optional[SignalEdgeSnapshot] = None
 
 
 class RadarSignal(BaseModel):
@@ -181,6 +198,7 @@ class RadarSignal(BaseModel):
     exit_plan: Optional[SignalExitPlanSnapshot] = None
     trade_plan: Optional[TradePlan] = None
     auto_entry: Optional[SignalAutoEntrySnapshot] = None
+    edge: Optional[SignalEdgeSnapshot] = None
     created_at: datetime
     updated_at: datetime
     expires_at: Optional[datetime] = None

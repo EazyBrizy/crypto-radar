@@ -756,6 +756,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         exit_plan=snapshot.get("exit_plan") if isinstance(snapshot.get("exit_plan"), dict) else None,
         trade_plan=trade_plan,
         auto_entry=snapshot.get("auto_entry") if isinstance(snapshot.get("auto_entry"), dict) else None,
+        edge=snapshot.get("edge") if isinstance(snapshot.get("edge"), dict) else None,
         created_at=created_at,
         updated_at=updated_at,
         expires_at=_as_utc(record.expires_at) if record.expires_at else None,
@@ -869,9 +870,10 @@ def _apply_signal_updates(
         "selected_rr",
         "selected_rr_target",
         "min_rr_ratio",
+        "edge",
     ):
         if key in updates:
-            snapshot[key] = updates[key]
+            snapshot[key] = _model_dump_optional(updates[key]) if key == "edge" else updates[key]
 
 
 def _snapshot_entry_price(snapshot: dict[str, Any]) -> float | None:
@@ -904,6 +906,7 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "exit_plan": _model_dump_optional(signal.exit_plan),
         "trade_plan": _trade_plan_snapshot(signal),
         "auto_entry": _model_dump_optional(signal.auto_entry),
+        "edge": _model_dump_optional(signal.edge),
         "decision": {
             "confirmed_trade_id": signal.confirmed_trade_id,
             "decision_mode": signal.decision_mode,
@@ -939,6 +942,7 @@ def _snapshot_from_strategy_signal(
         "exit_plan": _model_dump_optional(signal.exit_plan),
         "trade_plan": _trade_plan_snapshot(signal),
         "auto_entry": _model_dump_optional(signal.auto_entry),
+        "edge": _model_dump_optional(signal.edge),
     }
 
 
@@ -952,6 +956,8 @@ def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str
             merged[key] = value
         elif value is not None and key == "auto_entry":
             merged[key] = value
+    if merged.get("edge") is None and existing.get("edge") is not None:
+        merged["edge"] = existing["edge"]
     return merged
 
 

@@ -14,6 +14,7 @@ from app.schemas.risk import (
     TradeInstrumentType,
     TrailingStopPlan,
 )
+from app.schemas.signal import SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan, TradePlanTarget
 from app.schemas.user import RiskManagementPatch, RiskManagementSettings, RiskProfileName
 
@@ -188,6 +189,9 @@ _RISK_CUSTOM_FIELDS = {
     "virtual_slippage_model",
     "virtual_fee_model",
     "virtual_trading_uses_realistic_execution",
+    "real_requires_positive_edge",
+    "edge_min_sample_size",
+    "min_expectancy_after_costs_r",
     "strategy_risk_multipliers",
     "auto_reduce_risk_after_losses",
     "allow_risk_increase_after_profit",
@@ -203,6 +207,7 @@ _STRATEGY_RISK_ALIAS_FALLBACKS: dict[str, str] = {
 }
 
 _TAKE_PROFIT_LABELS = {"TP1", "TP2", "TP3"}
+EDGE_VIRTUAL_WARNING = "Edge is insufficient/unknown; virtual-only recommended."
 
 
 class TradePlanValidationError(ValueError):
@@ -360,6 +365,7 @@ def calculate_risk_check_result(
     account_drawdown_percent: float | None = None,
     max_account_drawdown_percent: float | None = None,
     execution_mode: str = "virtual",
+    signal_edge: SignalEdgeSnapshot | None = None,
 ) -> RiskCheckResult:
     settings = _settings_model(risk_settings)
     blockers: list[str] = []
@@ -391,6 +397,13 @@ def calculate_risk_check_result(
         blockers.append("Signal score is below the minimum tradable threshold.")
     elif risk_adjustment.signal_virtual_only and execution_mode == "real":
         blockers.append("Signal score is virtual-only; real execution is blocked.")
+
+    edge_blockers = _edge_gate_blockers(settings, signal_edge)
+    if edge_blockers:
+        if execution_mode == "real":
+            blockers.extend(edge_blockers)
+        elif signal_edge is not None and EDGE_VIRTUAL_WARNING not in warnings:
+            warnings.append(EDGE_VIRTUAL_WARNING)
 
     rr = None
     if take_profit_plan is not None and take_profit_plan.targets:
@@ -1244,6 +1257,37 @@ def _futures_liquidation_buffer_required(settings: RiskManagementSettings) -> bo
         and settings.futures_liquidation_buffer_required
         and _limit_enabled(settings.min_liquidation_buffer_percent)
     )
+
+
+def _edge_gate_blockers(
+    settings: RiskManagementSettings,
+    signal_edge: SignalEdgeSnapshot | None,
+) -> list[str]:
+    if not settings.real_requires_positive_edge:
+        return []
+    if signal_edge is None:
+        return ["Signal edge is missing; real execution requires positive historical edge."]
+
+    blockers: list[str] = []
+    if signal_edge.status == "unknown":
+        blockers.append("Signal edge is unknown; real execution requires positive historical edge.")
+    elif signal_edge.status == "insufficient_sample":
+        blockers.append("Signal edge has insufficient sample size for real execution.")
+    elif signal_edge.status != "positive":
+        blockers.append("Signal edge is negative; real execution is blocked.")
+
+    if signal_edge.sample_size < settings.edge_min_sample_size and (
+        "Signal edge has insufficient sample size for real execution." not in blockers
+    ):
+        blockers.append("Signal edge has insufficient sample size for real execution.")
+
+    expectancy_after_costs = signal_edge.expectancy_after_costs_r
+    if (
+        expectancy_after_costs is None
+        or expectancy_after_costs <= settings.min_expectancy_after_costs_r
+    ):
+        blockers.append("Signal expectancy after costs is below the configured minimum.")
+    return blockers
 
 
 def _signal_score_multiplier(signal_score: float) -> tuple[float, bool, bool]:

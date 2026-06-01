@@ -65,6 +65,9 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(settings["virtual_starting_balance"], 10_000.0)
         self.assertEqual(settings["virtual_slippage_model"], "spread_based")
         self.assertEqual(settings["virtual_fee_model"], "exchange_based")
+        self.assertTrue(settings["real_requires_positive_edge"])
+        self.assertEqual(settings["edge_min_sample_size"], 50)
+        self.assertEqual(settings["min_expectancy_after_costs_r"], 0.05)
         self.assertEqual(settings["strategy_risk_multipliers"]["trend_pullback_continuation"], 1.0)
         self.assertEqual(settings["strategy_risk_multipliers"]["volatility_squeeze_breakout"], 0.75)
         self.assertEqual(settings["strategy_risk_multipliers"]["liquidity_sweep_reversal"], 1.0)
@@ -126,6 +129,9 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
                 virtual_starting_balance=50_000,
                 virtual_slippage_model="orderbook_based",
                 virtual_fee_model="exchange_based",
+                real_requires_positive_edge=False,
+                edge_min_sample_size=25,
+                min_expectancy_after_costs_r=0.02,
                 strategy_risk_multipliers={"scalping": 0.4},
             ),
             risk_profile=None,
@@ -148,6 +154,9 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(settings["max_leverage"], 5)
         self.assertEqual(settings["virtual_risk_mode"], "custom")
         self.assertEqual(settings["virtual_slippage_model"], "orderbook_based")
+        self.assertFalse(settings["real_requires_positive_edge"])
+        self.assertEqual(settings["edge_min_sample_size"], 25)
+        self.assertEqual(settings["min_expectancy_after_costs_r"], 0.02)
         self.assertEqual(settings["strategy_risk_multipliers"]["scalping"], 0.4)
 
     def test_zero_disables_optional_risk_limits(self) -> None:

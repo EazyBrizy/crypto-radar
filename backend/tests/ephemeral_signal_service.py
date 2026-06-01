@@ -86,6 +86,7 @@ class EphemeralSignalRepository:
             invalidation=signal.invalidation,
             exit_plan=signal.exit_plan,
             trade_plan=signal.trade_plan,
+            edge=signal.edge,
             created_at=now,
             updated_at=now,
             expires_at=_signal_expires_at(now),

@@ -129,6 +129,7 @@ class RiskContextService:
             user_mode_multiplier=user_mode_multiplier,
             manual_take_profit_price=manual_take_profit_price,
             trade_plan=signal.trade_plan,
+            signal_edge=signal.edge,
         )
 
     def build_real_context(
@@ -236,6 +237,7 @@ class RiskContextService:
             user_mode_multiplier=user_mode_multiplier,
             manual_take_profit_price=manual_take_profit_price,
             trade_plan=signal.trade_plan,
+            signal_edge=signal.edge,
         )
 
 
@@ -355,6 +357,7 @@ class RiskGateService:
             account_drawdown_percent=context.account_drawdown_percent,
             max_account_drawdown_percent=context.max_account_drawdown_percent,
             execution_mode=context.mode,
+            signal_edge=context.signal_edge,
         )
         if take_profit_blockers:
             risk_check = risk_check.model_copy(

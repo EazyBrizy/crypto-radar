@@ -1,7 +1,7 @@
 import unittest
 
 from app.schemas.market import Features
-from app.schemas.signal import SignalScoreBreakdown
+from app.schemas.signal import SignalEdgeSnapshot, SignalScoreBreakdown
 from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
 from app.strategies.common import score_breakdown, score_from_breakdown
 from backend.tests.ephemeral_signal_service import ephemeral_signal_service
@@ -106,12 +106,30 @@ class SignalScoringContractTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(signal)
 
+        edge = SignalEdgeSnapshot(
+            status="positive",
+            sample_size=75,
+            min_sample_size=50,
+            winrate=0.56,
+            avg_win_r=1.2,
+            avg_loss_r=-1.0,
+            expectancy_r=0.232,
+            expectancy_after_costs_r=0.18,
+            profit_factor=1.5,
+            confidence_score=0.8,
+            source="outcome",
+            score_bucket="80-89",
+        )
         stored = ephemeral_signal_service().add_strategy_signal(
-            signal[0].model_copy(update={"score_breakdown": scoring, "score": 85})
+            signal[0].model_copy(update={"score_breakdown": scoring, "score": 85, "edge": edge})
         )
 
         self.assertEqual(stored.score, 85)
         self.assertEqual(stored.score_breakdown.total, 85)
+        self.assertIsNotNone(stored.edge)
+        assert stored.edge is not None
+        self.assertEqual(stored.edge.status, "positive")
+        self.assertAlmostEqual(stored.edge.expectancy_after_costs_r or 0, 0.18)
 
 
 if __name__ == "__main__":

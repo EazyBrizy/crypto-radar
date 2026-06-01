@@ -369,12 +369,8 @@ function stringMetadata(metadata: Record<string, unknown>, key: string): string 
 }
 
 function isStrategyRiskRewardFailed(signal: RadarSignal): boolean {
-  const selectedRr = signal.selected_rr;
-  const minRr = signal.min_rr_ratio;
-  if (selectedRr != null && minRr != null && minRr > 0) {
-    return selectedRr < minRr;
-  }
-  return signal.confirmation?.checks.some((item) => item.name === "risk_reward_guard" && item.status === "failed") ?? false;
+  const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
+  return check?.metadata.risk_reward_blocked === true || check?.status === "failed";
 }
 
 function RiskRewardDetailBlock({ signal }: { signal: RadarSignal }) {
@@ -384,15 +380,15 @@ function RiskRewardDetailBlock({ signal }: { signal: RadarSignal }) {
     <div className="risk-reward-detail-block">
       <div className="section-title">
         <ShieldAlert size={18} />
-        <h3>Risk / Reward Filter</h3>
+        <h3>Risk / Reward Guard</h3>
       </div>
       <p>{details.reason}</p>
       <div className="risk-reward-detail-grid">
         <MetricLine label="Nearest RR" value={formatRMultiple(details.firstTargetRr)} />
         <MetricLine label="Final RR" value={formatRMultiple(details.finalTargetRr)} />
         <MetricLine label="Selected RR" value={formatRMultiple(details.selectedRr)} />
-        <MetricLine label="Filter target" value={details.selectedTarget} />
-        <MetricLine label="Minimum RR" value={formatRMultiple(details.minRr)} />
+        <MetricLine label="Guard target" value={details.selectedTarget} />
+        <MetricLine label="Min execution/reporting RR" value={formatRMultiple(details.minRr)} />
       </div>
     </div>
   );
@@ -459,7 +455,7 @@ function TradePlanDetailBlock({ signal }: { signal: RadarSignal }) {
         <MetricLine label="Stop loss" value={formatPrice(plan.stopLoss)} />
         <MetricLine label="Selected RR" value={formatRMultiple(plan.selectedRr)} />
         <MetricLine label="RR target" value={formatRrTarget(plan.selectedRrTarget)} />
-        <MetricLine label="Minimum RR" value={formatRMultiple(plan.minRr)} />
+        <MetricLine label="Min execution/reporting RR" value={formatRMultiple(plan.minRr)} />
         <MetricLine label="Invalidation" value={formatPrice(invalidation?.hard_stop ?? invalidation?.price ?? signal.invalidation?.hard_stop ?? signal.invalidation?.price)} />
       </div>
       {plan.targets.length ? (

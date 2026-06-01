@@ -23,6 +23,7 @@ from app.schemas.trade_plan import (
     build_trade_plan_from_legacy_fields,
 )
 from app.services.no_trade_filter import NoTradeFilterService
+from app.services.risk_management import resolve_rr_guard_mode
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
@@ -109,6 +110,7 @@ class StrategyEvaluationContext:
     strategy_params: Mapping[str, Any] = field(default_factory=dict)
     market_quality: MarketQualityInput | None = None
     pair_scope_configured: bool = False
+    rr_guard_context: str = "discovery"
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,13 @@ class RiskRewardAssessment:
     passed: bool
     rr: float | None
     min_rr: float
+    guard_mode: str
+    status: str
+    meets_min_rr: bool
+    blocked: bool
+    warning: bool
+    warning_reason: str | None
+    block_reason: str | None
     target_key: str
     target_label: str
     first_target_rr: float | None
@@ -178,8 +187,8 @@ class StrategySignalPipeline:
             return None
         signal = _apply_regime_score(signal, regime)
         setup = StrategySetupLayer().evaluate(signal)
-        risk_reward = _assess_risk_reward(signal, context.strategy_params)
-        if not risk_reward.passed and _hide_failed_rr_signals(context.strategy_params):
+        risk_reward = _assess_risk_reward(signal, context.strategy_params, context.rr_guard_context)
+        if risk_reward.blocked and _hide_failed_rr_signals(context.strategy_params):
             return None
         confirmation = ConfirmationLayer().evaluate(signal, context, risk_reward)
         no_trade = NoTradeFilterService().evaluate(
@@ -232,7 +241,9 @@ class StrategySignalPipeline:
             risks.append("Signal is too close to higher-timeframe support/resistance")
         if _has_borderline_ema200_chop(regime):
             risks.append("Price is chopping around EMA200; trend-continuation setups are less reliable")
-        if not risk_reward.passed:
+        if risk_reward.warning and risk_reward.warning_reason:
+            risks.append(risk_reward.warning_reason)
+        if risk_reward.blocked:
             risks.append(risk_reward.reason)
         for reason in [*no_trade.blockers, *no_trade.warnings]:
             if reason not in risks:
@@ -267,7 +278,7 @@ class StrategySignalPipeline:
                     entry_min=target.entry_min,
                     entry_max=target.entry_max,
                 )
-        if not risk_reward.passed:
+        if risk_reward.blocked:
             updates["auto_entry"] = SignalAutoEntrySnapshot(
                 enabled=False,
                 status="cancelled",
@@ -676,7 +687,7 @@ class ConfirmationLayer:
             ),
             SignalLayerCheck(
                 name="risk_reward_guard",
-                status="passed" if risk_reward.passed else "failed",
+                status=risk_reward.status,
                 score=None if risk_reward.rr is None else round(risk_reward.rr, 3),
                 reason=risk_reward.reason,
                 metadata=_risk_reward_metadata(risk_reward),
@@ -2018,10 +2029,12 @@ def _risk_reward_metadata(risk_reward: RiskRewardAssessment) -> dict[str, Any]:
         "selected_rr_target": risk_reward.target_key,
         "selected_rr_label": risk_reward.target_label,
         "min_rr_ratio": risk_reward.min_rr,
-        "risk_reward_blocked": not risk_reward.passed,
+        "risk_reward_guard_mode": risk_reward.guard_mode,
+        "risk_reward_warning": risk_reward.warning,
+        "risk_reward_warning_reason": risk_reward.warning_reason,
+        "risk_reward_blocked": risk_reward.blocked,
+        "risk_reward_block_reason": risk_reward.block_reason,
     }
-    if not risk_reward.passed:
-        metadata["risk_reward_block_reason"] = risk_reward.reason
     return metadata
 
 
@@ -2165,13 +2178,30 @@ def _number_or_none(value: Any) -> float | None:
         return None
 
 
-def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> RiskRewardAssessment:
+def _assess_risk_reward(
+    signal: StrategySignal,
+    params: Mapping[str, Any],
+    rr_guard_context: str = "discovery",
+) -> RiskRewardAssessment:
     min_rr = _strategy_numeric_param(params, "min_rr_ratio", signal.strategy, DEFAULT_MIN_RR_RATIO)
+    guard_mode = resolve_rr_guard_mode(
+        params,
+        context=rr_guard_context,
+        strategy=signal.strategy,
+        strategy_risk_settings=params,
+    )
     if min_rr <= 0:
         return RiskRewardAssessment(
             passed=True,
             rr=signal.risk_reward,
             min_rr=min_rr,
+            guard_mode=guard_mode,
+            status="skipped",
+            meets_min_rr=True,
+            blocked=False,
+            warning=False,
+            warning_reason=None,
+            block_reason=None,
             target_key="disabled",
             target_label="disabled",
             first_target_rr=_target_rr(signal, signal.take_profit_1),
@@ -2197,6 +2227,13 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
             passed=False,
             rr=None,
             min_rr=min_rr,
+            guard_mode=guard_mode,
+            status="failed",
+            meets_min_rr=False,
+            blocked=True,
+            warning=False,
+            warning_reason=None,
+            block_reason=reason,
             target_key=rr_target,
             target_label=target_label,
             first_target_rr=first_target_rr,
@@ -2216,18 +2253,66 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
             if rr_target == "nearest" and first_target_rr is None and signal.take_profit_1 is not None
             else f"(nearest {nearest_text}, final {final_text})"
         )
+        threshold_reason = (
+            f"Risk/reward blocked: {target_label} is {selected_rr:.2f}R, "
+            f"below configured minimum {min_rr:.2f}R "
+            f"{target_context}"
+        )
+        if guard_mode == "hard":
+            return RiskRewardAssessment(
+                passed=False,
+                rr=selected_rr,
+                min_rr=min_rr,
+                guard_mode=guard_mode,
+                status="failed",
+                meets_min_rr=False,
+                blocked=True,
+                warning=False,
+                warning_reason=None,
+                block_reason=threshold_reason,
+                target_key=rr_target,
+                target_label=target_label,
+                first_target_rr=first_target_rr,
+                final_target_rr=final_target_rr,
+                reason=threshold_reason,
+            )
+        if guard_mode == "soft":
+            warning_reason = threshold_reason.replace("Risk/reward blocked:", "Risk/reward warning:", 1)
+            return RiskRewardAssessment(
+                passed=True,
+                rr=selected_rr,
+                min_rr=min_rr,
+                guard_mode=guard_mode,
+                status="warning",
+                meets_min_rr=False,
+                blocked=False,
+                warning=True,
+                warning_reason=warning_reason,
+                block_reason=None,
+                target_key=rr_target,
+                target_label=target_label,
+                first_target_rr=first_target_rr,
+                final_target_rr=final_target_rr,
+                reason=warning_reason,
+            )
         return RiskRewardAssessment(
-            passed=False,
+            passed=True,
             rr=selected_rr,
             min_rr=min_rr,
+            guard_mode=guard_mode,
+            status="skipped",
+            meets_min_rr=False,
+            blocked=False,
+            warning=False,
+            warning_reason=None,
+            block_reason=None,
             target_key=rr_target,
             target_label=target_label,
             first_target_rr=first_target_rr,
             final_target_rr=final_target_rr,
             reason=(
-                f"Risk/reward blocked: {target_label} is {selected_rr:.2f}R, "
-                f"below configured minimum {min_rr:.2f}R "
-                f"{target_context}"
+                f"Risk/reward guard is off: {target_label} is {selected_rr:.2f}R, "
+                f"minimum for reporting is {min_rr:.2f}R {target_context}"
             ),
         )
 
@@ -2235,11 +2320,22 @@ def _assess_risk_reward(signal: StrategySignal, params: Mapping[str, Any]) -> Ri
         passed=True,
         rr=selected_rr,
         min_rr=min_rr,
+        guard_mode=guard_mode,
+        status="skipped" if guard_mode == "off" else "passed",
+        meets_min_rr=True,
+        blocked=False,
+        warning=False,
+        warning_reason=None,
+        block_reason=None,
         target_key=rr_target,
         target_label=target_label,
         first_target_rr=first_target_rr,
         final_target_rr=final_target_rr,
-        reason=f"Risk/reward passed: {target_label} is {selected_rr:.2f}R, minimum {min_rr:.2f}R",
+        reason=(
+            f"Risk/reward passed: {target_label} is {selected_rr:.2f}R, minimum {min_rr:.2f}R"
+            if guard_mode != "off"
+            else f"Risk/reward guard is off: {target_label} is {selected_rr:.2f}R"
+        ),
     )
 
 

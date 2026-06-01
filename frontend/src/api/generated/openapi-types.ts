@@ -3019,6 +3019,26 @@ export interface components {
             rr?: number | null;
             /** Min Rr Ratio */
             min_rr_ratio: number;
+            /**
+             * Risk Reward Guard Mode
+             * @default soft
+             * @enum {string}
+             */
+            risk_reward_guard_mode: "off" | "soft" | "hard";
+            /**
+             * Risk Reward Warning
+             * @default false
+             */
+            risk_reward_warning: boolean;
+            /** Risk Reward Warning Reason */
+            risk_reward_warning_reason?: string | null;
+            /**
+             * Risk Reward Blocked
+             * @default false
+             */
+            risk_reward_blocked: boolean;
+            /** Risk Reward Block Reason */
+            risk_reward_block_reason?: string | null;
             /** Account Equity */
             account_equity: number;
             /** Adjusted Risk Amount */
@@ -3212,6 +3232,20 @@ export interface components {
             risk_per_trade_percent?: number | null;
             /** Min Rr Ratio */
             min_rr_ratio?: number | null;
+            /** Rr Guard Mode */
+            rr_guard_mode?: ("off" | "soft" | "hard") | null;
+            /** Discovery Rr Guard Mode */
+            discovery_rr_guard_mode?: ("off" | "soft" | "hard") | null;
+            /** Real Rr Guard Mode */
+            real_rr_guard_mode?: ("off" | "soft" | "hard") | null;
+            /** Virtual Rr Guard Mode */
+            virtual_rr_guard_mode?: ("off" | "soft" | "hard") | null;
+            /** Backtest Rr Guard Mode */
+            backtest_rr_guard_mode?: ("off" | "soft" | "hard") | null;
+            /** Strategy Rr Guard Modes */
+            strategy_rr_guard_modes?: {
+                [key: string]: "off" | "soft" | "hard";
+            } | null;
             /** Max Daily Loss Percent */
             max_daily_loss_percent?: number | null;
             /** Max Weekly Loss Percent */

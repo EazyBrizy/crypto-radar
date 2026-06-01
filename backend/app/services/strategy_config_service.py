@@ -17,7 +17,9 @@ from app.models.strategy import StrategyTemplate, StrategyVersion, UserStrategyC
 from app.models.user import AppUser
 from app.schemas.candle import DEFAULT_TIMEFRAMES
 from app.schemas.strategy import StrategyConfigResponse, StrategyConfigUpdateRequest, StrategyPairScope
+from app.schemas.user import RiskManagementSettings
 from app.services.bootstrap_service import DEMO_USERNAME
+from app.services.risk_management import resolve_rr_guard_mode
 
 RUNTIME_CONFIG_CACHE_TTL_SEC = 10.0
 RR_TARGET_DEFAULT_VERSION = "strategy-rr-target-v1"
@@ -55,6 +57,14 @@ DEFAULT_NO_TRADE_RISK_SETTINGS: dict[str, Any] = {
     "max_obstacle_distance_r": 1.0,
     "cooldown_after_stop_minutes": 0,
     "max_strategy_losses_per_day": 0,
+}
+
+DEFAULT_RR_GUARD_RISK_SETTINGS: dict[str, Any] = {
+    "rr_guard_mode": "soft",
+    "discovery_rr_guard_mode": "soft",
+    "virtual_rr_guard_mode": "soft",
+    "backtest_rr_guard_mode": "soft",
+    "real_rr_guard_mode": "hard",
 }
 
 DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
@@ -361,11 +371,17 @@ def _default_strategy_risk_settings(user_id: str) -> dict[str, Any]:
         from app.services.risk_management import get_user_risk_management_settings
 
         settings = get_user_risk_management_settings(user_id)
-        min_rr_ratio = settings.min_rr_ratio
+        values = settings.model_dump()
     except Exception:
-        min_rr_ratio = 2.0
+        values = RiskManagementSettings().model_dump()
     return {
-        "min_rr_ratio": min_rr_ratio,
+        "min_rr_ratio": values["min_rr_ratio"],
+        "rr_guard_mode": resolve_rr_guard_mode(values, context="discovery"),
+        "discovery_rr_guard_mode": values["discovery_rr_guard_mode"],
+        "virtual_rr_guard_mode": values["virtual_rr_guard_mode"],
+        "backtest_rr_guard_mode": values["backtest_rr_guard_mode"],
+        "real_rr_guard_mode": values["real_rr_guard_mode"],
+        "strategy_rr_guard_modes": dict(values.get("strategy_rr_guard_modes") or {}),
         "hide_failed_rr_signals": False,
         "show_only_active_setups": False,
         **DEFAULT_NO_TRADE_RISK_SETTINGS,
@@ -374,8 +390,15 @@ def _default_strategy_risk_settings(user_id: str) -> dict[str, Any]:
 
 def _risk_settings_for_strategy(strategy_code: str, base_settings: dict[str, Any]) -> dict[str, Any]:
     settings = dict(base_settings)
+    settings["rr_guard_mode"] = resolve_rr_guard_mode(
+        base_settings,
+        context="discovery",
+        strategy=strategy_code,
+    )
     settings.setdefault("hide_failed_rr_signals", False)
     settings.setdefault("show_only_active_setups", False)
+    for key, value in DEFAULT_RR_GUARD_RISK_SETTINGS.items():
+        settings.setdefault(key, value)
     for key, value in DEFAULT_NO_TRADE_RISK_SETTINGS.items():
         settings.setdefault(key, value)
     settings["rr_target"] = _default_rr_target_for_strategy(strategy_code)
@@ -387,6 +410,7 @@ def _persisted_risk_settings_for_strategy(strategy_code: str) -> dict[str, Any]:
     return {
         "rr_target": _default_rr_target_for_strategy(strategy_code),
         "rr_target_default_version": RR_TARGET_DEFAULT_VERSION,
+        **DEFAULT_RR_GUARD_RISK_SETTINGS,
         "hide_failed_rr_signals": False,
         "show_only_active_setups": False,
         **DEFAULT_NO_TRADE_RISK_SETTINGS,
@@ -416,6 +440,10 @@ def _normalize_existing_strategy_defaults(configs: list[UserStrategyConfig]) -> 
         if "show_only_active_setups" not in risk_settings:
             risk_settings["show_only_active_setups"] = False
             config_changed = True
+        for key, value in DEFAULT_RR_GUARD_RISK_SETTINGS.items():
+            if key not in risk_settings:
+                risk_settings[key] = value
+                config_changed = True
         for key, value in DEFAULT_NO_TRADE_RISK_SETTINGS.items():
             if key not in risk_settings:
                 risk_settings[key] = value
@@ -447,7 +475,13 @@ def _is_legacy_default_rr_target(strategy_code: str, risk_settings: dict[str, An
         return False
     if str(risk_settings.get("rr_target") or "").lower() != "final":
         return False
-    allowed_legacy_keys = {"rr_target", "hide_failed_rr_signals", "show_only_active_setups"}
+    allowed_legacy_keys = {
+        "rr_target",
+        "hide_failed_rr_signals",
+        "show_only_active_setups",
+        *DEFAULT_RR_GUARD_RISK_SETTINGS,
+        *DEFAULT_NO_TRADE_RISK_SETTINGS,
+    }
     return set(risk_settings).issubset(allowed_legacy_keys) and not bool(risk_settings.get("hide_failed_rr_signals"))
 
 

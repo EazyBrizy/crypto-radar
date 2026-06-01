@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from app.schemas.risk import (
     BreakevenPlan,
@@ -16,7 +16,7 @@ from app.schemas.risk import (
 )
 from app.schemas.signal import SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan, TradePlanTarget
-from app.schemas.user import RiskManagementPatch, RiskManagementSettings, RiskProfileName
+from app.schemas.user import RRGuardMode, RiskManagementPatch, RiskManagementSettings, RiskProfileName
 
 RISK_PROFILE_PRESETS: dict[RiskProfileName, RiskManagementSettings] = {
     "conservative": RiskManagementSettings(
@@ -144,6 +144,12 @@ RISK_PROFILE_PRESETS: dict[RiskProfileName, RiskManagementSettings] = {
 _RISK_CUSTOM_FIELDS = {
     "risk_per_trade_percent",
     "min_rr_ratio",
+    "rr_guard_mode",
+    "discovery_rr_guard_mode",
+    "real_rr_guard_mode",
+    "virtual_rr_guard_mode",
+    "backtest_rr_guard_mode",
+    "strategy_rr_guard_modes",
     "max_daily_loss_percent",
     "max_weekly_loss_percent",
     "max_account_drawdown_percent",
@@ -216,6 +222,21 @@ _STRATEGY_RISK_ALIAS_FALLBACKS: dict[str, str] = {
 
 _TAKE_PROFIT_LABELS = {"TP1", "TP2", "TP3"}
 EDGE_VIRTUAL_WARNING = "Edge is insufficient/unknown; virtual-only recommended."
+RR_GUARD_MODES = {"off", "soft", "hard"}
+RR_CONTEXT_DEFAULTS: dict[str, RRGuardMode] = {
+    "discovery": "soft",
+    "research": "soft",
+    "virtual": "soft",
+    "backtest": "soft",
+    "real": "hard",
+}
+RR_CONTEXT_FIELDS: dict[str, str] = {
+    "discovery": "discovery_rr_guard_mode",
+    "research": "discovery_rr_guard_mode",
+    "virtual": "virtual_rr_guard_mode",
+    "backtest": "backtest_rr_guard_mode",
+    "real": "real_rr_guard_mode",
+}
 
 
 class TradePlanValidationError(ValueError):
@@ -232,6 +253,46 @@ def normalize_risk_profile(value: Any) -> RiskProfileName:
 
 def risk_profile_preset(profile: RiskProfileName | str | None) -> RiskManagementSettings:
     return RISK_PROFILE_PRESETS[normalize_risk_profile(profile)]
+
+
+def normalize_rr_guard_mode(value: Any, fallback: RRGuardMode = "soft") -> RRGuardMode:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in RR_GUARD_MODES:
+            return cast(RRGuardMode, normalized)
+    return fallback
+
+
+def default_rr_guard_mode_for_context(context: str | None) -> RRGuardMode:
+    return RR_CONTEXT_DEFAULTS.get(_normalize_rr_context(context), "soft")
+
+
+def resolve_rr_guard_mode(
+    risk_settings: RiskManagementSettings | Mapping[str, Any] | None = None,
+    *,
+    context: str | None = "discovery",
+    strategy: str | None = None,
+    strategy_risk_settings: Mapping[str, Any] | None = None,
+) -> RRGuardMode:
+    context_key = _normalize_rr_context(context)
+    fallback = default_rr_guard_mode_for_context(context_key)
+    if strategy_risk_settings is not None and strategy_risk_settings.get("rr_guard_mode") is not None:
+        return normalize_rr_guard_mode(strategy_risk_settings.get("rr_guard_mode"), fallback)
+
+    settings = _risk_settings_mapping(risk_settings)
+    if strategy:
+        strategy_modes = settings.get("strategy_rr_guard_modes")
+        if isinstance(strategy_modes, Mapping):
+            mode = _mapping_value_for_strategy(strategy_modes, strategy)
+            if mode is not None:
+                return normalize_rr_guard_mode(mode, fallback)
+
+    context_field = RR_CONTEXT_FIELDS.get(context_key)
+    if context_field and settings.get(context_field) is not None:
+        return normalize_rr_guard_mode(settings.get(context_field), fallback)
+    if settings.get("rr_guard_mode") is not None:
+        return normalize_rr_guard_mode(settings.get("rr_guard_mode"), fallback)
+    return fallback
 
 
 def normalize_risk_management_settings(
@@ -376,6 +437,11 @@ def calculate_risk_check_result(
     signal_edge: SignalEdgeSnapshot | None = None,
 ) -> RiskCheckResult:
     settings = _settings_model(risk_settings)
+    rr_guard_mode = resolve_rr_guard_mode(
+        settings,
+        context=execution_mode,
+        strategy=risk_adjustment.strategy,
+    )
     blockers: list[str] = []
     warnings: list[str] = list(risk_adjustment.warnings)
     warnings.extend(market_data_warnings or [])
@@ -414,6 +480,10 @@ def calculate_risk_check_result(
             warnings.append(EDGE_VIRTUAL_WARNING)
 
     rr = None
+    risk_reward_warning = False
+    risk_reward_warning_reason = None
+    risk_reward_blocked = False
+    risk_reward_block_reason = None
     if take_profit_plan is not None and take_profit_plan.targets:
         rr = (
             take_profit_plan.selected_rr
@@ -421,9 +491,18 @@ def calculate_risk_check_result(
             else take_profit_plan.targets[-1].r_multiple
         )
         if _limit_enabled(settings.min_rr_ratio) and rr < settings.min_rr_ratio:
-            blockers.append("R:R is below the configured minimum.")
+            rr_reasons = ["R:R is below the configured minimum."]
             if signal_entry_price is not None and signal_entry_price != position_sizing.entry_price:
-                blockers.append("Market entry price moved far enough to invalidate R:R.")
+                rr_reasons.append("Market entry price moved far enough to invalidate R:R.")
+            rr_reason = "; ".join(rr_reasons)
+            if rr_guard_mode == "hard":
+                blockers.extend(rr_reasons)
+                risk_reward_blocked = True
+                risk_reward_block_reason = rr_reason
+            elif rr_guard_mode == "soft":
+                warnings.extend(rr_reasons)
+                risk_reward_warning = True
+                risk_reward_warning_reason = rr_reason
     elif settings.take_profit_required:
         blockers.append("Take-profit plan is required.")
 
@@ -555,6 +634,11 @@ def calculate_risk_check_result(
         warnings=warnings,
         rr=rr,
         min_rr_ratio=settings.min_rr_ratio,
+        risk_reward_guard_mode=rr_guard_mode,
+        risk_reward_warning=risk_reward_warning,
+        risk_reward_warning_reason=risk_reward_warning_reason,
+        risk_reward_blocked=risk_reward_blocked,
+        risk_reward_block_reason=risk_reward_block_reason,
         account_equity=risk_adjustment.account_equity,
         adjusted_risk_amount=risk_adjustment.adjusted_risk_amount,
         adjusted_risk_percent=risk_adjustment.adjusted_risk_percent,
@@ -1217,6 +1301,37 @@ def _settings_model(risk_settings: RiskManagementSettings | Mapping[str, Any]) -
         if isinstance(risk_settings, RiskManagementSettings)
         else RiskManagementSettings.model_validate(risk_settings)
     )
+
+
+def _risk_settings_mapping(risk_settings: RiskManagementSettings | Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if risk_settings is None:
+        return {}
+    if isinstance(risk_settings, RiskManagementSettings):
+        return risk_settings.model_dump()
+    return risk_settings
+
+
+def _normalize_rr_context(context: str | None) -> str:
+    value = str(context or "discovery").strip().lower().replace("-", "_")
+    if value in {"paper", "demo"}:
+        return "virtual"
+    if value in {"research", "scanner", "scan", "discovery"}:
+        return "discovery" if value != "research" else "research"
+    if value in RR_CONTEXT_DEFAULTS:
+        return value
+    return "discovery"
+
+
+def _mapping_value_for_strategy(values: Mapping[str, Any], strategy: str) -> Any:
+    normalized_strategy = _normalize_strategy_key(strategy)
+    if strategy in values:
+        return values[strategy]
+    if normalized_strategy in values:
+        return values[normalized_strategy]
+    for raw_key, value in values.items():
+        if isinstance(raw_key, str) and _normalize_strategy_key(raw_key) == normalized_strategy:
+            return value
+    return None
 
 
 def _limit_enabled(value: float | int | None) -> bool:

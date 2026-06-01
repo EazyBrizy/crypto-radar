@@ -635,8 +635,10 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
         self.assertEqual(decision.take_profit_plan.selected_rr_target, "nearest")
         self.assertAlmostEqual(decision.risk_check.rr or 0, 1.2)
-        self.assertEqual(decision.status, "failed")
-        self.assertIn("R:R is below the configured minimum.", decision.blockers)
+        self.assertEqual(decision.status, "warning")
+        self.assertTrue(decision.can_enter)
+        self.assertNotIn("R:R is below the configured minimum.", decision.blockers)
+        self.assertIn("R:R is below the configured minimum.", decision.warnings)
 
 
 def _risk_settings() -> RiskManagementSettings:

@@ -37,6 +37,7 @@ class StrategyEngine:
         support_resistance_by_timeframe: Mapping[str, SupportResistanceSnapshot] | None = None,
         market_quality: MarketQualityInput | None = None,
         strategy_configs: Mapping[str, Any] | None = None,
+        rr_guard_context: str = "discovery",
     ) -> List[StrategySignal]:
         signals: List[StrategySignal] = []
         for strategy in self._strategies:
@@ -53,6 +54,7 @@ class StrategyEngine:
                 market_quality=market_quality,
                 strategy_params=strategy_params,
                 pair_scope_configured=bool(getattr(runtime_config, "pair_scope_configured", False)),
+                rr_guard_context=rr_guard_context,
             )
             candidates = await strategy.evaluate(features, strategy_params)
             for candidate in candidates:

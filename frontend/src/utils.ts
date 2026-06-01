@@ -67,9 +67,6 @@ export function signalTradePlanSummary(signal: RadarSignal): SignalTradePlanSumm
 export function isRiskRewardBlocked(signal: RadarSignal): boolean {
   const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
   const metadataBlocked = check?.metadata.risk_reward_blocked === true;
-  const selectedRr = signal.trade_plan?.risk_rules.selected_rr ?? signal.selected_rr;
-  const minRr = signal.trade_plan?.risk_rules.min_rr_ratio ?? signal.min_rr_ratio;
-  if (selectedRr != null && minRr != null && minRr > 0 && selectedRr < minRr) return true;
   return metadataBlocked || check?.status === "failed";
 }
 

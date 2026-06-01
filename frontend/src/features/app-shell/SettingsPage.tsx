@@ -10,6 +10,7 @@ import type {
   MarketPairOption,
   RiskManagementSettings,
   RiskProfileName,
+  RRGuardMode,
   StopLossMode,
   StrategyConfig,
   StrategyConfigPatch,
@@ -99,6 +100,14 @@ const RR_TARGET_DEFAULTS: Record<string, "final" | "nearest"> = {
   volatility_squeeze_breakout: "final",
   liquidity_sweep_reversal: "nearest"
 };
+const RR_GUARD_MODES: Array<{
+  value: RRGuardMode;
+  label: string;
+}> = [
+  { value: "soft", label: "Soft" },
+  { value: "hard", label: "Hard" },
+  { value: "off", label: "Off" }
+];
 const SQUEEZE_BREAKOUT_FIELD_LABELS: Array<{
   key: string;
   label: string;
@@ -167,6 +176,24 @@ type RiskNumericField =
   | "virtual_starting_balance"
   | "max_risk_boost";
 
+type RiskGuardField =
+  | "rr_guard_mode"
+  | "discovery_rr_guard_mode"
+  | "virtual_rr_guard_mode"
+  | "backtest_rr_guard_mode"
+  | "real_rr_guard_mode";
+
+const RR_GUARD_FIELD_LABELS: Array<{
+  key: RiskGuardField;
+  label: string;
+}> = [
+  { key: "rr_guard_mode", label: "Generic R:R guard" },
+  { key: "discovery_rr_guard_mode", label: "Signal discovery R:R guard" },
+  { key: "virtual_rr_guard_mode", label: "Virtual / paper R:R guard" },
+  { key: "backtest_rr_guard_mode", label: "Backtest R:R guard" },
+  { key: "real_rr_guard_mode", label: "Real execution R:R guard" }
+];
+
 const RISK_PROFILE_FIELD_LABELS: Array<{
   key: RiskNumericField;
   label: string;
@@ -187,7 +214,7 @@ const TRADE_RULE_FIELD_LABELS: Array<{
   suffix: string;
   step: string;
 }> = [
-  { key: "min_rr_ratio", label: "Min R:R", suffix: "R", step: "0.1" },
+  { key: "min_rr_ratio", label: "Min R:R for execution / reporting", suffix: "R", step: "0.1" },
   { key: "max_spread_bps", label: "Max spread", suffix: "bps", step: "1" },
   { key: "max_slippage_bps", label: "Max slippage", suffix: "bps", step: "5" },
   { key: "max_price_deviation_bps", label: "Max price drift", suffix: "bps", step: "5" },
@@ -369,7 +396,7 @@ const RISK_BLOCKER_GUIDE: RiskGuideItem[] = [
     tip: "Для обучения можно поднять Correlated risk, но в real лучше оставлять его ниже Open risk cap."
   },
   {
-    title: "Min R:R",
+    title: "Min R:R for execution / reporting",
     body: "Backend пересчитывает R:R от реальной цены входа, стопа, комиссий и проскальзывания. Если цена ушла, бумажный 2R может стать 1.3R.",
     tip: "Для MVP-тестов допустимо временно поставить 1.5R, но для real 2R остается более дисциплинированным уровнем."
   },
@@ -452,7 +479,7 @@ const RISK_GUIDE_SECTIONS: RiskGuideSection[] = [
     intro: "Эти настройки проверяют качество сделки перед входом: достаточно ли прибыли к риску и не испортилось ли исполнение.",
     items: [
       {
-        title: "Min R:R",
+        title: "Min R:R for execution / reporting",
         body: "Минимальное качество сделки по соотношению цели и стопа. Backend пересматривает это качество по актуальной цене входа.",
         tip: "Значение 0 выключает эту проверку. Если рынок ушел от entry, backend все равно покажет изменившийся риск в карточке."
       },
@@ -640,6 +667,12 @@ export function SettingsPage({
     riskManagement.risk_profile,
     riskManagement.risk_per_trade_percent,
     riskManagement.min_rr_ratio,
+    riskManagement.rr_guard_mode,
+    riskManagement.discovery_rr_guard_mode,
+    riskManagement.real_rr_guard_mode,
+    riskManagement.virtual_rr_guard_mode,
+    riskManagement.backtest_rr_guard_mode,
+    JSON.stringify(riskManagement.strategy_rr_guard_modes),
     riskManagement.max_daily_loss_percent,
     riskManagement.max_weekly_loss_percent,
     riskManagement.max_account_drawdown_percent,
@@ -795,6 +828,10 @@ export function SettingsPage({
     params.context_timeframe_map = contextTimeframeMap;
 
     const minRrRatio = Number(formData.get("risk:min_rr_ratio") ?? riskManagement.min_rr_ratio ?? 2);
+    const rrGuardMode = normalizeRRGuardMode(
+      formData.get("risk:rr_guard_mode"),
+      riskManagement.discovery_rr_guard_mode
+    );
     await onUpdateStrategyConfig(configItem.id, {
       is_enabled: formData.has("is_enabled"),
       exchanges,
@@ -802,6 +839,7 @@ export function SettingsPage({
       params,
       risk_settings: {
         min_rr_ratio: Number.isFinite(minRrRatio) && minRrRatio >= 0 ? minRrRatio : riskManagement.min_rr_ratio,
+        rr_guard_mode: rrGuardMode,
         rr_target: String(formData.get("risk:rr_target") ?? defaultRrTarget(configItem.strategy_code)),
         hide_failed_rr_signals: formData.has("risk:hide_failed_rr_signals"),
         show_only_active_setups: formData.has("risk:show_only_active_setups")
@@ -820,6 +858,12 @@ export function SettingsPage({
         risk_profile: "custom",
         risk_per_trade_percent: riskDraft.risk_per_trade_percent,
         min_rr_ratio: riskDraft.min_rr_ratio,
+        rr_guard_mode: riskDraft.rr_guard_mode,
+        discovery_rr_guard_mode: riskDraft.discovery_rr_guard_mode,
+        real_rr_guard_mode: riskDraft.real_rr_guard_mode,
+        virtual_rr_guard_mode: riskDraft.virtual_rr_guard_mode,
+        backtest_rr_guard_mode: riskDraft.backtest_rr_guard_mode,
+        strategy_rr_guard_modes: riskDraft.strategy_rr_guard_modes,
         max_daily_loss_percent: riskDraft.max_daily_loss_percent,
         max_weekly_loss_percent: riskDraft.max_weekly_loss_percent,
         max_account_drawdown_percent: riskDraft.max_account_drawdown_percent,
@@ -1230,7 +1274,7 @@ export function SettingsPage({
                       ))
                     : null}
                   <label>
-                    <span>Min RR</span>
+                    <span>Min R:R for execution / reporting</span>
                     <input
                       defaultValue={String(Number(strategyConfig.risk_settings.min_rr_ratio ?? riskManagement.min_rr_ratio ?? 2))}
                       disabled={busy}
@@ -1250,6 +1294,18 @@ export function SettingsPage({
                     >
                       <option value="final">Final target</option>
                       <option value="nearest">Nearest target</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>R:R guard</span>
+                    <select
+                      defaultValue={normalizeRRGuardMode(strategyConfig.risk_settings.rr_guard_mode, riskManagement.discovery_rr_guard_mode)}
+                      disabled={busy}
+                      name="risk:rr_guard_mode"
+                    >
+                      {RR_GUARD_MODES.map((mode) => (
+                        <option key={mode.value} value={mode.value}>{mode.label}</option>
+                      ))}
                     </select>
                   </label>
                   <label className="strategy-risk-toggle">
@@ -1439,6 +1495,30 @@ export function SettingsPage({
 
           {riskTab === "rules" ? (
             <>
+              <div className="risk-plan-block">
+                <div className="risk-plan-heading">
+                  <strong>R:R guard policy</strong>
+                </div>
+                <div className="risk-settings-grid compact-risk-grid">
+                  {RR_GUARD_FIELD_LABELS.map((field) => (
+                    <label className="risk-setting-field" key={field.key}>
+                      <span>{field.label}</span>
+                      <div>
+                        <select
+                          aria-label={field.label}
+                          disabled={busy || !customRiskEnabled}
+                          onChange={(event) => updateRiskDraft({ [field.key]: event.target.value as RRGuardMode })}
+                          value={riskDraft[field.key]}
+                        >
+                          {RR_GUARD_MODES.map((mode) => (
+                            <option key={mode.value} value={mode.value}>{mode.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
               <div className="risk-settings-grid compact-risk-grid">
                 {TRADE_RULE_FIELD_LABELS.map((field) => (
                   <label className="risk-setting-field" key={field.key}>
@@ -2075,7 +2155,7 @@ function RiskManagementGuide({
         <div className="risk-guide-block">
           <h4>Что можно ослабить для обучения</h4>
           <ul>
-            <li>Min R:R: временно 1.5R вместо 2R для virtual.</li>
+            <li>Min R:R for execution / reporting: временно 1.5R вместо 2R для virtual.</li>
             <li>Open risk cap: выше, если на virtual много параллельных тестов.</li>
             <li>Correlated risk: выше, если вы сознательно тестируете один сектор.</li>
             <li>Virtual balance: ближе к реальному размеру учебного депозита.</li>
@@ -2161,6 +2241,10 @@ function defaultRrTarget(strategyCode: string): "final" | "nearest" {
   return RR_TARGET_DEFAULTS[strategyCode] ?? "final";
 }
 
+function normalizeRRGuardMode(value: FormDataEntryValue | unknown, fallback: RRGuardMode): RRGuardMode {
+  return value === "off" || value === "soft" || value === "hard" ? value : fallback;
+}
+
 function riskProtectionTone(mode: RiskProtectionMode): "green" | "red" | "yellow" | "blue" {
   if (mode === "blocked") return "red";
   if (mode === "virtual_only" || mode === "reduced") return "yellow";
@@ -2180,6 +2264,12 @@ function defaultRiskManagement(): RiskManagementSettings {
     risk_profile: "balanced",
     risk_per_trade_percent: 1,
     min_rr_ratio: 2,
+    rr_guard_mode: "soft",
+    discovery_rr_guard_mode: "soft",
+    real_rr_guard_mode: "hard",
+    virtual_rr_guard_mode: "soft",
+    backtest_rr_guard_mode: "soft",
+    strategy_rr_guard_modes: {},
     max_daily_loss_percent: 3,
     max_weekly_loss_percent: 7,
     max_account_drawdown_percent: 10,

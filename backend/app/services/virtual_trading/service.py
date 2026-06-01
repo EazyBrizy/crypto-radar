@@ -33,13 +33,14 @@ from app.schemas.trade import (
     TradeJournalEntry,
     VirtualAccount,
     VirtualExecutionReport,
+    VirtualMarketSnapshot,
     VirtualTrade,
 )
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_audit import RiskAuditService, risk_audit_service
 from app.services.risk_fee_rate import RiskFeeRateService, RiskFeeRateSnapshot, risk_fee_rate_service
 from app.services.risk_gate import RiskContextService, RiskGateService
-from app.services.risk_management import get_user_risk_management_settings
+from app.services.risk_management import get_user_risk_management_settings, resolve_rr_guard_mode
 from app.services.risk_market_data import RiskMarketDataService, RiskMarketDataSnapshot, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
 from app.services.signal_risk_reward import ensure_strategy_rr_eligible
@@ -288,8 +289,16 @@ class VirtualTradingService:
     ) -> tuple[RadarSignal, VirtualTrade]:
         confirm_with_trade = getattr(self._repository, "confirm_signal_with_trade", None)
         existing = self.get_virtual_trade_by_signal(signal.id)
+        risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
         if existing is None or signal.status != "confirmed":
-            ensure_strategy_rr_eligible(signal)
+            ensure_strategy_rr_eligible(
+                signal,
+                guard_mode=resolve_rr_guard_mode(
+                    risk_settings,
+                    context="virtual",
+                    strategy=signal.strategy,
+                ),
+            )
         if existing is not None and confirm_with_trade is not None and signal.status != "confirmed":
             result: VirtualTradeConfirmationResult = confirm_with_trade(signal.id, request, existing)
             self._trade_by_signal[signal.id] = result.trade.id
@@ -337,7 +346,15 @@ class VirtualTradingService:
         existing = self.get_virtual_trade_by_signal(signal.id)
         if existing is not None:
             return existing
-        ensure_strategy_rr_eligible(signal)
+        risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
+        ensure_strategy_rr_eligible(
+            signal,
+            guard_mode=resolve_rr_guard_mode(
+                risk_settings,
+                context="virtual",
+                strategy=signal.strategy,
+            ),
+        )
         trade = self._build_virtual_trade(signal, request)
         persisted_trade = self._repository.save_virtual_trade(trade)
         self._trade_by_signal[signal.id] = persisted_trade.id
@@ -742,6 +759,10 @@ class VirtualTradingService:
             mode="virtual",
             instrument_type="virtual",
             fallback_entry_price=fallback_entry_price,
+            manual_entry_price=_market_snapshot_reference_price(
+                request.market_snapshot,
+                signal.direction,
+            ),
             manual_slippage_bps=request.slippage_bps,
             user_id=request.user_id,
         )
@@ -1116,6 +1137,25 @@ def _fee_context_kwargs(fee_rate: RiskFeeRateSnapshot) -> dict[str, Any]:
 
 def _virtual_fee_instrument_type(request: ManualConfirmRequest) -> str:
     return "futures" if request.leverage > 1 else "spot"
+
+
+def _market_snapshot_reference_price(
+    snapshot: VirtualMarketSnapshot | None,
+    side: str,
+) -> float | None:
+    if snapshot is None:
+        return None
+    best_bid = snapshot.best_bid
+    best_ask = snapshot.best_ask
+    if best_bid is None and snapshot.bids:
+        best_bid = max(level.price for level in snapshot.bids)
+    if best_ask is None and snapshot.asks:
+        best_ask = min(level.price for level in snapshot.asks)
+    if best_bid is not None and best_ask is not None:
+        return (best_bid + best_ask) / 2
+    if side == "long":
+        return best_ask or best_bid
+    return best_bid or best_ask
 
 
 def _trade_plan_time_stop_metadata(signal: RadarSignal) -> dict[str, Any] | None:

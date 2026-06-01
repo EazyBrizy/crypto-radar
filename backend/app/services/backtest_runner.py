@@ -296,6 +296,7 @@ class ProductionBacktestRunner:
         return await self._strategy_engine.generate_signals(
             features,
             strategy_configs={strategy_code: runtime_config},
+            rr_guard_context="backtest",
         )
 
     def _try_open_position(

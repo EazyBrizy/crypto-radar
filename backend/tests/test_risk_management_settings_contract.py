@@ -22,6 +22,12 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(settings["risk_profile"], "balanced")
         self.assertEqual(settings["risk_per_trade_percent"], 1.0)
         self.assertEqual(settings["min_rr_ratio"], 2.0)
+        self.assertEqual(settings["rr_guard_mode"], "soft")
+        self.assertEqual(settings["discovery_rr_guard_mode"], "soft")
+        self.assertEqual(settings["virtual_rr_guard_mode"], "soft")
+        self.assertEqual(settings["backtest_rr_guard_mode"], "soft")
+        self.assertEqual(settings["real_rr_guard_mode"], "hard")
+        self.assertEqual(settings["strategy_rr_guard_modes"], {})
         self.assertEqual(settings["max_daily_loss_percent"], 3.0)
         self.assertEqual(settings["max_weekly_loss_percent"], 7.0)
         self.assertEqual(settings["max_open_risk_percent"], 5.0)
@@ -132,6 +138,12 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
                 virtual_fee_model="exchange_based",
                 real_requires_fresh_market_data=False,
                 real_requires_positive_edge=False,
+                rr_guard_mode="hard",
+                discovery_rr_guard_mode="soft",
+                virtual_rr_guard_mode="off",
+                backtest_rr_guard_mode="soft",
+                real_rr_guard_mode="hard",
+                strategy_rr_guard_modes={"volatility_squeeze_breakout": "hard"},
                 edge_min_sample_size=25,
                 min_expectancy_after_costs_r=0.02,
                 strategy_risk_multipliers={"scalping": 0.4},
@@ -158,6 +170,9 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(settings["virtual_slippage_model"], "orderbook_based")
         self.assertFalse(settings["real_requires_fresh_market_data"])
         self.assertFalse(settings["real_requires_positive_edge"])
+        self.assertEqual(settings["rr_guard_mode"], "hard")
+        self.assertEqual(settings["virtual_rr_guard_mode"], "off")
+        self.assertEqual(settings["strategy_rr_guard_modes"]["volatility_squeeze_breakout"], "hard")
         self.assertEqual(settings["edge_min_sample_size"], 25)
         self.assertEqual(settings["min_expectancy_after_costs_r"], 0.02)
         self.assertEqual(settings["strategy_risk_multipliers"]["scalping"], 0.4)
@@ -409,7 +424,7 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertAlmostEqual(sizing.risk_amount, 37.5)
         self.assertAlmostEqual(sizing.notional, 750.0)
 
-    def test_risk_check_fails_on_low_rr(self) -> None:
+    def test_real_risk_check_fails_on_low_rr_by_default(self) -> None:
         settings = normalize_risk_management_settings({}, "balanced")
         risk_plan = calculate_trade_risk_adjustment(
             account_equity=10_000,
@@ -437,10 +452,51 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
             risk_adjustment=risk_plan,
             position_sizing=sizing,
             take_profit_plan=tp_plan,
+            execution_mode="real",
         )
 
         self.assertEqual(result.status, "failed")
         self.assertIn("R:R is below the configured minimum.", result.blockers)
+        self.assertTrue(result.risk_reward_blocked)
+        self.assertEqual(result.risk_reward_guard_mode, "hard")
+
+    def test_virtual_risk_check_warns_on_low_rr_by_default(self) -> None:
+        settings = normalize_risk_management_settings({}, "balanced")
+        risk_plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=settings,
+            instrument_type="spot",
+            strategy="trend_following",
+            signal_score=90,
+        )
+        sizing = calculate_position_sizing(
+            account_equity=10_000,
+            risk_settings=settings,
+            entry_price=100,
+            stop_loss_price=95,
+            side="long",
+            risk_per_trade_percent=risk_plan.adjusted_risk_percent,
+        )
+        tp_plan = calculate_take_profit_plan(
+            entry_price=100,
+            stop_loss_price=95,
+            side="long",
+            risk_settings={**settings, "tp1_r_multiple": 0.5, "tp2_r_multiple": 1.0, "tp3_r_multiple": 1.5},
+        )
+        result = calculate_risk_check_result(
+            risk_settings=settings,
+            risk_adjustment=risk_plan,
+            position_sizing=sizing,
+            take_profit_plan=tp_plan,
+            execution_mode="virtual",
+        )
+
+        self.assertEqual(result.status, "warning")
+        self.assertNotIn("R:R is below the configured minimum.", result.blockers)
+        self.assertIn("R:R is below the configured minimum.", result.warnings)
+        self.assertTrue(result.risk_reward_warning)
+        self.assertFalse(result.risk_reward_blocked)
+        self.assertEqual(result.risk_reward_guard_mode, "soft")
 
     def test_zero_limits_do_not_block_risk_check(self) -> None:
         settings = normalize_risk_management_settings(

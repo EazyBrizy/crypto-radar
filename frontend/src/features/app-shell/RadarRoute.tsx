@@ -189,10 +189,8 @@ function canArmAutoEntry(signal: RadarSignal | null): boolean {
 }
 
 function isStrategyRiskRewardFailed(signal: RadarSignal): boolean {
-  if (signal.selected_rr != null && signal.min_rr_ratio != null && signal.min_rr_ratio > 0) {
-    return signal.selected_rr < signal.min_rr_ratio;
-  }
-  return signal.confirmation?.checks.some((item) => item.name === "risk_reward_guard" && item.status === "failed") ?? false;
+  const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
+  return check?.metadata.risk_reward_blocked === true || check?.status === "failed";
 }
 
 function errorMessage(exc: unknown, fallback: string): string {

@@ -8421,6 +8421,48 @@
             "minimum": 0,
             "title": "Min Rr Ratio"
           },
+          "risk_reward_guard_mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "soft",
+              "hard"
+            ],
+            "title": "Risk Reward Guard Mode",
+            "default": "soft"
+          },
+          "risk_reward_warning": {
+            "type": "boolean",
+            "title": "Risk Reward Warning",
+            "default": false
+          },
+          "risk_reward_warning_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Reward Warning Reason"
+          },
+          "risk_reward_blocked": {
+            "type": "boolean",
+            "title": "Risk Reward Blocked",
+            "default": false
+          },
+          "risk_reward_block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Reward Block Reason"
+          },
           "account_equity": {
             "type": "number",
             "exclusiveMinimum": 0,
@@ -9009,6 +9051,105 @@
               }
             ],
             "title": "Min Rr Ratio"
+          },
+          "rr_guard_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "soft",
+                  "hard"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rr Guard Mode"
+          },
+          "discovery_rr_guard_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "soft",
+                  "hard"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Rr Guard Mode"
+          },
+          "real_rr_guard_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "soft",
+                  "hard"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Real Rr Guard Mode"
+          },
+          "virtual_rr_guard_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "soft",
+                  "hard"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Rr Guard Mode"
+          },
+          "backtest_rr_guard_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "soft",
+                  "hard"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backtest Rr Guard Mode"
+          },
+          "strategy_rr_guard_modes": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "soft",
+                    "hard"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Rr Guard Modes"
           },
           "max_daily_loss_percent": {
             "anyOf": [

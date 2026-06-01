@@ -15,6 +15,7 @@ VirtualFeeModel = Literal["manual", "exchange_based"]
 TradeInstrumentType = Literal["spot", "futures", "virtual"]
 RiskCheckStatus = Literal["passed", "warning", "failed"]
 RiskExecutionMode = Literal["virtual", "real"]
+RRGuardMode = Literal["off", "soft", "hard"]
 RiskDecisionStage = Literal["preview", "pre_execution", "post_execution", "confirm"]
 RiskProtectionMode = Literal["normal", "reduced", "virtual_only", "blocked"]
 ExchangeRuleStatus = Literal["fresh", "missing", "stale", "unknown"]
@@ -76,6 +77,11 @@ class RiskCheckResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     rr: float | None = Field(default=None, ge=0)
     min_rr_ratio: float = Field(..., ge=0)
+    risk_reward_guard_mode: RRGuardMode = "soft"
+    risk_reward_warning: bool = False
+    risk_reward_warning_reason: str | None = None
+    risk_reward_blocked: bool = False
+    risk_reward_block_reason: str | None = None
     account_equity: float = Field(..., gt=0)
     adjusted_risk_amount: float = Field(..., ge=0)
     adjusted_risk_percent: float = Field(..., ge=0)

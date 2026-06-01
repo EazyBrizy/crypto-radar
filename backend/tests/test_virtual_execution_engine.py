@@ -14,6 +14,9 @@ from app.schemas.trade import (
     VirtualTrade,
 )
 from app.schemas.user import RiskManagementSettings
+from app.services.risk_fee_rate import RiskFeeRateSnapshot
+from app.services.risk_market_data import RiskMarketDataSnapshot
+from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.trade_service import TradeService
 from app.services.virtual_execution_engine import VirtualExecutionEngine
 
@@ -69,6 +72,33 @@ class EphemeralTradeRepository:
             TradeJournalEntry.model_validate(trade.model_dump())
             for trade in self.list_virtual_trades(status=status, signal_id=signal_id)
         ]
+
+
+class CapturingMarketDataService:
+    def __init__(self) -> None:
+        self.manual_entry_price: float | None = None
+
+    def build_snapshot(self, **kwargs) -> RiskMarketDataSnapshot:
+        self.manual_entry_price = kwargs.get("manual_entry_price")
+        return RiskMarketDataSnapshot(
+            exchange=kwargs["exchange"],
+            symbol=kwargs["symbol"],
+            category=None,
+            entry_price=self.manual_entry_price or kwargs["fallback_entry_price"],
+            slippage_bps=kwargs.get("manual_slippage_bps", 0.0),
+            market_data_status="fresh",
+            market_data_source="test",
+        )
+
+
+class ZeroFeeRateService:
+    def resolve(self, **kwargs) -> RiskFeeRateSnapshot:
+        return RiskFeeRateSnapshot(
+            fee_rate=0.0,
+            maker_fee_rate=0.0,
+            taker_fee_rate=0.0,
+            source="test",
+        )
 
 
 class VirtualExecutionEngineTest(unittest.TestCase):
@@ -270,6 +300,70 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertEqual(report.status, "partially_filled")
         self.assertEqual(repository.list_virtual_trades(), [])
 
+    def test_trade_service_uses_request_snapshot_as_preview_reference_price(self) -> None:
+        market_data = CapturingMarketDataService()
+        service = TradeService(
+            repository=EphemeralTradeRepository(),
+            risk_settings_provider=_loose_virtual_risk_settings,
+            market_data_service=market_data,
+            fee_rate_service=ZeroFeeRateService(),
+        )
+
+        report = service.preview_virtual_execution(
+            _signal(),
+            ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                size_usd=100.0,
+                market_snapshot=_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+        )
+
+        self.assertAlmostEqual(market_data.manual_entry_price or 0.0, 99.975)
+        self.assertAlmostEqual(report.reference_price, 99.975)
+        self.assertIsNotNone(report.simulated_path)
+
+    def test_trade_service_open_virtual_trade_allows_low_rr_signal_in_soft_virtual_mode(self) -> None:
+        service = TradeService(
+            repository=EphemeralTradeRepository(),
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(max_price_deviation_bps=0),
+            market_data_service=CapturingMarketDataService(),
+            fee_rate_service=ZeroFeeRateService(),
+        )
+
+        trade = service.open_virtual_trade(
+            _low_selected_rr_signal(),
+            ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                size_usd=100.0,
+                market_snapshot=_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+        )
+
+        self.assertEqual(trade.status, "open")
+
+    def test_trade_service_open_virtual_trade_blocks_low_rr_signal_when_virtual_guard_is_hard(self) -> None:
+        service = TradeService(
+            repository=EphemeralTradeRepository(),
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(
+                virtual_rr_guard_mode="hard",
+                max_price_deviation_bps=0,
+            ),
+            market_data_service=CapturingMarketDataService(),
+            fee_rate_service=ZeroFeeRateService(),
+        )
+
+        with self.assertRaises(StrategyRiskRewardBlocked):
+            service.open_virtual_trade(
+                _low_selected_rr_signal(),
+                ManualConfirmRequest(
+                    simulation_mode="impact_aware",
+                    size_usd=100.0,
+                    market_snapshot=_snapshot(),
+                ),
+            )
+
     def test_stop_loss_exit_uses_impact_aware_exit_slippage(self) -> None:
         service = TradeService(
             repository=EphemeralTradeRepository(),
@@ -364,6 +458,16 @@ def _signal(
         trade_plan=trade_plan,
         created_at=now,
         updated_at=now,
+    )
+
+
+def _low_selected_rr_signal() -> RadarSignal:
+    return _signal().model_copy(
+        update={
+            "selected_rr": 0.8,
+            "selected_rr_target": "nearest",
+            "min_rr_ratio": 1.5,
+        }
     )
 
 

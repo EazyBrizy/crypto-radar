@@ -312,7 +312,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(candidates, [])
 
-    def test_strategy_pipeline_keeps_low_rr_card_but_not_actionable(self) -> None:
+    def test_strategy_pipeline_warns_on_low_rr_without_blocking_discovery_by_default(self) -> None:
         features = _breakout_features()
         candidate = build_signal(
             features=features,
@@ -340,19 +340,61 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(signal)
-        self.assertEqual(signal.status, "ready")
-        self.assertIn("Risk/reward blocked", signal.status_reason or "")
+        self.assertEqual(signal.status, "actionable")
+        self.assertNotIn("Risk/reward blocked", signal.status_reason or "")
         self.assertIn("configured minimum", " ".join(signal.risks if signal else []))
-        self.assertIsNotNone(signal.auto_entry)
-        self.assertFalse(signal.auto_entry.enabled if signal.auto_entry else True)
-        self.assertEqual(signal.auto_entry.status if signal.auto_entry else None, "cancelled")
+        self.assertIsNone(signal.auto_entry)
         rr_check = next(
             check
             for check in (signal.confirmation.checks if signal.confirmation else [])
             if check.name == "risk_reward_guard"
         )
+        self.assertEqual(rr_check.status, "warning")
+        self.assertEqual(rr_check.metadata.get("risk_reward_guard_mode"), "soft")
+        self.assertTrue(rr_check.metadata.get("risk_reward_warning"))
+        self.assertFalse(rr_check.metadata.get("risk_reward_blocked"))
+        self.assertIn("Risk/reward warning", rr_check.metadata.get("risk_reward_warning_reason", ""))
+
+    def test_strategy_pipeline_hard_rr_guard_blocks_actionable_status(self) -> None:
+        features = _breakout_features()
+        candidate = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            scoring=score_breakdown(
+                trend_score=35,
+                volume_score=20,
+                volatility_score=20,
+                risk_reward_score=1,
+            ),
+            reasons=["Breakout setup is classified by strategy layer"],
+            entry=features.close,
+            stop_loss=100.7,
+            take_profit_1=101.4,
+            take_profit_2=101.5,
+        ).model_copy(update={"risk_reward": 0.8})
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"rr_guard_mode": "hard"},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "ready")
+        self.assertIn("Risk/reward blocked", signal.status_reason or "")
+        self.assertIsNotNone(signal.auto_entry)
+        rr_check = next(
+            check
+            for check in (signal.confirmation.checks if signal.confirmation else [])
+            if check.name == "risk_reward_guard"
+        )
+        self.assertEqual(rr_check.status, "failed")
+        self.assertEqual(rr_check.metadata.get("risk_reward_guard_mode"), "hard")
         self.assertTrue(rr_check.metadata.get("risk_reward_blocked"))
-        self.assertIn("Risk/reward blocked", rr_check.metadata.get("risk_reward_block_reason", ""))
 
     def test_risk_reward_guard_exposes_first_final_and_selected_rr(self) -> None:
         features = _breakout_features()
@@ -427,7 +469,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(signal)
-        self.assertEqual(signal.status, "ready")
+        self.assertEqual(signal.status, "actionable")
         self.assertEqual(signal.selected_rr_target, "nearest")
         self.assertEqual(
             signal.trade_plan.risk_rules.selected_rr_target if signal.trade_plan else None,
@@ -436,7 +478,13 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(signal.first_target_rr or 0, 1.0)
         self.assertAlmostEqual(signal.final_target_rr or 0, 3.0)
         self.assertAlmostEqual(signal.selected_rr or 0, 1.0)
-        self.assertIn("nearest target", signal.status_reason or "")
+        rr_check = next(
+            check
+            for check in (signal.confirmation.checks if signal.confirmation else [])
+            if check.name == "risk_reward_guard"
+        )
+        self.assertEqual(rr_check.status, "warning")
+        self.assertIn("nearest target", rr_check.reason or "")
 
     def test_sweep_ignores_nearest_target_that_is_behind_entry(self) -> None:
         features = _breakout_features().model_copy(
@@ -480,8 +528,14 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(signal.first_target_rr)
         self.assertAlmostEqual(signal.final_target_rr or 0, 0.3248)
         self.assertAlmostEqual(signal.selected_rr or 0, 0.3248)
-        self.assertIn("nearest valid target", signal.status_reason or "")
-        self.assertIn("TP1 not beyond entry", signal.status_reason or "")
+        rr_check = next(
+            check
+            for check in (signal.confirmation.checks if signal.confirmation else [])
+            if check.name == "risk_reward_guard"
+        )
+        self.assertEqual(rr_check.status, "warning")
+        self.assertIn("nearest valid target", rr_check.reason or "")
+        self.assertIn("TP1 not beyond entry", rr_check.reason or "")
         self.assertEqual([target.get("label") for target in signal.exit_plan.targets[:1]] if signal and signal.exit_plan else [], ["TP2"])
 
     def test_short_signal_reward_is_directional_not_absolute(self) -> None:
@@ -529,7 +583,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             StrategyEvaluationContext(
                 signal_features=features,
                 context_features=_bullish_context_features(),
-                strategy_params={"hide_failed_rr_signals": True},
+                strategy_params={"hide_failed_rr_signals": True, "rr_guard_mode": "hard"},
             ),
         )
 

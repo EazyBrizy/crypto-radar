@@ -143,6 +143,10 @@ try {
     : "empty-state";
   await page.goto(`http://127.0.0.1:${frontendPort}/dashboard/settings`, { waitUntil: "networkidle" });
   await page.getByText("Risk management", { exact: true }).waitFor({ timeout: 15000 });
+  const riskProfileTab = page.getByRole("tab", { name: "Risk Profile" });
+  if (!(await riskProfileTab.isVisible().catch(() => false))) {
+    await page.getByRole("button", { name: /Risk management/i }).click();
+  }
   await page.getByText("Risk Profile", { exact: true }).waitFor({ timeout: 15000 });
   await page.getByText("Balanced", { exact: true }).waitFor({ timeout: 15000 });
   await page.getByText("Daily Stop-Loss", { exact: true }).waitFor({ timeout: 15000 });
@@ -153,6 +157,10 @@ try {
   await page.getByRole("tab", { name: "Virtual Trading" }).click();
   await page.getByText("Virtual execution", { exact: true }).waitFor({ timeout: 15000 });
   await page.getByText("Simulation", { exact: true }).waitFor({ timeout: 15000 });
+  const advancedSimulationOption = page.getByText("Advanced", { exact: true });
+  if (!(await advancedSimulationOption.isVisible().catch(() => false))) {
+    await page.locator("button.settings-accordion-trigger").filter({ hasText: "Simulation" }).click();
+  }
   await page.getByText("Advanced", { exact: true }).waitFor({ timeout: 15000 });
 
   const result = {

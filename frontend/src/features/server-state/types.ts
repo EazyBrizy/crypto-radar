@@ -10,6 +10,7 @@ export type TrailingMode = "atr" | "percent" | "structure";
 export type VirtualRiskMode = "same_as_real" | "custom";
 export type VirtualSlippageModel = "none" | "fixed_percent" | "spread_based" | "orderbook_based" | "volatility_based";
 export type VirtualFeeModel = "manual" | "exchange_based";
+export type RRGuardMode = "off" | "soft" | "hard";
 
 export interface VirtualTradingSettings {
   simulation_level: VirtualSimulationLevel;
@@ -21,6 +22,12 @@ export interface RiskManagementSettings {
   risk_profile: RiskProfileName;
   risk_per_trade_percent: number;
   min_rr_ratio: number;
+  rr_guard_mode: RRGuardMode;
+  discovery_rr_guard_mode: RRGuardMode;
+  real_rr_guard_mode: RRGuardMode;
+  virtual_rr_guard_mode: RRGuardMode;
+  backtest_rr_guard_mode: RRGuardMode;
+  strategy_rr_guard_modes: Record<string, RRGuardMode>;
   max_daily_loss_percent: number;
   max_weekly_loss_percent: number;
   max_account_drawdown_percent: number;

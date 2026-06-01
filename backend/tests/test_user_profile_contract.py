@@ -68,6 +68,12 @@ class UserProfileContractTest(unittest.TestCase):
             risk_management=RiskManagementPatch(
                 risk_per_trade_percent=0.75,
                 min_rr_ratio=2.5,
+                rr_guard_mode="soft",
+                discovery_rr_guard_mode="soft",
+                virtual_rr_guard_mode="off",
+                backtest_rr_guard_mode="soft",
+                real_rr_guard_mode="hard",
+                strategy_rr_guard_modes={"trend_pullback_continuation": "hard"},
                 max_daily_loss_percent=2.0,
                 max_account_drawdown_percent=8.0,
                 max_open_risk_percent=4.0,
@@ -94,6 +100,8 @@ class UserProfileContractTest(unittest.TestCase):
 
         self.assertEqual(request.risk_profile, "custom")
         self.assertEqual(request.risk_management.risk_per_trade_percent, 0.75)
+        self.assertEqual(request.risk_management.virtual_rr_guard_mode, "off")
+        self.assertEqual(request.risk_management.strategy_rr_guard_modes["trend_pullback_continuation"], "hard")
         self.assertEqual(request.risk_management.stop_loss_mode, "atr")
         self.assertEqual(request.risk_management.tp3_close_percent, 30.0)
         self.assertEqual(request.risk_management.max_leverage, 3)

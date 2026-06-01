@@ -17,6 +17,7 @@ from app.schemas.risk import (
 
 VirtualSimulationLevel = Literal["mvp", "advanced", "pro"]
 RiskProfileName = Literal["conservative", "balanced", "aggressive", "custom"]
+RRGuardMode = Literal["off", "soft", "hard"]
 
 
 DEFAULT_STRATEGY_RISK_MULTIPLIERS: dict[str, float] = {
@@ -36,6 +37,12 @@ class RiskManagementSettings(BaseModel):
     risk_profile: RiskProfileName = "balanced"
     risk_per_trade_percent: float = Field(default=1.0, gt=0, le=10)
     min_rr_ratio: float = Field(default=2.0, ge=0, le=10)
+    rr_guard_mode: RRGuardMode = "soft"
+    discovery_rr_guard_mode: RRGuardMode = "soft"
+    real_rr_guard_mode: RRGuardMode = "hard"
+    virtual_rr_guard_mode: RRGuardMode = "soft"
+    backtest_rr_guard_mode: RRGuardMode = "soft"
+    strategy_rr_guard_modes: dict[str, RRGuardMode] = Field(default_factory=dict)
     max_daily_loss_percent: float = Field(default=3.0, ge=0, le=50)
     max_weekly_loss_percent: float = Field(default=7.0, ge=0, le=80)
     max_account_drawdown_percent: float = Field(default=10.0, ge=0, le=90)
@@ -117,6 +124,12 @@ class RiskManagementPatch(BaseModel):
     risk_profile: RiskProfileName | None = None
     risk_per_trade_percent: float | None = Field(default=None, gt=0, le=10)
     min_rr_ratio: float | None = Field(default=None, ge=0, le=10)
+    rr_guard_mode: RRGuardMode | None = None
+    discovery_rr_guard_mode: RRGuardMode | None = None
+    real_rr_guard_mode: RRGuardMode | None = None
+    virtual_rr_guard_mode: RRGuardMode | None = None
+    backtest_rr_guard_mode: RRGuardMode | None = None
+    strategy_rr_guard_modes: dict[str, RRGuardMode] | None = None
     max_daily_loss_percent: float | None = Field(default=None, ge=0, le=50)
     max_weekly_loss_percent: float | None = Field(default=None, ge=0, le=80)
     max_account_drawdown_percent: float | None = Field(default=None, ge=0, le=90)

@@ -125,6 +125,7 @@ from app.schemas.trade_plan import (
     build_trade_plan_from_legacy_fields,
 )
 from app.schemas.user import (
+    RRGuardMode,
     RiskManagementPatch,
     RiskManagementSettings,
     UserProfileResponse,
@@ -194,6 +195,7 @@ __all__ = [
     "ScoredSignal",
     "RiskManagementPatch",
     "RiskManagementSettings",
+    "RRGuardMode",
     "RiskAdjustmentPlan",
     "RiskCheckResult",
     "RiskContext",

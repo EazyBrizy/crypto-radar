@@ -8,6 +8,7 @@ from app.services.strategy_config_service import (
     StrategyConfigValidationError,
     _default_rr_target_for_strategy,
     _normalize_existing_strategy_defaults,
+    _risk_settings_for_strategy,
     _validate_exchanges,
     _validate_pairs,
 )
@@ -80,6 +81,19 @@ class StrategyConfigValidationTest(unittest.TestCase):
         self.assertEqual(_default_rr_target_for_strategy("trend_pullback_continuation"), "final")
         self.assertEqual(_default_rr_target_for_strategy("liquidity_sweep_reversal"), "nearest")
 
+    def test_strategy_rr_guard_prefers_user_strategy_override(self) -> None:
+        settings = _risk_settings_for_strategy(
+            "volatility_squeeze_breakout",
+            {
+                "min_rr_ratio": 2.0,
+                "rr_guard_mode": "soft",
+                "discovery_rr_guard_mode": "soft",
+                "strategy_rr_guard_modes": {"volatility_squeeze_breakout": "hard"},
+            },
+        )
+
+        self.assertEqual(settings["rr_guard_mode"], "hard")
+
     def test_legacy_sweep_rr_default_migrates_to_nearest(self) -> None:
         config = SimpleNamespace(
             risk_settings={"rr_target": "final", "hide_failed_rr_signals": False},
@@ -94,6 +108,8 @@ class StrategyConfigValidationTest(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(config.risk_settings["rr_target"], "nearest")
         self.assertEqual(config.risk_settings["rr_target_default_version"], RR_TARGET_DEFAULT_VERSION)
+        self.assertEqual(config.risk_settings["rr_guard_mode"], "soft")
+        self.assertEqual(config.risk_settings["real_rr_guard_mode"], "hard")
 
     def test_squeeze_defaults_are_added_to_existing_params(self) -> None:
         config = SimpleNamespace(

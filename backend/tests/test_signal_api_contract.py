@@ -8,6 +8,7 @@ from app.api.v1.signals import confirm_signal, list_active_signals, list_open_si
 from app.api.v1.trades import confirm_real_trade
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, RealConfirmRequest
+from app.schemas.user import RiskManagementSettings
 from app.services.execution_service import RealExecutionService
 from backend.tests.ephemeral_signal_service import ephemeral_signal_service
 
@@ -190,20 +191,24 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Auto-entry armed", response.message)
         self.assertEqual(broker.events[0]["type"], "signal.updated")
 
-    async def test_confirm_endpoint_rejects_auto_entry_when_strategy_rr_failed(self) -> None:
+    async def test_confirm_endpoint_allows_auto_entry_when_virtual_rr_guard_is_soft(self) -> None:
         now = datetime.now(timezone.utc)
         signal = _rr_failed_signal("sig_low_rr", now=now, status="ready")
         self.signal_service.add_signal(signal)
+        broker = _FakeRealtimeBroker()
 
-        with patch("app.api.v1.signals.signal_service", self.signal_service):
-            with self.assertRaises(HTTPException) as exc:
-                await confirm_signal(
-                    signal.id,
-                    ManualConfirmRequest(mode="virtual", user_id="demo_user", auto_enter_on_confirmation=True),
-                )
+        with (
+            patch("app.api.v1.signals.signal_service", self.signal_service),
+            patch("app.api.v1.signals.realtime_event_broker", broker),
+        ):
+            response = await confirm_signal(
+                signal.id,
+                ManualConfirmRequest(mode="virtual", user_id="demo_user", auto_enter_on_confirmation=True),
+            )
 
-        self.assertEqual(exc.exception.status_code, 409)
-        self.assertIn("Risk/reward blocked", str(exc.exception.detail))
+        self.assertEqual(response.signal.status, "ready")
+        self.assertEqual(response.signal.auto_entry.status if response.signal.auto_entry else None, "pending")
+        self.assertIn("Auto-entry armed", response.message)
 
     async def test_real_execution_service_blocks_rr_failed_signal_before_risk_gate(self) -> None:
         now = datetime.now(timezone.utc)
@@ -213,6 +218,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
             risk_state=None,
             market_data_service=None,
             fee_rate_service=None,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(),
         )
 
         result = await service.place_order(

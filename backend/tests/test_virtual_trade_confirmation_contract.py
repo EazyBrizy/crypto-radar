@@ -5,6 +5,7 @@ from uuid import UUID
 from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualTrade
+from app.schemas.user import RiskManagementSettings
 from app.services.trade_repository import (
     VirtualTradeConfirmationResult,
     VirtualTradePersistenceEvent,
@@ -99,6 +100,7 @@ class VirtualTradeConfirmationContractTest(unittest.TestCase):
             repository=repository,
             signal_analytics_writer=analytics,
             signal_hot_store=hot_store,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(max_price_deviation_bps=0),
         )
 
         signal, trade = service.confirm_signal(_signal(), ManualConfirmRequest())
@@ -110,9 +112,28 @@ class VirtualTradeConfirmationContractTest(unittest.TestCase):
         self.assertEqual(analytics.events, [{"event_type": "signal.confirmed"}])
         self.assertEqual(hot_store.results[0].signal.id, signal.id)
 
-    def test_confirm_signal_blocks_strategy_rr_failed_signal(self) -> None:
+    def test_confirm_signal_allows_low_rr_signal_in_soft_virtual_mode(self) -> None:
         repository = FakeConfirmRepository()
-        service = TradeService(repository=repository)
+        service = TradeService(
+            repository=repository,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(max_price_deviation_bps=0),
+        )
+
+        signal, trade = service.confirm_signal(_rr_failed_signal(), ManualConfirmRequest())
+
+        self.assertEqual(signal.status, "confirmed")
+        self.assertIsNotNone(repository.received_trade)
+        self.assertEqual(trade.id, signal.confirmed_trade_id)
+
+    def test_confirm_signal_blocks_low_rr_signal_when_virtual_guard_is_hard(self) -> None:
+        repository = FakeConfirmRepository()
+        service = TradeService(
+            repository=repository,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(
+                virtual_rr_guard_mode="hard",
+                max_price_deviation_bps=0,
+            ),
+        )
 
         with self.assertRaises(StrategyRiskRewardBlocked) as exc:
             service.confirm_signal(_rr_failed_signal(), ManualConfirmRequest())

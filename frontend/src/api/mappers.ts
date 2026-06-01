@@ -8,6 +8,7 @@ import type {
   MarketPairOption,
   NotificationDelivery,
   PersistedNotification,
+  RRGuardMode,
   StrategyConfig,
   SubscriptionState,
   SubscriptionStatus,
@@ -445,6 +446,11 @@ function normalizeRiskCheckResult(value: unknown): RiskCheckResult | null {
     warnings: Array.isArray(value.warnings) ? value.warnings.map(String) : [],
     rr: value.rr == null ? null : Number(value.rr),
     min_rr_ratio: Number(value.min_rr_ratio ?? 0),
+    risk_reward_guard_mode: normalizeRRGuardMode(value.risk_reward_guard_mode, "soft"),
+    risk_reward_warning: Boolean(value.risk_reward_warning ?? false),
+    risk_reward_warning_reason: value.risk_reward_warning_reason == null ? null : String(value.risk_reward_warning_reason),
+    risk_reward_blocked: Boolean(value.risk_reward_blocked ?? false),
+    risk_reward_block_reason: value.risk_reward_block_reason == null ? null : String(value.risk_reward_block_reason),
     account_equity: Number(value.account_equity ?? 0),
     adjusted_risk_amount: Number(value.adjusted_risk_amount ?? 0),
     adjusted_risk_percent: Number(value.adjusted_risk_percent ?? 0),
@@ -1095,6 +1101,12 @@ function normalizeRiskManagementSettings(
     risk_profile: normalizeRiskProfile(settings.risk_profile ?? profileFallback),
     risk_per_trade_percent: Number(settings.risk_per_trade_percent ?? 1),
     min_rr_ratio: Number(settings.min_rr_ratio ?? 2),
+    rr_guard_mode: normalizeRRGuardMode(settings.rr_guard_mode, "soft"),
+    discovery_rr_guard_mode: normalizeRRGuardMode(settings.discovery_rr_guard_mode, "soft"),
+    real_rr_guard_mode: normalizeRRGuardMode(settings.real_rr_guard_mode, "hard"),
+    virtual_rr_guard_mode: normalizeRRGuardMode(settings.virtual_rr_guard_mode, "soft"),
+    backtest_rr_guard_mode: normalizeRRGuardMode(settings.backtest_rr_guard_mode, "soft"),
+    strategy_rr_guard_modes: normalizeStrategyRRGuardModes(settings.strategy_rr_guard_modes),
     max_daily_loss_percent: Number(settings.max_daily_loss_percent ?? 3),
     max_weekly_loss_percent: Number(settings.max_weekly_loss_percent ?? 7),
     max_account_drawdown_percent: Number(settings.max_account_drawdown_percent ?? 10),
@@ -1155,6 +1167,20 @@ function normalizeRiskManagementSettings(
 function normalizeRiskProfile(value: unknown) {
   if (value === "conservative" || value === "aggressive" || value === "custom") return value;
   return "balanced";
+}
+
+function normalizeRRGuardMode(value: unknown, fallback: RRGuardMode): RRGuardMode {
+  if (value === "off" || value === "soft" || value === "hard") return value;
+  return fallback;
+}
+
+function normalizeStrategyRRGuardModes(value: unknown): Record<string, RRGuardMode> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, mode]) => [key, normalizeRRGuardMode(mode, "soft")] as const)
+      .filter(([key]) => key.length > 0)
+  );
 }
 
 function normalizeStopLossMode(value: unknown) {

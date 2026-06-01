@@ -29,11 +29,14 @@ Boundary rules:
   context. Strategies must not read/write DB, call APIs, or execute trades.
 - `TradePlan` normalizes executable entry, stop, target, invalidation, and risk
   metadata from a strategy signal while keeping legacy signal fields available.
-- Pipeline checks apply shared quality gates such as RR guard, regime,
+- Pipeline checks calculate shared quality signals such as RR quality, regime,
   confirmation, freshness, no-trade filters, market quality, and actionability.
+  RR is soft by default for discovery, research, virtual confirmation, and
+  backtests; it affects execution eligibility only when the active RR guard mode
+  is `hard`.
 - `RiskGate` is the single business boundary for virtual and real entry
-  decisions. It consumes `RiskContext`, `TradePlan`, market quality, edge, and
-  configured user risk settings.
+  eligibility decisions. It consumes `RiskContext`, `TradePlan`, market quality,
+  edge, and configured user risk settings.
 - Virtual execution may be used for research and simulation after the risk gate
   decision. Real execution requires all real-entry gates to pass before any
   adapter can submit an order.
@@ -45,15 +48,16 @@ Boundary rules:
   not rewrite the heuristic score; it produces the `edge` snapshot consumed by
   real-entry risk checks.
 
-Real execution eligibility is stricter than virtual research. A real entry must
-have: `risk passed`, `RR passed`, no hard no-trade result, positive edge,
-sufficient edge sample size, fresh market data, valid orderbook, a valid
-liquidation price/buffer for futures, available protective orders, and valid
-exchange rules.
+Real execution eligibility is stricter than discovery, research, virtual
+confirmation, and backtests. A real entry must have: `risk passed`, no hard
+no-trade result, positive edge, sufficient edge sample size, fresh market data,
+valid orderbook, a valid liquidation price/buffer for futures, available
+protective orders, valid exchange rules, and, when `real_rr_guard_mode = "hard"`
+(the default), `RR passed`.
 
-Virtual execution may continue to surface research warnings for unknown or weak
-edge, but it must not be confused with production permission to send exchange
-orders.
+Virtual execution may continue to surface research warnings for weak RR,
+unknown or weak edge, or incomplete context, but warnings must not be confused
+with production permission to send exchange orders.
 
 ## Backtest Runner v1
 
@@ -640,9 +644,63 @@ thresholds such as `funding_block_threshold`.
   then legacy alias fallback, then `1.0`.
 
 ## Strategy RR eligibility
-- `risk_reward_guard` failed checks make the signal non-actionable for real
-  and virtual entries.
-- Failed RR snapshots expose `metadata.risk_reward_blocked = true` and
-  `metadata.risk_reward_block_reason`.
-- Failed RR signals expose disabled `auto_entry` metadata so auto-entry cannot
-  be armed by pipeline output.
+- RR is calculated for discovery, research, virtual confirmation, backtests,
+  and real execution. By default, low RR is an execution quality/risk warning
+  and metadata signal, not proof that the market setup is invalid.
+- Signal validity and execution eligibility are separate. A failed RR check may
+  leave `signal_valid = true` and the signal status `actionable` in `soft` or
+  `off` mode. `execution_allowed` may be false only in the execution
+  layer/risk gate when the active guard mode blocks eligibility.
+- `min_rr_ratio` remains part of API/settings/storage for backward
+  compatibility. Its contract meaning is "minimum R:R for execution/reporting",
+  not a universal signal discovery filter.
+
+RR guard modes:
+
+- `off`: calculate and persist RR only; do not warn or block.
+- `soft`: warning plus metadata; default for discovery, virtual confirmation,
+  backtests, and research.
+- `hard`: block execution eligibility according to mode.
+
+RR guard mode precedence:
+
+1. Per-strategy `risk_settings.rr_guard_mode`.
+2. User risk setting `strategy_rr_guard_modes[strategy_code]`.
+3. Context-specific setting:
+   `discovery_rr_guard_mode`, `virtual_rr_guard_mode`,
+   `backtest_rr_guard_mode`, or `real_rr_guard_mode`.
+4. Generic `rr_guard_mode`.
+5. Safe default: `soft` for discovery/virtual/backtest/research, `hard` for
+   real execution.
+
+Context-specific defaults:
+
+- `discovery_rr_guard_mode = "soft"`
+- `virtual_rr_guard_mode = "soft"`
+- `backtest_rr_guard_mode = "soft"`
+- `real_rr_guard_mode = "hard"` by default, configurable to `"soft"` or
+  `"off"`.
+
+`risk_reward_guard` pipeline/layer check semantics:
+
+- `hard` mode plus failed RR => failed check, `risk_reward_blocked = true`,
+  and `risk_reward_block_reason`.
+- `soft` mode plus failed RR => warning check, `risk_reward_warning = true`,
+  and `risk_reward_warning_reason`; signal discovery/research/virtual/backtest
+  status is not blocked by RR alone.
+- `off` mode plus failed RR => skipped/info check; RR values and metadata are
+  still calculated and persisted.
+
+RR metadata snapshots expose:
+
+- `selected_rr`
+- `min_rr_ratio`
+- `risk_reward_guard_mode`
+- `risk_reward_warning`
+- `risk_reward_warning_reason`
+- `risk_reward_blocked`
+- `risk_reward_block_reason`
+
+Failed RR signals disable `auto_entry` metadata only when the active guard mode
+is `hard` and the execution layer/risk gate blocks eligibility. No-trade hard
+blockers remain hard blockers independent of RR mode.

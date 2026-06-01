@@ -377,6 +377,10 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(signal)
         self.assertEqual(signal.selected_rr_target, "final")
+        self.assertEqual(
+            signal.trade_plan.risk_rules.selected_rr_target if signal.trade_plan else None,
+            "final",
+        )
         self.assertAlmostEqual(signal.first_target_rr or 0, 1.0)
         self.assertAlmostEqual(signal.final_target_rr or 0, 3.0)
         self.assertAlmostEqual(signal.selected_rr or 0, 3.0)
@@ -419,6 +423,10 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal.status, "ready")
         self.assertEqual(signal.selected_rr_target, "nearest")
+        self.assertEqual(
+            signal.trade_plan.risk_rules.selected_rr_target if signal.trade_plan else None,
+            "nearest",
+        )
         self.assertAlmostEqual(signal.first_target_rr or 0, 1.0)
         self.assertAlmostEqual(signal.final_target_rr or 0, 3.0)
         self.assertAlmostEqual(signal.selected_rr or 0, 1.0)

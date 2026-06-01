@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.trade_plan import TradePlan
+
 StopLossMode = Literal["fixed_percent", "atr", "structure"]
 TakeProfitMode = Literal["risk_multiple"]
 TrailingMode = Literal["atr", "percent", "structure"]
@@ -150,6 +152,10 @@ class TakeProfitPlan(BaseModel):
     risk_per_unit: float = Field(..., gt=0)
     partial_take_profit_enabled: bool
     targets: list[TakeProfitTarget] = Field(default_factory=list)
+    source: str = "risk_settings"
+    selected_rr: float | None = Field(default=None, ge=0)
+    selected_rr_target: str | None = None
+    notes: list[str] = Field(default_factory=list)
 
 
 class BreakevenPlan(BaseModel):
@@ -251,6 +257,7 @@ class RiskContext(BaseModel):
     volatility_multiplier: float = Field(default=1.0, ge=0)
     user_mode_multiplier: float = Field(default=1.0, ge=0)
     manual_take_profit_price: float | None = Field(default=None, gt=0)
+    trade_plan: TradePlan | None = None
 
 
 class RiskDecision(BaseModel):

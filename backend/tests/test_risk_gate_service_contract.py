@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.schemas.signal import RadarSignal
+from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanRiskRules, TradePlanTarget
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_gate import RiskContextService, RiskGateService
@@ -380,6 +381,168 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertEqual(report.risk_check, report.risk_decision.risk_check)
         self.assertEqual(report.risk_decision.status, report.risk_check.status)
 
+    def test_risk_gate_uses_signal_trade_plan_targets(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(
+                    trade_plan=_trade_plan(
+                        targets=[
+                            TradePlanTarget(label="TP1", price=115.0),
+                            TradePlanTarget(label="TP2", price=127.0),
+                            TradePlanTarget(label="TP3", price=140.0),
+                        ],
+                    )
+                ),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.take_profit_plan.source, "trade_plan")
+        self.assertEqual(
+            [target.price for target in decision.take_profit_plan.targets],
+            [115.0, 127.0, 140.0],
+        )
+        self.assertAlmostEqual(decision.take_profit_plan.targets[-1].r_multiple, 4.0)
+
+    def test_risk_gate_falls_back_without_trade_plan(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=None),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.take_profit_plan.source, "risk_settings")
+        self.assertEqual(
+            [target.price for target in decision.take_profit_plan.targets],
+            [110.0, 120.0, 130.0],
+        )
+
+    def test_invalid_long_trade_plan_target_below_entry_is_blocked(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(
+                    trade_plan=_trade_plan(
+                        targets=[TradePlanTarget(label="TP1", price=99.0)]
+                    )
+                ),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn(
+            "TradePlan target TP1 must be above entry for long trades.",
+            decision.blockers,
+        )
+        self.assertEqual(decision.take_profit_plan.source, "trade_plan_invalid")
+
+    def test_invalid_short_trade_plan_target_above_entry_is_blocked(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(
+                    direction="short",
+                    stop_loss=110.0,
+                    take_profit_1=90.0,
+                    take_profit_2=80.0,
+                    trade_plan=_trade_plan(
+                        stop_loss=110.0,
+                        targets=[TradePlanTarget(label="TP1", price=101.0)],
+                    ),
+                ),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn(
+            "TradePlan target TP1 must be below entry for short trades.",
+            decision.blockers,
+        )
+
+    def test_measured_move_tp3_target_survives_risk_gate(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(
+                    trade_plan=_trade_plan(
+                        targets=[
+                            TradePlanTarget(label="TP1", price=112.0, close_percent=40),
+                            TradePlanTarget(label="TP2", price=125.0, close_percent=30),
+                            TradePlanTarget(
+                                label="TP3",
+                                price=145.0,
+                                action="measured_move_runner",
+                                close_percent="runner",
+                                source="range_measured_move",
+                            ),
+                        ],
+                    )
+                ),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertNotEqual(decision.status, "failed")
+        self.assertTrue(decision.can_enter)
+        self.assertEqual(decision.take_profit_plan.targets[-1].label, "TP3")
+        self.assertEqual(decision.take_profit_plan.targets[-1].price, 145.0)
+        self.assertAlmostEqual(decision.take_profit_plan.targets[-1].r_multiple, 4.5)
+        self.assertEqual(decision.take_profit_plan.targets[-1].close_percent, 30.0)
+
+    def test_trade_plan_selected_rr_target_is_respected(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(
+                    trade_plan=_trade_plan(
+                        targets=[
+                            TradePlanTarget(label="TP1", price=112.0, close_percent=40),
+                            TradePlanTarget(label="TP2", price=125.0, close_percent=30),
+                            TradePlanTarget(label="TP3", price=140.0, close_percent=30),
+                        ],
+                        selected_rr_target="nearest",
+                    )
+                ),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.take_profit_plan.selected_rr_target, "nearest")
+        self.assertAlmostEqual(decision.risk_check.rr or 0, 1.2)
+        self.assertEqual(decision.status, "failed")
+        self.assertIn("R:R is below the configured minimum.", decision.blockers)
+
 
 def _risk_settings() -> RiskManagementSettings:
     return RiskManagementSettings(
@@ -405,14 +568,23 @@ def _account() -> VirtualAccount:
     )
 
 
-def _signal(*, score: float = 78, strategy: str = "trend_pullback_continuation") -> RadarSignal:
+def _signal(
+    *,
+    score: float = 78,
+    strategy: str = "trend_pullback_continuation",
+    direction: str = "long",
+    stop_loss: float = 90.0,
+    take_profit_1: float = 120.0,
+    take_profit_2: float = 130.0,
+    trade_plan: TradePlan | None = None,
+) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
         id="sig_risk_gate",
         symbol="BTCUSDT",
         exchange="bybit",
         strategy=strategy,
-        direction="long",
+        direction=direction,
         confidence=0.8,
         risk_reward=3.0,
         urgency="medium",
@@ -420,13 +592,28 @@ def _signal(*, score: float = 78, strategy: str = "trend_pullback_continuation")
         timeframe="15m",
         entry_min=100.0,
         entry_max=100.0,
-        stop_loss=90.0,
-        take_profit_1=120.0,
-        take_profit_2=130.0,
+        stop_loss=stop_loss,
+        take_profit_1=take_profit_1,
+        take_profit_2=take_profit_2,
         explanation=[],
         risks=[],
+        trade_plan=trade_plan,
         created_at=now,
         updated_at=now,
+    )
+
+
+def _trade_plan(
+    *,
+    targets: list[TradePlanTarget],
+    stop_loss: float = 90.0,
+    selected_rr_target: str | None = None,
+) -> TradePlan:
+    return TradePlan(
+        entry=TradePlanEntry(price=100.0, min_price=100.0, max_price=100.0),
+        stop_loss=stop_loss,
+        targets=targets,
+        risk_rules=TradePlanRiskRules(selected_rr_target=selected_rr_target),
     )
 
 

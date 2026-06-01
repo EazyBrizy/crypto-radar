@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.schemas.signal import RadarSignal
+from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanTarget
 from app.schemas.trade import (
     CloseVirtualTradeRequest,
     ManualConfirmRequest,
@@ -295,8 +296,52 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertLess(closed.exit_price or 95.0, 95.0)
         self.assertEqual(closed.close_reason, "stop_loss")
 
+    def test_trade_service_persists_trade_plan_tp3_target(self) -> None:
+        service = TradeService(
+            repository=EphemeralTradeRepository(),
+            risk_settings_provider=_loose_virtual_risk_settings,
+        )
 
-def _signal(stop_loss: float = 90.0) -> RadarSignal:
+        trade = service.open_virtual_trade(
+            _signal(
+                trade_plan=TradePlan(
+                    entry=TradePlanEntry(price=100.0, min_price=100.0, max_price=100.0),
+                    stop_loss=90.0,
+                    targets=[
+                        TradePlanTarget(label="TP1", price=112.0, close_percent=40),
+                        TradePlanTarget(label="TP2", price=125.0, close_percent=30),
+                        TradePlanTarget(
+                            label="TP3",
+                            price=145.0,
+                            action="measured_move_runner",
+                            close_percent="runner",
+                            source="range_measured_move",
+                        ),
+                    ],
+                )
+            ),
+            ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                size_usd=300.0,
+                leverage=3,
+                market_snapshot=_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+        )
+
+        self.assertEqual(trade.take_profit[-1], 145.0)
+        self.assertIsNotNone(trade.execution)
+        assert trade.execution is not None
+        self.assertIsNotNone(trade.execution.take_profit_plan)
+        assert trade.execution.take_profit_plan is not None
+        self.assertEqual(trade.execution.take_profit_plan.source, "trade_plan")
+        self.assertEqual(trade.execution.take_profit_plan.targets[-1].price, 145.0)
+
+
+def _signal(
+    stop_loss: float = 90.0,
+    trade_plan: TradePlan | None = None,
+) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
         id="sig_execution",
@@ -316,6 +361,7 @@ def _signal(stop_loss: float = 90.0) -> RadarSignal:
         take_profit_2=130.0,
         explanation=[],
         risks=[],
+        trade_plan=trade_plan,
         created_at=now,
         updated_at=now,
     )

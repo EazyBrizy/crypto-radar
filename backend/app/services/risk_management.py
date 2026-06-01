@@ -14,6 +14,7 @@ from app.schemas.risk import (
     TradeInstrumentType,
     TrailingStopPlan,
 )
+from app.schemas.trade_plan import TradePlan, TradePlanTarget
 from app.schemas.user import RiskManagementPatch, RiskManagementSettings, RiskProfileName
 
 RISK_PROFILE_PRESETS: dict[RiskProfileName, RiskManagementSettings] = {
@@ -201,6 +202,14 @@ _STRATEGY_RISK_ALIAS_FALLBACKS: dict[str, str] = {
     "liquidity_sweep_reversal": "smart_money_setup",
 }
 
+_TAKE_PROFIT_LABELS = {"TP1", "TP2", "TP3"}
+
+
+class TradePlanValidationError(ValueError):
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = errors
+        super().__init__("; ".join(errors))
+
 
 def normalize_risk_profile(value: Any) -> RiskProfileName:
     if value in RISK_PROFILE_PRESETS:
@@ -385,7 +394,11 @@ def calculate_risk_check_result(
 
     rr = None
     if take_profit_plan is not None and take_profit_plan.targets:
-        rr = take_profit_plan.targets[-1].r_multiple
+        rr = (
+            take_profit_plan.selected_rr
+            if take_profit_plan.selected_rr is not None
+            else take_profit_plan.targets[-1].r_multiple
+        )
         if _limit_enabled(settings.min_rr_ratio) and rr < settings.min_rr_ratio:
             blockers.append("R:R is below the configured minimum.")
             if signal_entry_price is not None and signal_entry_price != position_sizing.entry_price:
@@ -702,6 +715,124 @@ def calculate_take_profit_plan(
         risk_per_unit=risk_per_unit,
         partial_take_profit_enabled=settings.partial_take_profit_enabled,
         targets=targets,
+        source="risk_settings",
+        selected_rr=targets[-1].r_multiple if targets else None,
+        selected_rr_target="final",
+    )
+
+
+def calculate_take_profit_plan_from_trade_plan(
+    *,
+    trade_plan: TradePlan,
+    entry_price: float,
+    stop_loss_price: float,
+    side: str,
+    risk_settings: RiskManagementSettings | Mapping[str, Any],
+) -> TakeProfitPlan:
+    settings = _settings_model(risk_settings)
+    _validate_side_and_entry(side, entry_price)
+    if stop_loss_price <= 0:
+        raise TradePlanValidationError(["Resolved stop_loss_price must be greater than zero."])
+    if not _stop_matches_side(entry_price, stop_loss_price, side):
+        raise TradePlanValidationError(
+            ["Resolved stop_loss_price must be on the risk side of entry."]
+        )
+
+    errors: list[str] = []
+    notes = ["Take-profit plan source: signal.trade_plan."]
+    _validate_trade_plan_stop(
+        trade_plan=trade_plan,
+        entry_price=entry_price,
+        side=side,
+        errors=errors,
+    )
+
+    risk_per_unit = abs(entry_price - stop_loss_price)
+    targets: list[TakeProfitTarget] = []
+    total_close_percent = 0.0
+    for target in trade_plan.targets:
+        label = _trade_plan_target_label(target, errors)
+        if label is None:
+            continue
+        if target.price is None:
+            if _is_unpriced_runner_target(target):
+                notes.append(
+                    f"TradePlan target {label} has no fixed price; risk gate skipped it."
+                )
+                continue
+            errors.append(f"TradePlan target {label} price is required.")
+            continue
+        if target.price <= 0:
+            errors.append(f"TradePlan target {label} price must be greater than zero.")
+            continue
+        if not _target_matches_side(entry_price, target.price, side):
+            direction = "above" if side == "long" else "below"
+            errors.append(
+                f"TradePlan target {label} must be {direction} entry for {side} trades."
+            )
+            continue
+
+        close_percent = _trade_plan_close_percent(
+            target=target,
+            label=label,
+            settings=settings,
+            used_close_percent=total_close_percent,
+            errors=errors,
+        )
+        if close_percent is None:
+            continue
+        if close_percent <= 0:
+            errors.append(f"TradePlan target {label} close_percent must be greater than zero.")
+            continue
+
+        total_close_percent += close_percent
+        reward_per_unit = _target_reward_per_unit(
+            entry_price=entry_price,
+            target_price=target.price,
+            side=side,
+        )
+        targets.append(
+            TakeProfitTarget(
+                label=label,
+                r_multiple=reward_per_unit / risk_per_unit,
+                price=target.price,
+                close_percent=close_percent,
+                action=_trade_plan_take_profit_action(target, label),
+            )
+        )
+
+    if total_close_percent > 100.0 + 0.000001:
+        errors.append("TradePlan close_percent total must not exceed 100.")
+    if not targets:
+        errors.append("TradePlan must include at least one executable take-profit target.")
+
+    selected_rr_target = trade_plan.risk_rules.selected_rr_target
+    selected_target = _selected_take_profit_target(
+        targets=targets,
+        selected_rr_target=selected_rr_target,
+        errors=errors,
+    )
+    if errors:
+        raise TradePlanValidationError(_dedupe(errors))
+
+    resolved_selected_rr_target = selected_rr_target or "final"
+    if selected_target is not None:
+        notes.append(
+            f"TradePlan selected_rr_target={resolved_selected_rr_target} resolved "
+            f"to {selected_target.label} at {selected_target.r_multiple:.4f}R."
+        )
+    return TakeProfitPlan(
+        mode=settings.take_profit_mode,
+        side=side,
+        entry_price=entry_price,
+        stop_loss_price=stop_loss_price,
+        risk_per_unit=risk_per_unit,
+        partial_take_profit_enabled=settings.partial_take_profit_enabled,
+        targets=targets,
+        source="trade_plan",
+        selected_rr=selected_target.r_multiple if selected_target is not None else None,
+        selected_rr_target=resolved_selected_rr_target,
+        notes=notes,
     )
 
 
@@ -1168,6 +1299,148 @@ def _take_profit_target(
         close_percent=close_percent,
         action=action,
     )
+
+
+def _validate_trade_plan_stop(
+    *,
+    trade_plan: TradePlan,
+    entry_price: float,
+    side: str,
+    errors: list[str],
+) -> None:
+    stop_loss = trade_plan.stop_loss
+    if stop_loss is None and trade_plan.invalidation is not None:
+        stop_loss = trade_plan.invalidation.hard_stop or trade_plan.invalidation.price
+    if stop_loss is None:
+        return
+    if stop_loss <= 0:
+        errors.append("TradePlan stop_loss must be greater than zero.")
+        return
+    if not _stop_matches_side(entry_price, stop_loss, side):
+        direction = "below" if side == "long" else "above"
+        errors.append(f"TradePlan stop_loss must be {direction} entry for {side} trades.")
+
+
+def _trade_plan_target_label(
+    target: TradePlanTarget,
+    errors: list[str],
+) -> str | None:
+    label = target.label.strip().upper()
+    if label in _TAKE_PROFIT_LABELS:
+        return label
+    errors.append(f"TradePlan target label {target.label!r} is not supported.")
+    return None
+
+
+def _is_unpriced_runner_target(target: TradePlanTarget) -> bool:
+    action = (target.action or "").strip().lower()
+    close_percent = str(target.close_percent or "").strip().lower()
+    return "runner" in action or close_percent == "runner"
+
+
+def _target_matches_side(entry_price: float, target_price: float, side: str) -> bool:
+    if side == "long":
+        return target_price > entry_price
+    return target_price < entry_price
+
+
+def _target_reward_per_unit(
+    *,
+    entry_price: float,
+    target_price: float,
+    side: str,
+) -> float:
+    return target_price - entry_price if side == "long" else entry_price - target_price
+
+
+def _trade_plan_close_percent(
+    *,
+    target: TradePlanTarget,
+    label: str,
+    settings: RiskManagementSettings,
+    used_close_percent: float,
+    errors: list[str],
+) -> float | None:
+    raw_close_percent = target.close_percent
+    if raw_close_percent is None:
+        return _settings_close_percent(label, settings)
+    if isinstance(raw_close_percent, str):
+        normalized = raw_close_percent.strip().lower()
+        if normalized == "runner":
+            return max(100.0 - used_close_percent, 0.0)
+        try:
+            return float(normalized)
+        except ValueError:
+            errors.append(f"TradePlan target {label} close_percent is malformed.")
+            return None
+    return float(raw_close_percent)
+
+
+def _settings_close_percent(label: str, settings: RiskManagementSettings) -> float:
+    if label == "TP1":
+        return settings.tp1_close_percent
+    if label == "TP2":
+        return settings.tp2_close_percent
+    return settings.tp3_close_percent
+
+
+def _trade_plan_take_profit_action(target: TradePlanTarget, label: str) -> str:
+    action = (target.action or "").strip().lower()
+    if action in {"move_stop_to_breakeven", "trailing_stop", "full_close", "observe"}:
+        return action
+    if action == "partial_close":
+        return "move_stop_to_breakeven"
+    if action == "reduce_and_keep_runner":
+        return "trailing_stop"
+    if "trailing" in action:
+        return "trailing_stop"
+    if "runner" in action or label == "TP3":
+        return "full_close"
+    if label == "TP1":
+        return "move_stop_to_breakeven"
+    if label == "TP2":
+        return "trailing_stop"
+    return "full_close"
+
+
+def _selected_take_profit_target(
+    *,
+    targets: list[TakeProfitTarget],
+    selected_rr_target: str | None,
+    errors: list[str],
+) -> TakeProfitTarget | None:
+    if not targets:
+        return None
+    if selected_rr_target is None:
+        return targets[-1]
+
+    normalized = selected_rr_target.strip().lower().replace("_", " ")
+    if normalized in {"final", "planned final target"}:
+        return targets[-1]
+    if normalized in {"nearest", "first", "nearest target", "nearest valid target"}:
+        return targets[0]
+
+    label = selected_rr_target.strip().upper()
+    if label in _TAKE_PROFIT_LABELS:
+        for target in targets:
+            if target.label == label:
+                return target
+        errors.append(f"TradePlan selected_rr_target {selected_rr_target!r} has no executable target.")
+        return None
+
+    errors.append(f"TradePlan selected_rr_target {selected_rr_target!r} is not supported.")
+    return None
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def get_user_risk_management_settings(user_id: str = "demo_user") -> RiskManagementSettings:

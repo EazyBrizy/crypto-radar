@@ -1,16 +1,24 @@
 from __future__ import annotations
 
-from app.schemas.risk import RiskContext, RiskDecision, TradeInstrumentType
+from app.schemas.risk import (
+    RiskContext,
+    RiskDecision,
+    TakeProfitPlan,
+    TakeProfitTarget,
+    TradeInstrumentType,
+)
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_management import (
+    TradePlanValidationError,
     calculate_breakeven_plan,
     calculate_futures_risk_plan,
     calculate_position_sizing,
     calculate_risk_check_result,
     calculate_stop_loss_plan,
     calculate_take_profit_plan,
+    calculate_take_profit_plan_from_trade_plan,
     calculate_trade_risk_adjustment,
     calculate_trailing_stop_plan,
     position_sizing_for_notional,
@@ -120,6 +128,7 @@ class RiskContextService:
             max_account_drawdown_percent=max_account_drawdown_percent,
             user_mode_multiplier=user_mode_multiplier,
             manual_take_profit_price=manual_take_profit_price,
+            trade_plan=signal.trade_plan,
         )
 
     def build_real_context(
@@ -226,6 +235,7 @@ class RiskContextService:
             max_account_drawdown_percent=max_account_drawdown_percent,
             user_mode_multiplier=user_mode_multiplier,
             manual_take_profit_price=manual_take_profit_price,
+            trade_plan=signal.trade_plan,
         )
 
 
@@ -246,19 +256,13 @@ class RiskGateService:
             atr_value=context.atr_value,
             structure_stop_loss_price=context.structure_stop_loss_price,
         )
-        take_profit_plan = calculate_take_profit_plan(
-            entry_price=context.entry_price,
+        take_profit_blockers: list[str] = []
+        take_profit_plan = self._take_profit_plan(
+            context=context,
             stop_loss_price=stop_loss_plan.stop_loss_price,
-            side=context.side,
             risk_settings=risk_settings,
+            blockers=take_profit_blockers,
         )
-        if context.manual_take_profit_price is not None:
-            take_profit_plan = _manual_take_profit_plan(
-                entry_price=context.entry_price,
-                stop_loss_price=stop_loss_plan.stop_loss_price,
-                take_profit_price=context.manual_take_profit_price,
-                side=context.side,
-            )
         breakeven_plan = calculate_breakeven_plan(
             entry_price=context.entry_price,
             stop_loss_price=stop_loss_plan.stop_loss_price,
@@ -352,13 +356,20 @@ class RiskGateService:
             max_account_drawdown_percent=context.max_account_drawdown_percent,
             execution_mode=context.mode,
         )
+        if take_profit_blockers:
+            risk_check = risk_check.model_copy(
+                update={
+                    "status": "failed",
+                    "blockers": _dedupe([*risk_check.blockers, *take_profit_blockers]),
+                }
+            )
         warnings = [
             *stop_loss_plan.warnings,
             *trailing_stop_plan.warnings,
             *(futures_risk_plan.warnings if futures_risk_plan is not None else []),
             *risk_check.warnings,
         ]
-        notes = _dedupe(warnings)
+        notes = _dedupe([*warnings, *take_profit_plan.notes, *take_profit_blockers])
         return RiskDecision(
             mode=context.mode,
             stage=context.stage,
@@ -380,6 +391,45 @@ class RiskGateService:
             trailing_stop_plan=trailing_stop_plan,
             futures_risk_plan=futures_risk_plan,
             notes=notes,
+        )
+
+    def _take_profit_plan(
+        self,
+        *,
+        context: RiskContext,
+        stop_loss_price: float,
+        risk_settings: RiskManagementSettings,
+        blockers: list[str],
+    ) -> TakeProfitPlan:
+        if context.manual_take_profit_price is not None:
+            return _manual_take_profit_plan(
+                entry_price=context.entry_price,
+                stop_loss_price=stop_loss_price,
+                take_profit_price=context.manual_take_profit_price,
+                side=context.side,
+            )
+        if context.trade_plan is not None:
+            try:
+                return calculate_take_profit_plan_from_trade_plan(
+                    trade_plan=context.trade_plan,
+                    entry_price=context.entry_price,
+                    stop_loss_price=stop_loss_price,
+                    side=context.side,
+                    risk_settings=risk_settings,
+                )
+            except TradePlanValidationError as exc:
+                blockers.extend(exc.errors)
+                return _invalid_trade_plan_take_profit_plan(
+                    entry_price=context.entry_price,
+                    stop_loss_price=stop_loss_price,
+                    side=context.side,
+                    notes=exc.errors,
+                )
+        return calculate_take_profit_plan(
+            entry_price=context.entry_price,
+            stop_loss_price=stop_loss_price,
+            side=context.side,
+            risk_settings=risk_settings,
         )
 
 
@@ -410,9 +460,7 @@ def _manual_take_profit_plan(
     stop_loss_price: float,
     take_profit_price: float,
     side: str,
-):
-    from app.schemas.risk import TakeProfitPlan, TakeProfitTarget
-
+) -> TakeProfitPlan:
     risk_per_unit = abs(entry_price - stop_loss_price)
     reward_per_unit = (
         take_profit_price - entry_price
@@ -438,6 +486,30 @@ def _manual_take_profit_plan(
                 action="full_close",
             )
         ],
+        source="manual_override",
+        selected_rr=r_multiple,
+        selected_rr_target="manual",
+        notes=["Manual take-profit override is used instead of signal trade_plan targets."],
+    )
+
+
+def _invalid_trade_plan_take_profit_plan(
+    *,
+    entry_price: float,
+    stop_loss_price: float,
+    side: str,
+    notes: list[str],
+) -> TakeProfitPlan:
+    return TakeProfitPlan(
+        mode="risk_multiple",
+        side=side,
+        entry_price=entry_price,
+        stop_loss_price=stop_loss_price,
+        risk_per_unit=abs(entry_price - stop_loss_price),
+        partial_take_profit_enabled=False,
+        targets=[],
+        source="trade_plan_invalid",
+        notes=notes,
     )
 
 

@@ -640,6 +640,127 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertFalse(any("R:R is below" in blocker for blocker in decision.blockers))
         self.assertTrue(any("Risk/reward warning" in warning for warning in decision.warnings))
 
+    def test_virtual_low_rr_soft_guard_warns_without_blocking(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=_low_rr_trade_plan()),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+            ),
+            risk_settings=_risk_settings().model_copy(update={"virtual_rr_guard_mode": "soft"}),
+        )
+
+        self.assertEqual(decision.status, "warning")
+        self.assertTrue(decision.can_enter)
+        self.assertFalse(_has_rr_policy_blocker(decision))
+        self.assertTrue(_has_rr_warning(decision))
+        self.assertTrue(decision.risk_check.risk_reward_warning)
+        self.assertFalse(decision.risk_check.risk_reward_blocked)
+        self.assertEqual(decision.risk_check.risk_reward_guard_mode, "soft")
+        self.assertAlmostEqual(decision.risk_check.rr or 0, 1.2)
+        self.assertEqual(decision.risk_check.min_rr_ratio, 2.0)
+
+    def test_real_low_rr_hard_guard_blocks_execution(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(trade_plan=_low_rr_trade_plan()),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "real_rr_guard_mode": "hard",
+                    "real_requires_positive_edge": False,
+                    "real_requires_fresh_market_data": False,
+                }
+            ),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertTrue(_has_rr_policy_blocker(decision))
+        self.assertTrue(decision.risk_check.risk_reward_blocked)
+        self.assertFalse(decision.risk_check.risk_reward_warning)
+        self.assertEqual(decision.risk_check.risk_reward_guard_mode, "hard")
+        self.assertAlmostEqual(decision.risk_check.rr or 0, 1.2)
+
+    def test_real_low_rr_soft_guard_warns_and_allows_execution(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(trade_plan=_low_rr_trade_plan()),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "real_rr_guard_mode": "soft",
+                    "real_requires_positive_edge": False,
+                    "real_requires_fresh_market_data": False,
+                }
+            ),
+        )
+
+        self.assertEqual(decision.status, "warning")
+        self.assertTrue(decision.can_enter)
+        self.assertFalse(_has_rr_policy_blocker(decision))
+        self.assertTrue(_has_rr_warning(decision))
+        self.assertTrue(decision.risk_check.risk_reward_warning)
+        self.assertFalse(decision.risk_check.risk_reward_blocked)
+        self.assertEqual(decision.risk_check.risk_reward_guard_mode, "soft")
+
+    def test_virtual_low_rr_off_guard_keeps_rr_metrics_without_warning(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=_low_rr_trade_plan()),
+                request=ManualConfirmRequest(liquidation_price=80),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+            ),
+            risk_settings=_risk_settings().model_copy(update={"virtual_rr_guard_mode": "off"}),
+        )
+
+        self.assertEqual(decision.status, "passed")
+        self.assertTrue(decision.can_enter)
+        self.assertFalse(_has_rr_policy_blocker(decision))
+        self.assertFalse(_has_rr_warning(decision))
+        self.assertFalse(decision.risk_check.risk_reward_warning)
+        self.assertFalse(decision.risk_check.risk_reward_blocked)
+        self.assertEqual(decision.risk_check.risk_reward_guard_mode, "off")
+        self.assertAlmostEqual(decision.risk_check.rr or 0, 1.2)
+        self.assertEqual(decision.risk_check.min_rr_ratio, 2.0)
+
+    def test_take_profit_required_still_blocks_when_no_tp_plan_exists(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=_trade_plan(targets=[])),
+                request=ManualConfirmRequest(liquidation_price=80),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+            ),
+            risk_settings=_risk_settings().model_copy(update={"take_profit_required": True}),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn("Take-profit plan is required.", decision.blockers)
+
     def test_strategy_rr_guard_override_uses_original_signal_strategy(self) -> None:
         decision = RiskGateService().evaluate(
             context=RiskContextService().build_real_context(
@@ -772,6 +893,21 @@ def _trade_plan(
         targets=targets,
         risk_rules=TradePlanRiskRules(selected_rr_target=selected_rr_target),
     )
+
+
+def _low_rr_trade_plan() -> TradePlan:
+    return _trade_plan(
+        targets=[TradePlanTarget(label="TP1", price=112.0, close_percent=100)],
+        selected_rr_target="nearest",
+    )
+
+
+def _has_rr_policy_blocker(decision) -> bool:
+    return any("RR policy rejected" in blocker for blocker in decision.blockers)
+
+
+def _has_rr_warning(decision) -> bool:
+    return any("Risk/reward warning" in warning for warning in decision.warnings)
 
 
 if __name__ == "__main__":

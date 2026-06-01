@@ -263,6 +263,14 @@ def normalize_rr_guard_mode(value: Any, fallback: RRGuardMode = "soft") -> RRGua
     return fallback
 
 
+def _normalize_rr_guard_mode(value: Any, default: RRGuardMode) -> RRGuardMode:
+    return normalize_rr_guard_mode(value, default)
+
+
+def _rr_guard_mode_for_execution(settings: RiskManagementSettings, execution_mode: str) -> RRGuardMode:
+    return resolve_rr_guard_mode(settings, context=execution_mode)
+
+
 def default_rr_guard_mode_for_context(context: str | None) -> RRGuardMode:
     return RR_CONTEXT_DEFAULTS.get(_normalize_rr_context(context), "soft")
 
@@ -1363,7 +1371,7 @@ def _rr_policy_reason(
         return f"Execution RR policy rejected: selected R:R {selected_rr} is below minimum {minimum_rr}."
     return (
         "Risk/reward warning: "
-        f"selected R:R {selected_rr} is below configured minimum {minimum_rr}."
+        f"selected R:R {selected_rr} is below configured reporting minimum {minimum_rr}."
     )
 
 

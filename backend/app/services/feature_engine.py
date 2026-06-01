@@ -664,6 +664,48 @@ class FeatureEngine:
         return numerator / denominator
 
     @staticmethod
+    def _session_high_low(candles: List[OHLCVCandle]) -> tuple[Optional[float], Optional[float]]:
+        if not candles:
+            return None, None
+        latest = candles[-1]
+        if latest.timeframe == "1d":
+            return None, None
+        latest_session = datetime.fromtimestamp(latest.open_time / 1000, tz=timezone.utc).date()
+        session_candles = [
+            candle
+            for candle in candles
+            if datetime.fromtimestamp(candle.open_time / 1000, tz=timezone.utc).date() == latest_session
+        ]
+        if not session_candles:
+            return None, None
+        return max(candle.high for candle in session_candles), min(candle.low for candle in session_candles)
+
+    @staticmethod
+    def _previous_day_high_low(candles: List[OHLCVCandle]) -> tuple[Optional[float], Optional[float]]:
+        if len(candles) < 2:
+            return None, None
+        latest = candles[-1]
+        latest_session = datetime.fromtimestamp(latest.open_time / 1000, tz=timezone.utc).date()
+        previous_sessions = sorted(
+            {
+                datetime.fromtimestamp(candle.open_time / 1000, tz=timezone.utc).date()
+                for candle in candles[:-1]
+                if datetime.fromtimestamp(candle.open_time / 1000, tz=timezone.utc).date() < latest_session
+            }
+        )
+        if not previous_sessions:
+            return None, None
+        previous_session = previous_sessions[-1]
+        previous_candles = [
+            candle
+            for candle in candles
+            if datetime.fromtimestamp(candle.open_time / 1000, tz=timezone.utc).date() == previous_session
+        ]
+        if not previous_candles:
+            return None, None
+        return max(candle.high for candle in previous_candles), min(candle.low for candle in previous_candles)
+
+    @staticmethod
     def _rolling_vwap(values: List[float], volumes: List[float], period: int = PRICE_LOOKBACK) -> Optional[float]:
         if not values or not volumes:
             return None
@@ -724,6 +766,8 @@ class FeatureEngine:
             swing_high_age_candles,
             swing_low_age_candles,
         ) = self._fractal_swing_levels(ordered, atr_14)
+        session_high, session_low = self._session_high_low(ordered)
+        previous_day_high, previous_day_low = self._previous_day_high_low(ordered)
         previous_close = previous_closes[-1] if previous_closes else latest.open
         price_change = (
             (latest.close - previous_close) / previous_close
@@ -757,6 +801,10 @@ class FeatureEngine:
             ema_200=ema_200_series[-1],
             sma_20=self._sma(closes, PRICE_LOOKBACK),
             vwap=self._session_vwap(ordered),
+            session_high=session_high,
+            session_low=session_low,
+            previous_day_high=previous_day_high,
+            previous_day_low=previous_day_low,
             rsi_14=self._rsi(closes, RSI_LOOKBACK),
             atr_14=atr_14,
             atr_sma_50=atr_sma_50,

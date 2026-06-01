@@ -15,6 +15,8 @@ ADX_RISING_BARS_MIN = 3
 PULLBACK_ZONE_ATR = 1.0
 APPROACH_ZONE_ATR = 1.8
 LATE_ENTRY_EMA20_ATR = 1.5
+DEFAULT_ENTRY_MODEL = "zone"
+DEFAULT_TIME_STOP_BARS = 8
 TRIGGER_VOLUME_MULTIPLIER = 1.1
 MAX_ENTRY_CANDLE_ATR = 2.5
 STOP_ATR_BUFFER = 0.5
@@ -37,6 +39,8 @@ class _TrendPullbackState:
     late_entry: bool
     entry_candle_too_large: bool
     nearest_ema: float | None
+    entry_model: str
+    overextension_atr: float
 
 
 class TrendPullbackContinuationStrategy:
@@ -59,17 +63,25 @@ class TrendPullbackContinuationStrategy:
         features: Features,
         params: Mapping[str, Any] | None = None,
     ) -> List[StrategySignal]:
+        strategy_params = params or {}
         if not has_minimum_market_data(features, min_history=200):
             return []
 
-        setup = self._setup_state(features)
+        setup = self._setup_state(features, strategy_params)
         if setup is None:
             return []
 
         scoring, reasons, risks = self._score(features, setup)
         atr = self._atr(features)
-        entry = features.close if setup.trigger else setup.nearest_ema or features.close
+        entry = self._entry_anchor(features, setup)
         stop_loss = self._stop_loss(features, setup.direction, atr)
+        take_profit_1, take_profit_2, target_sources = self._targets(
+            features=features,
+            direction=setup.direction,
+            entry=entry,
+            stop_loss=stop_loss,
+            atr=atr,
+        )
 
         signal = build_signal(
             features=features,
@@ -80,9 +92,17 @@ class TrendPullbackContinuationStrategy:
             risks=risks,
             entry=entry,
             stop_loss=stop_loss,
+            take_profit_1=take_profit_1,
+            take_profit_2=take_profit_2,
         )
-        if setup.trigger:
+        if setup.trigger and setup.entry_model == "chase":
             signal = signal.model_copy(update={"entry_min": features.close, "entry_max": features.close})
+        signal = self._enrich_trade_plan(
+            signal=signal,
+            setup=setup,
+            target_sources=target_sources,
+            params=strategy_params,
+        )
         if signal.score < MIN_VISIBLE_SETUP_SCORE:
             return []
         return [
@@ -95,10 +115,14 @@ class TrendPullbackContinuationStrategy:
         ]
 
     def _direction(self, features: Features) -> Optional[Literal["LONG", "SHORT"]]:
-        setup = self._setup_state(features)
+        setup = self._setup_state(features, {})
         return setup.direction if setup is not None else None
 
-    def _setup_state(self, features: Features) -> _TrendPullbackState | None:
+    def _setup_state(
+        self,
+        features: Features,
+        params: Mapping[str, Any],
+    ) -> _TrendPullbackState | None:
         if (
             features.ema_20 is None
             or features.ema_50 is None
@@ -126,9 +150,11 @@ class TrendPullbackContinuationStrategy:
         structure_intact = self._structure_intact(features, direction)
         funding_warning = self._funding_against_warning(features, direction)
         trigger = self._trigger(features, direction)
-        late_entry = self._late_entry(features)
-        entry_candle_too_large = self._entry_candle_too_large(features)
+        max_overextension_atr = _numeric_param(params, "max_overextension_atr", LATE_ENTRY_EMA20_ATR)
+        late_entry = self._late_entry(features, max_overextension_atr)
+        entry_candle_too_large = self._entry_candle_too_large(features, params)
         nearest_ema = self._nearest_pullback_ema(features)
+        entry_model = _entry_model(params)
 
         if not structure_intact:
             return None
@@ -137,7 +163,10 @@ class TrendPullbackContinuationStrategy:
             return _TrendPullbackState(
                 direction=direction,
                 status="wait_for_pullback",
-                reason="Trend is confirmed, but entry is late: price is more than 1.5 ATR from EMA20; wait for a fresh pullback",
+                reason=(
+                    "Trend is confirmed, but entry is late: price is more than "
+                    f"{max_overextension_atr:.2f} ATR from EMA20; wait for a fresh pullback"
+                ),
                 trigger=trigger,
                 near_pullback_zone=near_pullback_zone,
                 approaching_pullback_zone=approaching_pullback_zone,
@@ -148,6 +177,8 @@ class TrendPullbackContinuationStrategy:
                 late_entry=late_entry,
                 entry_candle_too_large=entry_candle_too_large,
                 nearest_ema=nearest_ema,
+                entry_model=entry_model,
+                overextension_atr=max_overextension_atr,
             )
 
         if near_pullback_zone and rsi_cooled and pullback_volume_contracting and trigger:
@@ -165,6 +196,8 @@ class TrendPullbackContinuationStrategy:
                 late_entry=False,
                 entry_candle_too_large=entry_candle_too_large,
                 nearest_ema=nearest_ema,
+                entry_model=entry_model,
+                overextension_atr=max_overextension_atr,
             )
 
         if near_pullback_zone:
@@ -189,6 +222,8 @@ class TrendPullbackContinuationStrategy:
                 late_entry=False,
                 entry_candle_too_large=entry_candle_too_large,
                 nearest_ema=nearest_ema,
+                entry_model=entry_model,
+                overextension_atr=max_overextension_atr,
             )
 
         if approaching_pullback_zone:
@@ -206,6 +241,8 @@ class TrendPullbackContinuationStrategy:
                 late_entry=False,
                 entry_candle_too_large=entry_candle_too_large,
                 nearest_ema=nearest_ema,
+                entry_model=entry_model,
+                overextension_atr=max_overextension_atr,
             )
 
         return _TrendPullbackState(
@@ -222,6 +259,8 @@ class TrendPullbackContinuationStrategy:
             late_entry=False,
             entry_candle_too_large=entry_candle_too_large,
             nearest_ema=nearest_ema,
+            entry_model=entry_model,
+            overextension_atr=max_overextension_atr,
         )
 
     def _trend_direction(self, features: Features) -> Optional[Literal["LONG", "SHORT"]]:
@@ -331,15 +370,133 @@ class TrendPullbackContinuationStrategy:
             and volume_ok
         )
 
-    def _late_entry(self, features: Features) -> bool:
+    def _late_entry(self, features: Features, max_overextension_atr: float) -> bool:
         if features.ema_20 is None:
             return False
-        return abs(features.close - features.ema_20) > self._atr(features) * LATE_ENTRY_EMA20_ATR
+        return abs(features.close - features.ema_20) > self._atr(features) * max_overextension_atr
 
-    def _entry_candle_too_large(self, features: Features) -> bool:
+    def _entry_candle_too_large(self, features: Features, params: Mapping[str, Any]) -> bool:
         atr = self._atr(features)
         candle_range = max(features.high - features.low, 0.0)
-        return candle_range > atr * MAX_ENTRY_CANDLE_ATR
+        max_entry_candle_atr = _numeric_param(params, "max_entry_candle_atr", MAX_ENTRY_CANDLE_ATR)
+        return candle_range > atr * max_entry_candle_atr
+
+    def _entry_anchor(self, features: Features, setup: _TrendPullbackState) -> float:
+        if setup.entry_model == "chase" and setup.trigger and not setup.entry_candle_too_large:
+            return features.close
+        return setup.nearest_ema or features.ema_20 or features.ema_50 or features.close
+
+    def _targets(
+        self,
+        *,
+        features: Features,
+        direction: Literal["LONG", "SHORT"],
+        entry: float,
+        stop_loss: float,
+        atr: float,
+    ) -> tuple[float, float, dict[str, str]]:
+        risk = abs(entry - stop_loss)
+        if risk <= 0:
+            risk = max(atr, abs(entry) * 0.001, 1e-8)
+        side = 1 if direction == "LONG" else -1
+        one_r = entry + side * risk
+        two_r = entry + side * risk * 2
+        candidates = _directional_targets(
+            direction,
+            entry,
+            (
+                ("previous_high" if direction == "LONG" else "previous_low", features.previous_high if direction == "LONG" else features.previous_low),
+                ("swing_high" if direction == "LONG" else "swing_low", features.swing_high if direction == "LONG" else features.swing_low),
+                ("donchian_high_20" if direction == "LONG" else "donchian_low_20", features.donchian_high_20 if direction == "LONG" else features.donchian_low_20),
+            ),
+        )
+
+        tp1 = one_r
+        tp1_source = "one_r"
+        for source, price in candidates:
+            reward = _target_reward(direction, entry, price)
+            if risk * 0.8 <= reward <= risk * 1.6:
+                tp1 = price
+                tp1_source = source
+                break
+
+        tp2 = two_r
+        tp2_source = "two_r"
+        minimum_tp2_reward = max(risk * 1.6, _target_reward(direction, entry, tp1) + risk * 0.4)
+        for source, price in candidates:
+            reward = _target_reward(direction, entry, price)
+            if reward >= minimum_tp2_reward:
+                tp2 = price
+                tp2_source = source
+                break
+        if _target_reward(direction, entry, tp2) <= _target_reward(direction, entry, tp1):
+            tp2 = entry + side * risk * 2
+            tp2_source = "two_r"
+        return tp1, tp2, {"TP1": tp1_source, "TP2": tp2_source}
+
+    def _enrich_trade_plan(
+        self,
+        *,
+        signal: StrategySignal,
+        setup: _TrendPullbackState,
+        target_sources: Mapping[str, str],
+        params: Mapping[str, Any],
+    ) -> StrategySignal:
+        trade_plan = signal.trade_plan
+        if trade_plan is None:
+            return signal
+        time_stop_bars = int(_numeric_param(params, "time_stop_bars", DEFAULT_TIME_STOP_BARS))
+        entry_metadata = dict(trade_plan.entry.metadata)
+        entry_metadata.update(
+            {
+                "entry_model": setup.entry_model,
+                "entry_type": "ema_pullback_zone" if setup.entry_model != "chase" else "trigger_close",
+                "nearest_ema": setup.nearest_ema,
+                "overextension_atr_limit": setup.overextension_atr,
+            }
+        )
+        entry = trade_plan.entry.model_copy(
+            update={
+                "source": "ema20_ema50_pullback_zone" if setup.entry_model != "chase" else "trigger_close",
+                "metadata": entry_metadata,
+            }
+        )
+        targets = [
+            target.model_copy(
+                update={
+                    "source": target_sources.get(target.label, target.source),
+                    "metadata": {
+                        **target.metadata,
+                        "entry_model": setup.entry_model,
+                        "target_model": "structure_aware",
+                    },
+                }
+            )
+            for target in trade_plan.targets
+        ]
+        risk_metadata = dict(trade_plan.risk_rules.metadata)
+        risk_metadata.update(
+            {
+                "time_stop_bars": time_stop_bars,
+                "time_stop": "no_progress_to_TP1",
+                "entry_model": setup.entry_model,
+            }
+        )
+        risk_rules = trade_plan.risk_rules.model_copy(update={"metadata": risk_metadata})
+        enriched_plan = trade_plan.model_copy(
+            update={
+                "entry": entry,
+                "targets": targets,
+                "risk_rules": risk_rules,
+                "metadata": {
+                    **trade_plan.metadata,
+                    "entry_model": setup.entry_model,
+                    "target_model": "structure_aware",
+                },
+            },
+            deep=True,
+        )
+        return signal.model_copy(update={"trade_plan": enriched_plan})
 
     def _stop_loss(
         self,
@@ -430,10 +587,10 @@ class TrendPullbackContinuationStrategy:
 
         if setup.late_entry:
             overheat_penalty += 15
-            risks.append("Entry is late: distance from EMA20 is above 1.5 ATR")
+            risks.append(f"Entry is late: distance from EMA20 is above {setup.overextension_atr:.2f} ATR")
         if setup.entry_candle_too_large:
             overheat_penalty += 20
-            risks.append("Entry candle range is above 2.5 ATR")
+            risks.append("Entry candle range is above the configured ATR limit")
         if setup.funding_warning:
             overheat_penalty += 10
             risks.append("Funding is elevated against the planned direction")
@@ -449,3 +606,39 @@ class TrendPullbackContinuationStrategy:
             reasons,
             risks,
         )
+
+
+def _entry_model(params: Mapping[str, Any]) -> str:
+    value = str(params.get("entry_model") or DEFAULT_ENTRY_MODEL).strip().lower()
+    if value in {"chase", "trigger_close"}:
+        return "chase"
+    if value in {"retest", "zone", "pullback_zone"}:
+        return "zone"
+    return DEFAULT_ENTRY_MODEL
+
+
+def _numeric_param(params: Mapping[str, Any], key: str, default: float) -> float:
+    try:
+        value = params.get(key)
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _directional_targets(
+    direction: Literal["LONG", "SHORT"],
+    entry: float,
+    candidates: tuple[tuple[str, float | None], ...],
+) -> list[tuple[str, float]]:
+    valid = [
+        (source, price)
+        for source, price in candidates
+        if price is not None and _target_reward(direction, entry, price) > 0
+    ]
+    return sorted(valid, key=lambda item: _target_reward(direction, entry, item[1]))
+
+
+def _target_reward(direction: Literal["LONG", "SHORT"], entry: float, target: float) -> float:
+    if direction == "LONG":
+        return target - entry
+    return entry - target

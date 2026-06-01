@@ -112,6 +112,12 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signal.invalidation.metadata.get("signal_open") if signal.invalidation else None, 100.6)
         self.assertEqual(signal.invalidation.metadata.get("conservative_entry") if signal.invalidation else None, 100.8)
         self.assertEqual(signal.exit_plan.targets[-1].get("source") if signal.exit_plan else None, "range_measured_move")
+        measured_targets = [
+            target for target in (signal.trade_plan.targets if signal.trade_plan else [])
+            if target.source == "range_measured_move"
+        ]
+        self.assertEqual(len(measured_targets), 1)
+        self.assertAlmostEqual(measured_targets[0].price or 0, 105.4)
         self.assertAlmostEqual(signal.first_target_rr or 0, 1.5)
         self.assertAlmostEqual(signal.final_target_rr or 0, 2.5)
         self.assertEqual(signal.regime.context_timeframe if signal.regime else None, "1h")
@@ -676,6 +682,25 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signals[0].status, "ready")
         self.assertIn("close strength", signals[0].status_reason or "")
 
+    async def test_breakout_large_candle_chooses_retest_wait(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "open": 100.0,
+                "high": 103.4,
+                "low": 99.8,
+                "close": 103.1,
+                "price": 103.1,
+                "volume_spike": 2.2,
+            }
+        )
+
+        candidates = await VolatilitySqueezeBreakoutStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].status, "wait_for_pullback")
+        self.assertIn("conservative retest", candidates[0].status_reason or "")
+        self.assertEqual(candidates[0].trade_plan.entry.source if candidates[0].trade_plan else None, "conservative_retest")
+
     async def test_squeeze_settings_can_raise_volume_confirmation_threshold(self) -> None:
         features = _breakout_features()
 
@@ -749,10 +774,54 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
 
         trend_signal = next(signal for signal in signals if signal.strategy == "trend_pullback_continuation")
         self.assertEqual(trend_signal.status, "actionable")
-        self.assertEqual(trend_signal.entry_min, 100.6)
-        self.assertEqual(trend_signal.entry_max, 100.6)
+        self.assertLess(trend_signal.entry_min or 0, 100.0)
+        self.assertGreater(trend_signal.entry_max or 0, 100.0)
+        self.assertEqual(trend_signal.trade_plan.entry.source if trend_signal.trade_plan else None, "ema20_ema50_pullback_zone")
+        self.assertEqual(
+            trend_signal.trade_plan.risk_rules.metadata.get("time_stop_bars") if trend_signal.trade_plan else None,
+            8,
+        )
         self.assertGreaterEqual(trend_signal.score, 75)
         self.assertEqual(trend_signal.exit_plan.trailing.get("source") if trend_signal.exit_plan else None, "EMA20")
+
+    async def test_trend_pullback_actionable_with_required_htf_alignment(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.6,
+                "price": 100.6,
+                "open": 100.1,
+                "high": 100.8,
+                "low": 99.8,
+                "ema_20": 100.0,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 50.0,
+                "volume_spike": 1.2,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "history_length": 220,
+            }
+        )
+
+        signals = await StrategyEngine().generate_signals(
+            features,
+            context_features=_bullish_context_features(),
+            strategy_configs={
+                "trend_pullback_continuation": type(
+                    "RuntimeConfig",
+                    (),
+                    {
+                        "params": {"require_htf_alignment": True},
+                        "risk_settings": {"min_rr_ratio": 1.5, "rr_target": "final"},
+                        "pair_scope_configured": False,
+                    },
+                )(),
+            },
+        )
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].status, "actionable")
+        self.assertEqual(signals[0].regime.alignment if signals[0].regime else None, "aligned")
 
     async def test_trend_pullback_far_from_ema_waits_for_new_pullback(self) -> None:
         features = _breakout_features().model_copy(
@@ -775,6 +844,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].status, "wait_for_pullback")
         self.assertIn("entry is late", candidates[0].status_reason or "")
+        self.assertEqual(candidates[0].trade_plan.entry.source if candidates[0].trade_plan else None, "ema20_ema50_pullback_zone")
 
     async def test_trend_pullback_blocks_extreme_positive_funding_for_long(self) -> None:
         features = _breakout_features().model_copy(
@@ -823,6 +893,53 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal.status, "ready")
         self.assertIn("waiting for reclaim", signal.status_reason or "")
+
+    async def test_liquidity_sweep_targets_midpoint_and_opposite_boundary(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 98.8,
+                "open": 99.2,
+                "high": 100.5,
+                "low": 96.2,
+                "close": 98.8,
+                "swing_low": 98.0,
+                "swing_high": 104.0,
+                "lower_wick_ratio": 0.6,
+                "upper_wick_ratio": 0.3,
+                "volume_spike": 1.8,
+            }
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        targets = candidates[0].trade_plan.targets if candidates[0].trade_plan else []
+        self.assertEqual(targets[0].source, "range_midpoint")
+        self.assertEqual(targets[1].source, "swing_high")
+        self.assertAlmostEqual(targets[0].price or 0, 101.0)
+        self.assertAlmostEqual(targets[1].price or 0, 104.0)
+
+    async def test_liquidity_sweep_blocks_against_strong_trend_without_confirmation(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 98.2,
+                "open": 98.1,
+                "high": 98.6,
+                "low": 95.5,
+                "close": 98.2,
+                "swing_low": 96.0,
+                "ema_50": 98.0,
+                "ema_200": 100.0,
+                "adx": 36.0,
+                "lower_wick_ratio": 0.25,
+                "upper_wick_ratio": 0.1,
+                "volume_spike": 1.0,
+            }
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+
+        self.assertEqual(candidates, [])
 
     async def test_liquidity_sweep_gets_higher_timeframe_level_confluence(self) -> None:
         features = _breakout_features().model_copy(

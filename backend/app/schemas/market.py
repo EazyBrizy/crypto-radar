@@ -41,6 +41,10 @@ class Features(BaseModel):
     ema_200: Optional[float] = None
     sma_20: Optional[float] = None
     vwap: Optional[float] = None
+    session_high: Optional[float] = None
+    session_low: Optional[float] = None
+    previous_day_high: Optional[float] = None
+    previous_day_low: Optional[float] = None
     rsi_14: Optional[float] = None
     atr_14: Optional[float] = None
     atr_sma_50: Optional[float] = None

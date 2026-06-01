@@ -58,6 +58,34 @@ legacy signal entry/stop/target fields. Existing signal fields remain available:
 `TradePlan` is persisted in `features_snapshot.trade_plan` and restored to
 `StrategySignal.trade_plan` / `RadarSignal.trade_plan` when present.
 
+Strategy trade plans are level-aware when strategy context exposes structure:
+
+- `trend_pullback_continuation` uses an EMA20/EMA50 pullback-zone entry model,
+  structure-aware TP1/TP2, and may add `time_stop_bars` in
+  `TradePlan.risk_rules.metadata`.
+- `volatility_squeeze_breakout` records `aggressive_breakout` or
+  `conservative_retest` entry metadata and stores the measured move as an
+  executable `TradePlanTarget` when enabled.
+- `liquidity_sweep_reversal` uses range midpoint and opposite boundary targets
+  where available.
+
+Strategy runtime params include:
+
+- `trend_pullback_continuation.entry_model`
+- `trend_pullback_continuation.max_overextension_atr`
+- `trend_pullback_continuation.require_htf_alignment`
+- `trend_pullback_continuation.time_stop_bars`
+- `volatility_squeeze_breakout.allow_aggressive_entry`
+- `volatility_squeeze_breakout.require_retest_after_large_candle`
+- `volatility_squeeze_breakout.large_candle_body_atr`
+- `volatility_squeeze_breakout.measured_move_target_enabled`
+- `liquidity_sweep_reversal.require_reclaim`
+- `liquidity_sweep_reversal.require_absorption`
+- `liquidity_sweep_reversal.max_obstacle_distance_r`
+
+`Features` may expose intraday range context for level-aware strategies:
+`session_high`, `session_low`, `previous_day_high`, and `previous_day_low`.
+
 Risk gate consumes `RiskContext.trade_plan` when it is present. Take-profit
 precedence is:
 

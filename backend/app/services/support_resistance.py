@@ -61,6 +61,28 @@ class SupportResistanceSnapshot:
             return max(candidates, key=lambda level: level.price, default=None)
         return None
 
+    def nearest_obstacle_between(
+        self,
+        *,
+        direction: str,
+        entry: float,
+        target: float | None,
+        min_strength: float = 0.0,
+    ) -> SupportResistanceLevel | None:
+        obstacle = self.nearest_obstacle(
+            direction=direction,
+            entry=entry,
+            min_strength=min_strength,
+        )
+        if obstacle is None or target is None:
+            return obstacle
+        normalized_direction = direction.strip().lower()
+        if normalized_direction == "long" and entry < obstacle.price <= target:
+            return obstacle
+        if normalized_direction == "short" and target <= obstacle.price < entry:
+            return obstacle
+        return None
+
 
 class SupportResistanceService:
     def build_snapshot(

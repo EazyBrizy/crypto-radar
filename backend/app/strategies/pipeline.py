@@ -562,6 +562,9 @@ class MarketRegimeFilter:
                         CONTEXT_LEVEL_MIN_STRENGTH,
                     )
                 ),
+                max_obstacle_distance_r=_optional_positive_float(
+                    context.strategy_params.get("max_obstacle_distance_r")
+                ),
             )
             checks.append(obstacle_check)
             adjustment += obstacle_adjustment
@@ -692,6 +695,13 @@ class RiskInvalidationLayer:
         if _has_strong_regime_conflict(regime):
             return ("watchlist", "Higher timeframe is strongly against the signal direction")
 
+        if (
+            signal.strategy == "trend_pullback_continuation"
+            and _bool_param(context.strategy_params, "require_htf_alignment", False)
+            and regime.alignment != "aligned"
+        ):
+            return ("watchlist", "Trend pullback requires higher-timeframe alignment before actionable entry")
+
         if signal.strategy == "trend_pullback_continuation" and _has_borderline_ema200_chop(regime):
             return ("watchlist", "EMA200 chop is elevated; trend pullback stays on watchlist")
 
@@ -742,11 +752,14 @@ class InvalidationLayer:
         }
 
         if signal.strategy == "trend_pullback_continuation":
+            time_stop_bars = _optional_positive_int(context.strategy_params.get("time_stop_bars"))
             metadata.update(
                 {
                     "rsi_long_min": 45.0,
                     "rsi_short_max": 55.0,
                     "trend_invalidation_level": features.swing_low if direction == "long" else features.swing_high,
+                    "time_stop_bars": time_stop_bars,
+                    "time_stop": "no_progress_to_TP1" if time_stop_bars is not None else None,
                 }
             )
             if direction == "long":
@@ -761,6 +774,8 @@ class InvalidationLayer:
                     "Break above last swing high",
                     "RSI reclaims the 55 zone",
                 ]
+            if time_stop_bars is not None:
+                conditions.append(f"No progress toward TP1 within {time_stop_bars} bars")
         elif signal.strategy == "volatility_squeeze_breakout":
             breakout_level = features.donchian_high_20 if direction == "long" else features.donchian_low_20
             range_high = features.donchian_high_20
@@ -791,6 +806,7 @@ class InvalidationLayer:
                     "conservative_entry": breakout_level,
                     "conservative_entry_min": retest_zone[0],
                     "conservative_entry_max": retest_zone[1],
+                    "entry_model": _trade_plan_entry_model(signal),
                     "measured_move_target": measured_move_target,
                     "bb_width_percentile": features.bb_width_percentile,
                     "atr_sma_50": features.atr_sma_50,
@@ -819,6 +835,7 @@ class InvalidationLayer:
             touch_count = features.swing_low_touch_count if direction == "long" else features.swing_high_touch_count
             level_volume_score = features.swing_low_volume_score if direction == "long" else features.swing_high_volume_score
             level_age = features.swing_low_age_candles if direction == "long" else features.swing_high_age_candles
+            target_midpoint, target_boundary = _liquidity_sweep_range_targets(signal)
             metadata.update(
                 {
                     "swept_low": features.swing_low,
@@ -838,6 +855,9 @@ class InvalidationLayer:
                     "micro_bos_trigger": features.previous_high if direction == "long" else features.previous_low,
                     "close_position": _directional_close_location(signal.direction, features),
                     "volume_disappears_below": 1.0,
+                    "target_midpoint": target_midpoint,
+                    "target_opposite_boundary": target_boundary,
+                    "requires_reclaim": _bool_param(context.strategy_params, "require_reclaim", True),
                 }
             )
             if direction == "long":
@@ -846,6 +866,7 @@ class InvalidationLayer:
                     "Sweep low is broken again",
                     "Next candles fail to hold reclaim",
                     "Volume disappears after reclaim",
+                    "Price cannot reach range midpoint after reclaim",
                 ]
             else:
                 conditions = [
@@ -853,6 +874,7 @@ class InvalidationLayer:
                     "Sweep high is broken again",
                     "Next candles fail to hold rejection",
                     "Volume disappears after rejection",
+                    "Price cannot reach range midpoint after rejection",
                 ]
         else:
             conditions = ["Signal stop is reached", "Setup expires before confirmation"]
@@ -873,6 +895,7 @@ class ExitManagementLayer:
     ) -> SignalExitPlanSnapshot:
         entry = _entry_price(signal)
         targets: list[dict[str, Any]] = []
+        planned_targets = _planned_targets_by_label(signal)
         for label, price in (("TP1", signal.take_profit_1), ("TP2", signal.take_profit_2)):
             if price is None:
                 continue
@@ -881,6 +904,8 @@ class ExitManagementLayer:
                 continue
             action = "partial_close" if label == "TP1" else "reduce_and_keep_runner"
             close_percent = 40 if label == "TP1" else 30
+            planned = planned_targets.get(label)
+            metadata = dict(planned.metadata) if planned is not None else {}
             targets.append(
                 {
                     "label": label,
@@ -888,38 +913,50 @@ class ExitManagementLayer:
                     "r_multiple": r_multiple,
                     "action": action,
                     "close_percent": close_percent,
+                    "source": planned.source if planned is not None else None,
+                    "metadata": metadata,
                 }
             )
         if signal.strategy == "trend_pullback_continuation":
-            targets.append(
-                {
-                    "label": "TP3",
-                    "price": None,
-                    "r_multiple": None,
-                    "action": "runner_trailing",
-                    "close_percent": "runner",
-                    "source": "EMA20" if context.signal_features.ema_20 is not None else "ATR",
-                }
-            )
+            if _strong_trend_for_runner(context.signal_features, context.context_features):
+                targets.append(
+                    {
+                        "label": "Runner",
+                        "price": None,
+                        "r_multiple": None,
+                        "action": "runner_trailing",
+                        "close_percent": "runner",
+                        "source": "EMA20" if context.signal_features.ema_20 is not None else "ATR",
+                        "metadata": {"enabled_when": "strong_trend"},
+                    }
+                )
         elif signal.strategy == "volatility_squeeze_breakout":
             measured_target = _measured_move_target(signal, context.signal_features)
-            if measured_target is not None:
+            if (
+                _bool_param(context.strategy_params, "measured_move_target_enabled", True)
+                and measured_target is not None
+            ):
                 r_multiple = _target_rr(signal, measured_target)
                 if r_multiple is not None:
                     targets.append(
                         {
-                            "label": "TP3",
+                            "label": "Measured Move",
                             "price": measured_target,
                             "r_multiple": r_multiple,
                             "action": "measured_move_runner",
                             "close_percent": "runner",
                             "source": "range_measured_move",
+                            "metadata": {
+                                "range_high": context.signal_features.donchian_high_20,
+                                "range_low": context.signal_features.donchian_low_20,
+                                "entry_model": _trade_plan_entry_model(signal),
+                            },
                         }
                     )
         elif signal.strategy == "liquidity_sweep_reversal":
             targets.append(
                 {
-                    "label": "TP3",
+                    "label": "Runner",
                     "price": None,
                     "r_multiple": None,
                     "action": "runner_trailing",
@@ -957,6 +994,11 @@ class ExitManagementLayer:
     ) -> TradePlan:
         trade_plan = signal.trade_plan or _trade_plan_from_signal(signal)
         targets = [_trade_plan_target_from_exit_target(target) for target in exit_plan.targets]
+        risk_metadata = dict(trade_plan.risk_rules.metadata)
+        for key in ("time_stop_bars", "time_stop"):
+            value = invalidation.metadata.get(key)
+            if value is not None:
+                risk_metadata[key] = value
         risk_rules = trade_plan.risk_rules.model_copy(
             update={
                 "risk_reward": signal.risk_reward,
@@ -965,6 +1007,7 @@ class ExitManagementLayer:
                 "selected_rr": risk_reward.rr,
                 "selected_rr_target": risk_reward.target_key,
                 "min_rr_ratio": risk_reward.min_rr,
+                "metadata": risk_metadata,
             }
         )
         return trade_plan.model_copy(
@@ -1041,6 +1084,43 @@ def _trade_plan_target_from_exit_target(target: dict[str, Any]) -> TradePlanTarg
         source=str(target["source"]) if target.get("source") is not None else None,
         metadata=metadata,
     )
+
+
+def _planned_targets_by_label(signal: StrategySignal) -> dict[str, TradePlanTarget]:
+    if signal.trade_plan is None:
+        return {}
+    return {target.label: target for target in signal.trade_plan.targets}
+
+
+def _trade_plan_entry_model(signal: StrategySignal) -> str | None:
+    if signal.trade_plan is None:
+        return None
+    raw = signal.trade_plan.entry.metadata.get("entry_model")
+    return str(raw) if raw is not None else None
+
+
+def _liquidity_sweep_range_targets(signal: StrategySignal) -> tuple[float | None, float | None]:
+    if signal.trade_plan is None:
+        return signal.take_profit_1, signal.take_profit_2
+    midpoint = None
+    boundary = None
+    for target in signal.trade_plan.targets:
+        source = target.source or ""
+        if source == "range_midpoint" and midpoint is None:
+            midpoint = target.price
+        if source not in {"range_midpoint", "legacy_fields"} and boundary is None:
+            boundary = target.price
+    return midpoint or signal.take_profit_1, boundary or signal.take_profit_2
+
+
+def _strong_trend_for_runner(
+    signal_features: Features,
+    context_features: Features | None,
+) -> bool:
+    features = context_features or signal_features
+    if features.adx is not None and features.adx >= 30:
+        return True
+    return bool(features.adx_rising and features.ema_50 is not None and features.ema_200 is not None)
 
 
 def _apply_regime_score(signal: StrategySignal, regime: MarketRegimeSnapshot) -> StrategySignal:
@@ -1135,6 +1215,22 @@ def _bool_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _optional_positive_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 def _primary_context_features(context: StrategyEvaluationContext) -> Features | None:
@@ -1328,6 +1424,7 @@ def _context_obstacle_check(
     support_resistance: SupportResistanceSnapshot | None,
     min_atr: float,
     min_strength: float,
+    max_obstacle_distance_r: float | None = None,
 ) -> tuple[SignalLayerCheck, int]:
     entry = _entry_price(signal) or signal_features.close
     atr = signal_features.atr_14 or context_features.atr_14
@@ -1344,7 +1441,12 @@ def _context_obstacle_check(
     if support_resistance is not None:
         check_name = "context_resistance" if signal.direction.lower() == "long" else "context_support"
         level_kind = "resistance" if signal.direction.lower() == "long" else "support"
-        level = support_resistance.nearest_obstacle(
+        level = support_resistance.nearest_obstacle_between(
+            direction=signal.direction,
+            entry=entry,
+            target=signal.take_profit_1,
+            min_strength=min_strength,
+        ) or support_resistance.nearest_obstacle(
             direction=signal.direction,
             entry=entry,
             min_strength=min_strength,
@@ -1366,7 +1468,17 @@ def _context_obstacle_check(
             if signal.direction.lower() == "long"
             else (entry - level.price) / atr
         )
-        status = "warning" if distance_atr <= min_atr else "passed"
+        before_target = _level_before_target(signal, entry, level.price)
+        distance_r = _distance_r(signal, entry, level.price)
+        status = _obstacle_status(
+            distance_atr=distance_atr,
+            min_atr=min_atr,
+            distance_r=distance_r,
+            max_obstacle_distance_r=max_obstacle_distance_r,
+            before_target=before_target,
+        )
+        target_context = " before TP1" if before_target else ""
+        distance_r_context = "" if distance_r is None else f", {distance_r:.2f}R"
         return (
             SignalLayerCheck(
                 name=check_name,
@@ -1374,10 +1486,17 @@ def _context_obstacle_check(
                 score=round(distance_atr, 3),
                 reason=(
                     f"{support_resistance.timeframe} S/R {level_kind} {level.price:.8f} "
-                    f"is {distance_atr:.2f} ATR from entry; strength {level.strength:.0f}, "
+                    f"is {distance_atr:.2f} ATR{distance_r_context} from entry{target_context}; "
+                    f"strength {level.strength:.0f}, "
                     f"retests {level.retest_count}, age {level.age_candles} candles, "
                     f"volume x{level.volume_score:.2f}"
                 ),
+                metadata={
+                    "level": level.price,
+                    "distance_atr": round(distance_atr, 4),
+                    "distance_r": None if distance_r is None else round(distance_r, 4),
+                    "before_tp1": before_target,
+                },
             ),
             -8 if status == "warning" else 0,
         )
@@ -1399,15 +1518,30 @@ def _context_obstacle_check(
             )
         level = min(levels)
         distance_atr = (level - entry) / atr
-        status = "warning" if distance_atr <= min_atr else "passed"
+        before_target = _level_before_target(signal, entry, level)
+        distance_r = _distance_r(signal, entry, level)
+        status = _obstacle_status(
+            distance_atr=distance_atr,
+            min_atr=min_atr,
+            distance_r=distance_r,
+            max_obstacle_distance_r=max_obstacle_distance_r,
+            before_target=before_target,
+        )
+        target_context = " before TP1" if before_target else ""
         return (
             SignalLayerCheck(
                 name="context_resistance",
                 status=status,
                 score=round(distance_atr, 3),
                 reason=(
-                    f"{context_features.timeframe} resistance is {distance_atr:.2f} ATR above entry"
+                    f"{context_features.timeframe} resistance is {distance_atr:.2f} ATR above entry{target_context}"
                 ),
+                metadata={
+                    "level": level,
+                    "distance_atr": round(distance_atr, 4),
+                    "distance_r": None if distance_r is None else round(distance_r, 4),
+                    "before_tp1": before_target,
+                },
             ),
             -8 if status == "warning" else 0,
         )
@@ -1428,13 +1562,28 @@ def _context_obstacle_check(
         )
     level = max(levels)
     distance_atr = (entry - level) / atr
-    status = "warning" if distance_atr <= min_atr else "passed"
+    before_target = _level_before_target(signal, entry, level)
+    distance_r = _distance_r(signal, entry, level)
+    status = _obstacle_status(
+        distance_atr=distance_atr,
+        min_atr=min_atr,
+        distance_r=distance_r,
+        max_obstacle_distance_r=max_obstacle_distance_r,
+        before_target=before_target,
+    )
+    target_context = " before TP1" if before_target else ""
     return (
         SignalLayerCheck(
             name="context_support",
             status=status,
             score=round(distance_atr, 3),
-            reason=f"{context_features.timeframe} support is {distance_atr:.2f} ATR below entry",
+            reason=f"{context_features.timeframe} support is {distance_atr:.2f} ATR below entry{target_context}",
+            metadata={
+                "level": level,
+                "distance_atr": round(distance_atr, 4),
+                "distance_r": None if distance_r is None else round(distance_r, 4),
+                "before_tp1": before_target,
+            },
         ),
         -8 if status == "warning" else 0,
     )
@@ -1446,6 +1595,45 @@ def _levels_above(entry: float, *levels: float | None) -> list[float]:
 
 def _levels_below(entry: float, *levels: float | None) -> list[float]:
     return [level for level in levels if level is not None and level < entry]
+
+
+def _level_before_target(signal: StrategySignal, entry: float, level: float) -> bool:
+    target = signal.take_profit_1
+    if target is None:
+        return False
+    if signal.direction.lower() == "long":
+        return entry < level <= target
+    return target <= level < entry
+
+
+def _distance_r(signal: StrategySignal, entry: float, level: float) -> float | None:
+    if signal.stop_loss is None:
+        return None
+    risk = abs(entry - signal.stop_loss)
+    if risk <= 0:
+        return None
+    return abs(level - entry) / risk
+
+
+def _obstacle_status(
+    *,
+    distance_atr: float,
+    min_atr: float,
+    distance_r: float | None,
+    max_obstacle_distance_r: float | None,
+    before_target: bool,
+) -> str:
+    if before_target:
+        return "warning"
+    if distance_atr <= min_atr:
+        return "warning"
+    if (
+        max_obstacle_distance_r is not None
+        and distance_r is not None
+        and distance_r <= max_obstacle_distance_r
+    ):
+        return "warning"
+    return "passed"
 
 
 def _has_strong_regime_conflict(regime: MarketRegimeSnapshot) -> bool:

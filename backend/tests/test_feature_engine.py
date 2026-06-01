@@ -20,6 +20,10 @@ class FeatureEngineTest(unittest.TestCase):
 
         self.assertIsNotNone(features)
         self.assertAlmostEqual(features.vwap or 0.0, 107.5)
+        self.assertAlmostEqual(features.session_high or 0.0, 112.0)
+        self.assertAlmostEqual(features.session_low or 0.0, 98.0)
+        self.assertAlmostEqual(features.previous_day_high or 0.0, 120.0)
+        self.assertAlmostEqual(features.previous_day_low or 0.0, 90.0)
 
     def test_daily_candle_features_skip_intraday_vwap(self) -> None:
         engine = FeatureEngine()

@@ -5,6 +5,7 @@ from typing import Any, List, Literal, Mapping, Optional
 
 from app.schemas.market import Features
 from app.schemas.signal import SignalScoreBreakdown, StrategySignal
+from app.schemas.trade_plan import TradePlanTarget
 from app.strategies.common import build_signal, has_minimum_market_data, score_breakdown
 
 STRATEGY_NAME = "volatility_squeeze_breakout"
@@ -21,6 +22,9 @@ DEFAULT_STOP_ATR_MULTIPLIER = 1.0
 DEFAULT_NARROW_RANGE_STOP_ATR_MULTIPLIER = 0.5
 NARROW_RANGE_ATR = 2.0
 MAX_BREAKOUT_BODY_ATR = 2.5
+DEFAULT_ALLOW_AGGRESSIVE_ENTRY = True
+DEFAULT_REQUIRE_RETEST_AFTER_LARGE_CANDLE = True
+DEFAULT_MEASURED_MOVE_TARGET_ENABLED = True
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,10 @@ class _SqueezeState:
     atr_expanding: bool
     close_position: float
     rejection_wick_ratio: float
+    entry_model: Literal["aggressive_breakout", "conservative_retest"]
+    large_candle: bool
+    body_atr: float
+    measured_move_target: float | None
 
 
 class VolatilitySqueezeBreakoutStrategy:
@@ -90,7 +98,7 @@ class VolatilitySqueezeBreakoutStrategy:
         else:
             stop_loss = breakout_level + atr * stop_multiplier
 
-        entry = features.close
+        entry = features.close if setup.entry_model == "aggressive_breakout" else breakout_level
         risk = abs(entry - stop_loss)
         if risk <= 0:
             risk = max(atr, abs(entry) * 0.001, 1e-8)
@@ -102,7 +110,13 @@ class VolatilitySqueezeBreakoutStrategy:
             take_profit_1 = entry - risk * 1.5
             take_profit_2 = entry - risk * 2.5
             measured_target = setup.range_low - setup.range_size
-        reasons.append(f"Measured move target: {measured_target:.8f}")
+        measured_move_enabled = _bool_param(
+            strategy_params,
+            "measured_move_target_enabled",
+            DEFAULT_MEASURED_MOVE_TARGET_ENABLED,
+        )
+        if measured_move_enabled:
+            reasons.append(f"Measured move target: {measured_target:.8f}")
 
         signal = build_signal(
             features=features,
@@ -116,8 +130,13 @@ class VolatilitySqueezeBreakoutStrategy:
             take_profit_1=take_profit_1,
             take_profit_2=take_profit_2,
         )
-        if setup.status == "actionable":
+        if setup.status == "actionable" and setup.entry_model == "aggressive_breakout":
             signal = signal.model_copy(update={"entry_min": entry, "entry_max": entry})
+        signal = self._enrich_trade_plan(
+            signal=signal,
+            setup=setup,
+            measured_move_enabled=measured_move_enabled,
+        )
         if signal.score < MIN_VISIBLE_SETUP_SCORE:
             return []
         return [signal.model_copy(update={"status": setup.status, "status_reason": setup.reason})]
@@ -272,15 +291,42 @@ class VolatilitySqueezeBreakoutStrategy:
         wick_ok = rejection_wick <= max_rejection_wick
         breakout_closed = not wick_returned_inside
         atr_expanding = features.atr_increasing
+        body_atr = _body_atr(features)
+        large_candle_threshold = _numeric_param(
+            params,
+            "large_candle_body_atr",
+            _numeric_param(params, "max_body_atr", MAX_BREAKOUT_BODY_ATR),
+        )
+        large_candle = body_atr > large_candle_threshold
+        require_retest_after_large_candle = _bool_param(
+            params,
+            "require_retest_after_large_candle",
+            DEFAULT_REQUIRE_RETEST_AFTER_LARGE_CANDLE,
+        )
+        allow_aggressive_entry = _bool_param(params, "allow_aggressive_entry", DEFAULT_ALLOW_AGGRESSIVE_ENTRY)
+        entry_model: Literal["aggressive_breakout", "conservative_retest"] = "conservative_retest"
+        measured_target = range_high + range_size if direction == "LONG" else range_low - range_size
 
         if wick_returned_inside:
             action = "Breakout" if direction == "LONG" else "Breakdown"
             status = "ready"
             reason = f"{action} only wicked outside the range and closed back inside; wait for a real candle close"
+        elif large_candle and require_retest_after_large_candle:
+            action = "Breakout" if direction == "LONG" else "Breakdown"
+            status = "wait_for_pullback"
+            reason = (
+                f"{action} candle body is {body_atr:.2f} ATR, above configured large-candle limit "
+                f"{large_candle_threshold:.2f} ATR; wait for conservative retest entry"
+            )
         elif volume_confirmed and strong_close and atr_expanding and wick_ok:
             action = "Breakout" if direction == "LONG" else "Breakdown"
-            status = "actionable"
-            reason = f"{action} closed outside the compressed range with volume, strong close and ATR expansion"
+            if allow_aggressive_entry:
+                status = "actionable"
+                entry_model = "aggressive_breakout"
+                reason = f"{action} closed outside the compressed range with volume, strong close and ATR expansion"
+            else:
+                status = "ready"
+                reason = f"{action} is confirmed, but strategy config requires a conservative retest entry"
         else:
             missing: list[str] = []
             if not volume_confirmed:
@@ -312,6 +358,10 @@ class VolatilitySqueezeBreakoutStrategy:
             atr_expanding=atr_expanding,
             close_position=close_position,
             rejection_wick_ratio=rejection_wick,
+            entry_model=entry_model,
+            large_candle=large_candle,
+            body_atr=body_atr,
+            measured_move_target=measured_target,
         )
 
     def _watchlist_state(
@@ -349,6 +399,10 @@ class VolatilitySqueezeBreakoutStrategy:
             atr_expanding=features.atr_increasing,
             close_position=_directional_close_position(direction, features),
             rejection_wick_ratio=_rejection_wick_ratio(direction, features),
+            entry_model="conservative_retest",
+            large_candle=False,
+            body_atr=_body_atr(features),
+            measured_move_target=range_high + range_size if direction == "LONG" else range_low - range_size,
         )
 
     def _score(
@@ -410,10 +464,17 @@ class VolatilitySqueezeBreakoutStrategy:
         if setup.range_size_atr >= 3:
             risks.append(f"Squeeze range uses {setup.range_size_atr:.2f} ATR; wider ranges are less clean")
 
-        body_atr = _body_atr(features)
-        if body_atr > MAX_BREAKOUT_BODY_ATR:
+        body_atr = setup.body_atr
+        large_candle_threshold = _numeric_param(
+            params,
+            "large_candle_body_atr",
+            _numeric_param(params, "max_body_atr", MAX_BREAKOUT_BODY_ATR),
+        )
+        if setup.large_candle:
             risks.append(f"Breakout candle body is {body_atr:.2f} ATR")
             overheat_penalty += 15
+            if setup.entry_model == "conservative_retest":
+                risks.append(f"Configured retest required above {large_candle_threshold:.2f} ATR breakout body")
 
         max_rejection_wick = _numeric_param(
             params,
@@ -449,6 +510,87 @@ class VolatilitySqueezeBreakoutStrategy:
             risks,
         )
 
+    def _enrich_trade_plan(
+        self,
+        *,
+        signal: StrategySignal,
+        setup: _SqueezeState,
+        measured_move_enabled: bool,
+    ) -> StrategySignal:
+        trade_plan = signal.trade_plan
+        if trade_plan is None:
+            return signal
+        entry_metadata = dict(trade_plan.entry.metadata)
+        entry_metadata.update(
+            {
+                "entry_model": setup.entry_model,
+                "entry_type": setup.entry_model,
+                "range_high": setup.range_high,
+                "range_low": setup.range_low,
+                "large_candle": setup.large_candle,
+                "body_atr": setup.body_atr,
+            }
+        )
+        entry = trade_plan.entry.model_copy(
+            update={
+                "source": setup.entry_model,
+                "metadata": entry_metadata,
+            }
+        )
+        targets = [
+            target.model_copy(
+                update={
+                    "source": (
+                        target.source
+                        if target.source not in {None, "legacy_fields"}
+                        else "breakout_momentum_rr" if target.label == "TP1" else "breakout_expansion_rr"
+                    ),
+                    "metadata": {
+                        **target.metadata,
+                        "entry_model": setup.entry_model,
+                    },
+                }
+            )
+            for target in trade_plan.targets
+        ]
+        measured_target = setup.measured_move_target
+        measured_reward = (
+            _target_reward(setup.direction, trade_plan.entry.price or signal.entry_min or signal.entry_max or 0.0, measured_target)
+            if measured_target is not None
+            else 0.0
+        )
+        if measured_move_enabled and measured_target is not None and measured_reward > 0:
+            existing_prices = {target.price for target in targets}
+            if round(measured_target, 8) not in existing_prices:
+                targets.append(
+                    TradePlanTarget(
+                        label="Measured Move",
+                        price=round(measured_target, 8),
+                        action="measured_move_runner",
+                        close_percent="runner",
+                        source="range_measured_move",
+                        metadata={
+                            "range_high": setup.range_high,
+                            "range_low": setup.range_low,
+                            "range_size": setup.range_size,
+                            "entry_model": setup.entry_model,
+                        },
+                    )
+                )
+        enriched_plan = trade_plan.model_copy(
+            update={
+                "entry": entry,
+                "targets": targets,
+                "metadata": {
+                    **trade_plan.metadata,
+                    "entry_model": setup.entry_model,
+                    "measured_move_target_enabled": measured_move_enabled,
+                },
+            },
+            deep=True,
+        )
+        return signal.model_copy(update={"trade_plan": enriched_plan})
+
     def _bb_squeeze(self, features: Features, params: Mapping[str, Any]) -> bool:
         threshold = _numeric_param(
             params,
@@ -480,6 +622,15 @@ def _numeric_param(params: Mapping[str, Any], key: str, default: float) -> float
         return default
 
 
+def _bool_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = params.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _directional_close_position(direction: Literal["LONG", "SHORT"], features: Features) -> float:
     candle_range = max(features.high - features.low, 0.0)
     if candle_range <= 0:
@@ -498,3 +649,9 @@ def _rejection_wick_ratio(direction: Literal["LONG", "SHORT"], features: Feature
 def _body_atr(features: Features) -> float:
     atr = features.atr_14 or max(abs(features.close) * 0.002, 1e-8)
     return abs(features.close - features.open) / atr if atr > 0 else 0.0
+
+
+def _target_reward(direction: Literal["LONG", "SHORT"], entry: float, target: float) -> float:
+    if direction == "LONG":
+        return target - entry
+    return entry - target

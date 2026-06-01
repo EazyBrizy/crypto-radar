@@ -48,6 +48,12 @@ DEFAULT_STRATEGY_QUALITY_PARAMS: dict[str, Any] = {
 }
 
 DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
+    "trend_pullback_continuation": {
+        "entry_model": "zone",
+        "max_overextension_atr": 1.5,
+        "require_htf_alignment": True,
+        "time_stop_bars": 8,
+    },
     "volatility_squeeze_breakout": {
         "bb_width_percentile_threshold": 20.0,
         "volume_spike_multiplier": 1.5,
@@ -57,6 +63,10 @@ DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
         "watchlist_distance_atr": 0.6,
         "breakout_stop_atr": 1.0,
         "narrow_range_stop_atr": 0.5,
+        "allow_aggressive_entry": True,
+        "require_retest_after_large_candle": True,
+        "large_candle_body_atr": 2.5,
+        "measured_move_target_enabled": True,
     },
     "liquidity_sweep_reversal": {
         "min_sweep_wick_ratio": 0.45,
@@ -67,6 +77,9 @@ DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
         "sweep_aggressive_close_position": 0.6,
         "min_level_retests": 2,
         "sweep_level_confluence_atr": 0.5,
+        "require_reclaim": True,
+        "require_absorption": True,
+        "max_obstacle_distance_r": 1.0,
     },
 }
 

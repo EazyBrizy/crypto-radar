@@ -39,6 +39,7 @@ class SweepSetup:
     touch_count: int
     level_volume_score: float | None
     sweep_extreme: float
+    require_reclaim: bool
 
 
 class LiquiditySweepReversalStrategy:
@@ -75,18 +76,21 @@ class LiquiditySweepReversalStrategy:
         entry = features.close
         if setup.direction == "LONG":
             stop_loss = setup.sweep_extreme - atr * stop_atr
-            range_high = features.swing_high or features.donchian_high_20
-            range_low = setup.level
+            range_low, range_high, boundary_source = _target_range(features, setup.direction, setup.level)
             take_profit_1 = _range_midpoint(range_low, range_high)
             take_profit_2 = range_high
         else:
             stop_loss = setup.sweep_extreme + atr * stop_atr
-            range_high = setup.level
-            range_low = features.swing_low or features.donchian_low_20
+            range_low, range_high, boundary_source = _target_range(features, setup.direction, setup.level)
             take_profit_1 = _range_midpoint(range_low, range_high)
             take_profit_2 = range_low
+        target_sources = {"TP1": "range_midpoint", "TP2": boundary_source}
 
         reasons.append(f"Swept liquidity level: {setup.level:.8f}")
+        if take_profit_1 is not None and take_profit_2 is not None:
+            reasons.append(
+                f"Range targets: midpoint {take_profit_1:.8f}, opposite boundary {take_profit_2:.8f}"
+            )
         if setup.touch_count >= DEFAULT_MIN_LEVEL_RETESTS:
             reasons.append(f"Level has {setup.touch_count} recent touches")
         if setup.confirmation:
@@ -106,6 +110,7 @@ class LiquiditySweepReversalStrategy:
             take_profit_1=take_profit_1,
             take_profit_2=take_profit_2,
         )
+        signal = self._enrich_trade_plan(signal, setup, target_sources)
         if signal.score < MIN_VISIBLE_SETUP_SCORE:
             return []
         return [
@@ -168,6 +173,7 @@ class LiquiditySweepReversalStrategy:
             "sweep_aggressive_close_position",
             DEFAULT_AGGRESSIVE_CLOSE_POSITION,
         )
+        require_reclaim = _bool_param(params, "require_reclaim", True)
 
         if direction == "LONG":
             level = features.swing_low
@@ -255,12 +261,24 @@ class LiquiditySweepReversalStrategy:
                 touch_count=touch_count,
                 level_volume_score=level_volume_score,
                 sweep_extreme=sweep_extreme,
+                require_reclaim=require_reclaim,
             )
 
         volume_ok = features.volume_spike >= volume_multiplier
         strong_wick = wick_ratio >= min_wick_ratio
         strong_close = close_position >= aggressive_close_position
         strong_trend_against = _strong_trend_against(direction, features)
+        absorption_or_flush = (
+            confirmation
+            or (swept and reclaimed and strong_wick and volume_ok and strong_close)
+            or (micro_bos and strong_wick and volume_ok)
+        )
+        if (
+            strong_trend_against
+            and _bool_param(params, "require_absorption", True)
+            and not absorption_or_flush
+        ):
+            return None
 
         if confirmation:
             return SweepSetup(
@@ -283,6 +301,7 @@ class LiquiditySweepReversalStrategy:
                 touch_count=touch_count,
                 level_volume_score=level_volume_score,
                 sweep_extreme=features.previous_low if direction == "LONG" and features.previous_low is not None else features.previous_high if direction == "SHORT" and features.previous_high is not None else sweep_extreme,
+                require_reclaim=require_reclaim,
             )
 
         if swept and reclaimed:
@@ -311,6 +330,7 @@ class LiquiditySweepReversalStrategy:
                 touch_count=touch_count,
                 level_volume_score=level_volume_score,
                 sweep_extreme=sweep_extreme,
+                require_reclaim=require_reclaim,
             )
 
         if swept:
@@ -319,8 +339,10 @@ class LiquiditySweepReversalStrategy:
                 status="ready",
                 status_reason=(
                     "Previous swing low was swept; waiting for reclaim above the level"
-                    if direction == "LONG"
+                    if direction == "LONG" and require_reclaim
                     else "Previous swing high was swept; waiting for rejection below the level"
+                    if direction == "SHORT" and require_reclaim
+                    else "Liquidity was swept; reclaim is optional by config, but reversal confirmation is still incomplete"
                 ),
                 level=level,
                 level_name=level_name,
@@ -338,6 +360,7 @@ class LiquiditySweepReversalStrategy:
                 touch_count=touch_count,
                 level_volume_score=level_volume_score,
                 sweep_extreme=sweep_extreme,
+                require_reclaim=require_reclaim,
             )
 
         if near_level:
@@ -365,6 +388,7 @@ class LiquiditySweepReversalStrategy:
                 touch_count=touch_count,
                 level_volume_score=level_volume_score,
                 sweep_extreme=sweep_extreme,
+                require_reclaim=require_reclaim,
             )
 
         return None
@@ -457,6 +481,74 @@ class LiquiditySweepReversalStrategy:
             risks,
         )
 
+    def _enrich_trade_plan(
+        self,
+        signal: StrategySignal,
+        setup: SweepSetup,
+        target_sources: Mapping[str, str],
+    ) -> StrategySignal:
+        trade_plan = signal.trade_plan
+        if trade_plan is None:
+            return signal
+        entry_metadata = dict(trade_plan.entry.metadata)
+        entry_metadata.update(
+            {
+                "entry_model": "reclaim" if setup.reclaimed else "wait_for_reclaim",
+                "swept_level": setup.level,
+                "level_name": setup.level_name,
+                "confirmation": setup.confirmation,
+                "micro_bos": setup.micro_bos,
+            }
+        )
+        entry = trade_plan.entry.model_copy(
+            update={
+                "source": "liquidity_reclaim" if setup.reclaimed else "liquidity_sweep_watch",
+                "metadata": entry_metadata,
+            }
+        )
+        targets = [
+            target.model_copy(
+                update={
+                    "source": target_sources.get(target.label, target.source),
+                    "metadata": {
+                        **target.metadata,
+                        "target_model": "range_midpoint_opposite_boundary",
+                        "swept_level": setup.level,
+                    },
+                }
+            )
+            for target in trade_plan.targets
+        ]
+        invalidation = trade_plan.invalidation.model_copy(
+            update={
+                "conditions": [
+                    *trade_plan.invalidation.conditions,
+                    "Reclaim fails and price settles beyond swept level",
+                    "Sweep extreme is broken again",
+                ],
+                "metadata": {
+                    **trade_plan.invalidation.metadata,
+                    "swept_level": setup.level,
+                    "sweep_extreme": setup.sweep_extreme,
+                    "requires_reclaim": setup.require_reclaim,
+                },
+            }
+        ) if trade_plan.invalidation is not None else None
+        enriched_plan = trade_plan.model_copy(
+            update={
+                "entry": entry,
+                "targets": targets,
+                "invalidation": invalidation,
+                "metadata": {
+                    **trade_plan.metadata,
+                    "target_model": "range_midpoint_opposite_boundary",
+                    "strong_trend_against": setup.strong_trend_against,
+                },
+            },
+            deep=True,
+        )
+        return signal.model_copy(update={"trade_plan": enriched_plan})
+
 
 def _candidate_priority(setup: SweepSetup) -> tuple[int, float, bool, int]:
     status_rank = {"actionable": 3, "ready": 2, "watchlist": 1}.get(setup.status, 0)
@@ -486,6 +578,76 @@ def _range_midpoint(low: float | None, high: float | None) -> float | None:
     if low is None or high is None:
         return None
     return (low + high) / 2
+
+
+def _target_range(
+    features: Features,
+    direction: Literal["LONG", "SHORT"],
+    swept_level: float,
+) -> tuple[float | None, float | None, str]:
+    if direction == "LONG":
+        boundary = _first_directional_level(
+            direction,
+            features.close,
+            (
+                ("session_high", _feature_level(features, "session_high")),
+                ("previous_day_high", _feature_level(features, "previous_day_high")),
+                ("swing_high", features.swing_high),
+                ("donchian_high_20", features.donchian_high_20),
+                ("previous_high", features.previous_high),
+            ),
+        )
+        return swept_level, boundary[1], boundary[0]
+    boundary = _first_directional_level(
+        direction,
+        features.close,
+        (
+            ("session_low", _feature_level(features, "session_low")),
+            ("previous_day_low", _feature_level(features, "previous_day_low")),
+            ("swing_low", features.swing_low),
+            ("donchian_low_20", features.donchian_low_20),
+            ("previous_low", features.previous_low),
+        ),
+    )
+    return boundary[1], swept_level, boundary[0]
+
+
+def _first_directional_level(
+    direction: Literal["LONG", "SHORT"],
+    entry: float,
+    candidates: tuple[tuple[str, float | None], ...],
+) -> tuple[str, float | None]:
+    valid = [
+        (source, price)
+        for source, price in candidates
+        if price is not None and _target_reward(direction, entry, price) > 0
+    ]
+    if not valid:
+        return "opposite_range_boundary", None
+    return valid[0]
+
+
+def _feature_level(features: Features, name: str) -> float | None:
+    value = getattr(features, name, None)
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _target_reward(direction: Literal["LONG", "SHORT"], entry: float, target: float) -> float:
+    if direction == "LONG":
+        return target - entry
+    return entry - target
+
+
+def _bool_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = params.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _numeric_param(params: Mapping[str, Any], key: str, default: float) -> float:

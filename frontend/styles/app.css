@@ -740,6 +740,13 @@ h3 { font-size: 15px; line-height: 1.3; }
   color: #fca5a5;
 }
 
+.signal-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -4px 0 12px;
+}
+
 .score-ring {
   display: grid;
   width: 58px;
@@ -922,7 +929,8 @@ h3 { font-size: 15px; line-height: 1.3; }
 }
 
 .invalidation-list,
-.layer-check-list {
+.layer-check-list,
+.target-state-list {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -930,7 +938,8 @@ h3 { font-size: 15px; line-height: 1.3; }
 }
 
 .invalidation-list span,
-.layer-check-list span {
+.layer-check-list span,
+.target-state-list span {
   padding: 5px 8px;
   border: 1px solid #263449;
   border-radius: 999px;
@@ -939,17 +948,57 @@ h3 { font-size: 15px; line-height: 1.3; }
   font-size: 12px;
 }
 
-.layer-check-list .layer-check-warning {
+.target-state-list strong {
+  color: #f9fafb;
+}
+
+.layer-check-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.layer-check-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.layer-check-group strong {
+  color: #f9fafb;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.layer-check-group span {
+  padding: 5px 8px;
+  border: 1px solid #263449;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #cbd5e1;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.layer-check-list .layer-check-warning,
+.layer-check-group .layer-check-warning {
   border-color: #92400e;
   color: #fde68a;
   background: #1f1a0f;
 }
 
-.layer-check-list .layer-check-skipped {
+.layer-check-list .layer-check-skipped,
+.layer-check-group .layer-check-skipped {
   color: #9ca3af;
 }
 
-.layer-check-list .layer-check-failed {
+.layer-check-list .layer-check-failed,
+.layer-check-group .layer-check-failed {
   border-color: #7f1d1d;
   color: #fecaca;
   background: #3b0a0a;
@@ -1178,7 +1227,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .trade-row {
   display: grid;
-  grid-template-columns: minmax(240px, 1.1fr) minmax(360px, 1.4fr) 110px;
+  grid-template-columns: minmax(260px, 1fr) minmax(420px, 1.6fr) 110px;
   gap: 12px;
   align-items: center;
   padding: 14px;
@@ -1191,6 +1240,13 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.trade-lifecycle-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
 }
 
 .trade-values {
@@ -1450,6 +1506,36 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 .table-execution-cell span {
+  color: #9ca3af;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.table-target-state-cell,
+.table-lifecycle-cell,
+.table-pnl-cell {
+  display: grid;
+  min-width: 120px;
+  gap: 4px;
+}
+
+.table-target-state-cell {
+  align-items: start;
+}
+
+.table-target-state-cell .badge,
+.table-lifecycle-cell .badge {
+  width: fit-content;
+}
+
+.table-lifecycle-cell div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.table-lifecycle-cell span,
+.table-pnl-cell span {
   color: #9ca3af;
   font-size: 12px;
   white-space: nowrap;
@@ -2425,6 +2511,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .pullback-guidance-grid,
   .risk-reward-detail-grid,
   .strategy-layer-grid,
+  .layer-check-groups,
   .trade-setup,
   .virtual-account-strip,
   .active-trade-summary,
@@ -2457,6 +2544,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .pullback-guidance-grid,
   .risk-reward-detail-grid,
   .strategy-layer-grid,
+  .layer-check-groups,
   .strategy-config-header,
   .strategy-quality-grid,
   .strategy-scope-grid,

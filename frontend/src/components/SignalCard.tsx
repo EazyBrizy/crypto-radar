@@ -4,8 +4,17 @@ import { Activity, ArrowDownRight, ArrowUpRight, Clock3 } from "lucide-react";
 import { Badge } from "./Badge";
 import { useSignalPrice } from "@/stores/price-store";
 import { useSignalStore } from "@/stores/signal-store";
-import type { RadarSignal } from "../types";
-import { entryZone, formatPrice, isSignalExpired, riskLabel, signalAge, signalTtlLabel, signalUpdatedAge } from "../utils";
+import type { RadarSignal, SignalEdgeStatus } from "../types";
+import {
+  formatPrice,
+  isRiskRewardBlocked,
+  isSignalExpired,
+  riskLabel,
+  signalAge,
+  signalTtlLabel,
+  signalTradePlanSummary,
+  signalUpdatedAge
+} from "../utils";
 
 interface SignalCardProps {
   signal: RadarSignal;
@@ -18,6 +27,11 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
   const price = useSignalPrice(signal.symbol);
   const expired = isSignalExpired(signal);
   const riskMeta = `Risk: ${riskLabel(signal)} | Opened ${signalAge(signal)} | Updated ${signalUpdatedAge(signal)}`;
+  const plan = signalTradePlanSummary(signal);
+  const targets = planTargets(plan.targets);
+  const rrBlocked = isRiskRewardBlocked(signal);
+  const noTrade = signal.no_trade_filter ?? null;
+  const edge = edgeBadge(signal.edge?.status ?? "unknown", signal.edge?.sample_size, signal.edge?.min_sample_size);
 
   return (
     <button className={`signal-card ${selected ? "selected" : ""}`} onClick={() => onSelect(signal)} type="button">
@@ -52,10 +66,19 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
         </div>
       </div>
 
+      <div className="signal-badge-row">
+        <Badge tone={edge.tone}>{edge.label}</Badge>
+        {rrBlocked ? <Badge tone="red">RR blocked</Badge> : null}
+        {noTrade ? <Badge tone={noTrade.blocked ? "red" : noTrade.warnings.length ? "yellow" : "green"}>{noTrade.blocked ? "No-trade" : noTrade.warnings.length ? "No-trade warn" : "No-trade clear"}</Badge> : null}
+      </div>
+
       <div className="setup-grid">
-        <span>Entry<strong>{entryZone(signal)}</strong></span>
-        <span>TP<strong>{formatPrice(signal.take_profit_1)}</strong></span>
-        <span>SL<strong>{formatPrice(signal.stop_loss)}</strong></span>
+        <span>Entry<strong>{plan.entryType} | {plan.entryZone}</strong></span>
+        <span>SL<strong>{formatPrice(plan.stopLoss)}</strong></span>
+        <span>TP1<strong>{formatTargetPrice(targets[0])}</strong></span>
+        <span>TP2<strong>{formatTargetPrice(targets[1])}</strong></span>
+        <span>TP3<strong>{formatTargetPrice(targets[2])}</strong></span>
+        <span>Selected RR<strong>{plan.selectedRr == null ? "-" : `${plan.selectedRr.toFixed(2)}R`}</strong></span>
         <span>
           {price ? "Price" : "TF"}
           <strong>{price ? `${formatPrice(price.price)} | ${new Date(price.updatedAt).toLocaleTimeString()}` : signal.timeframe}</strong>
@@ -78,6 +101,29 @@ function statusBadgeTone(status: RadarSignal["status"]): "green" | "red" | "yell
   if (status === "ready" || status === "wait_for_pullback") return "blue";
   if (status === "invalidated" || status === "expired" || status === "rejected") return "red";
   return "neutral";
+}
+
+function planTargets(targets: ReturnType<typeof signalTradePlanSummary>["targets"]) {
+  const byLabel = new Map(targets.map((target) => [target.label.toUpperCase(), target]));
+  const slots = ["TP1", "TP2", "TP3"].map((label, index) => byLabel.get(label) ?? targets[index] ?? null);
+  return slots;
+}
+
+function formatTargetPrice(target: ReturnType<typeof planTargets>[number]): string {
+  if (!target) return "-";
+  const rr = target.rMultiple == null ? "" : ` ${target.rMultiple.toFixed(2)}R`;
+  return `${formatPrice(target.price)}${rr}`;
+}
+
+function edgeBadge(
+  status: SignalEdgeStatus,
+  sampleSize = 0,
+  minSampleSize = 0
+): { label: string; tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral" } {
+  if (status === "positive") return { label: `Edge + ${sampleSize} sample`, tone: "green" };
+  if (status === "negative") return { label: `Edge - ${sampleSize} sample`, tone: "red" };
+  if (status === "insufficient_sample") return { label: `Edge low ${sampleSize}/${minSampleSize}`, tone: "yellow" };
+  return { label: "Edge unknown", tone: "neutral" };
 }
 
 export const SignalCardById = memo(function SignalCardById({

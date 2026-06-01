@@ -7,7 +7,16 @@ import { CircleStop } from "lucide-react";
 import { Badge } from "@/components/Badge";
 import { DataTable } from "@/components/data-table/DataTable";
 import type { TradeJournalEntry } from "@/types";
-import { formatPercent, formatPrice, tradePnlClass } from "@/utils";
+import {
+  formatPercent,
+  formatPrice,
+  tradeCurrentStop,
+  tradePnlClass,
+  tradeRealizedPnl,
+  tradeRemainingQuantity,
+  tradeTargetStates,
+  tradeUnrealizedPnl
+} from "@/utils";
 
 interface TradeJournalTableProps {
   closingTradeId?: string | null;
@@ -76,20 +85,30 @@ export function TradeJournalTable({
       {
         accessorKey: "stop_loss",
         header: "Stop",
-        cell: ({ row }) => formatPrice(row.original.stop_loss)
+        cell: ({ row }) => formatPrice(tradeCurrentStop(row.original))
       },
       {
         id: "take_profit",
         header: "TP",
-        cell: ({ row }) => formatPrice(row.original.take_profit[row.original.take_profit.length - 1])
+        cell: ({ row }) => <TargetStateCell trade={row.original} />
+      },
+      {
+        id: "lifecycle",
+        header: "Lifecycle",
+        cell: ({ row }) => <LifecycleCell trade={row.original} />
       },
       {
         accessorKey: "pnl_percent",
         header: "PnL",
         cell: ({ row }) => (
-          <strong className={tradePnlClass(row.original)}>
-            {formatUsd(row.original.pnl ?? 0)} / {formatPercent(row.original.pnl_percent)}
-          </strong>
+          <div className="table-pnl-cell">
+            <strong className={tradePnlClass(row.original)}>
+              {formatUsd(row.original.pnl ?? 0)} / {formatPercent(row.original.pnl_percent)}
+            </strong>
+            <span>
+              R {formatUsd(tradeRealizedPnl(row.original))} / U {formatUsd(tradeUnrealizedPnl(row.original))}
+            </span>
+          </div>
         )
       },
       {
@@ -150,7 +169,7 @@ export function TradeJournalTable({
       columns={columns}
       data={trades}
       emptyLabel={emptyLabel}
-      estimateRowHeight={64}
+      estimateRowHeight={76}
       getRowId={(trade) => trade.id}
       globalFilter={globalFilter}
       onGlobalFilterChange={setGlobalFilter}
@@ -162,8 +181,42 @@ export function TradeJournalTable({
   );
 }
 
+function TargetStateCell({ trade }: { trade: TradeJournalEntry }) {
+  const targets = tradeTargetStates(trade);
+  if (!targets.length) return <span className="muted">-</span>;
+  return (
+    <div className="table-target-state-cell">
+      {targets.slice(0, 3).map((target) => (
+        <Badge tone={target.hit ? "green" : "neutral"} key={`${target.label}:${target.price}`}>
+          {target.label} {target.hit ? "hit" : formatPrice(target.price)}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function LifecycleCell({ trade }: { trade: TradeJournalEntry }) {
+  const remaining = tradeRemainingQuantity(trade);
+  return (
+    <div className="table-lifecycle-cell">
+      <span>Remain {formatQuantity(remaining)}</span>
+      <span>Stop {formatPrice(tradeCurrentStop(trade))}</span>
+      <div>
+        {trade.stop_moved_to_breakeven ? <Badge tone="blue">BE</Badge> : null}
+        {trade.trailing_active ? <Badge tone="purple">Trail</Badge> : null}
+      </div>
+    </div>
+  );
+}
+
 function formatUsd(value: number): string {
   return `${value >= 0 ? "+" : "-"}$${Math.abs(value).toFixed(2)}`;
+}
+
+function formatQuantity(value: number): string {
+  if (value === 0) return "0";
+  if (Math.abs(value) >= 1) return value.toFixed(4).replace(/\.?0+$/u, "");
+  return value.toPrecision(4);
 }
 
 function formatExecutionMode(trade: TradeJournalEntry): string {

@@ -4,6 +4,7 @@ import { Metric } from "@/components/Metric";
 import { SignalDetails } from "@/components/SignalDetails";
 import { SignalFeed } from "@/components/SignalFeed";
 import type { HealthStatus, RadarSignal, RadarStatus, SignalStatus, VirtualExecutionReport } from "@/types";
+import { isRiskRewardBlocked } from "@/utils";
 
 interface RadarPageProps {
   busy: boolean;
@@ -34,6 +35,8 @@ interface RadarPageProps {
 export function RadarPage(props: RadarPageProps) {
   const activeSignals = props.signals.filter((signal) => signal.status === "actionable" || signal.status === "active").length;
   const highConfidence = props.signals.filter((signal) => signal.score >= 80).length;
+  const positiveEdge = props.signals.filter((signal) => signal.edge?.status === "positive").length;
+  const blockedIdeas = props.signals.filter((signal) => isRiskRewardBlocked(signal) || signal.no_trade_filter?.blocked).length;
   const latestSeries = Object.entries(props.radarStatus?.candle_history ?? {})
     .sort(([, left], [, right]) => right - left)
     .slice(0, 6);
@@ -56,6 +59,8 @@ export function RadarPage(props: RadarPageProps) {
           <Metric label="Market Status" value={props.health?.scanner_running ? "Online" : "Offline"} hint="scanner" />
           <Metric label="Active Signals" value={String(activeSignals)} hint="actionable" />
           <Metric label="High Confidence" value={String(highConfidence)} hint="score 80+" />
+          <Metric label="Positive Edge" value={String(positiveEdge)} hint="EV gate" />
+          <Metric label="Blocked Ideas" value={String(blockedIdeas)} hint="RR/no-trade" />
           <Metric label="Ticks" value={String(props.radarStatus?.ticks_processed ?? props.health?.ticks_processed ?? 0)} hint="market data" />
           <Metric label="Strategy Checks" value={String(props.radarStatus?.strategy_evaluations ?? props.health?.strategy_evaluations ?? 0)} hint="evaluated" />
           <Metric label="Features" value={String(props.radarStatus?.features_built ?? props.health?.features_built ?? 0)} hint="candles analyzed" />

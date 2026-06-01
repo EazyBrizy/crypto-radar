@@ -14,7 +14,16 @@ export type SignalStatus =
   | "entry_touched";
 export type TradeMode = "virtual" | "real";
 export type TradeStatus = "open" | "closed" | "cancelled";
-export type TradeCloseReason = "take_profit" | "stop_loss" | "manual_close" | "invalidation" | "cancelled";
+export type TradeCloseReason =
+  | "take_profit"
+  | "stop_loss"
+  | "manual_close"
+  | "invalidation"
+  | "cancelled"
+  | "partial_take_profit"
+  | "breakeven_stop"
+  | "trailing_stop"
+  | "time_stop";
 export type CloseMarketTradeStatus = "closed" | "not_implemented";
 export type TradeInvalidationStatus = "valid" | "invalidated" | "unavailable";
 export type TradeInvalidationAction = "none" | "close_market_or_wait_stop";
@@ -77,6 +86,69 @@ export interface SignalLayerCheck {
   metadata: Record<string, unknown>;
 }
 
+export interface TradePlanEntry {
+  price: number | null;
+  min_price: number | null;
+  max_price: number | null;
+  source: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface TradePlanTarget {
+  label: string;
+  price: number | null;
+  r_multiple: number | null;
+  action: string | null;
+  close_percent: number | string | null;
+  source: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface TradePlanInvalidation {
+  price: number | null;
+  hard_stop: number | null;
+  conditions: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface TradePlanRiskRules {
+  risk_reward: number | null;
+  first_target_rr: number | null;
+  final_target_rr: number | null;
+  selected_rr: number | null;
+  selected_rr_target: string | null;
+  min_rr_ratio: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface TradePlan {
+  version: "v1";
+  entry: TradePlanEntry;
+  stop_loss: number | null;
+  targets: TradePlanTarget[];
+  invalidation: TradePlanInvalidation | null;
+  risk_rules: TradePlanRiskRules;
+  metadata: Record<string, unknown>;
+}
+
+export type SignalEdgeStatus = "unknown" | "positive" | "negative" | "insufficient_sample";
+
+export interface SignalEdgeSnapshot {
+  status: SignalEdgeStatus;
+  sample_size: number;
+  min_sample_size: number;
+  winrate: number | null;
+  avg_win_r: number | null;
+  avg_loss_r: number | null;
+  expectancy_r: number | null;
+  expectancy_after_costs_r: number | null;
+  profit_factor: number | null;
+  confidence_score: number;
+  source: "outcome" | "backtest" | "mixed" | "none";
+  score_bucket: string | null;
+  metadata: Record<string, unknown>;
+}
+
 export interface MarketQualitySnapshot {
   passed: boolean;
   tier: "major" | "mid_alt" | "low_liquidity" | "unknown";
@@ -87,6 +159,16 @@ export interface MarketQualitySnapshot {
   rough_chart_score: number | null;
   checks: SignalLayerCheck[];
   warnings: string[];
+}
+
+export interface NoTradeFilterResult {
+  enabled: boolean;
+  blocked: boolean;
+  hard_block: boolean;
+  blockers: string[];
+  warnings: string[];
+  checks: SignalLayerCheck[];
+  metadata: Record<string, unknown>;
 }
 
 export interface MarketRegimeSnapshot {
@@ -168,7 +250,10 @@ export interface RadarSignal {
   confirmation: SignalConfirmationSnapshot | null;
   invalidation: SignalInvalidationSnapshot | null;
   exit_plan: SignalExitPlanSnapshot | null;
+  trade_plan?: TradePlan | null;
   auto_entry: SignalAutoEntrySnapshot | null;
+  edge?: SignalEdgeSnapshot | null;
+  no_trade_filter?: NoTradeFilterResult | null;
   created_at: string;
   updated_at: string;
   expires_at: string | null;
@@ -420,6 +505,10 @@ export interface TakeProfitPlan {
   risk_per_unit: number;
   partial_take_profit_enabled: boolean;
   targets: TakeProfitTarget[];
+  source?: string;
+  selected_rr?: number | null;
+  selected_rr_target?: string | null;
+  notes?: string[];
 }
 
 export interface BreakevenPlan {
@@ -499,6 +588,33 @@ export interface VirtualExecutionReport {
   notes: string[];
 }
 
+export interface VirtualTradeTargetState {
+  label: string;
+  price: number;
+  close_percent: number;
+  action: string | null;
+  hit: boolean;
+  hit_at: string | null;
+  closed_quantity: number;
+  closed_size_usd: number;
+  realized_pnl: number;
+  exit_fee: number;
+}
+
+export interface VirtualTradeLifecycleEvent {
+  event_type: string;
+  reason: TradeCloseReason | null;
+  target_label: string | null;
+  price: number | null;
+  quantity: number | null;
+  size_usd: number | null;
+  realized_pnl: number | null;
+  exit_fee: number | null;
+  stop_loss: number | null;
+  created_at: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface TradeJournalEntry {
   id: string;
   user_id: string;
@@ -514,13 +630,24 @@ export interface TradeJournalEntry {
   exit_price: number | null;
   size_usd: number;
   quantity: number;
+  initial_quantity?: number | null;
+  remaining_quantity?: number | null;
+  closed_quantity?: number;
+  initial_size_usd?: number | null;
+  remaining_size_usd?: number | null;
   leverage: number;
   risk_percent: number;
   risk_amount: number;
   risk_reward: number;
   stop_loss: number;
+  current_stop_loss?: number | null;
+  stop_moved_to_breakeven?: boolean;
+  trailing_active?: boolean;
   take_profit: number[];
   fees: number;
+  realized_pnl?: number;
+  unrealized_pnl?: number;
+  exit_fees?: number;
   slippage_bps: number;
   simulation_mode: VirtualSimulationMode;
   execution_status: VirtualExecutionStatus;
@@ -540,6 +667,8 @@ export interface TradeJournalEntry {
   opened_at: string;
   updated_at: string;
   closed_at: string | null;
+  target_states?: VirtualTradeTargetState[];
+  lifecycle_events?: VirtualTradeLifecycleEvent[];
 }
 
 export interface TradeInvalidationAlert {

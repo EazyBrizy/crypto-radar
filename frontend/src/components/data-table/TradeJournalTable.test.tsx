@@ -99,4 +99,50 @@ describe("TradeJournalTable", () => {
     expect(onCloseMarket).toHaveBeenCalledWith(baseTrade);
     expect(onSelectTrade).not.toHaveBeenCalled();
   });
+
+  it("shows virtual lifecycle target and PnL state", () => {
+    const lifecycleTrade: TradeJournalEntry = {
+      ...baseTrade,
+      current_stop_loss: 2_100,
+      remaining_quantity: 0.025,
+      stop_moved_to_breakeven: true,
+      trailing_active: true,
+      realized_pnl: 3.25,
+      unrealized_pnl: 1.75,
+      target_states: [
+        {
+          label: "TP1",
+          price: 2_150,
+          close_percent: 40,
+          action: "partial_close",
+          hit: true,
+          hit_at: "2026-05-28T10:30:00.000Z",
+          closed_quantity: 0.0188,
+          closed_size_usd: 40,
+          realized_pnl: 3.25,
+          exit_fee: 0.05
+        },
+        {
+          label: "TP2",
+          price: 2_200,
+          close_percent: 30,
+          action: "reduce_runner",
+          hit: false,
+          hit_at: null,
+          closed_quantity: 0,
+          closed_size_usd: 0,
+          realized_pnl: 0,
+          exit_fee: 0
+        }
+      ]
+    };
+
+    render(<TradeJournalTable trades={[lifecycleTrade]} />);
+
+    expect(screen.getByText("TP1 hit")).toBeInTheDocument();
+    expect(screen.getByText("BE")).toBeInTheDocument();
+    expect(screen.getByText("Trail")).toBeInTheDocument();
+    expect(screen.getByText(/Remain/u)).toBeInTheDocument();
+    expect(screen.getByText(/R \+\$3\.25 \/ U \+\$1\.75/u)).toBeInTheDocument();
+  });
 });

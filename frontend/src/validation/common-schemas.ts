@@ -19,6 +19,17 @@ export const SignalStatusSchema = z.enum([
 ]);
 export const TradeModeSchema = z.enum(["virtual", "real"]);
 export const TradeStatusSchema = z.enum(["open", "closed", "cancelled"]);
+export const TradeCloseReasonSchema = z.enum([
+  "take_profit",
+  "stop_loss",
+  "manual_close",
+  "invalidation",
+  "cancelled",
+  "partial_take_profit",
+  "breakeven_stop",
+  "trailing_stop",
+  "time_stop"
+]);
 export const VirtualSimulationModeSchema = z.enum(["passive", "impact_aware"]);
 export const VirtualSimulationTierSchema = z.enum(["mvp", "advanced", "pro"]);
 export const VirtualExecutionStatusSchema = z.enum(["filled", "partially_filled", "rejected_virtual_execution"]);
@@ -66,6 +77,69 @@ export const SignalLayerCheckSchema = z.object({
   status: z.enum(["passed", "warning", "failed", "skipped"]).default("passed"),
   score: z.number().nullable().optional(),
   reason: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).default({})
+});
+
+export const TradePlanSchema = z.object({
+  version: z.literal("v1").default("v1"),
+  entry: z.object({
+    price: z.number().nullable().optional(),
+    min_price: z.number().nullable().optional(),
+    max_price: z.number().nullable().optional(),
+    source: z.string().default("legacy_fields"),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  }).default({ source: "legacy_fields", metadata: {} }),
+  stop_loss: z.number().nullable().optional(),
+  targets: z.array(z.object({
+    label: z.string(),
+    price: z.number().nullable().optional(),
+    r_multiple: z.number().nullable().optional(),
+    action: z.string().nullable().optional(),
+    close_percent: z.union([z.number(), z.string()]).nullable().optional(),
+    source: z.string().nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })).default([]),
+  invalidation: z.object({
+    price: z.number().nullable().optional(),
+    hard_stop: z.number().nullable().optional(),
+    conditions: z.array(z.string()).default([]),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  }).nullable().optional(),
+  risk_rules: z.object({
+    risk_reward: z.number().nullable().optional(),
+    first_target_rr: z.number().nullable().optional(),
+    final_target_rr: z.number().nullable().optional(),
+    selected_rr: z.number().nullable().optional(),
+    selected_rr_target: z.string().nullable().optional(),
+    min_rr_ratio: z.number().nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  }).default({ metadata: {} }),
+  metadata: z.record(z.string(), z.unknown()).default({})
+});
+
+export const SignalEdgeSnapshotSchema = z.object({
+  status: z.enum(["unknown", "positive", "negative", "insufficient_sample"]).default("unknown"),
+  sample_size: z.number().default(0),
+  min_sample_size: z.number().default(0),
+  winrate: z.number().nullable().optional(),
+  avg_win_r: z.number().nullable().optional(),
+  avg_loss_r: z.number().nullable().optional(),
+  expectancy_r: z.number().nullable().optional(),
+  expectancy_after_costs_r: z.number().nullable().optional(),
+  profit_factor: z.number().nullable().optional(),
+  confidence_score: z.number().default(0),
+  source: z.enum(["outcome", "backtest", "mixed", "none"]).default("none"),
+  score_bucket: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).default({})
+});
+
+export const NoTradeFilterResultSchema = z.object({
+  enabled: z.boolean().default(true),
+  blocked: z.boolean().default(false),
+  hard_block: z.boolean().default(false),
+  blockers: z.array(z.string()).default([]),
+  warnings: z.array(z.string()).default([]),
+  checks: z.array(SignalLayerCheckSchema).default([]),
   metadata: z.record(z.string(), z.unknown()).default({})
 });
 
@@ -135,6 +209,7 @@ export const RadarSignalSchema = z.object({
     breakeven: z.record(z.string(), z.unknown()).default({}),
     trailing: z.record(z.string(), z.unknown()).default({})
   }).nullable().optional(),
+  trade_plan: TradePlanSchema.nullable().optional(),
   auto_entry: z.object({
     enabled: z.boolean(),
     status: z.enum(["pending", "triggered", "failed", "cancelled"]),
@@ -147,6 +222,8 @@ export const RadarSignalSchema = z.object({
     trade_id: z.string().nullable().optional(),
     real_execution: z.record(z.string(), z.unknown()).nullable().optional()
   }).nullable().optional(),
+  edge: SignalEdgeSnapshotSchema.nullable().optional(),
+  no_trade_filter: NoTradeFilterResultSchema.nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   expires_at: z.string().nullable().optional(),
@@ -238,13 +315,24 @@ export const TradeJournalEntrySchema = z.object({
   exit_price: z.number().nullable().optional(),
   size_usd: z.number(),
   quantity: z.number(),
+  initial_quantity: z.number().nullable().optional(),
+  remaining_quantity: z.number().nullable().optional(),
+  closed_quantity: z.number().default(0),
+  initial_size_usd: z.number().nullable().optional(),
+  remaining_size_usd: z.number().nullable().optional(),
   leverage: z.number(),
   risk_percent: z.number(),
   risk_amount: z.number().default(0),
   risk_reward: z.number().default(3),
   stop_loss: z.number(),
+  current_stop_loss: z.number().nullable().optional(),
+  stop_moved_to_breakeven: z.boolean().default(false),
+  trailing_active: z.boolean().default(false),
   take_profit: z.array(z.number()).default([]),
   fees: z.number().default(0),
+  realized_pnl: z.number().default(0),
+  unrealized_pnl: z.number().default(0),
+  exit_fees: z.number().default(0),
   slippage_bps: z.number().default(0),
   simulation_mode: VirtualSimulationModeSchema.default("passive"),
   execution_status: VirtualExecutionStatusSchema.default("filled"),
@@ -254,7 +342,7 @@ export const TradeJournalEntrySchema = z.object({
   execution: VirtualExecutionReportSchema.nullable().optional(),
   status: TradeStatusSchema,
   result: z.enum(["win", "loss", "breakeven"]).nullable().optional(),
-  close_reason: z.enum(["take_profit", "stop_loss", "manual_close", "invalidation", "cancelled"]).nullable().optional(),
+  close_reason: TradeCloseReasonSchema.nullable().optional(),
   pnl: z.number().nullable().optional(),
   pnl_percent: z.number().nullable().optional(),
   mfe: z.number().default(0),
@@ -263,7 +351,32 @@ export const TradeJournalEntrySchema = z.object({
   ai_review: z.string().nullable().optional(),
   opened_at: z.string(),
   updated_at: z.string(),
-  closed_at: z.string().nullable().optional()
+  closed_at: z.string().nullable().optional(),
+  target_states: z.array(z.object({
+    label: z.string(),
+    price: z.number(),
+    close_percent: z.number().default(0),
+    action: z.string().nullable().optional(),
+    hit: z.boolean().default(false),
+    hit_at: z.string().nullable().optional(),
+    closed_quantity: z.number().default(0),
+    closed_size_usd: z.number().default(0),
+    realized_pnl: z.number().default(0),
+    exit_fee: z.number().default(0)
+  })).default([]),
+  lifecycle_events: z.array(z.object({
+    event_type: z.string(),
+    reason: TradeCloseReasonSchema.nullable().optional(),
+    target_label: z.string().nullable().optional(),
+    price: z.number().nullable().optional(),
+    quantity: z.number().nullable().optional(),
+    size_usd: z.number().nullable().optional(),
+    realized_pnl: z.number().nullable().optional(),
+    exit_fee: z.number().nullable().optional(),
+    stop_loss: z.number().nullable().optional(),
+    created_at: z.string(),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })).default([])
 });
 
 export const TradeInvalidationAlertSchema = z.object({

@@ -23,10 +23,13 @@ import type {
   ImpactRisk,
   LiquidityMetrics,
   MarketDataStatus,
+  NoTradeFilterResult,
   OhlcvCandle,
   RadarConfig,
   RadarSignal,
   RadarStatus,
+  SignalEdgeSnapshot,
+  SignalLayerCheck,
   TradeJournalEntry,
   TradeJournalResponse,
   VirtualAccount,
@@ -43,7 +46,11 @@ import type {
   SignalStatus,
   StopLossPlan,
   TakeProfitPlan,
+  TradeCloseReason,
+  TradePlan,
   TrailingStopPlan,
+  VirtualTradeLifecycleEvent,
+  VirtualTradeTargetState,
   VirtualSimulationMode,
   VirtualSimulationTier,
   VirtualSimulatedPositionPath
@@ -62,6 +69,19 @@ type TradeJournalEntryExtra = TradeJournalEntryDto & Partial<Pick<
   | "filled_size_usd"
   | "unfilled_size_usd"
   | "execution"
+  | "initial_quantity"
+  | "remaining_quantity"
+  | "closed_quantity"
+  | "initial_size_usd"
+  | "remaining_size_usd"
+  | "current_stop_loss"
+  | "stop_moved_to_breakeven"
+  | "trailing_active"
+  | "realized_pnl"
+  | "unrealized_pnl"
+  | "exit_fees"
+  | "target_states"
+  | "lifecycle_events"
 >>;
 
 type VirtualAccountDto = Partial<VirtualAccount>;
@@ -113,13 +133,24 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     confirmation: enriched.confirmation ?? null,
     invalidation: enriched.invalidation ?? null,
     exit_plan: enriched.exit_plan ?? null,
+    trade_plan: normalizeTradePlan(enriched.trade_plan),
     auto_entry: enriched.auto_entry ?? null,
+    edge: normalizeSignalEdge(enriched.edge),
+    no_trade_filter: normalizeNoTradeFilter(enriched.no_trade_filter),
     confirmed_trade_id: signal.confirmed_trade_id ?? null
   };
 }
 
 export function normalizeTrade(trade: TradeJournalEntryDto): TradeJournalEntry {
   const enriched = trade as TradeJournalEntryExtra;
+  const takeProfit = trade.take_profit ?? [];
+  const initialQuantity = enriched.initial_quantity ?? trade.quantity;
+  const remainingQuantity = enriched.remaining_quantity ?? (trade.status === "closed" ? 0 : trade.quantity);
+  const closedQuantity = enriched.closed_quantity ?? Math.max(initialQuantity - remainingQuantity, 0);
+  const initialSizeUsd = enriched.initial_size_usd ?? trade.size_usd;
+  const remainingSizeUsd = enriched.remaining_size_usd ?? (trade.status === "closed" ? 0 : trade.size_usd);
+  const realizedPnl = enriched.realized_pnl ?? (trade.status === "closed" ? trade.pnl ?? 0 : 0);
+  const unrealizedPnl = enriched.unrealized_pnl ?? (trade.status === "open" ? trade.pnl ?? 0 : 0);
   return {
     id: trade.id,
     user_id: trade.user_id,
@@ -135,13 +166,24 @@ export function normalizeTrade(trade: TradeJournalEntryDto): TradeJournalEntry {
     exit_price: trade.exit_price ?? null,
     size_usd: trade.size_usd,
     quantity: trade.quantity,
+    initial_quantity: initialQuantity,
+    remaining_quantity: remainingQuantity,
+    closed_quantity: closedQuantity,
+    initial_size_usd: initialSizeUsd,
+    remaining_size_usd: remainingSizeUsd,
     leverage: trade.leverage,
     risk_percent: trade.risk_percent,
     risk_amount: enriched.risk_amount ?? 0,
     risk_reward: enriched.risk_reward ?? 3,
     stop_loss: trade.stop_loss,
-    take_profit: trade.take_profit ?? [],
+    current_stop_loss: enriched.current_stop_loss ?? trade.stop_loss,
+    stop_moved_to_breakeven: enriched.stop_moved_to_breakeven ?? false,
+    trailing_active: enriched.trailing_active ?? false,
+    take_profit: takeProfit,
     fees: trade.fees,
+    realized_pnl: realizedPnl,
+    unrealized_pnl: unrealizedPnl,
+    exit_fees: enriched.exit_fees ?? 0,
     slippage_bps: enriched.slippage_bps ?? 0,
     simulation_mode: normalizeSimulationMode(enriched.simulation_mode),
     execution_status: normalizeExecutionStatus(enriched.execution_status),
@@ -160,8 +202,154 @@ export function normalizeTrade(trade: TradeJournalEntryDto): TradeJournalEntry {
     ai_review: trade.ai_review ?? null,
     opened_at: trade.opened_at,
     updated_at: trade.updated_at,
-    closed_at: trade.closed_at ?? null
+    closed_at: trade.closed_at ?? null,
+    target_states: normalizeTargetStates(enriched.target_states, takeProfit, trade),
+    lifecycle_events: normalizeLifecycleEvents(enriched.lifecycle_events)
   };
+}
+
+function normalizeTradePlan(value: unknown): TradePlan | null {
+  if (!isRecord(value)) return null;
+  const entry = isRecord(value.entry) ? value.entry : {};
+  const invalidation = isRecord(value.invalidation) ? value.invalidation : null;
+  const riskRules = isRecord(value.risk_rules) ? value.risk_rules : {};
+  return {
+    version: "v1",
+    entry: {
+      price: optionalNumber(entry.price),
+      min_price: optionalNumber(entry.min_price),
+      max_price: optionalNumber(entry.max_price),
+      source: String(entry.source ?? "legacy_fields"),
+      metadata: normalizeMetadata(entry.metadata)
+    },
+    stop_loss: optionalNumber(value.stop_loss),
+    targets: Array.isArray(value.targets)
+      ? value.targets.filter(isRecord).map((target) => ({
+          label: String(target.label ?? "TP"),
+          price: optionalNumber(target.price),
+          r_multiple: optionalNumber(target.r_multiple),
+          action: optionalString(target.action),
+          close_percent: normalizeClosePercent(target.close_percent),
+          source: optionalString(target.source),
+          metadata: normalizeMetadata(target.metadata)
+        }))
+      : [],
+    invalidation: invalidation
+      ? {
+          price: optionalNumber(invalidation.price),
+          hard_stop: optionalNumber(invalidation.hard_stop),
+          conditions: Array.isArray(invalidation.conditions) ? invalidation.conditions.map(String) : [],
+          metadata: normalizeMetadata(invalidation.metadata)
+        }
+      : null,
+    risk_rules: {
+      risk_reward: optionalNumber(riskRules.risk_reward),
+      first_target_rr: optionalNumber(riskRules.first_target_rr),
+      final_target_rr: optionalNumber(riskRules.final_target_rr),
+      selected_rr: optionalNumber(riskRules.selected_rr),
+      selected_rr_target: optionalString(riskRules.selected_rr_target),
+      min_rr_ratio: optionalNumber(riskRules.min_rr_ratio),
+      metadata: normalizeMetadata(riskRules.metadata)
+    },
+    metadata: normalizeMetadata(value.metadata)
+  };
+}
+
+function normalizeSignalEdge(value: unknown): SignalEdgeSnapshot | null {
+  if (!isRecord(value)) return null;
+  return {
+    status: normalizeEdgeStatus(value.status),
+    sample_size: Number(value.sample_size ?? 0),
+    min_sample_size: Number(value.min_sample_size ?? 0),
+    winrate: optionalNumber(value.winrate),
+    avg_win_r: optionalNumber(value.avg_win_r),
+    avg_loss_r: optionalNumber(value.avg_loss_r),
+    expectancy_r: optionalNumber(value.expectancy_r),
+    expectancy_after_costs_r: optionalNumber(value.expectancy_after_costs_r),
+    profit_factor: optionalNumber(value.profit_factor),
+    confidence_score: Number(value.confidence_score ?? 0),
+    source: normalizeEdgeSource(value.source),
+    score_bucket: optionalString(value.score_bucket),
+    metadata: normalizeMetadata(value.metadata)
+  };
+}
+
+function normalizeNoTradeFilter(value: unknown): NoTradeFilterResult | null {
+  if (!isRecord(value)) return null;
+  return {
+    enabled: Boolean(value.enabled ?? true),
+    blocked: Boolean(value.blocked ?? false),
+    hard_block: Boolean(value.hard_block ?? false),
+    blockers: Array.isArray(value.blockers) ? value.blockers.map(String) : [],
+    warnings: Array.isArray(value.warnings) ? value.warnings.map(String) : [],
+    checks: normalizeLayerChecks(value.checks),
+    metadata: normalizeMetadata(value.metadata)
+  };
+}
+
+function normalizeLayerChecks(value: unknown): SignalLayerCheck[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((check) => ({
+    name: String(check.name ?? "check"),
+    status: check.status === "warning" || check.status === "failed" || check.status === "skipped" ? check.status : "passed",
+    score: optionalNumber(check.score),
+    reason: optionalString(check.reason),
+    metadata: normalizeMetadata(check.metadata)
+  }));
+}
+
+function normalizeTargetStates(
+  value: unknown,
+  takeProfit: number[],
+  trade: TradeJournalEntryDto
+): VirtualTradeTargetState[] {
+  if (Array.isArray(value) && value.length) {
+    return value.filter(isRecord).map((target) => ({
+      label: String(target.label ?? "TP"),
+      price: Number(target.price ?? 0),
+      close_percent: Number(target.close_percent ?? 0),
+      action: optionalString(target.action),
+      hit: Boolean(target.hit ?? false),
+      hit_at: optionalString(target.hit_at),
+      closed_quantity: Number(target.closed_quantity ?? 0),
+      closed_size_usd: Number(target.closed_size_usd ?? 0),
+      realized_pnl: Number(target.realized_pnl ?? 0),
+      exit_fee: Number(target.exit_fee ?? 0)
+    }));
+  }
+  if (!takeProfit.length) return [];
+  const finalPrice = takeProfit[takeProfit.length - 1];
+  return [
+    {
+      label: "Final",
+      price: finalPrice,
+      close_percent: 100,
+      action: "full_close",
+      hit: trade.status === "closed" && trade.close_reason === "take_profit",
+      hit_at: trade.status === "closed" && trade.close_reason === "take_profit" ? trade.closed_at ?? null : null,
+      closed_quantity: trade.status === "closed" ? trade.quantity : 0,
+      closed_size_usd: trade.status === "closed" ? trade.size_usd : 0,
+      realized_pnl: trade.status === "closed" ? trade.pnl ?? 0 : 0,
+      exit_fee: 0
+    }
+  ];
+}
+
+function normalizeLifecycleEvents(value: unknown): VirtualTradeLifecycleEvent[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((event) => ({
+    event_type: String(event.event_type ?? "event"),
+    reason: normalizeTradeCloseReason(event.reason),
+    target_label: optionalString(event.target_label),
+    price: optionalNumber(event.price),
+    quantity: optionalNumber(event.quantity),
+    size_usd: optionalNumber(event.size_usd),
+    realized_pnl: optionalNumber(event.realized_pnl),
+    exit_fee: optionalNumber(event.exit_fee),
+    stop_loss: optionalNumber(event.stop_loss),
+    created_at: String(event.created_at ?? new Date().toISOString()),
+    metadata: normalizeMetadata(event.metadata)
+  }));
 }
 
 export function normalizeExecutionReport(value: unknown): VirtualExecutionReport | null {
@@ -501,7 +689,11 @@ function normalizeTakeProfitPlan(value: unknown): TakeProfitPlan | null {
           close_percent: Number(target.close_percent ?? 0),
           action: normalizeTakeProfitAction(target.action)
         }))
-      : []
+      : [],
+    source: String(value.source ?? "risk_settings"),
+    selected_rr: value.selected_rr == null ? null : Number(value.selected_rr),
+    selected_rr_target: value.selected_rr_target == null ? null : String(value.selected_rr_target),
+    notes: Array.isArray(value.notes) ? value.notes.map(String) : []
   };
 }
 
@@ -1146,6 +1338,54 @@ export function normalizeExchangeFeeRate(value: unknown): ExchangeFeeRate {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeMetadata(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? { ...value } : {};
+}
+
+function optionalNumber(value: unknown): number | null {
+  if (value == null) return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+function normalizeClosePercent(value: unknown): number | string | null {
+  if (value == null) return null;
+  if (typeof value === "string") return value;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function normalizeEdgeStatus(value: unknown): SignalEdgeSnapshot["status"] {
+  if (value === "positive" || value === "negative" || value === "insufficient_sample") return value;
+  return "unknown";
+}
+
+function normalizeEdgeSource(value: unknown): SignalEdgeSnapshot["source"] {
+  if (value === "outcome" || value === "backtest" || value === "mixed") return value;
+  return "none";
+}
+
+function normalizeTradeCloseReason(value: unknown): TradeCloseReason | null {
+  if (
+    value === "take_profit" ||
+    value === "stop_loss" ||
+    value === "manual_close" ||
+    value === "invalidation" ||
+    value === "cancelled" ||
+    value === "partial_take_profit" ||
+    value === "breakeven_stop" ||
+    value === "trailing_stop" ||
+    value === "time_stop"
+  ) {
+    return value;
+  }
+  return null;
 }
 
 function normalizeSubscriptionTier(value: unknown): SubscriptionTier {

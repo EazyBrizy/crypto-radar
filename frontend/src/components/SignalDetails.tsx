@@ -5,8 +5,8 @@ import { useState } from "react";
 import { BarChart3, CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert, XCircle } from "lucide-react";
 
 import { Badge } from "./Badge";
-import type { ExecutionGateStatus, ImpactRisk, RadarSignal, VirtualExecutionReport } from "../types";
-import { entryZone, formatPrice, riskLabel } from "../utils";
+import type { ExecutionGateStatus, ImpactRisk, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
+import { entryZone, formatPrice, isRiskRewardBlocked, riskLabel, riskRewardBlockReason, signalTradePlanSummary } from "../utils";
 
 const LazySignalDetailsChart = dynamic(
   () => import("@/components/charts/SignalDetailsChart").then((module) => module.SignalDetailsChart),
@@ -58,8 +58,9 @@ export function SignalDetails({
   const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || strategyRiskFailed || (!statusAllowsTrade && !canArmAutoEntry) || (statusAllowsTrade && riskFailed);
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const breakdown = signal.score_breakdown;
-  const tradePlanComplete = (signal.entry_min != null || signal.entry_max != null) && signal.stop_loss != null && (signal.take_profit_1 != null || signal.take_profit_2 != null);
-  const riskRewardOk = !strategyRiskFailed && (signal.selected_rr != null || signal.risk_reward != null);
+  const tradePlan = signalTradePlanSummary(signal);
+  const tradePlanComplete = tradePlan.entryPrice != null && tradePlan.stopLoss != null && tradePlan.targets.length > 0;
+  const riskRewardOk = !strategyRiskFailed && (tradePlan.selectedRr != null || signal.risk_reward != null);
   const reasons = signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."];
 
   return (
@@ -88,13 +89,16 @@ export function SignalDetails({
       <AutoEntryBlock signal={signal} />
 
       <div className="trade-setup">
-        <div><span>Entry Zone</span><strong>{entryZone(signal)}</strong></div>
-        <div><span>Stop Loss</span><strong>{formatPrice(signal.stop_loss)}</strong></div>
-        <div><span>Take Profit</span><strong>{formatPrice(signal.take_profit_1)} / {formatPrice(signal.take_profit_2)}</strong></div>
-        <div><span>Risk / Reward</span><strong>1 : {signal.risk_reward?.toFixed(2) ?? "-"}</strong></div>
+        <div><span>Entry</span><strong>{tradePlan.entryType} | {tradePlan.entryZone}</strong></div>
+        <div><span>Stop Loss</span><strong>{formatPrice(tradePlan.stopLoss)}</strong></div>
+        <div><span>Take Profit</span><strong>{formatTargetsInline(tradePlan.targets)}</strong></div>
+        <div><span>Selected RR</span><strong>{formatRMultiple(tradePlan.selectedRr)}</strong></div>
       </div>
 
+      <TradePlanDetailBlock signal={signal} />
       <RiskRewardDetailBlock signal={signal} />
+      <EdgeSnapshotBlock signal={signal} />
+      <RiskBlockersDetailBlock signal={signal} execution={executionPreview} />
 
       <ExecutionQualityBlock
         signal={signal}
@@ -103,7 +107,7 @@ export function SignalDetails({
         loading={executionPreviewLoading}
       />
 
-      <StrategyLayersBlock signal={signal} />
+      <StrategyLayersBlock signal={signal} execution={executionPreview} />
 
       <div className="detail-actions">
         <button className="secondary-action" onClick={() => setChartOpen((open) => !open)} type="button">
@@ -437,33 +441,167 @@ function formatRrTarget(value: string | null): string {
   return value.replaceAll("_", " ");
 }
 
-function StrategyLayersBlock({ signal }: { signal: RadarSignal }) {
+function TradePlanDetailBlock({ signal }: { signal: RadarSignal }) {
+  const plan = signalTradePlanSummary(signal);
+  const invalidation = signal.trade_plan?.invalidation ?? null;
+  return (
+    <div className="risk-reward-detail-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Trade Plan</h3>
+        <Badge tone={plan.hasTradePlan ? "blue" : "neutral"}>{plan.hasTradePlan ? "trade_plan" : "legacy fallback"}</Badge>
+      </div>
+      <p>{plan.hasTradePlan ? "Backend trade_plan is active for entry, stop, targets and selected RR." : "Old signal contract is displayed through legacy entry, SL and TP fields."}</p>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Entry type" value={plan.entryType} />
+        <MetricLine label="Entry zone" value={plan.entryZone} />
+        <MetricLine label="Entry price" value={formatPrice(plan.entryPrice)} />
+        <MetricLine label="Stop loss" value={formatPrice(plan.stopLoss)} />
+        <MetricLine label="Selected RR" value={formatRMultiple(plan.selectedRr)} />
+        <MetricLine label="RR target" value={formatRrTarget(plan.selectedRrTarget)} />
+        <MetricLine label="Minimum RR" value={formatRMultiple(plan.minRr)} />
+        <MetricLine label="Invalidation" value={formatPrice(invalidation?.hard_stop ?? invalidation?.price ?? signal.invalidation?.hard_stop ?? signal.invalidation?.price)} />
+      </div>
+      {plan.targets.length ? (
+        <div className="target-state-list">
+          {plan.targets.map((target, index) => (
+            <span key={`${target.label}:${target.price ?? index}`}>
+              <strong>{target.label}</strong> {formatPrice(target.price)}
+              {target.rMultiple == null ? "" : ` | ${formatRMultiple(target.rMultiple)}`}
+              {target.closePercent == null ? "" : ` | ${target.closePercent}%`}
+              {target.action ? ` | ${formatLayerCheckName(target.action)}` : ""}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {invalidation?.conditions.length ? (
+        <div className="invalidation-list">
+          {invalidation.conditions.slice(0, 4).map((condition) => (
+            <span key={condition}>{condition}</span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EdgeSnapshotBlock({ signal }: { signal: RadarSignal }) {
+  const edge = signal.edge ?? null;
+  const badge = edgeStatusBadge(edge?.status ?? "unknown");
+  return (
+    <div className="risk-reward-detail-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Edge Snapshot</h3>
+        <Badge tone={badge.tone}>{badge.label}</Badge>
+      </div>
+      <p>{edge ? "Historical/forward outcome calibration used by real-entry risk gating." : "Edge was not evaluated for this signal yet."}</p>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Sample" value={edge ? `${edge.sample_size}/${edge.min_sample_size}` : "unknown"} />
+        <MetricLine label="Winrate" value={formatRatioPercent(edge?.winrate ?? null)} />
+        <MetricLine label="Avg win" value={formatRMultiple(edge?.avg_win_r ?? null)} />
+        <MetricLine label="Avg loss" value={formatRMultiple(edge?.avg_loss_r ?? null)} />
+        <MetricLine label="Expectancy" value={formatRMultiple(edge?.expectancy_r ?? null)} />
+        <MetricLine label="After costs" value={formatRMultiple(edge?.expectancy_after_costs_r ?? null)} />
+        <MetricLine label="Profit factor" value={edge?.profit_factor == null ? "-" : edge.profit_factor.toFixed(2)} />
+        <MetricLine label="Confidence" value={edge ? `${Math.round(edge.confidence_score * 100)}%` : "-"} />
+        <MetricLine label="Source" value={edge?.source ?? "none"} />
+        <MetricLine label="Score bucket" value={edge?.score_bucket ?? "-"} />
+      </div>
+    </div>
+  );
+}
+
+function RiskBlockersDetailBlock({
+  signal,
+  execution
+}: {
+  signal: RadarSignal;
+  execution: VirtualExecutionReport | null;
+}) {
+  const rrReason = riskRewardBlockReason(signal);
+  const noTrade = signal.no_trade_filter ?? null;
+  const riskDecision = execution?.risk_decision ?? null;
+  const riskCheck = execution?.risk_check ?? null;
+  const blockers = dedupe([
+    ...(rrReason ? [rrReason] : []),
+    ...(noTrade?.blockers ?? []),
+    ...(riskDecision?.blockers ?? riskCheck?.blockers ?? [])
+  ]);
+  const warnings = dedupe([
+    ...(noTrade?.warnings ?? []),
+    ...(riskDecision?.warnings ?? riskCheck?.warnings ?? [])
+  ]);
+  if (!blockers.length && !warnings.length) return null;
+  return (
+    <div className="risk-block">
+      <h3>Risk blockers / warnings</h3>
+      {blockers.length ? (
+        <ul className="risk-blocker-list">
+          {blockers.map((blocker) => (
+            <li key={blocker}>{blocker}</li>
+          ))}
+        </ul>
+      ) : null}
+      {warnings.map((warning) => (
+        <p key={warning}>{warning}</p>
+      ))}
+    </div>
+  );
+}
+
+function StrategyLayersBlock({ signal, execution }: { signal: RadarSignal; execution: VirtualExecutionReport | null }) {
+  const plan = signalTradePlanSummary(signal);
+  const riskGate = execution?.risk_decision?.status ?? execution?.risk_check?.status ?? "-";
   const regimeChecks = signal.regime?.checks.filter((check) => check.status !== "passed").slice(0, 4) ?? [];
   const layers = [
     {
-      label: "Market quality",
+      label: "quality",
       value: signal.quality ? `${signal.quality.tier.replace("_", " ")} / ${signal.quality.score}` : "-"
     },
     {
-      label: "Market regime",
+      label: "regime",
       value: signal.regime ? `${signal.regime.direction} / ${signal.regime.alignment}` : "-"
     },
     {
-      label: "Strategy setup",
+      label: "setup",
       value: signal.setup ? signal.setup.stage : "-"
     },
     {
-      label: "Confirmation",
+      label: "risk_reward",
+      value: `${isRiskRewardBlocked(signal) ? "blocked" : "selected"} ${formatRMultiple(plan.selectedRr)}`
+    },
+    {
+      label: "confirmation",
       value: signal.confirmation ? (signal.confirmation.passed ? "passed" : "pending") : "-"
     },
     {
-      label: "Invalidation",
+      label: "invalidation",
       value: signal.invalidation?.price == null ? "-" : formatPrice(signal.invalidation.price)
     },
     {
-      label: "Exit management",
+      label: "exit_plan",
       value: signal.exit_plan?.targets.length ? `${signal.exit_plan.targets.length} targets` : "-"
+    },
+    {
+      label: "trade_plan",
+      value: plan.hasTradePlan ? `${plan.targets.length} targets` : "legacy fallback"
+    },
+    {
+      label: "edge",
+      value: signal.edge ? `${signal.edge.status} / ${signal.edge.sample_size}` : "unknown"
+    },
+    {
+      label: "risk_gate",
+      value: riskGate
     }
+  ];
+  const checkGroups = [
+    { label: "quality", checks: signal.quality?.checks ?? [] },
+    { label: "regime", checks: signal.regime?.checks ?? [] },
+    { label: "setup", checks: signal.setup?.checks ?? [] },
+    { label: "confirmation", checks: signal.confirmation?.checks ?? [] },
+    { label: "no_trade", checks: signal.no_trade_filter?.checks ?? [] }
   ];
 
   return (
@@ -496,12 +634,51 @@ function StrategyLayersBlock({ signal }: { signal: RadarSignal }) {
           ))}
         </div>
       ) : null}
+      <div className="layer-check-groups">
+        {checkGroups.filter((group) => group.checks.length).map((group) => (
+          <div className="layer-check-group" key={group.label}>
+            <strong>{group.label}</strong>
+            {group.checks.slice(0, 5).map((check) => (
+              <span className={`layer-check-${check.status}`} key={`${group.label}:${check.name}:${check.reason ?? ""}`}>
+                {formatLayerCheckName(check.name)}: {formatLayerCheckReason(check)}
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
 function formatLayerCheckName(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function formatLayerCheckReason(check: SignalLayerCheck): string {
+  if (check.reason) return check.reason;
+  if (check.score != null) return `${check.status} (${check.score})`;
+  return check.status;
+}
+
+function formatTargetsInline(targets: ReturnType<typeof signalTradePlanSummary>["targets"]): string {
+  if (!targets.length) return "-";
+  return targets.slice(0, 3).map((target) => `${target.label} ${formatPrice(target.price)}`).join(" / ");
+}
+
+function formatRatioPercent(value: number | null): string {
+  if (value == null) return "-";
+  return `${Math.round(value * 100)}%`;
+}
+
+function edgeStatusBadge(status: SignalEdgeStatus): { label: string; tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral" } {
+  if (status === "positive") return { label: "positive edge", tone: "green" };
+  if (status === "negative") return { label: "negative edge", tone: "red" };
+  if (status === "insufficient_sample") return { label: "insufficient sample", tone: "yellow" };
+  return { label: "unknown edge", tone: "neutral" };
+}
+
+function dedupe(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function ExecutionQualityBlock({

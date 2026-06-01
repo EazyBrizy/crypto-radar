@@ -19,7 +19,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "openapi:export": "node scripts/export-openapi.mjs",
-    "openapi:types": "openapi-typescript src/api/generated/openapi.json -o src/generated/openapi-types.ts",
+    "openapi:types": "openapi-typescript src/api/generated/openapi.json -o src/api/generated/openapi-types.ts",
     "openapi:generate": "corepack pnpm openapi:export && corepack pnpm openapi:types"
   },
   "dependencies": {

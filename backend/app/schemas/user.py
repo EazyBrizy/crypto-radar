@@ -19,6 +19,19 @@ VirtualSimulationLevel = Literal["mvp", "advanced", "pro"]
 RiskProfileName = Literal["conservative", "balanced", "aggressive", "custom"]
 
 
+DEFAULT_STRATEGY_RISK_MULTIPLIERS: dict[str, float] = {
+    "trend_pullback_continuation": 1.0,
+    "volatility_squeeze_breakout": 0.75,
+    "liquidity_sweep_reversal": 1.0,
+    "trend_following": 1.0,
+    "breakout": 0.75,
+    "smart_money_setup": 1.0,
+    "scalping": 0.5,
+    "mean_reversion": 0.75,
+    "news_event_trade": 0.25,
+}
+
+
 class RiskManagementSettings(BaseModel):
     risk_profile: RiskProfileName = "balanced"
     risk_per_trade_percent: float = Field(default=1.0, gt=0, le=10)
@@ -71,15 +84,7 @@ class RiskManagementSettings(BaseModel):
     virtual_fee_model: VirtualFeeModel = "exchange_based"
     virtual_trading_uses_realistic_execution: bool = True
     strategy_risk_multipliers: dict[str, float] = Field(
-        default_factory=lambda: {
-            "trend_following": 1.0,
-            "trend_pullback_continuation": 1.0,
-            "breakout": 0.75,
-            "scalping": 0.5,
-            "mean_reversion": 0.75,
-            "smart_money_setup": 1.0,
-            "news_event_trade": 0.25,
-        }
+        default_factory=lambda: dict(DEFAULT_STRATEGY_RISK_MULTIPLIERS)
     )
     auto_reduce_risk_after_losses: bool = True
     allow_risk_increase_after_profit: bool = False

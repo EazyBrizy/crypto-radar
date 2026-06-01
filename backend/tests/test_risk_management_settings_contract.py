@@ -65,7 +65,12 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(settings["virtual_starting_balance"], 10_000.0)
         self.assertEqual(settings["virtual_slippage_model"], "spread_based")
         self.assertEqual(settings["virtual_fee_model"], "exchange_based")
+        self.assertEqual(settings["strategy_risk_multipliers"]["trend_pullback_continuation"], 1.0)
+        self.assertEqual(settings["strategy_risk_multipliers"]["volatility_squeeze_breakout"], 0.75)
+        self.assertEqual(settings["strategy_risk_multipliers"]["liquidity_sweep_reversal"], 1.0)
+        self.assertEqual(settings["strategy_risk_multipliers"]["trend_following"], 1.0)
         self.assertEqual(settings["strategy_risk_multipliers"]["breakout"], 0.75)
+        self.assertEqual(settings["strategy_risk_multipliers"]["smart_money_setup"], 1.0)
 
     def test_preset_patch_replaces_custom_values(self) -> None:
         settings = apply_risk_management_patch(
@@ -335,6 +340,50 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertAlmostEqual(plan.adjusted_risk_percent, 0.375)
         self.assertAlmostEqual(plan.adjusted_risk_amount, 37.5)
 
+    def test_trade_risk_adjustment_uses_real_strategy_multiplier(self) -> None:
+        plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=normalize_risk_management_settings({}, "balanced"),
+            instrument_type="spot",
+            strategy="volatility_squeeze_breakout",
+            signal_score=90,
+        )
+
+        self.assertEqual(plan.strategy_risk_multiplier, 0.75)
+        self.assertAlmostEqual(plan.adjusted_risk_percent, 0.75)
+
+    def test_trade_risk_adjustment_preserves_legacy_breakout_alias(self) -> None:
+        plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=normalize_risk_management_settings({}, "balanced"),
+            instrument_type="spot",
+            strategy="breakout",
+            signal_score=90,
+        )
+
+        self.assertEqual(plan.strategy_risk_multiplier, 0.75)
+        self.assertAlmostEqual(plan.adjusted_risk_percent, 0.75)
+
+    def test_trade_risk_adjustment_falls_back_to_legacy_breakout_alias(self) -> None:
+        settings = normalize_risk_management_settings(
+            {
+                "risk_profile": "custom",
+                "strategy_risk_multipliers": {"breakout": 0.6},
+            },
+            "custom",
+        )
+
+        plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=settings,
+            instrument_type="spot",
+            strategy="volatility_squeeze_breakout",
+            signal_score=90,
+        )
+
+        self.assertEqual(plan.strategy_risk_multiplier, 0.6)
+        self.assertAlmostEqual(plan.adjusted_risk_percent, 0.6)
+
     def test_position_sizing_can_use_adjusted_risk_percent(self) -> None:
         sizing = calculate_position_sizing(
             account_equity=10_000,
@@ -475,6 +524,161 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(result.account_drawdown_percent, 37.19)
         self.assertEqual(result.max_account_drawdown_percent, 15)
         self.assertIn("Risk protection mode blocks entries after account drawdown.", result.blockers)
+
+    def test_risk_check_blocks_real_virtual_only_signal_score(self) -> None:
+        settings = normalize_risk_management_settings({}, "balanced")
+        risk_plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=settings,
+            instrument_type="spot",
+            strategy="trend_pullback_continuation",
+            signal_score=65,
+        )
+        sizing = calculate_position_sizing(
+            account_equity=10_000,
+            risk_settings=settings,
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            risk_per_trade_percent=risk_plan.adjusted_risk_percent,
+        )
+        tp_plan = calculate_take_profit_plan(
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            risk_settings=settings,
+        )
+
+        result = calculate_risk_check_result(
+            risk_settings=settings,
+            risk_adjustment=risk_plan,
+            position_sizing=sizing,
+            take_profit_plan=tp_plan,
+            execution_mode="real",
+            best_bid=99.95,
+            best_ask=100.05,
+            orderbook_depth_usd=100_000,
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertIn("Signal score is virtual-only; real execution is blocked.", result.blockers)
+
+    def test_risk_check_does_not_hard_block_virtual_only_signal_score_for_virtual(self) -> None:
+        settings = normalize_risk_management_settings({}, "balanced")
+        risk_plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=settings,
+            instrument_type="spot",
+            strategy="trend_pullback_continuation",
+            signal_score=65,
+        )
+        sizing = calculate_position_sizing(
+            account_equity=10_000,
+            risk_settings=settings,
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            risk_per_trade_percent=risk_plan.adjusted_risk_percent,
+        )
+        tp_plan = calculate_take_profit_plan(
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            risk_settings=settings,
+        )
+
+        result = calculate_risk_check_result(
+            risk_settings=settings,
+            risk_adjustment=risk_plan,
+            position_sizing=sizing,
+            take_profit_plan=tp_plan,
+            execution_mode="virtual",
+        )
+
+        self.assertNotEqual(result.status, "failed")
+        self.assertNotIn("Signal score is virtual-only; real execution is blocked.", result.blockers)
+
+    def test_risk_check_applies_spot_max_position_percent(self) -> None:
+        settings = normalize_risk_management_settings({}, "balanced")
+        risk_plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=settings,
+            instrument_type="spot",
+            strategy="trend_pullback_continuation",
+            signal_score=90,
+        )
+        sizing = calculate_position_sizing(
+            account_equity=10_000,
+            risk_settings=settings,
+            entry_price=100,
+            stop_loss_price=99,
+            side="long",
+            risk_per_trade_percent=risk_plan.adjusted_risk_percent,
+        )
+        tp_plan = calculate_take_profit_plan(
+            entry_price=100,
+            stop_loss_price=99,
+            side="long",
+            risk_settings=settings,
+        )
+
+        result = calculate_risk_check_result(
+            risk_settings=settings,
+            risk_adjustment=risk_plan,
+            position_sizing=sizing,
+            take_profit_plan=tp_plan,
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertIn("Spot position size exceeds the configured maximum.", result.blockers)
+
+    def test_risk_check_blocks_real_futures_unknown_liquidation_when_required(self) -> None:
+        settings = normalize_risk_management_settings({}, "balanced")
+        risk_plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=settings,
+            instrument_type="futures",
+            strategy="trend_pullback_continuation",
+            signal_score=90,
+        )
+        sizing = calculate_position_sizing(
+            account_equity=10_000,
+            risk_settings=settings,
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            leverage=2,
+            risk_per_trade_percent=risk_plan.adjusted_risk_percent,
+        )
+        tp_plan = calculate_take_profit_plan(
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            risk_settings=settings,
+        )
+        futures_plan = calculate_futures_risk_plan(
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            leverage=2,
+            liquidation_price=None,
+            risk_settings=settings,
+        )
+
+        result = calculate_risk_check_result(
+            risk_settings=settings,
+            risk_adjustment=risk_plan,
+            position_sizing=sizing,
+            take_profit_plan=tp_plan,
+            futures_risk_plan=futures_plan,
+            execution_mode="real",
+            best_bid=99.95,
+            best_ask=100.05,
+            orderbook_depth_usd=100_000,
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertIn("Liquidation price is unavailable; exact futures liquidation risk is not checked.", result.blockers)
 
     def test_position_sizing_includes_fee_and_slippage_buffers(self) -> None:
         sizing = calculate_position_sizing(

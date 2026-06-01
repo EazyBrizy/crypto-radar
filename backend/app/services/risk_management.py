@@ -194,6 +194,13 @@ _RISK_CUSTOM_FIELDS = {
     "max_risk_boost",
 }
 
+_STRATEGY_RISK_ALIAS_FALLBACKS: dict[str, str] = {
+    "trend_pullback": "trend_following",
+    "trend_pullback_continuation": "trend_following",
+    "volatility_squeeze_breakout": "breakout",
+    "liquidity_sweep_reversal": "smart_money_setup",
+}
+
 
 def normalize_risk_profile(value: Any) -> RiskProfileName:
     if value in RISK_PROFILE_PRESETS:
@@ -270,8 +277,9 @@ def calculate_trade_risk_adjustment(
         raise ValueError("risk multipliers must be greater than or equal to zero")
 
     base_risk_percent = _base_risk_percent(settings, instrument_type)
+    normalized_strategy_key = _normalize_strategy_key(strategy)
     strategy_key = _strategy_key(strategy)
-    strategy_multiplier = settings.strategy_risk_multipliers.get(strategy_key, 1.0)
+    strategy_multiplier = _strategy_risk_multiplier(settings, normalized_strategy_key)
     signal_multiplier, signal_trade_allowed, signal_virtual_only = _signal_score_multiplier(signal_score)
     warnings: list[str] = []
     if not signal_trade_allowed:
@@ -372,6 +380,8 @@ def calculate_risk_check_result(
 
     if not risk_adjustment.signal_trade_allowed:
         blockers.append("Signal score is below the minimum tradable threshold.")
+    elif risk_adjustment.signal_virtual_only and execution_mode == "real":
+        blockers.append("Signal score is virtual-only; real execution is blocked.")
 
     rr = None
     if take_profit_plan is not None and take_profit_plan.targets:
@@ -427,6 +437,13 @@ def calculate_risk_check_result(
     risk_tolerance = max(0.000001, risk_adjustment.adjusted_risk_amount * 0.02)
     if effective_risk_amount > risk_adjustment.adjusted_risk_amount + risk_tolerance:
         blockers.append("Risk per trade exceeds the adjusted risk limit.")
+    if (
+        risk_adjustment.instrument_type == "spot"
+        and _limit_enabled(settings.spot_max_position_size_percent)
+        and position_sizing.notional / risk_adjustment.account_equity * 100
+        > settings.spot_max_position_size_percent
+    ):
+        blockers.append("Spot position size exceeds the configured maximum.")
 
     orderbook_can_fill = None
     orderbook_liquidity_ratio = None
@@ -482,7 +499,14 @@ def calculate_risk_check_result(
         if futures_risk_plan.status == "blocked":
             blockers.append(futures_risk_plan.message)
         elif futures_risk_plan.status == "unknown":
-            warnings.append(futures_risk_plan.message)
+            if (
+                execution_mode == "real"
+                and risk_adjustment.instrument_type == "futures"
+                and _futures_liquidation_buffer_required(settings)
+            ):
+                blockers.append(futures_risk_plan.message)
+            else:
+                warnings.append(futures_risk_plan.message)
 
     return RiskCheckResult(
         status="failed" if blockers else ("warning" if warnings else "passed"),
@@ -1050,11 +1074,45 @@ def _base_risk_percent(settings: RiskManagementSettings, instrument_type: TradeI
     return settings.risk_per_trade_percent
 
 
+def _strategy_risk_multiplier(settings: RiskManagementSettings, strategy_key: str) -> float:
+    exact_multiplier = _multiplier_for_key(settings.strategy_risk_multipliers, strategy_key)
+    if exact_multiplier is not None:
+        return exact_multiplier
+
+    alias_key = _STRATEGY_RISK_ALIAS_FALLBACKS.get(strategy_key)
+    if alias_key is None:
+        return 1.0
+    alias_multiplier = _multiplier_for_key(settings.strategy_risk_multipliers, alias_key)
+    return 1.0 if alias_multiplier is None else alias_multiplier
+
+
+def _multiplier_for_key(multipliers: Mapping[str, float], strategy_key: str) -> float | None:
+    if strategy_key in multipliers:
+        return multipliers[strategy_key]
+    for raw_key, multiplier in multipliers.items():
+        if _normalize_strategy_key(raw_key) == strategy_key:
+            return multiplier
+    return None
+
+
 def _strategy_key(strategy: str) -> str:
+    value = _normalize_strategy_key(strategy)
+    if value == "trend_pullback":
+        return "trend_following"
+    return value
+
+
+def _normalize_strategy_key(strategy: str) -> str:
     value = strategy.strip().lower().replace("-", "_").replace(" ", "_")
-    if value in {"trend_following", "trend_pullback", "trend_pullback_continuation"}:
-        return "trend_following" if value != "trend_pullback_continuation" else value
     return value or "unknown"
+
+
+def _futures_liquidation_buffer_required(settings: RiskManagementSettings) -> bool:
+    return (
+        settings.liquidation_buffer_required
+        and settings.futures_liquidation_buffer_required
+        and _limit_enabled(settings.min_liquidation_buffer_percent)
+    )
 
 
 def _signal_score_multiplier(signal_score: float) -> tuple[float, bool, bool]:

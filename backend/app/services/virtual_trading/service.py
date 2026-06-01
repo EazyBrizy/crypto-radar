@@ -43,6 +43,7 @@ from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.risk_management import get_user_risk_management_settings
 from app.services.risk_market_data import RiskMarketDataService, RiskMarketDataSnapshot, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
+from app.services.signal_risk_reward import ensure_strategy_rr_eligible
 from app.services.signal_service import ClickHouseSignalAnalyticsWriter, RedisSignalHotStore
 from app.services.trade_repository import (
     PostgresVirtualTradeRepository,
@@ -281,6 +282,8 @@ class VirtualTradingService:
     ) -> tuple[RadarSignal, VirtualTrade]:
         confirm_with_trade = getattr(self._repository, "confirm_signal_with_trade", None)
         existing = self.get_virtual_trade_by_signal(signal.id)
+        if existing is None or signal.status != "confirmed":
+            ensure_strategy_rr_eligible(signal)
         if existing is not None and confirm_with_trade is not None and signal.status != "confirmed":
             result: VirtualTradeConfirmationResult = confirm_with_trade(signal.id, request, existing)
             self._trade_by_signal[signal.id] = result.trade.id
@@ -328,6 +331,7 @@ class VirtualTradingService:
         existing = self.get_virtual_trade_by_signal(signal.id)
         if existing is not None:
             return existing
+        ensure_strategy_rr_eligible(signal)
         trade = self._build_virtual_trade(signal, request)
         persisted_trade = self._repository.save_virtual_trade(trade)
         self._trade_by_signal[signal.id] = persisted_trade.id

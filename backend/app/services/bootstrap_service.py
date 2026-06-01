@@ -16,6 +16,7 @@ from app.models.risk import AssetRiskGroup
 from app.models.strategy import StrategyTemplate, StrategyVersion
 from app.models.user import AppUser, SubscriptionPlan, UserProfile, UserSubscription
 from app.models.watchlist import UserWatchlist, UserWatchlistPair
+from app.schemas.user import DEFAULT_STRATEGY_RISK_MULTIPLIERS
 
 DEMO_USER_EMAIL = "demo@crypto-radar.local"
 DEMO_USERNAME = "demo"
@@ -733,15 +734,7 @@ def _seed_demo_profile(session: Session, tracker: _SeedTracker, user: AppUser) -
                 "virtual_slippage_model": "spread_based",
                 "virtual_fee_model": "exchange_based",
                 "virtual_trading_uses_realistic_execution": True,
-                "strategy_risk_multipliers": {
-                    "trend_following": 1.0,
-                    "trend_pullback_continuation": 1.0,
-                    "breakout": 0.75,
-                    "scalping": 0.5,
-                    "mean_reversion": 0.75,
-                    "smart_money_setup": 1.0,
-                    "news_event_trade": 0.25,
-                },
+                "strategy_risk_multipliers": dict(DEFAULT_STRATEGY_RISK_MULTIPLIERS),
                 "auto_reduce_risk_after_losses": True,
                 "allow_risk_increase_after_profit": False,
                 "increase_risk_after_profit_streak": False,

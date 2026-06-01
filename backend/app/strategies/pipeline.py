@@ -7,6 +7,7 @@ from app.schemas.market import Features
 from app.schemas.signal import (
     MarketQualitySnapshot,
     MarketRegimeSnapshot,
+    SignalAutoEntrySnapshot,
     SignalConfirmationSnapshot,
     SignalExitPlanSnapshot,
     SignalInvalidationSnapshot,
@@ -225,6 +226,12 @@ class StrategySignalPipeline:
             if target is not None:
                 updates["entry_min"] = target.entry_min
                 updates["entry_max"] = target.entry_max
+        if not risk_reward.passed:
+            updates["auto_entry"] = SignalAutoEntrySnapshot(
+                enabled=False,
+                status="cancelled",
+                message=risk_reward.reason,
+            )
 
         return signal.model_copy(update=updates)
 
@@ -1669,14 +1676,18 @@ def _overextension_metadata(overextension: OverextensionAssessment) -> dict[str,
 
 
 def _risk_reward_metadata(risk_reward: RiskRewardAssessment) -> dict[str, Any]:
-    return {
+    metadata: dict[str, Any] = {
         "first_target_rr": risk_reward.first_target_rr,
         "final_target_rr": risk_reward.final_target_rr,
         "selected_rr": risk_reward.rr,
         "selected_rr_target": risk_reward.target_key,
         "selected_rr_label": risk_reward.target_label,
         "min_rr_ratio": risk_reward.min_rr,
+        "risk_reward_blocked": not risk_reward.passed,
     }
+    if not risk_reward.passed:
+        metadata["risk_reward_block_reason"] = risk_reward.reason
+    return metadata
 
 
 def _overextension_check(confirmation: SignalConfirmationSnapshot) -> SignalLayerCheck | None:

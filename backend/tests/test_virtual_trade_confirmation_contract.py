@@ -9,6 +9,7 @@ from app.services.trade_repository import (
     VirtualTradeConfirmationResult,
     VirtualTradePersistenceEvent,
 )
+from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.trade_service import TradeService
 
 
@@ -109,6 +110,16 @@ class VirtualTradeConfirmationContractTest(unittest.TestCase):
         self.assertEqual(analytics.events, [{"event_type": "signal.confirmed"}])
         self.assertEqual(hot_store.results[0].signal.id, signal.id)
 
+    def test_confirm_signal_blocks_strategy_rr_failed_signal(self) -> None:
+        repository = FakeConfirmRepository()
+        service = TradeService(repository=repository)
+
+        with self.assertRaises(StrategyRiskRewardBlocked) as exc:
+            service.confirm_signal(_rr_failed_signal(), ManualConfirmRequest())
+
+        self.assertIn("Risk/reward blocked", exc.exception.reason)
+        self.assertIsNone(repository.received_trade)
+
 
 def _signal() -> RadarSignal:
     now = datetime.now(timezone.utc)
@@ -129,6 +140,16 @@ def _signal() -> RadarSignal:
         take_profit_2=130,
         created_at=now,
         updated_at=now,
+    )
+
+
+def _rr_failed_signal() -> RadarSignal:
+    return _signal().model_copy(
+        update={
+            "selected_rr": 0.8,
+            "selected_rr_target": "nearest",
+            "min_rr_ratio": 1.5,
+        }
     )
 
 

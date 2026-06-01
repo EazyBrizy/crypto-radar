@@ -72,12 +72,14 @@ Current JSON shape:
   "virtual_fee_model": "exchange_based",
   "virtual_trading_uses_realistic_execution": true,
   "strategy_risk_multipliers": {
-    "trend_following": 1.0,
     "trend_pullback_continuation": 1.0,
+    "volatility_squeeze_breakout": 0.75,
+    "liquidity_sweep_reversal": 1.0,
+    "trend_following": 1.0,
     "breakout": 0.75,
+    "smart_money_setup": 1.0,
     "scalping": 0.5,
     "mean_reversion": 0.75,
-    "smart_money_setup": 1.0,
     "news_event_trade": 0.25
   },
   "auto_reduce_risk_after_losses": true,
@@ -146,7 +148,6 @@ while the module is being built step by step.
 
 - mark virtual trades opened after daily stop as discipline violations instead
   of blocking the simulation when protection is not account-blocked;
-- apply `spot_max_position_size_percent` to spot entries.
 
 ### Fees, Funding, And Liquidation
 

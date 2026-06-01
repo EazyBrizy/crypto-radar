@@ -3,6 +3,12 @@ from __future__ import annotations
 from app.schemas.signal import RadarSignal
 
 
+class StrategyRiskRewardBlocked(ValueError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 def strategy_rr_block_reason(signal: RadarSignal) -> str | None:
     selected_rr = signal.selected_rr
     min_rr = signal.min_rr_ratio
@@ -15,6 +21,12 @@ def strategy_rr_block_reason(signal: RadarSignal) -> str | None:
             )
         return None
     return failed_check_reason
+
+
+def ensure_strategy_rr_eligible(signal: RadarSignal) -> None:
+    reason = strategy_rr_block_reason(signal)
+    if reason is not None:
+        raise StrategyRiskRewardBlocked(reason)
 
 
 def _failed_rr_check_reason(signal: RadarSignal) -> str | None:

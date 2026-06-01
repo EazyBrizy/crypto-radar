@@ -189,6 +189,61 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertIn("Exchange instrument rules are stale.", decision.blockers)
         self.assertEqual(decision.risk_check.exchange_rule_status, "stale")
 
+    def test_real_gate_blocks_virtual_only_signal_score(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(score=65),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn("Signal score is virtual-only; real execution is blocked.", decision.blockers)
+
+    def test_virtual_gate_does_not_hard_block_virtual_only_signal_score(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(score=65),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertNotEqual(decision.status, "failed")
+        self.assertTrue(decision.can_enter)
+        self.assertNotIn("Signal score is virtual-only; real execution is blocked.", decision.blockers)
+
+    def test_real_futures_gate_blocks_unknown_liquidation_when_buffer_required(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(),
+                request=ManualConfirmRequest(leverage=2),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn("Liquidation price is unavailable; exact futures liquidation risk is not checked.", decision.blockers)
+
     def test_market_spread_and_funding_are_included_in_effective_risk(self) -> None:
         decision = RiskGateService().evaluate(
             context=RiskContextService().build_virtual_context(
@@ -350,18 +405,18 @@ def _account() -> VirtualAccount:
     )
 
 
-def _signal() -> RadarSignal:
+def _signal(*, score: float = 78, strategy: str = "trend_pullback_continuation") -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
         id="sig_risk_gate",
         symbol="BTCUSDT",
         exchange="bybit",
-        strategy="trend_pullback_continuation",
+        strategy=strategy,
         direction="long",
         confidence=0.8,
         risk_reward=3.0,
         urgency="medium",
-        score=78,
+        score=score,
         timeframe="15m",
         entry_min=100.0,
         entry_max=100.0,

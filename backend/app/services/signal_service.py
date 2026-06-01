@@ -11,6 +11,7 @@ from app.repositories.signal_repository import (
     SignalWriteResult,
 )
 from app.schemas.signal import RadarSignal, StrategySignal
+from app.services.signal_risk_reward import ensure_strategy_rr_eligible
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +233,10 @@ class SignalService:
         arm = getattr(self._repository, "arm_auto_entry", None)
         if arm is None:
             return None
+        signal = self._repository.get_signal(signal_id)
+        if signal is None:
+            return None
+        ensure_strategy_rr_eligible(signal)
         result = arm(signal_id, request=request)
         if result is None:
             return None

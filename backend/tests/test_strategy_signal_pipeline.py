@@ -257,6 +257,16 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signal.status, "ready")
         self.assertIn("Risk/reward blocked", signal.status_reason or "")
         self.assertIn("configured minimum", " ".join(signal.risks if signal else []))
+        self.assertIsNotNone(signal.auto_entry)
+        self.assertFalse(signal.auto_entry.enabled if signal.auto_entry else True)
+        self.assertEqual(signal.auto_entry.status if signal.auto_entry else None, "cancelled")
+        rr_check = next(
+            check
+            for check in (signal.confirmation.checks if signal.confirmation else [])
+            if check.name == "risk_reward_guard"
+        )
+        self.assertTrue(rr_check.metadata.get("risk_reward_blocked"))
+        self.assertIn("Risk/reward blocked", rr_check.metadata.get("risk_reward_block_reason", ""))
 
     def test_risk_reward_guard_exposes_first_final_and_selected_rr(self) -> None:
         features = _breakout_features()

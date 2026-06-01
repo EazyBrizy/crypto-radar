@@ -8,6 +8,7 @@ from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.risk_management import get_user_risk_management_settings
 from app.services.risk_market_data import RiskMarketDataService, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
+from app.services.signal_risk_reward import strategy_rr_block_reason
 
 
 class RealExecutionService:
@@ -38,6 +39,15 @@ class RealExecutionService:
         signal: RadarSignal,
         request: ManualConfirmRequest,
     ) -> RealExecutionResult:
+        rr_block_reason = strategy_rr_block_reason(signal)
+        if rr_block_reason is not None:
+            return RealExecutionResult(
+                status="risk_failed",
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                message=f"Strategy risk/reward blocked real order: {rr_block_reason}",
+            )
+
         risk_settings = get_user_risk_management_settings(request.user_id)
         instrument_type = "futures" if request.leverage > 1 else "spot"
         fallback_entry_price = _entry_price(signal)

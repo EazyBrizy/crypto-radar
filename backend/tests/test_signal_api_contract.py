@@ -5,8 +5,10 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.api.v1.signals import confirm_signal, list_active_signals, list_open_signals
+from app.api.v1.trades import confirm_real_trade
 from app.schemas.signal import RadarSignal
-from app.schemas.trade import ManualConfirmRequest
+from app.schemas.trade import ManualConfirmRequest, RealConfirmRequest
+from app.services.execution_service import RealExecutionService
 from backend.tests.ephemeral_signal_service import ephemeral_signal_service
 
 
@@ -16,6 +18,11 @@ class _FakeRealtimeBroker:
 
     async def publish(self, event: dict) -> None:
         self.events.append(event)
+
+
+class _ExplodingRiskGateService:
+    def evaluate(self, *args, **kwargs):
+        raise AssertionError("risk gate should not run when strategy RR blocks first")
 
 
 class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
@@ -185,21 +192,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_confirm_endpoint_rejects_auto_entry_when_strategy_rr_failed(self) -> None:
         now = datetime.now(timezone.utc)
-        signal = RadarSignal(
-            id="sig_low_rr",
-            symbol="SOL/USDT:PERP",
-            exchange="bybit",
-            strategy="liquidity_sweep_reversal",
-            direction="short",
-            confidence=0.7,
-            status="ready",
-            score=70,
-            selected_rr=0.32,
-            selected_rr_target="nearest",
-            min_rr_ratio=1.5,
-            created_at=now,
-            updated_at=now,
-        )
+        signal = _rr_failed_signal("sig_low_rr", now=now, status="ready")
         self.signal_service.add_signal(signal)
 
         with patch("app.api.v1.signals.signal_service", self.signal_service):
@@ -211,6 +204,64 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(exc.exception.status_code, 409)
         self.assertIn("Risk/reward blocked", str(exc.exception.detail))
+
+    async def test_real_execution_service_blocks_rr_failed_signal_before_risk_gate(self) -> None:
+        now = datetime.now(timezone.utc)
+        service = RealExecutionService(
+            risk_gate_service=_ExplodingRiskGateService(),
+            risk_audit=None,
+            risk_state=None,
+            market_data_service=None,
+            fee_rate_service=None,
+        )
+
+        result = await service.place_order(
+            _rr_failed_signal("sig_real_service", now=now, status="actionable"),
+            ManualConfirmRequest(mode="real", user_id="demo_user"),
+        )
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIsNone(result.risk_decision)
+        self.assertIn("Strategy risk/reward blocked real order", result.message)
+        self.assertIn("Risk/reward blocked", result.message)
+
+    async def test_real_confirm_endpoint_cannot_bypass_strategy_rr_block(self) -> None:
+        now = datetime.now(timezone.utc)
+        signal = _rr_failed_signal("sig_real_confirm", now=now, status="actionable")
+        self.signal_service.add_signal(signal)
+
+        with patch("app.api.v1.trades.signal_service", self.signal_service):
+            with self.assertRaises(HTTPException) as exc:
+                await confirm_real_trade(
+                    RealConfirmRequest(signal_id=signal.id, user_id="demo_user"),
+                )
+
+        self.assertEqual(exc.exception.status_code, 422)
+        self.assertEqual(exc.exception.detail["status"], "risk_failed")
+        self.assertIn("Strategy risk/reward blocked real order", exc.exception.detail["message"])
+
+
+def _rr_failed_signal(signal_id: str, *, now: datetime, status: str) -> RadarSignal:
+    return RadarSignal(
+        id=signal_id,
+        symbol="SOL/USDT:PERP",
+        exchange="bybit",
+        strategy="liquidity_sweep_reversal",
+        direction="short",
+        confidence=0.7,
+        status=status,
+        score=70,
+        selected_rr=0.32,
+        selected_rr_target="nearest",
+        min_rr_ratio=1.5,
+        entry_min=100,
+        entry_max=100,
+        stop_loss=101,
+        take_profit_1=99.68,
+        take_profit_2=99.5,
+        created_at=now,
+        updated_at=now,
+    )
 
 
 if __name__ == "__main__":

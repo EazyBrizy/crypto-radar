@@ -14,7 +14,7 @@ from app.services.realtime_events import (
     signal_updated_event,
     trade_activated_event,
 )
-from app.services.signal_risk_reward import strategy_rr_block_reason
+from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.signal_service import signal_service
 from app.services.virtual_trading import VirtualExecutionRejected, virtual_trading_service
 
@@ -64,14 +64,14 @@ async def confirm_signal(
             status_code=status.HTTP_409_CONFLICT,
             detail="Signal cannot be confirmed in current status",
         )
-    rr_block_reason = strategy_rr_block_reason(signal)
-    if rr_block_reason is not None and (request.auto_enter_on_confirmation or _signal_can_enter_now(signal)):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=rr_block_reason,
-        )
     if request.auto_enter_on_confirmation and not _signal_can_enter_now(signal):
-        armed_signal = signal_service.arm_auto_entry(signal.id, request.model_dump(mode="json"))
+        try:
+            armed_signal = signal_service.arm_auto_entry(signal.id, request.model_dump(mode="json"))
+        except StrategyRiskRewardBlocked as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=exc.reason,
+            ) from exc
         if armed_signal is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -90,6 +90,11 @@ async def confirm_signal(
 
     if request.mode == "real":
         real_execution = await real_execution_service.place_order(signal, request)
+        if real_execution.status == "risk_failed":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=real_execution.model_dump(mode="json"),
+            )
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=real_execution.message,
@@ -97,6 +102,11 @@ async def confirm_signal(
 
     try:
         updated_signal, virtual_trade = virtual_trading_service.confirm_signal(signal, request)
+    except StrategyRiskRewardBlocked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.reason,
+        ) from exc
     except VirtualExecutionRejected as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

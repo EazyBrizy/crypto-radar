@@ -183,16 +183,49 @@ CREATE TABLE IF NOT EXISTS analytics.strategy_performance_daily
     exchange LowCardinality(String),
     symbol LowCardinality(String),
     timeframe LowCardinality(String),
+    market_regime LowCardinality(String),
+    score_bucket LowCardinality(String),
+    direction LowCardinality(String),
     signals_count UInt64,
     wins_count UInt64,
     losses_count UInt64,
     avg_rr Float64,
     avg_pnl_pct Float64,
-    max_drawdown_pct Float64
+    max_drawdown_pct Float64,
+    sample_size UInt64,
+    trades_count UInt64,
+    entry_touch_rate Float64,
+    winrate Float64,
+    tp1_rate Float64,
+    tp2_rate Float64,
+    stop_rate Float64,
+    invalidation_rate Float64,
+    avg_win_r Float64,
+    avg_loss_r Float64,
+    expectancy_r Float64,
+    profit_factor Nullable(Float64),
+    max_drawdown_r Float64,
+    median_bars_to_entry Nullable(Float64),
+    median_bars_to_outcome Nullable(Float64),
+    avg_mfe_r Float64,
+    avg_mae_r Float64,
+    fees_bps Float64,
+    slippage_bps Float64,
+    updated_at DateTime64(3, 'UTC')
 )
-ENGINE = SummingMergeTree
+ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(date)
-ORDER BY (strategy_code, exchange, symbol, timeframe, date);
+ORDER BY (
+    strategy_code,
+    exchange,
+    symbol,
+    timeframe,
+    strategy_version,
+    market_regime,
+    score_bucket,
+    direction,
+    date
+);
 
 CREATE TABLE IF NOT EXISTS analytics.virtual_trade_events
 (

@@ -1,9 +1,10 @@
 from fastapi import APIRouter
 
-from app.api.v1 import ai, backtests, billing, candles, exchanges, health, notifications, radar, realtime, risk, signals, strategies, trades, users, watchlists
+from app.api.v1 import ai, analytics, backtests, billing, candles, exchanges, health, notifications, radar, realtime, risk, signals, strategies, trades, users, watchlists
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(ai.router)
+api_router.include_router(analytics.router)
 api_router.include_router(backtests.router)
 api_router.include_router(billing.router)
 api_router.include_router(candles.router)

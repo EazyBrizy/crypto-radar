@@ -84,6 +84,11 @@ from app.schemas.strategy import (
     StrategyConfigUpdateRequest,
     StrategyPairScope,
 )
+from app.schemas.strategy_performance import (
+    ScoreBucket,
+    StrategyEdgeProfile,
+    StrategyPerformanceDaily,
+)
 from app.schemas.trade import (
     CloseMarketTradeRequest,
     CloseMarketTradeResponse,
@@ -192,10 +197,13 @@ __all__ = [
     "SignalAIExplanationCreate",
     "SignalAIExplanationGenerateRequest",
     "SignalAIExplanationResponse",
+    "ScoreBucket",
     "StopLossPlan",
     "StrategySignal",
     "StrategyConfigResponse",
     "StrategyConfigUpdateRequest",
+    "StrategyEdgeProfile",
+    "StrategyPerformanceDaily",
     "StrategyPairScope",
     "TakeProfitPlan",
     "TakeProfitTarget",

@@ -164,6 +164,71 @@ Time stop metadata may be supplied by `trade_plan.metadata`,
 `trade_plan.risk_rules.metadata`, or `trade_plan.invalidation.metadata` via
 `time_stop`, `time_stop_at`, `expires_at`, `at`, or `max_holding_seconds`.
 
+## Strategy Performance Aggregator v1
+
+`StrategyPerformanceService.aggregate_daily` builds strategy analytics from
+closed `SignalOutcome` records and writes daily rows to
+`analytics.strategy_performance_daily`.
+
+Daily rows are grouped by:
+
+- `date`
+- `exchange`
+- `symbol`
+- `timeframe`
+- `strategy`
+- `strategy_version`
+- `market_regime`
+- `score_bucket`
+- `direction`
+
+`score_bucket` values are:
+
+- `0-49`
+- `50-59`
+- `60-69`
+- `70-79`
+- `80-89`
+- `90-100`
+
+Daily metrics are:
+
+- `sample_size`
+- `trades_count`
+- `signals_count`
+- `wins_count`
+- `losses_count`
+- `entry_touch_rate`
+- `winrate`
+- `tp1_rate`
+- `tp2_rate`
+- `stop_rate`
+- `invalidation_rate`
+- `avg_win_r`
+- `avg_loss_r`
+- `expectancy_r`
+- `profit_factor`
+- `max_drawdown_r`
+- `median_bars_to_entry`
+- `median_bars_to_outcome`
+- `avg_mfe_r`
+- `avg_mae_r`
+- `fees_bps`
+- `slippage_bps`
+
+`StrategyPerformanceService.get_edge_profile` returns a
+`StrategyEdgeProfile` for a requested strategy/exchange/symbol/timeframe with
+optional market regime and score. Lookup order is:
+
+1. exact `strategy + exchange + symbol + timeframe + market_regime + score_bucket`;
+2. fallback `strategy + timeframe + market_regime`;
+3. fallback `strategy` global.
+
+The minimum sample threshold is configured by
+`settings.strategy_performance_min_sample_size`. Results with data below that
+threshold return `confidence = "low"`. No matching data returns
+`confidence = "insufficient_sample"`.
+
 ---
 
 # Rules

@@ -434,13 +434,14 @@ def calculate_risk_check_result(
     account_drawdown_percent: float | None = None,
     max_account_drawdown_percent: float | None = None,
     execution_mode: str = "virtual",
+    strategy: str | None = None,
     signal_edge: SignalEdgeSnapshot | None = None,
 ) -> RiskCheckResult:
     settings = _settings_model(risk_settings)
     rr_guard_mode = resolve_rr_guard_mode(
         settings,
         context=execution_mode,
-        strategy=risk_adjustment.strategy,
+        strategy=strategy or risk_adjustment.strategy,
     )
     blockers: list[str] = []
     warnings: list[str] = list(risk_adjustment.warnings)
@@ -491,18 +492,24 @@ def calculate_risk_check_result(
             else take_profit_plan.targets[-1].r_multiple
         )
         if _limit_enabled(settings.min_rr_ratio) and rr < settings.min_rr_ratio:
-            rr_reasons = ["R:R is below the configured minimum."]
+            rr_reason = _rr_policy_reason(
+                rr=rr,
+                min_rr_ratio=settings.min_rr_ratio,
+                execution_mode=execution_mode,
+                guard_mode=rr_guard_mode,
+            )
+            rr_reasons = [rr_reason]
             if signal_entry_price is not None and signal_entry_price != position_sizing.entry_price:
                 rr_reasons.append("Market entry price moved far enough to invalidate R:R.")
-            rr_reason = "; ".join(rr_reasons)
+            combined_rr_reason = "; ".join(rr_reasons)
             if rr_guard_mode == "hard":
                 blockers.extend(rr_reasons)
                 risk_reward_blocked = True
-                risk_reward_block_reason = rr_reason
+                risk_reward_block_reason = combined_rr_reason
             elif rr_guard_mode == "soft":
                 warnings.extend(rr_reasons)
                 risk_reward_warning = True
-                risk_reward_warning_reason = rr_reason
+                risk_reward_warning_reason = combined_rr_reason
     elif settings.take_profit_required:
         blockers.append("Take-profit plan is required.")
 
@@ -1336,6 +1343,28 @@ def _mapping_value_for_strategy(values: Mapping[str, Any], strategy: str) -> Any
 
 def _limit_enabled(value: float | int | None) -> bool:
     return value is not None and float(value) > 0
+
+
+def _rr_policy_reason(
+    *,
+    rr: float,
+    min_rr_ratio: float,
+    execution_mode: str,
+    guard_mode: RRGuardMode,
+) -> str:
+    selected_rr = f"{rr:.2f}R"
+    minimum_rr = f"{min_rr_ratio:.2f}R"
+    if execution_mode == "real" and guard_mode == "hard":
+        return (
+            "Real execution RR policy rejected: "
+            f"selected R:R {selected_rr} is below minimum {minimum_rr}."
+        )
+    if guard_mode == "hard":
+        return f"Execution RR policy rejected: selected R:R {selected_rr} is below minimum {minimum_rr}."
+    return (
+        "Risk/reward warning: "
+        f"selected R:R {selected_rr} is below configured minimum {minimum_rr}."
+    )
 
 
 def _base_risk_percent(settings: RiskManagementSettings, instrument_type: TradeInstrumentType) -> float:

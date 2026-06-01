@@ -7974,6 +7974,16 @@
             "title": "Status",
             "default": "not_implemented"
           },
+          "signal_valid": {
+            "type": "boolean",
+            "title": "Signal Valid",
+            "default": true
+          },
+          "execution_allowed": {
+            "type": "boolean",
+            "title": "Execution Allowed",
+            "default": false
+          },
           "exchange": {
             "type": "string",
             "title": "Exchange"

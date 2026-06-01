@@ -359,6 +359,7 @@ class RiskGateService:
             account_drawdown_percent=context.account_drawdown_percent,
             max_account_drawdown_percent=context.max_account_drawdown_percent,
             execution_mode=context.mode,
+            strategy=context.strategy,
             signal_edge=context.signal_edge,
         )
         no_trade_blockers = _no_trade_blockers(context)

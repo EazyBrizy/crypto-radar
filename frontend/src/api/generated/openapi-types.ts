@@ -2839,6 +2839,16 @@ export interface components {
              * @enum {string}
              */
             status: "not_implemented" | "risk_failed" | "dry_run" | "submitted";
+            /**
+             * Signal Valid
+             * @default true
+             */
+            signal_valid: boolean;
+            /**
+             * Execution Allowed
+             * @default false
+             */
+            execution_allowed: boolean;
             /** Exchange */
             exchange: string;
             /** Symbol */

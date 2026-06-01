@@ -380,6 +380,8 @@ class VirtualTrade(BaseModel):
 class RealExecutionResult(BaseModel):
     mode: Literal["real"] = "real"
     status: Literal["not_implemented", "risk_failed", "dry_run", "submitted"] = "not_implemented"
+    signal_valid: bool = True
+    execution_allowed: bool = False
     exchange: str
     symbol: str
     message: str

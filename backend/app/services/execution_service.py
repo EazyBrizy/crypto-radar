@@ -16,10 +16,9 @@ from app.schemas.user import RiskManagementSettings
 from app.services.risk_audit import RiskAuditService, risk_audit_service
 from app.services.risk_fee_rate import RiskFeeRateService, risk_fee_rate_service
 from app.services.risk_gate import RiskContextService, RiskGateService
-from app.services.risk_management import get_user_risk_management_settings, resolve_rr_guard_mode
+from app.services.risk_management import get_user_risk_management_settings
 from app.services.risk_market_data import RiskMarketDataService, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
-from app.services.signal_risk_reward import StrategyRiskRewardBlocked, ensure_signal_execution_eligible
 
 
 _DEFAULT_EXECUTION_ADAPTER = object()
@@ -64,24 +63,6 @@ class RealExecutionService:
         request: ManualConfirmRequest,
     ) -> RealExecutionResult:
         risk_settings = self._risk_settings_provider(request.user_id)
-        try:
-            ensure_signal_execution_eligible(
-                signal,
-                mode="real",
-                rr_guard_mode=resolve_rr_guard_mode(
-                    risk_settings,
-                    context="real",
-                    strategy=signal.strategy,
-                ),
-            )
-        except StrategyRiskRewardBlocked as exc:
-            return RealExecutionResult(
-                status="risk_failed",
-                exchange=signal.exchange,
-                symbol=signal.symbol,
-                message=f"Execution policy rejected real order: {exc.reason}",
-            )
-
         instrument_type = "futures" if request.leverage > 1 else "spot"
         fallback_entry_price = _entry_price(signal)
         market_data = (
@@ -207,11 +188,14 @@ class RealExecutionService:
         )
         risk_decision_id = self._record_real_attempt(signal, request, risk_decision)
         if not risk_decision.can_enter:
+            message = _risk_rejection_message(risk_decision)
             return RealExecutionResult(
                 status="risk_failed",
+                signal_valid=True,
+                execution_allowed=False,
                 exchange=signal.exchange,
                 symbol=signal.symbol,
-                message="Risk gate blocked real order: " + "; ".join(risk_decision.blockers),
+                message=message,
                 risk_decision=risk_decision,
                 risk_decision_id=risk_decision_id,
             )
@@ -228,6 +212,8 @@ class RealExecutionService:
         if validation_errors:
             return RealExecutionResult(
                 status="risk_failed",
+                signal_valid=True,
+                execution_allowed=False,
                 exchange=signal.exchange,
                 symbol=signal.symbol,
                 message="Execution plan validation failed: " + "; ".join(validation_errors),
@@ -240,6 +226,8 @@ class RealExecutionService:
             )
         if self._execution_adapter is None:
             return RealExecutionResult(
+                signal_valid=True,
+                execution_allowed=True,
                 exchange=signal.exchange,
                 symbol=signal.symbol,
                 message=(
@@ -262,6 +250,8 @@ class RealExecutionService:
         execution_plan = execution_plan.model_copy(update={"planned_orders": planned_orders})
         return RealExecutionResult(
             status=status,
+            signal_valid=True,
+            execution_allowed=True,
             exchange=signal.exchange,
             symbol=signal.symbol,
             message=(
@@ -306,6 +296,15 @@ def _entry_price(signal: RadarSignal) -> float:
     if signal.entry_max is not None:
         return signal.entry_max
     raise ValueError("Signal has no entry zone")
+
+
+def _risk_rejection_message(risk_decision: RiskDecision) -> str:
+    rr_reason = risk_decision.risk_check.risk_reward_block_reason
+    if rr_reason:
+        return rr_reason
+    if risk_decision.blockers:
+        return "Execution not allowed by risk gate: " + "; ".join(risk_decision.blockers)
+    return "Real execution rejected by risk policy."
 
 
 def _build_execution_plan(

@@ -637,8 +637,44 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertAlmostEqual(decision.risk_check.rr or 0, 1.2)
         self.assertEqual(decision.status, "warning")
         self.assertTrue(decision.can_enter)
-        self.assertNotIn("R:R is below the configured minimum.", decision.blockers)
-        self.assertIn("R:R is below the configured minimum.", decision.warnings)
+        self.assertFalse(any("R:R is below" in blocker for blocker in decision.blockers))
+        self.assertTrue(any("Risk/reward warning" in warning for warning in decision.warnings))
+
+    def test_strategy_rr_guard_override_uses_original_signal_strategy(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(
+                    trade_plan=_trade_plan(
+                        targets=[TradePlanTarget(label="TP1", price=112.0, close_percent=100)],
+                        selected_rr_target="nearest",
+                    )
+                ),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=RiskManagementSettings(
+                risk_profile="balanced",
+                risk_per_trade_percent=1.0,
+                min_rr_ratio=2.0,
+                real_rr_guard_mode="soft",
+                strategy_rr_guard_modes={"trend_pullback_continuation": "hard"},
+                max_daily_loss_percent=3.0,
+                max_account_drawdown_percent=10.0,
+                max_open_risk_percent=5.0,
+                stop_loss_mode="structure",
+                real_requires_positive_edge=False,
+                real_requires_fresh_market_data=False,
+            ),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertEqual(decision.risk_check.risk_reward_guard_mode, "hard")
+        self.assertTrue(any("Real execution RR policy rejected" in blocker for blocker in decision.blockers))
 
 
 def _risk_settings() -> RiskManagementSettings:

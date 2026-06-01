@@ -456,7 +456,8 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "failed")
-        self.assertIn("R:R is below the configured minimum.", result.blockers)
+        self.assertTrue(any("Real execution RR policy rejected" in blocker for blocker in result.blockers))
+        self.assertIn("selected R:R 1.50R is below minimum 2.00R", result.risk_reward_block_reason or "")
         self.assertTrue(result.risk_reward_blocked)
         self.assertEqual(result.risk_reward_guard_mode, "hard")
 
@@ -492,8 +493,8 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "warning")
-        self.assertNotIn("R:R is below the configured minimum.", result.blockers)
-        self.assertIn("R:R is below the configured minimum.", result.warnings)
+        self.assertFalse(any("R:R is below" in blocker for blocker in result.blockers))
+        self.assertTrue(any("Risk/reward warning" in warning for warning in result.warnings))
         self.assertTrue(result.risk_reward_warning)
         self.assertFalse(result.risk_reward_blocked)
         self.assertEqual(result.risk_reward_guard_mode, "soft")
@@ -551,7 +552,7 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
             orderbook_depth_usd=1,
         )
 
-        self.assertNotIn("R:R is below the configured minimum.", result.blockers)
+        self.assertFalse(any("R:R is below" in blocker for blocker in result.blockers))
         self.assertNotIn("Daily loss limit would be exceeded.", result.blockers)
         self.assertNotIn("Max open risk would be exceeded.", result.blockers)
         self.assertNotIn("Max correlated risk would be exceeded.", result.blockers)

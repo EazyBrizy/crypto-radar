@@ -13,10 +13,11 @@ from app.schemas.risk import (
     TakeProfitTarget,
     TrailingStopPlan,
 )
-from app.schemas.signal import RadarSignal
+from app.schemas.signal import NoTradeFilterResult, RadarSignal
 from app.schemas.trade import ExecutionPlannedOrder, ManualConfirmRequest
 from app.schemas.user import RiskManagementSettings
 from app.services.execution_service import RealExecutionService
+from app.services.risk_market_data import RiskMarketDataSnapshot
 
 
 class _FakeRiskGateService:
@@ -103,6 +104,26 @@ class _FakeRiskState:
         return self.reference
 
 
+class _FakeMarketDataService:
+    def build_snapshot(self, *args, **kwargs) -> RiskMarketDataSnapshot:
+        entry_price = float(kwargs["fallback_entry_price"])
+        return RiskMarketDataSnapshot(
+            exchange=kwargs["exchange"],
+            symbol=kwargs["symbol"],
+            category="spot",
+            entry_price=entry_price,
+            slippage_bps=kwargs.get("manual_slippage_bps", 0.0),
+            best_bid=entry_price - 0.05,
+            best_ask=entry_price + 0.05,
+            mark_price=entry_price,
+            spread_percent=0.1,
+            spread_bps=10.0,
+            orderbook_depth_usd=100_000.0,
+            market_data_status="fresh",
+            market_data_source="test",
+        )
+
+
 class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_dry_run_returns_full_order_plan(self) -> None:
         service = _service(_decision())
@@ -110,6 +131,8 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await service.place_order(_signal(), _request())
 
         self.assertEqual(result.status, "dry_run")
+        self.assertTrue(result.signal_valid)
+        self.assertTrue(result.execution_allowed)
         self.assertEqual(result.adapter, "dry_run")
         self.assertIsNotNone(result.idempotency_key)
         self.assertEqual(
@@ -128,6 +151,8 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await service.place_order(_signal(), _request())
 
         self.assertEqual(result.status, "not_implemented")
+        self.assertTrue(result.signal_valid)
+        self.assertTrue(result.execution_allowed)
         self.assertEqual(
             [order.role for order in result.planned_orders],
             ["entry", "protective_stop", "take_profit", "take_profit"],
@@ -186,6 +211,8 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await service.place_order(_signal(), _request())
 
         self.assertEqual(result.status, "submitted")
+        self.assertTrue(result.signal_valid)
+        self.assertTrue(result.execution_allowed)
         self.assertEqual([role for role, _order in adapter.calls], ["entry", "protective_stop", "take_profit", "take_profit"])
         self.assertTrue(all(order.status == "submitted" for order in result.planned_orders))
 
@@ -200,31 +227,114 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await service.place_order(_signal(), _request())
 
         self.assertEqual(result.status, "risk_failed")
+        self.assertTrue(result.signal_valid)
+        self.assertFalse(result.execution_allowed)
         self.assertIn("quantity is not aligned to qty_step", result.message)
         self.assertEqual(adapter.calls, [])
 
+    async def test_low_rr_hard_real_policy_blocks_execution_not_signal(self) -> None:
+        service = _service(
+            None,
+            market_data_service=_FakeMarketDataService(),
+            risk_settings=_risk_settings(
+                min_rr_ratio=2.0,
+                real_rr_guard_mode="hard",
+                tp1_r_multiple=0.5,
+                tp2_r_multiple=1.0,
+                tp3_r_multiple=1.5,
+            ),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertTrue(result.signal_valid)
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("Real execution RR policy rejected", result.message)
+        self.assertIn("selected R:R 1.50R is below minimum 2.00R", result.message)
+        self.assertNotIn("signal rejected", result.message.lower())
+        self.assertNotIn("invalid signal", result.message.lower())
+        self.assertIsNotNone(result.risk_decision)
+        assert result.risk_decision is not None
+        self.assertTrue(
+            any("Real execution RR policy rejected" in blocker for blocker in result.risk_decision.blockers)
+        )
+        self.assertTrue(result.risk_decision.risk_check.risk_reward_blocked)
+
+    async def test_low_rr_soft_real_policy_warns_and_allows_execution(self) -> None:
+        service = _service(
+            None,
+            market_data_service=_FakeMarketDataService(),
+            risk_settings=_risk_settings(
+                min_rr_ratio=2.0,
+                real_rr_guard_mode="soft",
+                tp1_r_multiple=0.5,
+                tp2_r_multiple=1.0,
+                tp3_r_multiple=1.5,
+            ),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "dry_run")
+        self.assertTrue(result.signal_valid)
+        self.assertTrue(result.execution_allowed)
+        self.assertIsNotNone(result.risk_decision)
+        assert result.risk_decision is not None
+        self.assertFalse(
+            any("Real execution RR policy rejected" in blocker for blocker in result.risk_decision.blockers)
+        )
+        self.assertTrue(
+            any("Risk/reward warning" in warning for warning in result.risk_decision.warnings)
+        )
+        self.assertTrue(result.risk_decision.risk_check.risk_reward_warning)
+
+    async def test_no_trade_signal_blocks_execution_not_signal_validity(self) -> None:
+        no_trade_reason = "No-trade policy blocks real execution during scheduled news."
+        service = _service(
+            None,
+            market_data_service=_FakeMarketDataService(),
+            risk_settings=_risk_settings(min_rr_ratio=1.0, real_rr_guard_mode="hard"),
+        )
+
+        result = await service.place_order(
+            _signal(no_trade_filter=NoTradeFilterResult(blocked=True, hard_block=True, blockers=[no_trade_reason])),
+            _request(),
+        )
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertTrue(result.signal_valid)
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("Execution not allowed by risk gate", result.message)
+        self.assertIsNotNone(result.risk_decision)
+        assert result.risk_decision is not None
+        self.assertIn(no_trade_reason, result.risk_decision.blockers)
+
 
 def _service(
-    decision: RiskDecision,
+    decision: RiskDecision | None,
     *,
     execution_adapter=...,
     risk_state=None,
+    market_data_service=None,
+    risk_settings: RiskManagementSettings | None = None,
 ) -> RealExecutionService:
     kwargs = {}
     if execution_adapter is not ...:
         kwargs["execution_adapter"] = execution_adapter
+    risk_gate_service = _FakeRiskGateService(decision) if decision is not None else None
     return RealExecutionService(
-        risk_gate_service=_FakeRiskGateService(decision),
+        risk_gate_service=risk_gate_service,
         risk_audit=None,
         risk_state=risk_state,
-        market_data_service=None,
+        market_data_service=market_data_service,
         fee_rate_service=None,
-        risk_settings_provider=lambda _user_id: _risk_settings(),
+        risk_settings_provider=lambda _user_id: risk_settings or _risk_settings(),
         **kwargs,
     )
 
 
-def _signal() -> RadarSignal:
+def _signal(*, no_trade_filter: NoTradeFilterResult | None = None) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
         id="sig_real_execution",
@@ -241,6 +351,7 @@ def _signal() -> RadarSignal:
         stop_loss=95.0,
         take_profit_1=105.0,
         take_profit_2=110.0,
+        no_trade_filter=no_trade_filter,
         created_at=now,
         updated_at=now,
     )
@@ -256,15 +367,26 @@ def _request() -> ManualConfirmRequest:
     )
 
 
-def _risk_settings() -> RiskManagementSettings:
+def _risk_settings(
+    *,
+    min_rr_ratio: float = 1.0,
+    real_rr_guard_mode: str = "hard",
+    tp1_r_multiple: float = 1.0,
+    tp2_r_multiple: float = 2.0,
+    tp3_r_multiple: float = 3.0,
+) -> RiskManagementSettings:
     return RiskManagementSettings(
         risk_profile="balanced",
         risk_per_trade_percent=1.0,
-        min_rr_ratio=1.0,
+        min_rr_ratio=min_rr_ratio,
+        real_rr_guard_mode=real_rr_guard_mode,
         max_daily_loss_percent=3.0,
         max_account_drawdown_percent=10.0,
         max_open_risk_percent=5.0,
         stop_loss_mode="structure",
+        tp1_r_multiple=tp1_r_multiple,
+        tp2_r_multiple=tp2_r_multiple,
+        tp3_r_multiple=tp3_r_multiple,
         real_requires_fresh_market_data=False,
         real_requires_positive_edge=False,
     )

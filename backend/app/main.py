@@ -18,6 +18,7 @@ from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
 from app.services.realtime_gateway import realtime_gateway
 from app.workers.derivative_snapshot_worker import DerivativeSnapshotSyncRunner
 from app.workers.exchange_instrument_worker import ExchangeInstrumentRuleSyncRunner
+from app.workers.orderbook_snapshot_worker import OrderbookSnapshotWorker
 from app.workers.signal_worker import ScannerRunner
 
 load_dotenv()
@@ -40,20 +41,28 @@ def _derivative_snapshot_sync_enabled() -> bool:
     return settings.derivative_snapshot_sync_enabled
 
 
+def _orderbook_snapshot_sync_enabled() -> bool:
+    return settings.orderbook_snapshot_sync_enabled
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     runner = ScannerRunner()
     instrument_rule_runner = ExchangeInstrumentRuleSyncRunner()
     derivative_snapshot_runner = DerivativeSnapshotSyncRunner()
+    orderbook_snapshot_worker = OrderbookSnapshotWorker()
     scanner_autostart_enabled = _scanner_enabled()
     instrument_rule_sync_enabled = _instrument_rule_sync_enabled()
     derivative_snapshot_sync_enabled = _derivative_snapshot_sync_enabled()
+    orderbook_snapshot_sync_enabled = _orderbook_snapshot_sync_enabled()
     app.state.scanner_runner = runner
     app.state.exchange_instrument_rule_sync_runner = instrument_rule_runner
     app.state.derivative_snapshot_sync_runner = derivative_snapshot_runner
+    app.state.orderbook_snapshot_worker = orderbook_snapshot_worker
     app.state.scanner_autostart_enabled = scanner_autostart_enabled
     app.state.exchange_instrument_rule_sync_enabled = instrument_rule_sync_enabled
     app.state.derivative_snapshot_sync_enabled = derivative_snapshot_sync_enabled
+    app.state.orderbook_snapshot_sync_enabled = orderbook_snapshot_sync_enabled
 
     realtime_gateway.start_broker_bridge()
 
@@ -67,6 +76,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         logging.info("Derivative snapshot sync disabled by settings")
 
+    if orderbook_snapshot_sync_enabled:
+        orderbook_snapshot_worker.start()
+    else:
+        logging.info("Orderbook snapshot sync disabled by settings")
+
     if scanner_autostart_enabled:
         runner.start()
     else:
@@ -75,6 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await orderbook_snapshot_worker.stop()
         await derivative_snapshot_runner.stop()
         await instrument_rule_runner.stop()
         await runner.stop()
@@ -109,6 +124,7 @@ async def health() -> dict[str, object]:
     runner = getattr(app.state, "scanner_runner", None)
     instrument_rule_runner = getattr(app.state, "exchange_instrument_rule_sync_runner", None)
     derivative_snapshot_runner = getattr(app.state, "derivative_snapshot_sync_runner", None)
+    orderbook_snapshot_worker = getattr(app.state, "orderbook_snapshot_worker", None)
     scanner_status = runner.scanner_status if runner else {}
     storage_health = await asyncio.to_thread(get_storage_health)
     return {
@@ -136,6 +152,17 @@ async def health() -> dict[str, object]:
         "derivative_snapshot_sync_last_result": (
             derivative_snapshot_runner.last_result
             if derivative_snapshot_runner is not None
+            else {}
+        ),
+        "orderbook_snapshot_sync_enabled": bool(
+            getattr(app.state, "orderbook_snapshot_sync_enabled", False)
+        ),
+        "orderbook_snapshot_sync_running": bool(
+            orderbook_snapshot_worker and orderbook_snapshot_worker.is_running
+        ),
+        "orderbook_snapshot_sync_last_result": (
+            orderbook_snapshot_worker.last_result
+            if orderbook_snapshot_worker is not None
             else {}
         ),
         "processed_signals": runner.processed_signals if runner else 0,

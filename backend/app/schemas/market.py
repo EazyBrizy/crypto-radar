@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MarketData(BaseModel):
@@ -9,6 +9,29 @@ class MarketData(BaseModel):
     price: float
     volume: float
     timestamp: int
+
+
+class OrderBookLevel(BaseModel):
+    price: float = Field(..., gt=0)
+    quantity: float = Field(..., ge=0)
+
+
+class OrderBookSnapshot(BaseModel):
+    exchange: str = "bybit"
+    symbol: str
+    category: Optional[str] = None
+    bids: list[OrderBookLevel] = Field(default_factory=list)
+    asks: list[OrderBookLevel] = Field(default_factory=list)
+    timestamp: int = Field(..., ge=0)
+    ts: Optional[str] = None
+    source: str
+    spread_bps: Optional[float] = Field(default=None, ge=0)
+    bid_depth_usd_0_1_pct: float = Field(default=0.0, ge=0)
+    ask_depth_usd_0_1_pct: float = Field(default=0.0, ge=0)
+    bid_depth_usd_0_5_pct: float = Field(default=0.0, ge=0)
+    ask_depth_usd_0_5_pct: float = Field(default=0.0, ge=0)
+    bid_depth_usd_1_pct: float = Field(default=0.0, ge=0)
+    ask_depth_usd_1_pct: float = Field(default=0.0, ge=0)
 
 
 class Features(BaseModel):

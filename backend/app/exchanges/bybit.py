@@ -97,6 +97,8 @@ class BybitOrderBookSnapshot:
     bids: list[tuple[float, float]]
     asks: list[tuple[float, float]]
     raw_payload: dict
+    timestamp_ms: int | None = None
+    sequence_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -293,6 +295,8 @@ def fetch_bybit_orderbook(
         bids=_parse_book_side(result.get("b")),
         asks=_parse_book_side(result.get("a")),
         raw_payload=result,
+        timestamp_ms=_int_or_none(result.get("ts")),
+        sequence_id=_int_or_none(result.get("seq") or result.get("u")),
     )
 
 

@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
+from app.core.config import settings
+from app.core.redis_client import get_redis_client
 from app.exchanges.bybit import (
     BybitOrderBookSnapshot,
     BybitPositionInfo,
     BybitTicker,
-    fetch_bybit_orderbook,
     fetch_bybit_tickers,
 )
+from app.schemas.market import OrderBookSnapshot
 from app.services.exchange_connection_service import exchange_connection_service
+from app.services.market_persistence import orderbook_hot_key
 
 logger = logging.getLogger(__name__)
+PLACEHOLDER_ORDERBOOK_SOURCE = "orderbook_l2_not_available"
 
 
 class BybitPositionProvider(Protocol):
@@ -29,6 +35,12 @@ class BybitPositionProvider(Protocol):
 
 BybitTickerFetcher = Callable[..., list[BybitTicker]]
 BybitOrderBookFetcher = Callable[..., BybitOrderBookSnapshot]
+OrderBookLike = BybitOrderBookSnapshot | OrderBookSnapshot
+
+
+class RedisHotClient(Protocol):
+    def get(self, name: str) -> object:
+        ...
 
 
 @dataclass(frozen=True)
@@ -52,6 +64,14 @@ class RiskMarketDataSnapshot:
     warnings: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class OrderBookReadResult:
+    snapshot: OrderBookLike | None
+    status: str
+    source: str | None
+    warnings: tuple[str, ...] = ()
+
+
 class RiskMarketDataService:
     """Collects exchange market context before the mandatory risk-gate decision."""
 
@@ -59,11 +79,16 @@ class RiskMarketDataService:
         self,
         *,
         ticker_fetcher: BybitTickerFetcher = fetch_bybit_tickers,
-        orderbook_fetcher: BybitOrderBookFetcher = fetch_bybit_orderbook,
+        orderbook_fetcher: BybitOrderBookFetcher | None = None,
+        redis_client_factory: Callable[[], RedisHotClient] = get_redis_client,
+        orderbook_max_age_seconds: int | None = None,
         position_provider: BybitPositionProvider | None = exchange_connection_service,
     ) -> None:
         self._ticker_fetcher = ticker_fetcher
         self._orderbook_fetcher = orderbook_fetcher
+        self._redis_client_factory = redis_client_factory
+        self._prefer_hot_orderbook = orderbook_fetcher is None
+        self._orderbook_max_age_seconds = int(orderbook_max_age_seconds or settings.orderbook_snapshot_ttl_seconds)
         self._position_provider = position_provider
 
     def build_snapshot(
@@ -95,17 +120,23 @@ class RiskMarketDataService:
 
         warnings: list[str] = []
         ticker = self._fetch_ticker(category, normalized_symbol, warnings)
-        orderbook = self._fetch_orderbook(category, normalized_symbol, warnings)
+        orderbook_result = self._fetch_orderbook(normalized_exchange, category, normalized_symbol)
+        warnings.extend(orderbook_result.warnings)
+        orderbook = orderbook_result.snapshot
         best_bid = _first_not_none(
+            _best_bid(orderbook),
             ticker.bid1_price if ticker is not None else None,
-            orderbook.bids[0][0] if orderbook is not None and orderbook.bids else None,
         )
         best_ask = _first_not_none(
+            _best_ask(orderbook),
             ticker.ask1_price if ticker is not None else None,
-            orderbook.asks[0][0] if orderbook is not None and orderbook.asks else None,
         )
-        spread_percent = _spread_percent(best_bid, best_ask)
-        spread_bps = spread_percent * 100 if spread_percent is not None else None
+        spread_bps = _spread_bps_from_orderbook(orderbook)
+        if spread_bps is None:
+            spread_percent = _spread_percent(best_bid, best_ask)
+            spread_bps = spread_percent * 100 if spread_percent is not None else None
+        else:
+            spread_percent = spread_bps / 100
         if best_bid is None or best_ask is None:
             warnings.append("Bybit bid/ask is unavailable; risk-gate uses the signal entry fallback.")
 
@@ -138,7 +169,6 @@ class RiskMarketDataService:
             user_id=user_id,
             warnings=warnings,
         )
-        status = _market_status(ticker=ticker, orderbook=orderbook, best_bid=best_bid, best_ask=best_ask)
         return RiskMarketDataSnapshot(
             exchange=normalized_exchange,
             symbol=normalized_symbol,
@@ -154,8 +184,8 @@ class RiskMarketDataService:
             spread_bps=spread_bps,
             orderbook_depth_usd=orderbook_depth_usd,
             liquidation_price=liquidation_price,
-            market_data_status=status,
-            market_data_source="bybit_v5",
+            market_data_status=orderbook_result.status,
+            market_data_source=orderbook_result.source or "bybit_v5_tickers",
             warnings=tuple(_dedupe(warnings)),
         )
 
@@ -175,16 +205,104 @@ class RiskMarketDataService:
 
     def _fetch_orderbook(
         self,
+        exchange: str,
         category: str,
         symbol: str,
-        warnings: list[str],
-    ) -> BybitOrderBookSnapshot | None:
+    ) -> OrderBookReadResult:
+        if self._prefer_hot_orderbook:
+            hot_snapshot = self._read_hot_orderbook(exchange=exchange, symbol=symbol)
+            if hot_snapshot.snapshot is not None or self._orderbook_fetcher is None:
+                return hot_snapshot
+        if self._orderbook_fetcher is None:
+            return OrderBookReadResult(
+                snapshot=None,
+                status="missing",
+                source=None,
+                warnings=("Bybit L2 orderbook snapshot is missing.",),
+            )
         try:
-            return self._orderbook_fetcher(category=category, symbol=symbol, limit=50)
+            orderbook = self._orderbook_fetcher(category=category, symbol=symbol, limit=50)
         except Exception as exc:
             logger.warning("Bybit orderbook lookup failed for %s %s: %s", category, symbol, exc)
-            warnings.append("Bybit orderbook is unavailable.")
-            return None
+            return OrderBookReadResult(
+                snapshot=None,
+                status="missing",
+                source=None,
+                warnings=("Bybit orderbook is unavailable.",),
+            )
+        return OrderBookReadResult(
+            snapshot=orderbook,
+            status="fresh" if orderbook.bids and orderbook.asks else "missing",
+            source="bybit_v5_orderbook_direct",
+        )
+
+    def _read_hot_orderbook(self, *, exchange: str, symbol: str) -> OrderBookReadResult:
+        key = orderbook_hot_key(exchange=exchange, symbol=symbol)
+        try:
+            raw = self._redis_client_factory().get(key)
+        except Exception as exc:
+            logger.warning("Orderbook hot snapshot read failed for %s: %s", key, exc)
+            return OrderBookReadResult(
+                snapshot=None,
+                status="missing",
+                source=None,
+                warnings=("Bybit L2 orderbook snapshot is missing.",),
+            )
+        if raw is None:
+            return OrderBookReadResult(
+                snapshot=None,
+                status="missing",
+                source=None,
+                warnings=("Bybit L2 orderbook snapshot is missing.",),
+            )
+
+        payload = raw.decode("utf8") if isinstance(raw, bytes) else str(raw)
+        try:
+            data = json.loads(payload)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Orderbook hot snapshot is malformed for %s: %s", key, exc)
+            return OrderBookReadResult(
+                snapshot=None,
+                status="missing",
+                source=None,
+                warnings=("Bybit L2 orderbook snapshot is malformed.",),
+            )
+        if data.get("source") == PLACEHOLDER_ORDERBOOK_SOURCE:
+            return OrderBookReadResult(
+                snapshot=None,
+                status="missing",
+                source=PLACEHOLDER_ORDERBOOK_SOURCE,
+                warnings=("Bybit L2 orderbook snapshot is missing.",),
+            )
+        try:
+            snapshot = OrderBookSnapshot.model_validate(data)
+        except (TypeError, ValueError) as exc:
+            logger.warning("Orderbook hot snapshot validation failed for %s: %s", key, exc)
+            return OrderBookReadResult(
+                snapshot=None,
+                status="missing",
+                source=None,
+                warnings=("Bybit L2 orderbook snapshot is malformed.",),
+            )
+        if not snapshot.bids or not snapshot.asks:
+            return OrderBookReadResult(
+                snapshot=None,
+                status="missing",
+                source=snapshot.source,
+                warnings=("Bybit L2 orderbook snapshot is empty.",),
+            )
+        if _is_orderbook_stale(snapshot, self._orderbook_max_age_seconds):
+            return OrderBookReadResult(
+                snapshot=snapshot,
+                status="stale",
+                source=snapshot.source,
+                warnings=("Bybit L2 orderbook snapshot is stale.",),
+            )
+        return OrderBookReadResult(
+            snapshot=snapshot,
+            status="fresh",
+            source=snapshot.source,
+        )
 
     def _live_liquidation_price(
         self,
@@ -250,11 +368,55 @@ def _spread_percent(best_bid: float | None, best_ask: float | None) -> float | N
     return (best_ask - best_bid) / mid * 100
 
 
-def _side_depth_usd(orderbook: BybitOrderBookSnapshot | None, side: str) -> float | None:
+def _best_bid(orderbook: OrderBookLike | None) -> float | None:
     if orderbook is None:
         return None
+    if not orderbook.bids:
+        return None
+    level = orderbook.bids[0]
+    return float(level.price) if hasattr(level, "price") else level[0]
+
+
+def _best_ask(orderbook: OrderBookLike | None) -> float | None:
+    if orderbook is None:
+        return None
+    if not orderbook.asks:
+        return None
+    level = orderbook.asks[0]
+    return float(level.price) if hasattr(level, "price") else level[0]
+
+
+def _spread_bps_from_orderbook(orderbook: OrderBookLike | None) -> float | None:
+    if orderbook is None:
+        return None
+    if isinstance(orderbook, OrderBookSnapshot) and orderbook.spread_bps is not None:
+        return orderbook.spread_bps
+    return _spread_bps(_best_bid(orderbook), _best_ask(orderbook))
+
+
+def _side_depth_usd(orderbook: OrderBookLike | None, side: str) -> float | None:
+    if orderbook is None:
+        return None
+    if isinstance(orderbook, OrderBookSnapshot):
+        return (
+            orderbook.ask_depth_usd_0_5_pct
+            if side == "long"
+            else orderbook.bid_depth_usd_0_5_pct
+        )
     levels = orderbook.asks if side == "long" else orderbook.bids
     return sum(price * quantity for price, quantity in levels if price > 0 and quantity > 0)
+
+
+def _spread_bps(best_bid: float | None, best_ask: float | None) -> float | None:
+    spread_percent = _spread_percent(best_bid, best_ask)
+    return spread_percent * 100 if spread_percent is not None else None
+
+
+def _is_orderbook_stale(snapshot: OrderBookSnapshot, max_age_seconds: int) -> bool:
+    if max_age_seconds <= 0:
+        return False
+    age_seconds = (int(time.time() * 1000) - snapshot.timestamp) / 1000
+    return age_seconds > max_age_seconds
 
 
 def _bybit_position_side(value: str | None) -> str | None:

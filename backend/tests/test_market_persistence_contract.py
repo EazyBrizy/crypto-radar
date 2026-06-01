@@ -3,7 +3,7 @@ import unittest
 from decimal import Decimal
 
 from app.schemas.candle import OHLCVCandle
-from app.schemas.market import Features, MarketData
+from app.schemas.market import Features, MarketData, OrderBookLevel, OrderBookSnapshot
 from app.services.candle_service import CandleService
 from app.services.derivative_market import DerivativeMarketSnapshot
 from app.services.market_persistence import MarketDataPersistenceService
@@ -67,7 +67,7 @@ class MarketDataPersistenceContractTest(unittest.TestCase):
             redis_client_factory=lambda: self.redis,
         )
 
-    def test_tick_writes_clickhouse_market_tables_and_redis_hot_keys(self) -> None:
+    def test_tick_writes_clickhouse_market_tables_and_price_hot_key(self) -> None:
         tick = MarketData(
             exchange="bybit",
             symbol="BTCUSDT",
@@ -81,7 +81,7 @@ class MarketDataPersistenceContractTest(unittest.TestCase):
         tables = [insert[0] for insert in self.clickhouse.inserts]
         self.assertEqual(tables, ["market.raw_exchange_events", "market.trades"])
         self.assertIn("price:bybit:BTCUSDT", self.redis.values)
-        self.assertIn("orderbook:bybit:BTCUSDT", self.redis.values)
+        self.assertNotIn("orderbook:bybit:BTCUSDT", self.redis.values)
 
         price_ttl, price_payload_raw = self.redis.values["price:bybit:BTCUSDT"]
         self.assertEqual(price_ttl, 30)
@@ -93,6 +93,36 @@ class MarketDataPersistenceContractTest(unittest.TestCase):
         raw_payload = json.loads(self.clickhouse.inserts[0][1][0][-1])
         self.assertEqual(raw_payload["source"], "normalized_trade_tick")
         self.assertEqual(raw_payload["symbol"], "BTCUSDT")
+
+    def test_orderbook_snapshot_writes_normalized_l2_payload(self) -> None:
+        snapshot = OrderBookSnapshot(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            category="linear",
+            bids=[OrderBookLevel(price=100, quantity=1)],
+            asks=[OrderBookLevel(price=100.1, quantity=2)],
+            timestamp=1_779_796_800_123,
+            ts="2026-05-25T12:00:00Z",
+            source="bybit_v5_orderbook",
+            spread_bps=9.995,
+            bid_depth_usd_0_1_pct=100,
+            ask_depth_usd_0_1_pct=200.2,
+            bid_depth_usd_0_5_pct=100,
+            ask_depth_usd_0_5_pct=200.2,
+            bid_depth_usd_1_pct=100,
+            ask_depth_usd_1_pct=200.2,
+        )
+
+        self.service.persist_orderbook_snapshot(snapshot, ttl_seconds=15)
+
+        ttl, payload_raw = self.redis.values["orderbook:bybit:BTCUSDT"]
+        payload = json.loads(payload_raw)
+        self.assertEqual(ttl, 15)
+        self.assertEqual(payload["source"], "bybit_v5_orderbook")
+        self.assertEqual(payload["timestamp"], 1_779_796_800_123)
+        self.assertEqual(payload["bids"], [{"price": 100.0, "quantity": 1.0}])
+        self.assertEqual(payload["asks"], [{"price": 100.1, "quantity": 2.0}])
+        self.assertEqual(payload["ask_depth_usd_0_5_pct"], 200.2)
 
     def test_candles_write_supported_ohlcv_tables(self) -> None:
         open_time = 1_779_796_800_000

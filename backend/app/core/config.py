@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     derivative_snapshot_sync_interval_seconds: int = 60
     derivative_snapshot_ttl_seconds: int = 120
     bybit_derivative_snapshot_categories: str = "linear"
+    orderbook_snapshot_sync_enabled: bool = True
+    orderbook_snapshot_sync_interval_seconds: int = 10
+    orderbook_snapshot_ttl_seconds: int = 15
+    bybit_orderbook_snapshot_categories: str = "linear"
+    bybit_orderbook_snapshot_limit: int = 50
     signal_active_ttl_seconds: int = 3_600
     signal_outcome_tracking_min_score: int = 70
     signal_outcome_same_candle_resolution: str = "stop_first"

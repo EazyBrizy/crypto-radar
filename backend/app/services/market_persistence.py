@@ -7,10 +7,11 @@ from typing import Any, Protocol
 from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
 from app.schemas.candle import OHLCVCandle
-from app.schemas.market import Features, MarketData
+from app.schemas.market import Features, MarketData, OrderBookSnapshot
 
 PRICE_TTL_SECONDS = 30
 ORDERBOOK_TTL_SECONDS = 5
+ORDERBOOK_HOT_KEY_PREFIX = "orderbook"
 
 OHLCV_TABLES_BY_TIMEFRAME = {
     "1m": "market.ohlcv_1m",
@@ -55,6 +56,10 @@ def _decimal(value: float | int | str | Decimal | None) -> Decimal | None:
 
 def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def orderbook_hot_key(*, exchange: str, symbol: str) -> str:
+    return f"{ORDERBOOK_HOT_KEY_PREFIX}:{exchange.strip().lower()}:{symbol.strip().upper()}"
 
 
 def _tick_source_id(tick: MarketData) -> str:
@@ -131,7 +136,6 @@ class MarketDataPersistenceService:
         self._write_raw_exchange_event(tick, source_id, event_ts, ingest_ts)
         self._write_trade(tick, source_id, event_ts, ingest_ts)
         self._write_hot_price(tick)
-        self._write_orderbook_placeholder(tick)
 
     def persist_candles(self, candles: list[OHLCVCandle]) -> int:
         grouped_rows: dict[str, list[list[Any]]] = defaultdict(list)
@@ -153,6 +157,18 @@ class MarketDataPersistenceService:
             "market.indicator_values",
             [self._feature_row(features)],
             column_names=self._indicator_columns,
+        )
+
+    def persist_orderbook_snapshot(
+        self,
+        snapshot: OrderBookSnapshot,
+        *,
+        ttl_seconds: int = ORDERBOOK_TTL_SECONDS,
+    ) -> None:
+        self._redis().setex(
+            orderbook_hot_key(exchange=snapshot.exchange, symbol=snapshot.symbol),
+            ttl_seconds,
+            snapshot.model_dump_json(exclude_none=True),
         )
 
     def _clickhouse(self) -> ClickHouseInsertClient:
@@ -223,19 +239,6 @@ class MarketDataPersistenceService:
         self._redis().setex(
             f"price:{tick.exchange}:{tick.symbol}",
             PRICE_TTL_SECONDS,
-            _json_dumps(payload),
-        )
-
-    def _write_orderbook_placeholder(self, tick: MarketData) -> None:
-        payload = {
-            "bids": [],
-            "asks": [],
-            "ts": _utc_from_ms(tick.timestamp).isoformat().replace("+00:00", "Z"),
-            "source": "orderbook_l2_not_available",
-        }
-        self._redis().setex(
-            f"orderbook:{tick.exchange}:{tick.symbol}",
-            ORDERBOOK_TTL_SECONDS,
             _json_dumps(payload),
         )
 

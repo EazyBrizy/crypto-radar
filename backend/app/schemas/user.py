@@ -83,6 +83,7 @@ class RiskManagementSettings(BaseModel):
     virtual_slippage_model: VirtualSlippageModel = "spread_based"
     virtual_fee_model: VirtualFeeModel = "exchange_based"
     virtual_trading_uses_realistic_execution: bool = True
+    real_requires_fresh_market_data: bool = True
     real_requires_positive_edge: bool = True
     edge_min_sample_size: int = Field(default=50, ge=0, le=100_000)
     min_expectancy_after_costs_r: float = Field(default=0.05, ge=-100, le=100)
@@ -154,6 +155,7 @@ class RiskManagementPatch(BaseModel):
     virtual_slippage_model: VirtualSlippageModel | None = None
     virtual_fee_model: VirtualFeeModel | None = None
     virtual_trading_uses_realistic_execution: bool | None = None
+    real_requires_fresh_market_data: bool | None = None
     real_requires_positive_edge: bool | None = None
     edge_min_sample_size: int | None = Field(default=None, ge=0, le=100_000)
     min_expectancy_after_costs_r: float | None = Field(default=None, ge=-100, le=100)

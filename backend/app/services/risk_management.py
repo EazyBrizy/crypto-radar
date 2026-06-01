@@ -189,6 +189,7 @@ _RISK_CUSTOM_FIELDS = {
     "virtual_slippage_model",
     "virtual_fee_model",
     "virtual_trading_uses_realistic_execution",
+    "real_requires_fresh_market_data",
     "real_requires_positive_edge",
     "edge_min_sample_size",
     "min_expectancy_after_costs_r",
@@ -440,11 +441,16 @@ def calculate_risk_check_result(
         else:
             warnings.append(message)
 
-    if market_data_status == "missing":
-        if execution_mode == "real":
-            blockers.append("Bybit market data is unavailable.")
+    if market_data_status in {"missing", "stale"}:
+        message = (
+            "Bybit market data is unavailable."
+            if market_data_status == "missing"
+            else "Bybit market data is stale."
+        )
+        if execution_mode == "real" and settings.real_requires_fresh_market_data:
+            blockers.append(message)
         else:
-            warnings.append("Bybit market data is unavailable.")
+            warnings.append(message)
     elif market_data_status == "partial":
         warnings.append("Bybit market data is incomplete.")
     if execution_mode == "real" and (best_bid is None or best_ask is None):
@@ -474,8 +480,10 @@ def calculate_risk_check_result(
     orderbook_can_fill = None
     orderbook_liquidity_ratio = None
     if orderbook_depth_usd is None:
-        if execution_mode == "real":
+        if execution_mode == "real" and settings.real_requires_fresh_market_data:
             blockers.append("Orderbook liquidity is unavailable.")
+        elif market_data_status in {"missing", "stale"}:
+            warnings.append("Orderbook liquidity is unavailable.")
     elif orderbook_depth_usd <= 0:
         orderbook_can_fill = False
         blockers.append("Orderbook liquidity is empty for the entry side.")

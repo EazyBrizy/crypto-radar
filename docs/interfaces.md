@@ -339,6 +339,46 @@ Virtual execution does not hard-block on explicit unknown, insufficient, or
 weak edge snapshots, but the risk decision warns:
 `Edge is insufficient/unknown; virtual-only recommended.`
 
+## L2 Orderbook Market Quality v1
+
+`OrderbookSnapshotWorker` refreshes configured/watchlist Bybit symbols and
+writes normalized hot L2 snapshots to Redis key
+`orderbook:{exchange}:{symbol}`.
+
+`OrderBookSnapshot` fields:
+
+- `exchange`, `symbol`, `category`
+- `bids`, `asks`: normalized levels with `price` and `quantity`
+- `timestamp`: source/fetch timestamp in milliseconds
+- `ts`: ISO-8601 UTC timestamp for compatibility with existing hot payloads
+- `source`: `bybit_v5_orderbook` for real L2 snapshots
+- `spread_bps`
+- `bid_depth_usd_0_1_pct`, `ask_depth_usd_0_1_pct`
+- `bid_depth_usd_0_5_pct`, `ask_depth_usd_0_5_pct`
+- `bid_depth_usd_1_pct`, `ask_depth_usd_1_pct`
+
+Depth bands are measured from the best bid/ask. Bids include levels at or
+above `best_bid * (1 - band)`; asks include levels at or below
+`best_ask * (1 + band)`.
+
+`RiskMarketDataService` reads the Redis L2 snapshot for Bybit market context.
+It exposes `spread_bps`, entry-side `orderbook_depth_usd` from the 0.5% band,
+and `market_data_status`:
+
+- `fresh`: a non-placeholder L2 snapshot is present and within the configured
+  orderbook snapshot max age
+- `stale`: a real L2 snapshot exists but is older than the configured max age
+- `missing`: no usable L2 snapshot exists, including legacy
+  `orderbook_l2_not_available` placeholder payloads
+
+`RiskManagementSettings` adds:
+
+- `real_requires_fresh_market_data: bool = True`
+
+When `real_requires_fresh_market_data` is enabled, real entries are blocked for
+`missing` or `stale` market data. Virtual entries warn instead. If disabled,
+real entries also warn, while other risk checks still apply.
+
 ---
 
 # Rules

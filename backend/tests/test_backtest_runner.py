@@ -1,0 +1,182 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+import unittest
+
+from app.schemas.backtest import BacktestRunRequest
+from app.schemas.candle import OHLCVCandle
+from app.schemas.market import Features
+from app.services.backtest_runner import ProductionBacktestRunner
+from app.services.historical_candle_provider import InMemoryHistoricalCandleProvider
+from app.strategies.common import build_signal
+
+
+class RecordingFeatureEngine:
+    def __init__(self) -> None:
+        self.windows: list[list[OHLCVCandle]] = []
+
+    def process_candles(self, candles: list[OHLCVCandle]) -> Features:
+        self.windows.append(list(candles))
+        latest = candles[-1]
+        previous = candles[-2] if len(candles) > 1 else None
+        return Features(
+            exchange=latest.exchange,
+            symbol=latest.symbol,
+            timeframe=latest.timeframe,
+            timestamp=latest.close_time,
+            price=latest.close,
+            open=latest.open,
+            high=latest.high,
+            low=latest.low,
+            close=latest.close,
+            price_change_1m=0.0,
+            previous_open=previous.open if previous is not None else None,
+            previous_high=previous.high if previous is not None else None,
+            previous_low=previous.low if previous is not None else None,
+            previous_close=previous.close if previous is not None else None,
+            previous_volume=previous.volume if previous is not None else None,
+            volume=latest.volume,
+            volume_spike=2.0,
+            volume_ma_20=latest.volume,
+            volatility=1.0,
+            history_length=len(candles),
+            atr_14=1.0,
+        )
+
+
+class DeterministicStrategyEngine:
+    def __init__(self, trigger_timestamp: int) -> None:
+        self.trigger_timestamp = trigger_timestamp
+        self.feature_timestamps: list[int] = []
+
+    async def generate_signals(self, features: Features, **_: object):
+        self.feature_timestamps.append(features.timestamp)
+        if features.timestamp != self.trigger_timestamp:
+            return []
+        signal = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            reasons=["synthetic actionable setup"],
+            score=90,
+            entry=features.close,
+            stop_loss=features.close - 1.0,
+            take_profit_1=features.close + 1.0,
+            take_profit_2=features.close + 2.0,
+        )
+        return [signal.model_copy(update={"status": "actionable"})]
+
+
+class BacktestRunnerTest(unittest.TestCase):
+    def test_runner_creates_trade_and_computes_cost_aware_metrics(self) -> None:
+        candles = _candles()
+        feature_engine = RecordingFeatureEngine()
+        runner = ProductionBacktestRunner(
+            feature_engine=feature_engine,  # type: ignore[arg-type]
+            strategy_engine=DeterministicStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run(_request(candles))
+
+        self.assertEqual(result.status, "completed")
+        assert result.result is not None
+        self.assertGreaterEqual(result.result.trades_count, 1)
+        self.assertEqual(result.result.metrics["trades_count"], result.result.trades_count)
+        self.assertGreater(result.result.metrics["fees_total"], 0)
+        self.assertGreater(result.result.metrics["slippage_total"], 0)
+        self.assertIn("mfe_r_avg", result.result.metrics)
+        self.assertIn("mae_r_avg", result.result.metrics)
+        self.assertIn("by_strategy", result.result.metrics)
+
+    def test_runner_does_not_include_future_candles_in_feature_window(self) -> None:
+        candles = _candles()
+        feature_engine = RecordingFeatureEngine()
+        runner = ProductionBacktestRunner(
+            feature_engine=feature_engine,  # type: ignore[arg-type]
+            strategy_engine=DeterministicStrategyEngine(candles[4].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        runner.run(_request(candles))
+
+        for window in feature_engine.windows:
+            latest_open_time = window[-1].open_time
+            self.assertTrue(all(candle.open_time <= latest_open_time for candle in window))
+            self.assertEqual(window, sorted(window, key=lambda candle: candle.open_time))
+
+    def test_no_data_returns_explicit_error(self) -> None:
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        runner = ProductionBacktestRunner(
+            historical_candle_provider=InMemoryHistoricalCandleProvider([]),
+        )
+
+        with self.assertRaisesRegex(ValueError, "no_historical_data"):
+            runner.run(
+                BacktestRunRequest(
+                    strategy_code="breakout",
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    timeframe="1m",
+                    start_at=now,
+                    end_at=now + timedelta(minutes=10),
+                )
+            )
+
+
+def _request(candles: list[OHLCVCandle]) -> BacktestRunRequest:
+    return BacktestRunRequest(
+        user_id="demo_user",
+        strategy_code="breakout",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        start_at=datetime.fromtimestamp(candles[0].open_time / 1000, tz=timezone.utc),
+        end_at=datetime.fromtimestamp(candles[-1].close_time / 1000, tz=timezone.utc),
+        initial_capital=Decimal("1000"),
+        fee_rate=Decimal("0.001"),
+        slippage_bps=Decimal("5"),
+        params={
+            "warmup_candles": 3,
+            "rolling_window_candles": 3,
+            "risk_settings": {
+                "min_rr_ratio": 0,
+                "max_price_deviation_bps": 1000,
+            },
+        },
+    )
+
+
+def _candles() -> list[OHLCVCandle]:
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    closes = [100.0, 100.1, 99.9, 100.0, 102.5, 103.0, 103.2, 103.5]
+    candles: list[OHLCVCandle] = []
+    for index, close in enumerate(closes):
+        open_time = int((start + timedelta(minutes=index)).timestamp() * 1000)
+        high = close + 0.4
+        low = close - 0.4
+        if index == 4:
+            high = 103.0
+            low = 100.2
+        candles.append(
+            OHLCVCandle(
+                exchange="bybit",
+                symbol="BTCUSDT",
+                timeframe="1m",
+                open_time=open_time,
+                close_time=open_time + 59_999,
+                open=close - 0.1,
+                high=high,
+                low=low,
+                close=close,
+                volume=100 + index,
+                trades=10,
+                is_closed=True,
+            )
+        )
+    return candles
+
+
+if __name__ == "__main__":
+    unittest.main()

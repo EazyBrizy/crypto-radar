@@ -17,7 +17,10 @@ router = APIRouter(prefix="/backtests", tags=["backtests"])
 @router.post(
     "/run",
     response_model=BacktestRunResult,
-    responses={status.HTTP_501_NOT_IMPLEMENTED: {"model": BacktestNotReadyResponse}},
+    responses={
+        status.HTTP_400_BAD_REQUEST: {"description": "Backtest input or historical data error"},
+        status.HTTP_501_NOT_IMPLEMENTED: {"model": BacktestNotReadyResponse},
+    },
 )
 async def run_backtest(request: BacktestRunRequest) -> BacktestRunResult | JSONResponse:
     try:

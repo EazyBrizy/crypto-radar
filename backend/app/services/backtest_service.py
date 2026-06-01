@@ -280,4 +280,7 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-backtest_service = BacktestService()
+from app.services.backtest_runner import ProductionBacktestRunner
+
+
+backtest_service = BacktestService(runner=ProductionBacktestRunner())

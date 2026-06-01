@@ -14,6 +14,7 @@ BACKTEST_DATA_SOURCES = [
     "market.ohlcv_5m",
     "market.ohlcv_15m",
     "market.ohlcv_1h",
+    "market.ohlcv_4h",
     "market.ohlcv_1d",
     "market.indicator_values",
 ]

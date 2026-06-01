@@ -2,6 +2,53 @@
 
 MarketData → Features → StrategySignal → TradePlan → RiskGate → Execution
 
+## Backtest Runner v1
+
+Production backtests replay closed historical candles through the same service
+pipeline used by live signal generation:
+
+Historical candles -> FeatureEngine -> StrategyEngine/StrategySignalPipeline ->
+RiskGate -> virtual execution/lifecycle simulation -> metrics.
+
+`HistoricalCandleProvider` is the service boundary for loading candles:
+
+```python
+class HistoricalCandleProvider(Protocol):
+    async def load_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> list[OHLCVCandle]:
+        ...
+```
+
+Providers must return only closed candles ordered by `open_time` and must not
+include candles outside `[start_at, end_at]`.
+
+`BacktestRunRequest.params` may carry optional backtest configuration such as
+`warmup_candles`, `rolling_window_candles`, `leverage`, `risk_settings`, and
+strategy params. Existing top-level `fee_rate` and `slippage_bps` remain the
+execution cost inputs.
+
+`BacktestResultResponse` keeps the existing top-level fields and adds v1
+analytics in `metrics`:
+
+- `trades_count`, `wins`, `losses`, `winrate`
+- `avg_win_r`, `avg_loss_r`, `expectancy_r`, `profit_factor`
+- `max_drawdown_pct`
+- `fees_total`, `slippage_total`, `funding_total`
+- `avg_bars_in_trade`, `mfe_r_avg`, `mae_r_avg`
+- `tp1_rate`, `stop_rate`
+- `by_strategy`, `by_regime`
+
+No-data failures must surface explicit `no_historical_data` or
+`not_enough_data` errors instead of `not_implemented` when a runner is
+configured.
+
 `TradePlan` is a backward-compatible v1 signal contract generated from the
 legacy signal entry/stop/target fields. Existing signal fields remain available:
 `entry_min`, `entry_max`, `stop_loss`, `take_profit_1`, `take_profit_2`,

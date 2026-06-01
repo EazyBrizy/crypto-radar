@@ -663,6 +663,60 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertAlmostEqual(decision.risk_check.rr or 0, 1.2)
         self.assertEqual(decision.risk_check.min_rr_ratio, 2.0)
 
+    def test_backtest_rr_context_uses_backtest_guard_instead_of_virtual_guard(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=_low_rr_trade_plan()),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+                rr_guard_context="backtest",
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "virtual_rr_guard_mode": "hard",
+                    "backtest_rr_guard_mode": "soft",
+                }
+            ),
+        )
+
+        self.assertEqual(decision.status, "warning")
+        self.assertTrue(decision.can_enter)
+        self.assertFalse(_has_rr_policy_blocker(decision))
+        self.assertTrue(_has_rr_warning(decision))
+        self.assertTrue(decision.risk_check.risk_reward_warning)
+        self.assertFalse(decision.risk_check.risk_reward_blocked)
+        self.assertEqual(decision.risk_check.risk_reward_guard_mode, "soft")
+
+    def test_backtest_rr_context_can_hard_block_when_backtest_guard_is_hard(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=_low_rr_trade_plan()),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+                rr_guard_context="backtest",
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "virtual_rr_guard_mode": "soft",
+                    "backtest_rr_guard_mode": "hard",
+                }
+            ),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertTrue(_has_rr_policy_blocker(decision))
+        self.assertFalse(_has_rr_warning(decision))
+        self.assertTrue(decision.risk_check.risk_reward_blocked)
+        self.assertFalse(decision.risk_check.risk_reward_warning)
+        self.assertEqual(decision.risk_check.risk_reward_guard_mode, "hard")
+
     def test_real_low_rr_hard_guard_blocks_execution(self) -> None:
         decision = RiskGateService().evaluate(
             context=RiskContextService().build_real_context(

@@ -210,6 +210,7 @@ class FuturesRiskPlan(BaseModel):
 
 class RiskContext(BaseModel):
     mode: RiskExecutionMode
+    rr_guard_context: str | None = None
     stage: RiskDecisionStage = "preview"
     user_id: str = "demo_user"
     exchange: str

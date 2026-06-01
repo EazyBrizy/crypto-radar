@@ -360,6 +360,7 @@ class ProductionBacktestRunner:
                     spread_bps=_float_param(request.params, "spread_bps", None),
                     orderbook_depth_usd=_float_param(request.params, "orderbook_depth_usd", None),
                     market_data_status=str(request.params.get("market_data_status") or "unknown"),
+                    rr_guard_context="backtest",
                 ),
                 risk_settings=risk_settings,
             )
@@ -402,6 +403,7 @@ class ProductionBacktestRunner:
                     spread_bps=_float_param(request.params, "spread_bps", None),
                     orderbook_depth_usd=_float_param(request.params, "orderbook_depth_usd", None),
                     market_data_status=str(request.params.get("market_data_status") or "unknown"),
+                    rr_guard_context="backtest",
                 ),
                 risk_settings=risk_settings,
             )

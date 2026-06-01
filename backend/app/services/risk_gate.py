@@ -72,10 +72,12 @@ class RiskContextService:
         maker_fee_rate: float | None = None,
         taker_fee_rate: float | None = None,
         fee_rate_warnings: list[str] | None = None,
+        rr_guard_context: str | None = None,
     ) -> RiskContext:
         account_equity = account.equity if account.equity > 0 else request.account_balance
         return RiskContext(
             mode="virtual",
+            rr_guard_context=rr_guard_context,
             stage=stage,
             user_id=request.user_id,
             exchange=signal.exchange,
@@ -358,7 +360,7 @@ class RiskGateService:
             protection_reason=context.protection_reason,
             account_drawdown_percent=context.account_drawdown_percent,
             max_account_drawdown_percent=context.max_account_drawdown_percent,
-            execution_mode=context.mode,
+            execution_mode=context.rr_guard_context or context.mode,
             strategy=context.strategy,
             signal_edge=context.signal_edge,
         )

@@ -24,9 +24,19 @@ def strategy_rr_block_reason(signal: RadarSignal) -> str | None:
 
 
 def ensure_strategy_rr_eligible(signal: RadarSignal) -> None:
+    no_trade_reason = strategy_no_trade_block_reason(signal)
+    if no_trade_reason is not None:
+        raise StrategyRiskRewardBlocked(no_trade_reason)
     reason = strategy_rr_block_reason(signal)
     if reason is not None:
         raise StrategyRiskRewardBlocked(reason)
+
+
+def strategy_no_trade_block_reason(signal: RadarSignal) -> str | None:
+    result = signal.no_trade_filter
+    if result is None or not result.blocked:
+        return None
+    return "; ".join(result.blockers) if result.blockers else "No-trade filter blocked this entry."
 
 
 def _failed_rr_check_reason(signal: RadarSignal) -> str | None:

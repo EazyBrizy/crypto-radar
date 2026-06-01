@@ -57,6 +57,16 @@ class MarketQualitySnapshot(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
+class NoTradeFilterResult(BaseModel):
+    enabled: bool = True
+    blocked: bool = False
+    hard_block: bool = False
+    blockers: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    checks: List[SignalLayerCheck] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class MarketRegimeSnapshot(BaseModel):
     signal_timeframe: str = "stream"
     context_timeframe: Optional[str] = None
@@ -160,6 +170,7 @@ class StrategySignal(BaseModel):
     trade_plan: Optional[TradePlan] = None
     auto_entry: Optional[SignalAutoEntrySnapshot] = None
     edge: Optional[SignalEdgeSnapshot] = None
+    no_trade_filter: Optional[NoTradeFilterResult] = None
 
 
 class RadarSignal(BaseModel):
@@ -199,6 +210,7 @@ class RadarSignal(BaseModel):
     trade_plan: Optional[TradePlan] = None
     auto_entry: Optional[SignalAutoEntrySnapshot] = None
     edge: Optional[SignalEdgeSnapshot] = None
+    no_trade_filter: Optional[NoTradeFilterResult] = None
     created_at: datetime
     updated_at: datetime
     expires_at: Optional[datetime] = None

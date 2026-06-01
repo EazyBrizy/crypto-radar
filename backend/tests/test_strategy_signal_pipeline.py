@@ -606,6 +606,38 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(signal)
 
+    def test_no_trade_high_spread_disables_auto_entry(self) -> None:
+        features = _breakout_features()
+
+        signal = StrategySignalPipeline().finalize(
+            _quality_candidate(features),
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                market_quality=MarketQualityInput(volume_24h_quote=50_000_000.0, spread_bps=84.0),
+                strategy_params={
+                    "no_trade_filters_enabled": True,
+                    "max_spread_bps_for_entry": 25.0,
+                    "min_rr_ratio": 1.5,
+                    "rr_target": "final",
+                },
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "ready")
+        self.assertIn("No-trade hard block", signal.status_reason or "")
+        self.assertTrue(signal.no_trade_filter.blocked if signal and signal.no_trade_filter else False)
+        self.assertIn("high_spread", signal.no_trade_filter.metadata.get("blocker_codes") if signal and signal.no_trade_filter else [])
+        self.assertFalse(signal.auto_entry.enabled if signal and signal.auto_entry else True)
+        self.assertEqual(signal.auto_entry.status if signal and signal.auto_entry else None, "cancelled")
+        self.assertTrue(
+            any(
+                check.name == "no_trade_filter" and check.status == "failed"
+                for check in (signal.confirmation.checks if signal and signal.confirmation else [])
+            )
+        )
+
     async def test_squeeze_pre_breakout_is_watchlist(self) -> None:
         features = _breakout_features().model_copy(
             update={

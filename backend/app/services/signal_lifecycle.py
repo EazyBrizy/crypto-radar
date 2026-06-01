@@ -272,6 +272,7 @@ def _status_reason_blocks_actionable(signal: RadarSignal) -> bool:
     reason = (signal.status_reason or "").lower()
     blockers = (
         "risk/reward blocked",
+        "no-trade hard block",
         "support/resistance is too close",
         "higher timeframe is strongly against",
         "low-liquidity asset needs",

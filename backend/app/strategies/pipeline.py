@@ -7,6 +7,7 @@ from app.schemas.market import Features
 from app.schemas.signal import (
     MarketQualitySnapshot,
     MarketRegimeSnapshot,
+    NoTradeFilterResult,
     SignalAutoEntrySnapshot,
     SignalConfirmationSnapshot,
     SignalExitPlanSnapshot,
@@ -21,6 +22,7 @@ from app.schemas.trade_plan import (
     TradePlanTarget,
     build_trade_plan_from_legacy_fields,
 )
+from app.services.no_trade_filter import NoTradeFilterService
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
@@ -167,7 +169,8 @@ class StrategySignalPipeline:
     ) -> StrategySignal | None:
         signal = _ensure_trade_plan(signal)
         quality = MarketQualityFilter().evaluate(signal, context)
-        if not quality.passed:
+        no_trade_enabled = _bool_param(context.strategy_params, "no_trade_filters_enabled", False)
+        if not quality.passed and not no_trade_enabled:
             return None
 
         regime = MarketRegimeFilter().evaluate(signal, context)
@@ -179,6 +182,20 @@ class StrategySignalPipeline:
         if not risk_reward.passed and _hide_failed_rr_signals(context.strategy_params):
             return None
         confirmation = ConfirmationLayer().evaluate(signal, context, risk_reward)
+        no_trade = NoTradeFilterService().evaluate(
+            signal=signal,
+            features=context.signal_features,
+            context={
+                "quality": quality,
+                "regime": regime,
+                "confirmation": confirmation,
+                "market_quality": context.market_quality,
+            },
+            settings=context.strategy_params,
+        )
+        confirmation = _confirmation_with_no_trade_check(confirmation, no_trade)
+        if not quality.passed and not no_trade.blocked:
+            return None
         invalidation = InvalidationLayer().build(signal, context)
         exit_management = ExitManagementLayer()
         exit_plan = exit_management.build(signal, context)
@@ -196,6 +213,7 @@ class StrategySignalPipeline:
             regime=regime,
             confirmation=confirmation,
             risk_reward=risk_reward,
+            no_trade_filter=no_trade,
         )
         if _show_only_active_setups(context.strategy_params) and not _is_active_setup_status(status):
             return None
@@ -216,6 +234,9 @@ class StrategySignalPipeline:
             risks.append("Price is chopping around EMA200; trend-continuation setups are less reliable")
         if not risk_reward.passed:
             risks.append(risk_reward.reason)
+        for reason in [*no_trade.blockers, *no_trade.warnings]:
+            if reason not in risks:
+                risks.append(reason)
 
         updates: dict[str, Any] = {
             "status": status,
@@ -224,6 +245,7 @@ class StrategySignalPipeline:
             "regime": regime,
             "setup": setup,
             "confirmation": confirmation,
+            "no_trade_filter": no_trade,
             "invalidation": invalidation,
             "exit_plan": exit_plan,
             "first_target_rr": risk_reward.first_target_rr,
@@ -250,6 +272,12 @@ class StrategySignalPipeline:
                 enabled=False,
                 status="cancelled",
                 message=risk_reward.reason,
+            )
+        if no_trade.blocked:
+            updates["auto_entry"] = SignalAutoEntrySnapshot(
+                enabled=False,
+                status="cancelled",
+                message=status_reason,
             )
         updates["trade_plan"] = trade_plan
 
@@ -675,9 +703,13 @@ class RiskInvalidationLayer:
         regime: MarketRegimeSnapshot,
         confirmation: SignalConfirmationSnapshot,
         risk_reward: RiskRewardAssessment,
+        no_trade_filter: NoTradeFilterResult,
     ) -> tuple[str, str]:
         if signal.status == "invalidated":
             return ("invalidated", signal.status_reason or "Strategy idea is invalidated")
+
+        if no_trade_filter.blocked:
+            return ("ready", f"No-trade hard block: {'; '.join(no_trade_filter.blockers)}")
 
         overextension = _assess_overextension(signal, context.signal_features, context.strategy_params)
         if overextension.overextended:
@@ -1991,6 +2023,38 @@ def _risk_reward_metadata(risk_reward: RiskRewardAssessment) -> dict[str, Any]:
     if not risk_reward.passed:
         metadata["risk_reward_block_reason"] = risk_reward.reason
     return metadata
+
+
+def _confirmation_with_no_trade_check(
+    confirmation: SignalConfirmationSnapshot,
+    no_trade: NoTradeFilterResult,
+) -> SignalConfirmationSnapshot:
+    if not no_trade.enabled:
+        status = "skipped"
+        reason = "No-trade filters are disabled by settings"
+    elif no_trade.blocked:
+        status = "failed"
+        reason = "; ".join(no_trade.blockers)
+    elif no_trade.warnings:
+        status = "warning"
+        reason = "; ".join(no_trade.warnings)
+    else:
+        status = "passed"
+        reason = "No-trade filters passed"
+    return confirmation.model_copy(
+        update={
+            "passed": confirmation.passed and status != "failed",
+            "checks": [
+                *confirmation.checks,
+                SignalLayerCheck(
+                    name="no_trade_filter",
+                    status=status,
+                    reason=reason,
+                    metadata=no_trade.model_dump(mode="json"),
+                ),
+            ],
+        }
+    )
 
 
 def _overextension_check(confirmation: SignalConfirmationSnapshot) -> SignalLayerCheck | None:

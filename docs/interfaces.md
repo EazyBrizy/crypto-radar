@@ -379,6 +379,62 @@ When `real_requires_fresh_market_data` is enabled, real entries are blocked for
 `missing` or `stale` market data. Virtual entries warn instead. If disabled,
 real entries also warn, while other risk checks still apply.
 
+## No-Trade Filters v1
+
+`StrategySignal` and `RadarSignal` expose optional
+`no_trade_filter: NoTradeFilterResult | None`. The no-trade layer is evaluated
+after strategy setup, market quality, regime, confirmation, and RR checks. It
+does not change strategy formulas; it converts hard entry blockers into an
+explicit signal layer.
+
+`NoTradeFilterResult` fields:
+
+- `enabled`
+- `blocked`
+- `hard_block`
+- `blockers`
+- `warnings`
+- `checks: list[SignalLayerCheck]`
+- `metadata`
+
+The no-trade check names are:
+
+- `near_htf_obstacle`
+- `low_liquidity`
+- `high_spread`
+- `high_slippage`
+- `overextended_entry`
+- `extreme_funding`
+- `strategy_cooldown`
+- `daily_loss_streak`
+- `negative_edge`
+- `missing_market_data`
+
+Hard no-trade results must be visible in `signal.risks`, persisted in
+`features_snapshot.no_trade_filter`, and surfaced as a `no_trade_filter`
+confirmation check. A hard no-trade result makes the signal non-actionable,
+sets disabled `auto_entry` metadata, and prevents lifecycle promotion to
+`actionable`.
+
+`RiskContext` carries `no_trade_filter`. RiskGate blocks real and virtual
+trade confirmation when `no_trade_filter.blocked` is true. Research-only
+warning behavior is not introduced in v1.
+
+No-trade settings are configurable through strategy runtime/risk settings:
+
+- `no_trade_filters_enabled`
+- `max_spread_bps_for_entry`
+- `max_slippage_bps_for_entry`
+- `min_depth_usd_for_entry`
+- `max_obstacle_distance_r`
+- `cooldown_after_stop_minutes`
+- `max_strategy_losses_per_day`
+
+Existing related settings remain honored where applicable:
+`real_requires_fresh_market_data`, `real_requires_positive_edge`,
+`edge_min_sample_size`, `min_expectancy_after_costs_r`, and strategy funding
+thresholds such as `funding_block_threshold`.
+
 ---
 
 # Rules

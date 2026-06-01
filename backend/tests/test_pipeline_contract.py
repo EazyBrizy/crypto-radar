@@ -9,6 +9,7 @@ from app.schemas.pipeline import (
     normalized_topic_for,
     raw_topic_for,
 )
+from app.schemas.signal import NoTradeFilterResult, SignalLayerCheck
 
 
 EXPECTED_PIPELINE_STAGES = (
@@ -100,6 +101,28 @@ class PipelineContractTest(unittest.TestCase):
             event_time=1_717_000_000_000,
         )
         self.assertEqual(normalized.topic, "market.trades.normalized")
+
+    def test_no_trade_filter_result_contract_exposes_blockers(self) -> None:
+        result = NoTradeFilterResult(
+            enabled=True,
+            blocked=True,
+            hard_block=True,
+            blockers=["Spread 84.0 bps is above entry limit 25.0 bps"],
+            checks=[
+                SignalLayerCheck(
+                    name="high_spread",
+                    status="failed",
+                    reason="Spread 84.0 bps is above entry limit 25.0 bps",
+                )
+            ],
+            metadata={"blocker_codes": ["high_spread"]},
+        )
+
+        payload = result.model_dump(mode="json")
+
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["checks"][0]["name"], "high_spread")
+        self.assertEqual(payload["metadata"]["blocker_codes"], ["high_spread"])
 
 
 if __name__ == "__main__":

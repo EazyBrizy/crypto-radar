@@ -715,6 +715,7 @@ def _radar_signal_from_strategy_signal(signal: StrategySignal, candle: OHLCVCand
         exit_plan=signal.exit_plan,
         trade_plan=signal.trade_plan,
         auto_entry=signal.auto_entry,
+        no_trade_filter=signal.no_trade_filter,
         created_at=now,
         updated_at=now,
     )

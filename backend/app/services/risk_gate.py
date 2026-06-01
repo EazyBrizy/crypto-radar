@@ -130,6 +130,7 @@ class RiskContextService:
             manual_take_profit_price=manual_take_profit_price,
             trade_plan=signal.trade_plan,
             signal_edge=signal.edge,
+            no_trade_filter=signal.no_trade_filter,
         )
 
     def build_real_context(
@@ -238,6 +239,7 @@ class RiskContextService:
             manual_take_profit_price=manual_take_profit_price,
             trade_plan=signal.trade_plan,
             signal_edge=signal.edge,
+            no_trade_filter=signal.no_trade_filter,
         )
 
 
@@ -359,6 +361,17 @@ class RiskGateService:
             execution_mode=context.mode,
             signal_edge=context.signal_edge,
         )
+        no_trade_blockers = _no_trade_blockers(context)
+        no_trade_warnings = _no_trade_warnings(context)
+        if no_trade_blockers or no_trade_warnings:
+            no_trade_status = "failed" if no_trade_blockers else "warning" if risk_check.status == "passed" else risk_check.status
+            risk_check = risk_check.model_copy(
+                update={
+                    "status": no_trade_status,
+                    "blockers": _dedupe([*risk_check.blockers, *no_trade_blockers]),
+                    "warnings": _dedupe([*risk_check.warnings, *no_trade_warnings]),
+                }
+            )
         if take_profit_blockers:
             risk_check = risk_check.model_copy(
                 update={
@@ -445,6 +458,20 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _no_trade_blockers(context: RiskContext) -> list[str]:
+    result = context.no_trade_filter
+    if result is None or not result.blocked:
+        return []
+    return result.blockers or ["No-trade filter blocked this entry."]
+
+
+def _no_trade_warnings(context: RiskContext) -> list[str]:
+    result = context.no_trade_filter
+    if result is None or result.blocked:
+        return []
+    return result.warnings
 
 
 def _signal_entry_price(signal: RadarSignal) -> float | None:

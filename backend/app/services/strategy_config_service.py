@@ -47,6 +47,16 @@ DEFAULT_STRATEGY_QUALITY_PARAMS: dict[str, Any] = {
     },
 }
 
+DEFAULT_NO_TRADE_RISK_SETTINGS: dict[str, Any] = {
+    "no_trade_filters_enabled": True,
+    "max_spread_bps_for_entry": 50.0,
+    "max_slippage_bps_for_entry": 150.0,
+    "min_depth_usd_for_entry": 0.0,
+    "max_obstacle_distance_r": 1.0,
+    "cooldown_after_stop_minutes": 0,
+    "max_strategy_losses_per_day": 0,
+}
+
 DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
     "trend_pullback_continuation": {
         "entry_model": "zone",
@@ -358,6 +368,7 @@ def _default_strategy_risk_settings(user_id: str) -> dict[str, Any]:
         "min_rr_ratio": min_rr_ratio,
         "hide_failed_rr_signals": False,
         "show_only_active_setups": False,
+        **DEFAULT_NO_TRADE_RISK_SETTINGS,
     }
 
 
@@ -365,6 +376,8 @@ def _risk_settings_for_strategy(strategy_code: str, base_settings: dict[str, Any
     settings = dict(base_settings)
     settings.setdefault("hide_failed_rr_signals", False)
     settings.setdefault("show_only_active_setups", False)
+    for key, value in DEFAULT_NO_TRADE_RISK_SETTINGS.items():
+        settings.setdefault(key, value)
     settings["rr_target"] = _default_rr_target_for_strategy(strategy_code)
     settings["rr_target_default_version"] = RR_TARGET_DEFAULT_VERSION
     return settings
@@ -376,6 +389,7 @@ def _persisted_risk_settings_for_strategy(strategy_code: str) -> dict[str, Any]:
         "rr_target_default_version": RR_TARGET_DEFAULT_VERSION,
         "hide_failed_rr_signals": False,
         "show_only_active_setups": False,
+        **DEFAULT_NO_TRADE_RISK_SETTINGS,
     }
 
 
@@ -402,6 +416,10 @@ def _normalize_existing_strategy_defaults(configs: list[UserStrategyConfig]) -> 
         if "show_only_active_setups" not in risk_settings:
             risk_settings["show_only_active_setups"] = False
             config_changed = True
+        for key, value in DEFAULT_NO_TRADE_RISK_SETTINGS.items():
+            if key not in risk_settings:
+                risk_settings[key] = value
+                config_changed = True
         if "rr_target" not in risk_settings:
             risk_settings["rr_target"] = _default_rr_target_for_strategy(strategy_code)
             config_changed = True

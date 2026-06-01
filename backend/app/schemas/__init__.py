@@ -72,6 +72,7 @@ from app.schemas.risk import (
 )
 from app.schemas.signal import (
     ErrorResponse,
+    NoTradeFilterResult,
     RadarResponse,
     RadarSignal,
     ScoredSignal,
@@ -164,6 +165,7 @@ __all__ = [
     "NormalizedCandleEvent",
     "NormalizedOrderBookEvent",
     "NormalizedTradeEvent",
+    "NoTradeFilterResult",
     "OHLCVCandle",
     "OrderBookLevel",
     "PIPELINE_STAGES",

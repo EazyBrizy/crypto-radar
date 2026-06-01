@@ -85,6 +85,13 @@ class RiskManagementSettings(BaseModel):
     virtual_trading_uses_realistic_execution: bool = True
     real_requires_fresh_market_data: bool = True
     real_requires_positive_edge: bool = True
+    no_trade_filters_enabled: bool = True
+    max_spread_bps_for_entry: float = Field(default=50.0, ge=0, le=10_000)
+    max_slippage_bps_for_entry: float = Field(default=150.0, ge=0, le=10_000)
+    min_depth_usd_for_entry: float = Field(default=0.0, ge=0)
+    max_obstacle_distance_r: float = Field(default=1.0, ge=0, le=100)
+    cooldown_after_stop_minutes: int = Field(default=0, ge=0, le=43_200)
+    max_strategy_losses_per_day: int = Field(default=0, ge=0, le=1_000)
     edge_min_sample_size: int = Field(default=50, ge=0, le=100_000)
     min_expectancy_after_costs_r: float = Field(default=0.05, ge=-100, le=100)
     strategy_risk_multipliers: dict[str, float] = Field(
@@ -157,6 +164,13 @@ class RiskManagementPatch(BaseModel):
     virtual_trading_uses_realistic_execution: bool | None = None
     real_requires_fresh_market_data: bool | None = None
     real_requires_positive_edge: bool | None = None
+    no_trade_filters_enabled: bool | None = None
+    max_spread_bps_for_entry: float | None = Field(default=None, ge=0, le=10_000)
+    max_slippage_bps_for_entry: float | None = Field(default=None, ge=0, le=10_000)
+    min_depth_usd_for_entry: float | None = Field(default=None, ge=0)
+    max_obstacle_distance_r: float | None = Field(default=None, ge=0, le=100)
+    cooldown_after_stop_minutes: int | None = Field(default=None, ge=0, le=43_200)
+    max_strategy_losses_per_day: int | None = Field(default=None, ge=0, le=1_000)
     edge_min_sample_size: int | None = Field(default=None, ge=0, le=100_000)
     min_expectancy_after_costs_r: float | None = Field(default=None, ge=-100, le=100)
     strategy_risk_multipliers: dict[str, float] | None = None

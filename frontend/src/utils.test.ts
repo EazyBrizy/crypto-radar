@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RadarSignal } from "./types";
-import { isOpenFeedSignal, isSignalExpired, signalAge, signalTtlLabel, signalUpdatedAge } from "./utils";
+import {
+  isOpenFeedSignal,
+  isRiskRewardBlocked,
+  isSignalExpired,
+  riskRewardWarningReason,
+  signalAge,
+  signalTtlLabel,
+  signalUpdatedAge
+} from "./utils";
 
 const baseSignal: RadarSignal = {
   id: "sig_1",
@@ -83,5 +91,52 @@ describe("signal expiry utilities", () => {
 
     expect(signalAge(refreshedSignal)).toBe("58m ago");
     expect(signalUpdatedAge(refreshedSignal)).toBe("just now");
+  });
+});
+
+describe("risk/reward display utilities", () => {
+  it("treats failed legacy RR metadata as a virtual warning instead of a hard block", () => {
+    const signal: RadarSignal = {
+      ...baseSignal,
+      selected_rr: 0.8,
+      min_rr_ratio: 1.5,
+      confirmation: {
+        passed: false,
+        checks: [
+          {
+            name: "risk_reward_guard",
+            status: "failed",
+            score: 0.8,
+            reason: "Risk/reward blocked: nearest target is below minimum",
+            metadata: { risk_reward_blocked: true }
+          }
+        ]
+      }
+    };
+
+    expect(isRiskRewardBlocked(signal)).toBe(false);
+    expect(riskRewardWarningReason(signal)).toContain("Risk/reward warning");
+    expect(riskRewardWarningReason(signal)?.toLowerCase()).not.toContain("blocked");
+  });
+
+  it("keeps explicitly hard RR failures as blockers", () => {
+    const signal: RadarSignal = {
+      ...baseSignal,
+      confirmation: {
+        passed: false,
+        checks: [
+          {
+            name: "risk_reward_guard",
+            status: "failed",
+            score: 0.8,
+            reason: "Risk/reward blocked: nearest target is below minimum",
+            metadata: { risk_reward_blocked: true, risk_reward_guard_mode: "hard" }
+          }
+        ]
+      }
+    };
+
+    expect(isRiskRewardBlocked(signal)).toBe(true);
+    expect(riskRewardWarningReason(signal)).toBeNull();
   });
 });

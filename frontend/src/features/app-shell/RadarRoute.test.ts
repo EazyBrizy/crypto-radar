@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { RadarSignal, SignalStatus } from "@/types";
-import { shouldRequestExecutionPreview } from "./RadarRoute";
+import { canArmAutoEntry, canSendPaperTrade, shouldRequestExecutionPreview } from "./RadarRoute";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() })
@@ -72,5 +72,29 @@ describe("shouldRequestExecutionPreview", () => {
     expect(shouldRequestExecutionPreview(signalWithStatus("ready"), "open", true)).toBe(false);
     expect(shouldRequestExecutionPreview(signalWithStatus("expired"), "open", false)).toBe(false);
     expect(shouldRequestExecutionPreview(null, "open", false)).toBe(false);
+  });
+});
+
+describe("paper trade eligibility", () => {
+  it("allows auto paper for soft or legacy RR warnings and leaves execution to backend risk gate", () => {
+    const lowRrSignal: RadarSignal = {
+      ...baseSignal,
+      selected_rr: 0.8,
+      confirmation: {
+        passed: false,
+        checks: [
+          {
+            name: "risk_reward_guard",
+            status: "failed",
+            score: 0.8,
+            reason: "Risk/reward blocked: nearest target is below minimum",
+            metadata: { risk_reward_blocked: true }
+          }
+        ]
+      }
+    };
+
+    expect(canArmAutoEntry(lowRrSignal)).toBe(true);
+    expect(canSendPaperTrade(lowRrSignal)).toBe(true);
   });
 });

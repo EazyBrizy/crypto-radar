@@ -54,13 +54,6 @@ def signal_no_trade_block_reason(signal: SignalLike) -> str | None:
 def signal_rr_warning_reason(signal: SignalLike) -> str | None:
     check = _confirmation_check(signal, "risk_reward_guard")
     metadata = check.metadata if check is not None else {}
-    metadata_reason = _metadata_string(
-        metadata,
-        "risk_reward_warning_reason",
-        "risk_reward_block_reason",
-    )
-    if metadata_reason is not None:
-        return metadata_reason
 
     selected_rr = _first_number(
         metadata.get("selected_rr") if isinstance(metadata, Mapping) else None,
@@ -76,8 +69,16 @@ def signal_rr_warning_reason(signal: SignalLike) -> str | None:
             f"below configured minimum {min_rr:.2f}R"
         )
 
+    metadata_warning_reason = _metadata_string(metadata, "risk_reward_warning_reason")
+    if metadata_warning_reason is not None:
+        return _as_rr_warning_reason(metadata_warning_reason)
+
+    metadata_block_reason = _metadata_string(metadata, "risk_reward_block_reason")
+    if metadata_block_reason is not None:
+        return _as_rr_warning_reason(metadata_block_reason)
+
     if check is not None and check.status in {"warning", "failed"}:
-        return check.reason or "Risk/reward guard reported a warning."
+        return _as_rr_warning_reason(check.reason) or "Risk/reward guard reported a warning."
 
     return None
 
@@ -189,3 +190,22 @@ def _rr_target_label(signal: SignalLike) -> str:
     if target == "final":
         return "planned final target"
     return target
+
+
+def _as_rr_warning_reason(reason: str | None) -> str | None:
+    if reason is None:
+        return None
+    value = reason.strip()
+    if not value:
+        return None
+    lower = value.lower()
+    if lower.startswith("risk/reward blocked:"):
+        detail = value.split(":", 1)[1].strip()
+        return (
+            f"Risk/reward warning: {detail}"
+            if detail
+            else "Risk/reward warning: selected R:R is below configured reporting threshold."
+        )
+    if "blocked" in lower or "blocker" in lower:
+        return "Risk/reward warning: selected R:R is below configured reporting threshold."
+    return value

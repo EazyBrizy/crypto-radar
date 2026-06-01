@@ -43,7 +43,7 @@ from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.risk_management import get_user_risk_management_settings, resolve_rr_guard_mode
 from app.services.risk_market_data import RiskMarketDataService, RiskMarketDataSnapshot, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
-from app.services.signal_risk_reward import ensure_signal_execution_eligible
+from app.services.signal_risk_reward import ensure_signal_execution_eligible, signal_rr_warning_reason
 from app.services.signal_service import ClickHouseSignalAnalyticsWriter, RedisSignalHotStore
 from app.services.trade_repository import (
     PostgresVirtualTradeRepository,
@@ -412,6 +412,7 @@ class VirtualTradingService:
         open_user_positions: list[VirtualTrade],
     ) -> VirtualTrade:
         raw_entry = self._entry_price(signal)
+        rr_warning = signal_rr_warning_reason(signal)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
         market_data = self._risk_market_snapshot(signal, request, raw_entry)
         fee_rate = self._risk_fee_snapshot(signal, request, risk_settings)
@@ -512,7 +513,11 @@ class VirtualTradingService:
             reference_price=market_data.entry_price,
             requested_size_usd=requested_size_usd,
         )
-        execution = self._execution_with_risk_decision(execution, raw_decision)
+        execution = self._execution_with_risk_decision(
+            execution,
+            raw_decision,
+            rr_warning=rr_warning,
+        )
         if execution.status == "rejected_virtual_execution" or execution.average_price is None:
             raise VirtualExecutionRejected(execution)
 
@@ -594,7 +599,11 @@ class VirtualTradingService:
             self._record_blocked_risk_decision(signal, gate_request, filled_decision)
             raise ValueError("; ".join(filled_decision.blockers))
 
-        execution = self._execution_with_risk_decision(execution, filled_decision)
+        execution = self._execution_with_risk_decision(
+            execution,
+            filled_decision,
+            rr_warning=rr_warning,
+        )
         quantity = size_usd / entry_price
         now = datetime.now(timezone.utc)
         trade = VirtualTrade(
@@ -641,6 +650,7 @@ class VirtualTradingService:
         request: ManualConfirmRequest,
     ) -> _VirtualEntrySimulation:
         raw_entry = self._entry_price(signal)
+        rr_warning = signal_rr_warning_reason(signal)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
         market_data = self._risk_market_snapshot(signal, request, raw_entry)
         fee_rate = self._risk_fee_snapshot(signal, request, risk_settings)
@@ -740,7 +750,11 @@ class VirtualTradingService:
             reference_price=market_data.entry_price,
             requested_size_usd=requested_size_usd,
         )
-        execution = self._execution_with_risk_decision(execution, decision)
+        execution = self._execution_with_risk_decision(
+            execution,
+            decision,
+            rr_warning=rr_warning,
+        )
         return _VirtualEntrySimulation(
             execution=execution,
             account=account,
@@ -856,19 +870,23 @@ class VirtualTradingService:
     def _execution_with_risk_decision(
         execution: VirtualExecutionReport,
         decision: RiskDecision,
+        *,
+        rr_warning: str | None = None,
     ) -> VirtualExecutionReport:
+        rr_warning_note = _rr_warning_note(rr_warning)
+        risk_decision = _risk_decision_with_rr_warning(decision, rr_warning_note)
         return execution.model_copy(
             update={
-                "risk_decision": decision,
-                "risk_adjustment_plan": decision.risk_adjustment_plan,
-                "risk_check": decision.risk_check,
-                "position_sizing": decision.position_sizing,
-                "stop_loss_plan": decision.stop_loss_plan,
-                "take_profit_plan": decision.take_profit_plan,
-                "breakeven_plan": decision.breakeven_plan,
-                "trailing_stop_plan": decision.trailing_stop_plan,
-                "futures_risk_plan": decision.futures_risk_plan,
-                "notes": _dedupe_strings([*execution.notes, *decision.notes]),
+                "risk_decision": risk_decision,
+                "risk_adjustment_plan": risk_decision.risk_adjustment_plan,
+                "risk_check": risk_decision.risk_check,
+                "position_sizing": risk_decision.position_sizing,
+                "stop_loss_plan": risk_decision.stop_loss_plan,
+                "take_profit_plan": risk_decision.take_profit_plan,
+                "breakeven_plan": risk_decision.breakeven_plan,
+                "trailing_stop_plan": risk_decision.trailing_stop_plan,
+                "futures_risk_plan": risk_decision.futures_risk_plan,
+                "notes": _dedupe_strings([*execution.notes, *risk_decision.notes]),
             }
         )
 
@@ -1175,6 +1193,47 @@ def _trade_plan_time_stop_metadata(signal: RadarSignal) -> dict[str, Any] | None
             if source.get(key) is not None:
                 metadata[key] = source[key]
     return metadata or None
+
+
+def _risk_decision_with_rr_warning(decision: RiskDecision, rr_warning_note: str | None) -> RiskDecision:
+    if rr_warning_note is None:
+        return decision
+
+    risk_check = decision.risk_check
+    risk_check_status = "warning" if risk_check.status == "passed" else risk_check.status
+    decision_status = "warning" if decision.status == "passed" else decision.status
+    updated_risk_check = risk_check.model_copy(
+        update={
+            "status": risk_check_status,
+            "warnings": _dedupe_strings([*risk_check.warnings, rr_warning_note]),
+            "risk_reward_warning": risk_check.risk_reward_warning or not risk_check.risk_reward_blocked,
+            "risk_reward_warning_reason": risk_check.risk_reward_warning_reason or rr_warning_note,
+        }
+    )
+    return decision.model_copy(
+        update={
+            "status": decision_status,
+            "warnings": _dedupe_strings([*decision.warnings, rr_warning_note]),
+            "notes": _dedupe_strings([*decision.notes, rr_warning_note]),
+            "risk_check": updated_risk_check,
+        }
+    )
+
+
+def _rr_warning_note(reason: str | None) -> str | None:
+    if reason is None:
+        return None
+    value = reason.strip()
+    if not value:
+        return None
+    summary = "Risk/reward warning: selected R:R is below configured reporting threshold."
+    lower = value.lower()
+    if "blocked" in lower or "blocker" in lower:
+        return summary
+    if lower.startswith("risk/reward warning:"):
+        detail = value.split(":", 1)[1].strip()
+        return f"{summary} {detail}" if detail and detail != summary else summary
+    return f"{summary} {value}"
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:

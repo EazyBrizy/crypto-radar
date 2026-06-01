@@ -74,7 +74,7 @@ describe("SignalCard", () => {
             status: "failed",
             score: 0.8,
             reason: "Risk/reward blocked: nearest target is 0.80R, minimum 1.50R",
-            metadata: { risk_reward_blocked: true }
+            metadata: { risk_reward_blocked: true, risk_reward_guard_mode: "hard" }
           }
         ]
       },
@@ -139,5 +139,30 @@ describe("SignalCard", () => {
     expect(screen.getByText(/ema pullback zone \| 100-101/u)).toBeInTheDocument();
     expect(screen.getByText("125 2.50R")).toBeInTheDocument();
     expect(screen.getByText("0.80R")).toBeInTheDocument();
+  });
+
+  it("shows soft RR failures as warnings instead of blocked badges", () => {
+    const signal: RadarSignal = {
+      ...baseSignal,
+      selected_rr: 0.8,
+      min_rr_ratio: 1.5,
+      confirmation: {
+        passed: false,
+        checks: [
+          {
+            name: "risk_reward_guard",
+            status: "failed",
+            score: 0.8,
+            reason: "Risk/reward blocked: nearest target is below minimum",
+            metadata: { risk_reward_blocked: true }
+          }
+        ]
+      }
+    };
+
+    render(<SignalCard signal={signal} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("RR warning")).toBeInTheDocument();
+    expect(screen.queryByText("RR blocked")).not.toBeInTheDocument();
   });
 });

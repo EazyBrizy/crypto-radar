@@ -66,21 +66,46 @@ export function signalTradePlanSummary(signal: RadarSignal): SignalTradePlanSumm
 
 export function isRiskRewardBlocked(signal: RadarSignal): boolean {
   const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
-  const metadataBlocked = check?.metadata.risk_reward_blocked === true;
-  return metadataBlocked || check?.status === "failed";
+  if (!check) return false;
+  const guardMode = stringMetadata(check.metadata, "risk_reward_guard_mode");
+  const metadataBlocked = check.metadata.risk_reward_blocked === true;
+  return guardMode === "hard" && (metadataBlocked || check.status === "failed");
 }
 
 export function riskRewardBlockReason(signal: RadarSignal): string | null {
-  const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
-  const metadataReason = check?.metadata.risk_reward_block_reason;
-  if (typeof metadataReason === "string" && metadataReason) return metadataReason;
-  if (check?.status === "failed" && check.reason) return check.reason;
   if (!isRiskRewardBlocked(signal)) return null;
+  const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
+  const metadataReason = check ? stringMetadata(check.metadata, "risk_reward_block_reason") : null;
+  if (metadataReason) return metadataReason;
+  if (check?.status === "failed" && check.reason) return check.reason;
   const selectedRr = signal.trade_plan?.risk_rules.selected_rr ?? signal.selected_rr;
   const minRr = signal.trade_plan?.risk_rules.min_rr_ratio ?? signal.min_rr_ratio;
   return selectedRr != null && minRr != null
     ? `Selected RR ${selectedRr.toFixed(2)}R is below minimum ${minRr.toFixed(2)}R.`
     : "Risk/reward guard blocked this signal.";
+}
+
+export function riskRewardWarningReason(signal: RadarSignal): string | null {
+  if (isRiskRewardBlocked(signal)) return null;
+  const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
+  const metadata = check?.metadata ?? {};
+  const selectedRr = signal.trade_plan?.risk_rules.selected_rr
+    ?? signal.selected_rr
+    ?? numberMetadata(metadata, "selected_rr");
+  const minRr = signal.trade_plan?.risk_rules.min_rr_ratio
+    ?? signal.min_rr_ratio
+    ?? numberMetadata(metadata, "min_rr_ratio");
+  if (selectedRr != null && minRr != null && minRr > 0 && selectedRr < minRr) {
+    return `Risk/reward warning: selected R:R ${selectedRr.toFixed(2)}R is below configured reporting threshold ${minRr.toFixed(2)}R.`;
+  }
+  const metadataWarning = stringMetadata(metadata, "risk_reward_warning_reason");
+  if (metadataWarning) return asRiskRewardWarning(metadataWarning);
+  const metadataBlockReason = stringMetadata(metadata, "risk_reward_block_reason");
+  if (metadataBlockReason) return asRiskRewardWarning(metadataBlockReason);
+  if (check?.metadata.risk_reward_warning === true || check?.metadata.risk_reward_blocked === true || check?.status === "warning" || check?.status === "failed") {
+    return asRiskRewardWarning(check.reason) ?? "Risk/reward warning: selected R:R is below configured reporting threshold.";
+  }
+  return null;
 }
 
 export function tradeTargetStates(trade: TradeJournalEntry): VirtualTradeTargetState[] {
@@ -212,6 +237,33 @@ function planEntryType(signal: RadarSignal): string {
 
 function formatPlanLabel(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function stringMetadata(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+function numberMetadata(metadata: Record<string, unknown>, key: string): number | null {
+  const value = metadata[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asRiskRewardWarning(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  const value = reason.trim();
+  if (!value) return null;
+  const lower = value.toLowerCase();
+  if (lower.startsWith("risk/reward blocked:")) {
+    const detail = value.split(":", 2)[1]?.trim();
+    return detail
+      ? `Risk/reward warning: ${detail}`
+      : "Risk/reward warning: selected R:R is below configured reporting threshold.";
+  }
+  if (lower.includes("blocked") || lower.includes("blocker")) {
+    return "Risk/reward warning: selected R:R is below configured reporting threshold.";
+  }
+  return value;
 }
 
 function midpoint(left: number | null | undefined, right: number | null | undefined): number | null {

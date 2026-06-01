@@ -8,6 +8,7 @@ import type { RadarSignal, SignalEdgeStatus } from "../types";
 import {
   formatPrice,
   isRiskRewardBlocked,
+  riskRewardWarningReason,
   isSignalExpired,
   riskLabel,
   signalAge,
@@ -30,6 +31,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
   const plan = signalTradePlanSummary(signal);
   const targets = planTargets(plan.targets);
   const rrBlocked = isRiskRewardBlocked(signal);
+  const rrWarning = riskRewardWarningReason(signal);
   const noTrade = signal.no_trade_filter ?? null;
   const edge = edgeBadge(signal.edge?.status ?? "unknown", signal.edge?.sample_size, signal.edge?.min_sample_size);
 
@@ -69,6 +71,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
       <div className="signal-badge-row">
         <Badge tone={edge.tone}>{edge.label}</Badge>
         {rrBlocked ? <Badge tone="red">RR blocked</Badge> : null}
+        {!rrBlocked && rrWarning ? <Badge tone="yellow">RR warning</Badge> : null}
         {noTrade ? <Badge tone={noTrade.blocked ? "red" : noTrade.warnings.length ? "yellow" : "green"}>{noTrade.blocked ? "No-trade" : noTrade.warnings.length ? "No-trade warn" : "No-trade clear"}</Badge> : null}
       </div>
 

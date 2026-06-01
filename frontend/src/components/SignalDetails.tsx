@@ -6,7 +6,15 @@ import { BarChart3, CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert,
 
 import { Badge } from "./Badge";
 import type { ExecutionGateStatus, ImpactRisk, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
-import { entryZone, formatPrice, isRiskRewardBlocked, riskLabel, riskRewardBlockReason, signalTradePlanSummary } from "../utils";
+import {
+  entryZone,
+  formatPrice,
+  isRiskRewardBlocked,
+  riskLabel,
+  riskRewardBlockReason,
+  riskRewardWarningReason,
+  signalTradePlanSummary
+} from "../utils";
 
 const LazySignalDetailsChart = dynamic(
   () => import("@/components/charts/SignalDetailsChart").then((module) => module.SignalDetailsChart),
@@ -51,16 +59,17 @@ export function SignalDetails({
 
   const isLong = signal.direction === "long";
   const riskFailed = executionPreview?.risk_check?.status === "failed";
-  const strategyRiskFailed = isStrategyRiskRewardFailed(signal);
+  const strategyRiskBlocked = isRiskRewardBlocked(signal);
+  const strategyRiskWarning = riskRewardWarningReason(signal);
   const statusAllowsTrade = signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
   const autoEntryPending = signal.auto_entry?.status === "pending";
   const canArmAutoEntry = signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback";
-  const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || strategyRiskFailed || (!statusAllowsTrade && !canArmAutoEntry) || (statusAllowsTrade && riskFailed);
+  const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || strategyRiskBlocked || (!statusAllowsTrade && !canArmAutoEntry) || (statusAllowsTrade && riskFailed);
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const breakdown = signal.score_breakdown;
   const tradePlan = signalTradePlanSummary(signal);
   const tradePlanComplete = tradePlan.entryPrice != null && tradePlan.stopLoss != null && tradePlan.targets.length > 0;
-  const riskRewardOk = !strategyRiskFailed && (tradePlan.selectedRr != null || signal.risk_reward != null);
+  const riskRewardOk = tradePlan.selectedRr != null || signal.risk_reward != null;
   const reasons = signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."];
 
   return (
@@ -173,10 +182,13 @@ export function SignalDetails({
       {riskFailed ? (
         <p className="form-description">Entry is blocked by backend risk gate.</p>
       ) : null}
-      {strategyRiskFailed ? (
-        <p className="form-description">Strategy Risk/Reward is below the configured minimum, so Paper Trade is disabled for this idea.</p>
+      {strategyRiskBlocked ? (
+        <p className="form-description">Hard R:R execution policy blocks this idea.</p>
       ) : null}
-      {!statusAllowsTrade && !autoEntryPending && !strategyRiskFailed ? (
+      {!strategyRiskBlocked && strategyRiskWarning ? (
+        <p className="form-description">{strategyRiskWarning}</p>
+      ) : null}
+      {!statusAllowsTrade && !autoEntryPending && !strategyRiskBlocked ? (
         <p className="form-description">Use Auto Paper to wait for confirmation and enter automatically after the trigger candle.</p>
       ) : null}
     </section>
@@ -368,11 +380,6 @@ function stringMetadata(metadata: Record<string, unknown>, key: string): string 
   return typeof value === "string" && value ? value : null;
 }
 
-function isStrategyRiskRewardFailed(signal: RadarSignal): boolean {
-  const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
-  return check?.metadata.risk_reward_blocked === true || check?.status === "failed";
-}
-
 function RiskRewardDetailBlock({ signal }: { signal: RadarSignal }) {
   const details = riskRewardDetails(signal);
   if (!details) return null;
@@ -515,16 +522,18 @@ function RiskBlockersDetailBlock({
   signal: RadarSignal;
   execution: VirtualExecutionReport | null;
 }) {
-  const rrReason = riskRewardBlockReason(signal);
+  const rrBlockReason = riskRewardBlockReason(signal);
+  const rrWarningReason = riskRewardWarningReason(signal);
   const noTrade = signal.no_trade_filter ?? null;
   const riskDecision = execution?.risk_decision ?? null;
   const riskCheck = execution?.risk_check ?? null;
   const blockers = dedupe([
-    ...(rrReason ? [rrReason] : []),
+    ...(rrBlockReason ? [rrBlockReason] : []),
     ...(noTrade?.blockers ?? []),
     ...(riskDecision?.blockers ?? riskCheck?.blockers ?? [])
   ]);
   const warnings = dedupe([
+    ...(!rrBlockReason && rrWarningReason ? [rrWarningReason] : []),
     ...(noTrade?.warnings ?? []),
     ...(riskDecision?.warnings ?? riskCheck?.warnings ?? [])
   ]);
@@ -565,7 +574,7 @@ function StrategyLayersBlock({ signal, execution }: { signal: RadarSignal; execu
     },
     {
       label: "risk_reward",
-      value: `${isRiskRewardBlocked(signal) ? "blocked" : "selected"} ${formatRMultiple(plan.selectedRr)}`
+      value: `${isRiskRewardBlocked(signal) ? "blocked" : riskRewardWarningReason(signal) ? "warning" : "selected"} ${formatRMultiple(plan.selectedRr)}`
     },
     {
       label: "confirmation",

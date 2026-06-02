@@ -209,32 +209,50 @@ StrategyTestMatrix = {
 }
 ```
 
-`StrategyTestTrade` is a simulated trade observation. It is not an order,
-position, balance event, or risk-state mutation:
+`StrategyTestTrade` is a simulated trade-level analytics observation stored in
+ClickHouse. It is not an order, position, balance event, or risk-state
+mutation:
 
 ```python
 StrategyTestTrade = {
-    "run_id": str,
-    "scenario_id": str,
+    "run_id": UUID,
     "trade_id": str,
+    "user_id": UUID,
     "mode": StrategyTestMode,
+    "strategy_code": str,
+    "strategy_version": str,
     "exchange": str,
     "symbol": str,
     "timeframe": str,
-    "strategy_code": str,
-    "direction": "long" | "short",
-    "entry_price": float,
-    "stop_loss": float,
+    "direction": str,
+    "signal_score": float | None,
+    "market_regime": str,
+    "score_bucket": str,
+    "entry_time": datetime,
+    "exit_time": datetime | None,
+    "entry_price": Decimal,
+    "exit_price": Decimal | None,
+    "stop_loss": Decimal | None,
     "targets": list[dict],
-    "opened_at": datetime,
-    "closed_at": datetime | None,
-    "status": "open" | "closed" | "rejected" | "skipped",
+    "selected_rr": float | None,
     "realized_r": float | None,
-    "fees": float,
-    "slippage": float,
+    "pnl": Decimal,
+    "pnl_pct": float,
+    "fees": Decimal,
+    "slippage": Decimal,
+    "mfe_r": float | None,
+    "mae_r": float | None,
+    "bars_to_entry": int | None,
+    "bars_in_trade": int | None,
+    "close_reason": str,
+    "outcome": str,
+    "risk_rejected": bool,
+    "execution_rejected": bool,
     "warnings": list[str],
-    "rejections": list[str],
-    "metadata": {"source": "backtest", "tag": "backtest", "run_id": str},
+    "features_snapshot": dict,
+    "trade_plan": dict,
+    "tags": list[str],
+    "created_at": datetime,
 }
 ```
 
@@ -251,6 +269,28 @@ StrategyTestMetric = {
     "group": dict,
     "confidence": "high" | "medium" | "low" | "insufficient_sample",
     "metadata": dict,
+}
+```
+
+Grouped Strategy Test Lab metric rows may also be stored in ClickHouse:
+
+```python
+StrategyTestMetricRow = {
+    "run_id": UUID,
+    "user_id": UUID,
+    "mode": StrategyTestMode,
+    "strategy_code": str,
+    "exchange": str,
+    "symbol": str,
+    "timeframe": str,
+    "market_regime": str,
+    "score_bucket": str,
+    "direction": str,
+    "metric_code": str,
+    "metric_value": float | None,
+    "sample_size": int,
+    "metadata": dict,
+    "created_at": datetime,
 }
 ```
 

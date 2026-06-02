@@ -101,6 +101,70 @@ class StrategyTestRunListResponse(BaseModel):
     total: int = 0
 
 
+class StrategyTestTrade(BaseModel):
+    run_id: UUID
+    trade_id: str
+    user_id: UUID
+    mode: StrategyTestMode
+    strategy_code: str
+    strategy_version: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    direction: str
+    signal_score: float | None = None
+    market_regime: str
+    score_bucket: str
+    entry_time: datetime
+    exit_time: datetime | None = None
+    entry_price: Decimal
+    exit_price: Decimal | None = None
+    stop_loss: Decimal | None = None
+    targets: list[dict[str, Any]] = Field(default_factory=list)
+    selected_rr: float | None = None
+    realized_r: float | None = None
+    pnl: Decimal
+    pnl_pct: float
+    fees: Decimal
+    slippage: Decimal
+    mfe_r: float | None = None
+    mae_r: float | None = None
+    bars_to_entry: int | None = Field(default=None, ge=0)
+    bars_in_trade: int | None = Field(default=None, ge=0)
+    close_reason: str
+    outcome: str
+    risk_rejected: bool = False
+    execution_rejected: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    features_snapshot: dict[str, Any] = Field(default_factory=dict)
+    trade_plan: dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+    @field_validator("trade_id", mode="before")
+    @classmethod
+    def stringify_trade_id(cls, value: Any) -> str:
+        return str(value)
+
+
+class StrategyTestMetricRow(BaseModel):
+    run_id: UUID
+    user_id: UUID
+    mode: StrategyTestMode
+    strategy_code: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    market_regime: str
+    score_bucket: str
+    direction: str
+    metric_code: str
+    metric_value: float | None = None
+    sample_size: int = Field(ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
 class StrategyTestTradeResponse(BaseModel):
     run_id: UUID
     trade_id: UUID

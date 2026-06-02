@@ -17,6 +17,23 @@ Historical candles
 Backtests are research tools. They do not grant real execution permission unless
 the resulting edge later passes live risk and EV gates with enough sample size.
 
+## Backtest Runner vs Strategy Test Lab
+
+`/api/v1/backtests` remains the legacy/single-scenario production-like runner.
+It uses `BacktestRunRequest`, `/api/v1/backtests/run`,
+`ProductionBacktestRunner`, and `analytics.backtest_results`.
+
+`/api/v1/strategy-tests` is the new matrix/lab API for Strategy Testing v1. It
+supports discovery, `research_virtual`, and `production_like` modes across
+expanded strategy, market, parameter, and assumption matrices. The existing
+`/backtests` API is not the full Strategy Test Lab.
+
+`research_virtual` disables hard RR/risk rejection for research simulation and
+reports rejections and warnings separately. `production_like` keeps hard gates
+when configured, including RiskGate behavior and execution realism checks.
+
+backtest trades must not pollute live/virtual portfolio risk state.
+
 ## No Lookahead
 
 Backtests must use only data known at the decision time.

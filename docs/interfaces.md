@@ -106,6 +106,170 @@ No-data failures must surface explicit `no_historical_data` or
 `not_enough_data` errors instead of `not_implemented` when a runner is
 configured.
 
+## Strategy Testing v1
+
+Strategy Test Lab is a separate research and simulation surface from the
+legacy single-scenario backtest runner. It supports matrix-style runs across
+pairs, strategies, timeframes, parameters, assumptions, and modes.
+
+Canonical discovery test flow:
+
+```text
+Historical candles
+-> FeatureEngine
+-> StrategyEngine
+-> StrategySignal
+-> Entry/Stop/Targets
+-> outcome simulation
+-> metrics
+```
+
+Canonical research virtual test flow:
+
+```text
+Historical candles
+-> FeatureEngine
+-> StrategyEngine
+-> StrategySignal
+-> virtual execution simulation
+-> lifecycle simulation
+-> metrics
+```
+
+Canonical production-like test flow:
+
+```text
+Historical candles
+-> FeatureEngine
+-> StrategyEngine
+-> StrategySignal
+-> RiskGate
+-> execution simulation
+-> metrics
+```
+
+Boundary rules:
+
+- `discovery` and `research_virtual` are research/alpha modes.
+- `production_like` is the execution/risk-gate realism mode.
+- Research results must not be interpreted as real execution permission.
+- backtest trades must not pollute live/virtual portfolio risk state.
+- Backtest trades are surfaced in the journal with `source/tag = backtest`.
+- Backtest trades must not insert rows into `orders`.
+- Backtest trades must not insert rows into `positions`.
+- Backtest trades must not update portfolio balances or `risk_state`.
+- Journal visibility for backtest trades must come from
+  `StrategyTestJournalAdapter`.
+
+`StrategyTestMode` is the execution realism level for a lab run:
+
+```python
+StrategyTestMode = "discovery" | "research_virtual" | "production_like"
+```
+
+`StrategyTestPair` identifies one market/timeframe input in a matrix:
+
+```python
+StrategyTestPair = {
+    "exchange": str,
+    "symbol": str,
+    "timeframe": str,
+}
+```
+
+`StrategyTestRun` records one requested or completed lab run:
+
+```python
+StrategyTestRun = {
+    "run_id": str,
+    "mode": StrategyTestMode,
+    "status": "queued" | "running" | "completed" | "failed" | "cancelled",
+    "pairs": list[StrategyTestPair],
+    "strategy_codes": list[str],
+    "started_at": datetime | None,
+    "completed_at": datetime | None,
+    "params": dict,
+    "assumptions": dict,
+    "metadata": dict,
+}
+```
+
+`StrategyTestMatrix` is the expanded deterministic set of scenarios produced
+from a lab request:
+
+```python
+StrategyTestMatrix = {
+    "run_id": str,
+    "mode": StrategyTestMode,
+    "pairs": list[StrategyTestPair],
+    "strategy_codes": list[str],
+    "parameter_sets": list[dict],
+    "assumption_sets": list[dict],
+    "scenario_count": int,
+}
+```
+
+`StrategyTestTrade` is a simulated trade observation. It is not an order,
+position, balance event, or risk-state mutation:
+
+```python
+StrategyTestTrade = {
+    "run_id": str,
+    "scenario_id": str,
+    "trade_id": str,
+    "mode": StrategyTestMode,
+    "exchange": str,
+    "symbol": str,
+    "timeframe": str,
+    "strategy_code": str,
+    "direction": "long" | "short",
+    "entry_price": float,
+    "stop_loss": float,
+    "targets": list[dict],
+    "opened_at": datetime,
+    "closed_at": datetime | None,
+    "status": "open" | "closed" | "rejected" | "skipped",
+    "realized_r": float | None,
+    "fees": float,
+    "slippage": float,
+    "warnings": list[str],
+    "rejections": list[str],
+    "metadata": {"source": "backtest", "tag": "backtest", "run_id": str},
+}
+```
+
+`StrategyTestMetric` is a named deterministic metric emitted by the metrics
+registry:
+
+```python
+StrategyTestMetric = {
+    "run_id": str,
+    "scenario_id": str | None,
+    "name": str,
+    "value": int | float | str | bool | None,
+    "unit": str | None,
+    "group": dict,
+    "confidence": "high" | "medium" | "low" | "insufficient_sample",
+    "metadata": dict,
+}
+```
+
+`StrategyTestReport` is the read model returned by report endpoints:
+
+```python
+StrategyTestReport = {
+    "run": StrategyTestRun,
+    "matrix": StrategyTestMatrix,
+    "summary_metrics": list[StrategyTestMetric],
+    "grouped_metrics": list[StrategyTestMetric],
+    "trades_count": int,
+    "warnings": list[str],
+    "rejections": list[str],
+    "assumptions": dict,
+    "created_at": datetime,
+}
+```
+
 `TradePlan` is a backward-compatible v1 signal contract generated from the
 legacy signal entry/stop/target fields. Existing signal fields remain available:
 `entry_min`, `entry_max`, `stop_loss`, `take_profit_1`, `take_profit_2`,

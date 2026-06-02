@@ -28,7 +28,12 @@ or any future candle information.
 It uses `BacktestRunRequest`, `/api/v1/backtests/run`,
 `ProductionBacktestRunner`, and `analytics.backtest_results`.
 
-`/api/v1/strategy-tests` is the Strategy Test Lab API for Strategy Testing v1.
+`/api/v1/strategy-lab` is the LAB-01 synchronous Strategy Test Lab surface for
+safe batch/matrix research runs on top of `ProductionBacktestRunner.run_detailed`.
+It returns the matrix comparison result directly and does not persist orders,
+positions, balances, or scanner state.
+
+`/api/v1/strategy-tests` remains the broader persisted Strategy Testing v1 API.
 It is a separate measurement and research contour from the legacy backtest
 runner. It supports matrix runs by strategy, symbol, timeframe, date range,
 parameter set, entry policy, exit policy, fee model, slippage model, and
@@ -37,8 +42,8 @@ assumption set. The existing `/backtests` API is not the full Strategy Test Lab.
 Strategy Test Lab supports:
 
 - matrix runs by `strategy_code`, `symbol`, `timeframe`, and date range;
-- baseline mode, where a locked `baseline_id` records the reference strategy,
-  parameters, entry policy, exit policy, costs, and assumptions;
+- baseline mode, where a request records the reference strategy, parameters,
+  costs, tags, and assumptions for later baseline locking;
 - experiment mode, where candidate strategy params, entry policies, or exit
   policies are compared against a baseline;
 - comparison of entry policies such as aggressive breakout, conservative
@@ -60,6 +65,78 @@ Backtest and Strategy Test Lab trades are simulated research observations only.
 They must not create real execution side effects, submit exchange orders, create
 orders or positions, update portfolio balances, or mutate live/virtual
 `risk_state`.
+
+## LAB-01 Strategy Lab API
+
+Use `POST /api/v1/strategy-lab/matrix` for batch research runs and
+`POST /api/v1/strategy-lab/run` for a single strategy/symbol/timeframe scenario.
+Both endpoints accept closed-candle research inputs:
+
+```json
+{
+  "exchange": "bybit",
+  "strategies": ["trend_pullback_continuation"],
+  "symbols": ["BTCUSDT"],
+  "timeframes": ["1h"],
+  "start_time": "2026-01-01T00:00:00Z",
+  "end_time": "2026-02-01T00:00:00Z",
+  "initial_equity": "1000",
+  "fees_bps": "10",
+  "slippage_bps": "1",
+  "max_bars_in_trade": 20,
+  "warmup_bars": 200,
+  "mode": "baseline",
+  "label": "tpullback-reference",
+  "tags": {"desk": "research"}
+}
+```
+
+LAB-01 `mode` is a comparison label:
+
+- `baseline`: reference run used as a stable research comparison point.
+- `experiment`: candidate run with changed strategy params, assumptions, or
+  tags that can be compared against a baseline.
+
+LAB-01 runs use `research_virtual` runner assumptions internally. They are not
+real execution readiness checks and must not call `RealExecutionService`,
+exchange adapters, scanner mutation paths, order repositories, position
+repositories, portfolio balances, or `risk_state` writers.
+
+Every scenario receives structured tags:
+
+- `source=strategy_lab`
+- `mode=baseline|experiment`
+- `lab_run_id`
+- `strategy`
+- `symbol`
+- `timeframe`
+- `candle_state=closed`
+
+The comparison response groups metrics by strategy, symbol, and timeframe. The
+minimum comparison metrics are:
+
+- `total_trades`
+- `win_rate`
+- `profit_factor`
+- `expectancy_r`
+- `avg_r`
+- `max_drawdown`
+- `avg_bars_in_trade`
+- `stop_rate`
+- `tp1_rate`
+- `final_target_rate`
+- `fees_paid`
+- `slippage_paid`
+- `risk_rejections`
+- `execution_rejections`
+- `fallback_used_count` when fallback metadata is available
+- `incomplete_trade_plan_count` when trade-plan completeness metadata is
+  available
+
+If the underlying runner reports `no_historical_data`, the scenario status is
+`no_data`. If it reports `not_enough_data`, the scenario status is
+`insufficient_data`. In both cases Strategy Lab must leave metrics empty rather
+than fabricating zero-value baseline or experiment results.
 
 ## Backtest Journal Tags
 

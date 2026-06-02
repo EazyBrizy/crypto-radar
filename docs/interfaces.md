@@ -252,6 +252,105 @@ Strategy Test Lab is a separate research and simulation surface from the
 legacy single-scenario backtest runner. It supports matrix-style runs across
 pairs, strategies, timeframes, parameters, assumptions, and modes.
 
+LAB-01 adds a synchronous Strategy Lab orchestration surface for batch/matrix
+research runs on top of `ProductionBacktestRunner.run_detailed`:
+
+```text
+POST /api/v1/strategy-lab/run
+POST /api/v1/strategy-lab/matrix
+```
+
+The API layer validates the request and calls `StrategyTestLabService`. It must
+not contain strategy, backtest, comparison, or persistence logic.
+
+LAB-01 request modes are comparison modes, not real execution permissions:
+
+```python
+StrategyLabMode = "baseline" | "experiment"
+```
+
+`baseline` records a reference research run. `experiment` records a candidate
+research run that can be compared against a baseline. Both are executed with
+safe research/backtest assumptions and must not call `RealExecutionService`,
+exchange adapters, scanner mutation paths, order writers, position writers,
+portfolio balance writers, or live/virtual `risk_state` writers.
+
+`StrategyLabRunRequest` is the single-scenario request. It uses the same fields
+as `StrategyLabMatrixRequest`, but `strategies`, `symbols`, and `timeframes`
+must each contain exactly one item.
+
+```python
+StrategyLabMatrixRequest = {
+    "user_id": str,
+    "exchange": str,
+    "strategies": list[str],
+    "symbols": list[str],
+    "timeframes": list[str],
+    "start_time": datetime,
+    "end_time": datetime,
+    "initial_equity": Decimal,
+    "fees_bps": Decimal,
+    "slippage_bps": Decimal,
+    "max_bars_in_trade": int | None,
+    "warmup_bars": int,
+    "mode": StrategyLabMode,
+    "label": str | None,
+    "tags": dict[str, str],
+    "params": dict,
+    "strategy_version": str | None,
+}
+```
+
+The service expands every `strategy x symbol x timeframe` scenario into a
+backward-compatible `BacktestRunRequest`. Fee bps are converted to
+`BacktestRunRequest.fee_rate`; `warmup_bars` is forwarded as
+`params.warmup_candles`; `max_bars_in_trade` is forwarded as scenario metadata.
+
+Every scenario must carry these structured tags:
+
+```python
+StrategyLabTags = {
+    "source": "strategy_lab",
+    "mode": "baseline" | "experiment",
+    "lab_run_id": str,
+    "strategy": str,
+    "symbol": str,
+    "timeframe": str,
+    "candle_state": "closed",
+}
+```
+
+`StrategyLabRunSummary` is the comparison metric contract:
+
+```python
+StrategyLabRunSummary = {
+    "status": "completed" | "no_data" | "insufficient_data" | "failed",
+    "total_trades": int | None,
+    "win_rate": float | None,
+    "profit_factor": float | None,
+    "expectancy_r": float | None,
+    "avg_r": float | None,
+    "max_drawdown": float | None,
+    "avg_bars_in_trade": float | None,
+    "stop_rate": float | None,
+    "tp1_rate": float | None,
+    "final_target_rate": float | None,
+    "fees_paid": Decimal | None,
+    "slippage_paid": Decimal | None,
+    "risk_rejections": int | None,
+    "execution_rejections": int | None,
+    "fallback_used_count": int | None,
+    "incomplete_trade_plan_count": int | None,
+    "signals_seen": int | None,
+}
+```
+
+`StrategyLabComparisonResult` returns `overall_summary`,
+`metrics_by_strategy`, `metrics_by_symbol`, `metrics_by_timeframe`, and the
+expanded `runs`. Historical-data failures must be explicit: runner
+`no_historical_data` errors become `no_data`, runner `not_enough_data` errors
+become `insufficient_data`, and metrics must remain empty for those scenarios.
+
 Canonical discovery test flow:
 
 ```text

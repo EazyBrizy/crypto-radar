@@ -86,6 +86,15 @@ from app.schemas.strategy import (
     StrategyConfigUpdateRequest,
     StrategyPairScope,
 )
+from app.schemas.strategy_lab import (
+    StrategyLabComparisonResult,
+    StrategyLabMatrixRequest,
+    StrategyLabMode,
+    StrategyLabRunItem,
+    StrategyLabRunRequest,
+    StrategyLabRunStatus,
+    StrategyLabRunSummary,
+)
 from app.schemas.strategy_performance import (
     ScoreBucket,
     StrategyEdgeProfile,
@@ -214,6 +223,13 @@ __all__ = [
     "StrategyConfigResponse",
     "StrategyConfigUpdateRequest",
     "StrategyEdgeProfile",
+    "StrategyLabComparisonResult",
+    "StrategyLabMatrixRequest",
+    "StrategyLabMode",
+    "StrategyLabRunItem",
+    "StrategyLabRunRequest",
+    "StrategyLabRunStatus",
+    "StrategyLabRunSummary",
     "StrategyPerformanceDaily",
     "StrategyPairScope",
     "TakeProfitPlan",

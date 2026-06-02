@@ -45,9 +45,15 @@
 AUD work must be handled as small PR-sized patches. Do not mix neighboring
 AUD tasks unless an explicit dependency requires it.
 
+LAB prerequisites:
+
+- [x] LAB-01: Implement synchronous Strategy Test Lab batch/matrix API on top
+  of `ProductionBacktestRunner.run_detailed`. This is a prerequisite for
+  AUD-03 baseline work.
+
 1. [x] AUD-01: contract cleanup after RR and Strategy Test Lab.
 2. [ ] AUD-02: Strategy Test Lab.
-3. [ ] AUD-03: baseline.
+3. [ ] AUD-03: baseline. Prerequisite: LAB-01.
 4. [ ] AUD-04: fallback cleanup.
 5. [ ] AUD-05: open/closed candle separation.
 6. [ ] AUD-06: pipeline cleanup.

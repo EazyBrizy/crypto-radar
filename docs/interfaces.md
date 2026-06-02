@@ -242,6 +242,35 @@ facade. Strategies continue to call it with a `StrategySignal` and
 `StrategyEvaluationContext`; the facade orchestrates shared layers and attaches
 snapshots to the signal without changing the strategy call contract.
 
+`StrategyEvaluationContext` separates market setup parameters from execution
+policy:
+
+```python
+StrategyEvaluationContext = {
+    "signal_features": Features,
+    "alpha_context": AlphaMarketContext | None,
+    "context_features": Features | None,
+    "context_features_by_timeframe": dict[str, Features],
+    "support_resistance_by_timeframe": dict[str, SupportResistanceSnapshot],
+    "strategy_params": dict,      # market setup / strategy logic only
+    "execution_settings": StrategyExecutionSettings,
+    "pipeline_settings": dict,    # transitional pipeline adapter
+    "market_quality": MarketQualityInput | None,
+    "pair_scope_configured": bool,
+    "rr_guard_context": str,
+}
+```
+
+`strategy_params` must not contain account balance, margin, position sizing,
+fixed/percent risk amounts, user leverage, or Radar display mode. The strategy
+engine passes only `strategy_params` plus market context to
+`strategy.evaluate(...)`. Pipeline layers that need RR guard mode, `min_rr`,
+`rr_target`, no-trade filters, display filtering, or execution eligibility
+settings must read them from `execution_settings` or `pipeline_settings`.
+`pipeline_settings` may merge strategy market params with typed execution
+settings for backward-compatible pipeline checks, but it must not be passed to
+strategy code.
+
 Pipeline layer ownership:
 
 - `SetupDetector` / setup layer: strategy-specific setup discovery and stage

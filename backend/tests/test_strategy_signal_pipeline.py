@@ -1977,6 +1977,76 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("radar_display_mode", strategy.params)
         self.assertNotIn("min_rr_ratio", strategy.params)
 
+    async def test_engine_passes_execution_settings_to_pipeline_not_strategy_params(self) -> None:
+        class CapturingStrategy:
+            name = "volatility_squeeze_breakout"
+
+            def __init__(self) -> None:
+                self.params: dict[str, object] = {}
+
+            async def evaluate(self, features: Features, params=None):
+                self.params = dict(params or {})
+                return [_quality_candidate(features)]
+
+        class CapturingPipeline:
+            def __init__(self) -> None:
+                self.context: StrategyEvaluationContext | None = None
+
+            def finalize(self, signal, context: StrategyEvaluationContext):
+                self.context = context
+                return signal
+
+        strategy = CapturingStrategy()
+        pipeline = CapturingPipeline()
+        engine = StrategyEngine()
+        engine._strategies = [strategy]
+        engine._pipeline = pipeline
+
+        signals = await engine.generate_signals(
+            _breakout_features(),
+            strategy_configs={
+                "volatility_squeeze_breakout": type(
+                    "RuntimeConfig",
+                    (),
+                    {
+                        "params": {
+                            "min_history": 50,
+                            "risk_percent": 99,
+                            "fixed_risk_amount": 999,
+                            "leverage": 25,
+                        },
+                        "risk_settings": {
+                            "risk_percent": 1.25,
+                            "fixed_risk_amount": 50,
+                            "leverage": 3,
+                            "rr_guard_mode": "hard",
+                            "min_rr_ratio": 2.5,
+                            "rr_target": "nearest",
+                        },
+                        "pair_scope_configured": False,
+                    },
+                )(),
+            },
+        )
+
+        self.assertTrue(signals)
+        for forbidden_key in ("risk_percent", "fixed_risk_amount", "leverage"):
+            self.assertNotIn(forbidden_key, strategy.params)
+        self.assertEqual(strategy.params["min_history"], 50)
+
+        self.assertIsNotNone(pipeline.context)
+        context = pipeline.context
+        assert context is not None
+        for forbidden_key in ("risk_percent", "fixed_risk_amount", "leverage"):
+            self.assertNotIn(forbidden_key, context.strategy_params)
+        self.assertEqual(str(context.execution_settings.risk_percent), "1.25")
+        self.assertEqual(str(context.execution_settings.fixed_risk_amount), "50")
+        self.assertEqual(str(context.execution_settings.leverage), "3")
+        self.assertEqual(context.execution_settings.rr_guard_mode, "hard")
+        self.assertEqual(float(context.pipeline_settings["min_rr_ratio"]), 2.5)
+        self.assertEqual(context.pipeline_settings["rr_guard_mode"], "hard")
+        self.assertEqual(context.pipeline_settings["rr_target"], "nearest")
+
     async def test_liquidity_sweep_without_reclaim_is_not_actionable(self) -> None:
         features = _breakout_features().model_copy(
             update={

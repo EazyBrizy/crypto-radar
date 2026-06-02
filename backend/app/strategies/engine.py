@@ -2,6 +2,7 @@ import asyncio
 from typing import Any, List, Mapping
 
 from app.schemas.market import AlphaMarketContext, Features
+from app.schemas.risk import StrategyExecutionSettings
 from app.schemas.signal import StrategySignal
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
@@ -80,17 +81,19 @@ class StrategyEngine:
             runtime_config = strategy_configs.get(strategy.name) if strategy_configs is not None else None
             if strategy_configs is not None and runtime_config is None:
                 continue
-            setup_params = _strategy_logic_params(
+            market_params = _strategy_logic_params(
                 getattr(runtime_config, "params", {}) if runtime_config is not None else {}
             )
-            pipeline_params = dict(setup_params)
-            pipeline_params.update(getattr(runtime_config, "risk_settings", {}) if runtime_config is not None else {})
+            execution_settings = StrategyExecutionSettings.model_validate(
+                (getattr(runtime_config, "risk_settings", {}) if runtime_config is not None else {}) or {}
+            )
+            pipeline_settings = _pipeline_settings_for_pipeline_only(market_params, execution_settings)
             if alpha_context is not None:
-                setup_params["alpha_context"] = alpha_context
-                pipeline_params["alpha_context"] = alpha_context
+                market_params["alpha_context"] = alpha_context
+                pipeline_settings["alpha_context"] = alpha_context
             if support_resistance_by_timeframe:
-                setup_params["support_resistance_by_timeframe"] = support_resistance_by_timeframe
-                pipeline_params["support_resistance_by_timeframe"] = support_resistance_by_timeframe
+                market_params["support_resistance_by_timeframe"] = support_resistance_by_timeframe
+                pipeline_settings["support_resistance_by_timeframe"] = support_resistance_by_timeframe
             context = StrategyEvaluationContext(
                 signal_features=features,
                 alpha_context=alpha_context,
@@ -98,11 +101,13 @@ class StrategyEngine:
                 context_features_by_timeframe=context_features_by_timeframe or {},
                 support_resistance_by_timeframe=support_resistance_by_timeframe or {},
                 market_quality=market_quality,
-                strategy_params=pipeline_params,
+                strategy_params=market_params,
+                execution_settings=execution_settings,
+                pipeline_settings=pipeline_settings,
                 pair_scope_configured=bool(getattr(runtime_config, "pair_scope_configured", False)),
                 rr_guard_context=rr_guard_context,
             )
-            candidates = await strategy.evaluate(features, setup_params)
+            candidates = await strategy.evaluate(features, market_params)
             for candidate in candidates:
                 finalized = self._pipeline.finalize(candidate, context)
                 if finalized is not None:
@@ -117,3 +122,12 @@ def _strategy_logic_params(values: Mapping[str, Any]) -> dict[str, Any]:
         for key, value in dict(values or {}).items()
         if key not in EXECUTION_PROFILE_PARAM_KEYS
     }
+
+
+def _pipeline_settings_for_pipeline_only(
+    market_params: Mapping[str, Any],
+    execution_settings: StrategyExecutionSettings,
+) -> dict[str, Any]:
+    pipeline_settings = dict(market_params)
+    pipeline_settings.update(execution_settings.to_legacy_dict(exclude_unset=True))
+    return pipeline_settings

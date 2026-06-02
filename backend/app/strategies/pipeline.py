@@ -15,6 +15,7 @@ from app.schemas.signal import (
     StrategySetupSnapshot,
     StrategySignal,
 )
+from app.schemas.risk import StrategyExecutionSettings
 from app.schemas.trade_plan import (
     TargetThesis,
     TradePlan,
@@ -111,6 +112,8 @@ class StrategyEvaluationContext:
     context_features_by_timeframe: Mapping[str, Features] = field(default_factory=dict)
     support_resistance_by_timeframe: Mapping[str, SupportResistanceSnapshot] = field(default_factory=dict)
     strategy_params: Mapping[str, Any] = field(default_factory=dict)
+    execution_settings: StrategyExecutionSettings = field(default_factory=StrategyExecutionSettings)
+    pipeline_settings: Mapping[str, Any] = field(default_factory=dict)
     market_quality: MarketQualityInput | None = None
     pair_scope_configured: bool = False
     rr_guard_context: str = "discovery"
@@ -166,7 +169,8 @@ class StrategySignalPipeline:
         if signal.candle_state != candle_state:
             signal = signal.model_copy(update={"candle_state": candle_state})
         quality = MarketQualityFilter().evaluate(signal, context)
-        no_trade_enabled = _bool_param(context.strategy_params, "no_trade_filters_enabled", False)
+        pipeline_settings = _pipeline_settings(context)
+        no_trade_enabled = _bool_param(pipeline_settings, "no_trade_filters_enabled", False)
         if not quality.passed and not no_trade_enabled:
             return None
 
@@ -177,10 +181,10 @@ class StrategySignalPipeline:
         setup = StrategySetupLayer().evaluate(signal)
         risk_reward = RiskRewardAssessmentService().assess(
             signal,
-            context.strategy_params,
+            pipeline_settings,
             context.rr_guard_context,
         )
-        if risk_reward.blocked and _hide_failed_rr_signals(context.strategy_params):
+        if risk_reward.blocked and _hide_failed_rr_signals(pipeline_settings):
             return None
         confirmation = ConfirmationLayer().evaluate(signal, context, risk_reward)
         no_trade = NoTradeFilterService().evaluate(
@@ -192,7 +196,7 @@ class StrategySignalPipeline:
                 "confirmation": confirmation,
                 "market_quality": context.market_quality,
             },
-            settings=context.strategy_params,
+            settings=pipeline_settings,
         )
         confirmation = _confirmation_with_no_trade_check(confirmation, no_trade)
         if not quality.passed and not no_trade.blocked:
@@ -206,7 +210,7 @@ class StrategySignalPipeline:
             invalidation=invalidation,
             risk_reward=risk_reward,
         )
-        production_mode = _is_production_mode(context.strategy_params)
+        production_mode = _is_production_mode(pipeline_settings)
         completeness = TradePlanCompletenessCheck().evaluate(trade_plan)
         trade_plan = trade_plan_enrichment.attach_completeness_metadata(
             trade_plan=trade_plan,
@@ -221,7 +225,7 @@ class StrategySignalPipeline:
 
         status_decision = SignalStatusResolver().resolve(
             signal=signal,
-            params=context.strategy_params,
+            params=pipeline_settings,
             quality=quality,
             regime=regime,
             confirmation=confirmation,
@@ -239,7 +243,7 @@ class StrategySignalPipeline:
         confirmation = status_decision.confirmation
         setup = status_decision.setup
         trade_plan = status_decision.trade_plan
-        if _show_only_active_setups(context.strategy_params) and not _is_active_setup_status(status):
+        if _show_only_active_setups(pipeline_settings) and not _is_active_setup_status(status):
             return None
 
         auto_entry = AutoEntryEligibilityService().evaluate(
@@ -1722,6 +1726,10 @@ def _bool_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _pipeline_settings(context: StrategyEvaluationContext) -> Mapping[str, Any]:
+    return context.pipeline_settings or context.strategy_params
 
 
 def _is_production_mode(params: Mapping[str, Any]) -> bool:

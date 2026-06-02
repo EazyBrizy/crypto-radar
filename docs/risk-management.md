@@ -162,6 +162,12 @@ Invalid profile combinations must fail with an auditable validation reason.
 Examples: `risk_mode = "fixed"` without `fixed_risk_amount`, non-positive
 fixed risk amount, unsupported RR target, or an invalid Radar display mode.
 
+Strategy evaluation must not consume the resolved execution profile directly.
+`StrategyEngine` resolves `user_strategy_configs.risk_settings` into typed
+`StrategyExecutionSettings` and exposes it to the shared pipeline context for
+RR/no-trade/execution policy checks, while `strategy.evaluate(...)` receives
+only market setup params and market context.
+
 ## Profiles
 
 - `conservative`: lower risk budget for beginners or larger deposits.

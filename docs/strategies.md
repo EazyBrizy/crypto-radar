@@ -276,6 +276,12 @@ Risk:
 
 Runtime implementation notes:
 
+- Sweep scoring is no longer a wick-only model. The strategy scores obvious
+  liquidity, reclaim quality, absorption proxy, CVD/delta divergence, OI and
+  liquidation flush, failed continuation, and market target room.
+- Obvious liquidity can come from session high/low, previous-day high/low,
+  Donchian/range boundaries, swing/equal highs/lows, and
+  `AlphaMarketContext.session_liquidity_pools` when available.
 - `FeatureEngine` uses 20-50 candle fractal swing levels and records level
   touch count, age and volume score for sweep scoring.
 - Equal high/low fallback is allowed only when the level has at least two
@@ -284,16 +290,27 @@ Runtime implementation notes:
   after an unreclaimed or weak reclaim, and `confirmed_candidate` after an
   aggressive sweep or conservative confirmation candle. Production actionability
   still belongs to the shared eligibility layers.
-- Aggressive sweep requires reclaim/rejection, wick ratio, volume and close
-  strength. Conservative sweep requires the next candle to break micro
-  structure in the reversal direction with at least `1.1x` volume.
+- Aggressive sweep requires reclaim/rejection, wick ratio, volume, close
+  strength, and optional smart-money thresholds. Conservative sweep requires
+  the next candle to break micro structure in the reversal direction with at
+  least `1.1x` volume.
+- Acceptance beyond the swept level is not treated as a reversal. A clean
+  continuation after a sweep is surfaced as rejected/watchlist research context
+  instead of an actionable signal.
+- If `AlphaMarketContext` is present, orderflow evidence can include delta not
+  confirming the new extreme, orderbook wall/imbalance supporting reversal,
+  sweep-through-book plus reclaim, OI flush windows, and liquidation clusters.
+  If alpha context is absent, the strategy uses only candle/volume proxy
+  evidence and records `missing_alpha_sources`.
 - The scoring budget follows the 100-point Liquidity Sweep model in
   `docs/scoring.md`; HTF level confluence, RR, spread/liquidity and strong
   regime conflict stay in shared pipeline layers.
 - Invalidation metadata stores the swept level, sweep extreme, wick ratio,
   level touch count, aggressive entry and conservative confirmation zone.
-- Exit management uses TP1 at range midpoint, TP2 at the opposite range
-  boundary, and a TP3 runner after micro-BOS/ATR trailing.
+- Exit management uses market targets when available: TP1 at range midpoint,
+  TP2 at the opposite/session/PDH/PDL/HTF/liquidity-pool boundary, and a TP3
+  runner after micro-BOS/ATR trailing. Target source and thesis are stored in
+  `TradePlanTarget.metadata` and `TradePlan.metadata`.
 
 ## Pipeline
 
@@ -520,15 +537,23 @@ Idea:
 
 - Trade a failed break of visible liquidity when price sweeps a swing/equal
   high or low and then reclaims back into the range.
+- AUD-07 extends "visible liquidity" beyond a single swing level: session
+  highs/lows, PDH/PDL, range boundaries, swing/equal highs/lows, high-volume
+  level scores, and alpha liquidity pools can all contribute to the obvious
+  liquidity score.
 
 Entry model:
 
 - Aggressive entry: sweep plus reclaim/rejection on the same candle with wick,
-  volume, and close-quality confirmation.
+  volume, close-quality, and optional absorption/orderflow confirmation.
 - Conservative entry: next candle breaks micro-structure in the reversal
   direction after the sweep.
 - The plan should expose swept level, sweep extreme, reclaim state, and
   confirmation zone in metadata.
+- Missing alpha context is allowed by default. The strategy records
+  `alpha_context_used=false` and `missing_alpha_sources`, then falls back to a
+  candle/volume proxy instead of inventing CVD, orderbook, OI, or liquidation
+  values.
 
 Invalidation:
 
@@ -540,13 +565,19 @@ Invalidation:
 Targets:
 
 - TP1: range midpoint.
-- TP2: opposite range boundary.
+- TP2: nearest useful market target, such as opposite range boundary,
+  session/previous-day level, HTF S/R, or liquidity pool.
 - TP3/runner: optional micro-BOS/ATR trailing target when continuation develops.
+- If no market target exists, R-multiple fallback targets remain explicit via
+  fallback metadata. When a market target exists, `TradePlanTarget.source`,
+  `metadata.market_target_source`, and `TradePlan.metadata.target_thesis`
+  explain the target.
 
 Good regime:
 
 - Range or late-trend liquidity event, visible swing/equal highs/lows, strong
-  rejection wick, absorption/flush evidence, and room back to range midpoint.
+  rejection wick, absorption/flush evidence, CVD non-confirmation, failed
+  continuation after the sweep, and room back to a market target.
 
 Bad regime:
 
@@ -560,6 +591,8 @@ Required confirmations:
 - Reclaim or configured absorption confirmation.
 - Directional wick and close quality.
 - Volume confirmation.
+- Optional CVD divergence, OI flush, liquidation flush, and target-distance
+  thresholds when configured.
 - RR measured and annotated; failed RR affects execution eligibility only in
   the active guard mode.
 

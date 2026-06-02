@@ -1,7 +1,7 @@
 import unittest
 from inspect import signature
 
-from app.schemas.market import Features
+from app.schemas.market import AlphaMarketContext, Features
 from app.schemas.signal import (
     MarketQualitySnapshot,
     MarketRegimeSnapshot,
@@ -655,6 +655,115 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(candidates[0].score, 80)
         self.assertIn("recent touches", " ".join(candidates[0].explanation))
 
+    async def test_liquidity_sweep_obvious_liquidity_reclaim_absorption_long(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 98.8,
+                "open": 99.2,
+                "high": 100.5,
+                "low": 96.2,
+                "close": 98.8,
+                "session_low": 98.0,
+                "swing_low": 98.0,
+                "swing_low_touch_count": 3,
+                "swing_low_volume_score": 1.5,
+                "lower_wick_ratio": 0.6,
+                "upper_wick_ratio": 0.3,
+                "volume_spike": 1.8,
+            }
+        )
+        alpha_context = AlphaMarketContext(
+            symbol="BTCUSDT",
+            timeframe="15m",
+            timestamp=features.timestamp,
+            orderbook_imbalance=0.35,
+            depth_wall_side="bid",
+            absorption_score=0.72,
+            data_quality={"missing_sources": ["liquidation_data"]},
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(
+            features,
+            {
+                "alpha_context": alpha_context,
+                "require_absorption": True,
+                "min_absorption_score": 0.5,
+            },
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].status, "actionable")
+        metadata = candidates[0].trade_plan.metadata if candidates[0].trade_plan else {}
+        breakdown = metadata.get("liquidity_sweep_score_breakdown", {})
+        self.assertTrue(metadata.get("alpha_context_used"))
+        self.assertGreaterEqual(breakdown.get("absorption_score", 0), 0.7)
+        self.assertGreaterEqual(breakdown.get("obvious_liquidity_score", 0), 0.7)
+
+    async def test_liquidity_sweep_reclaim_cvd_divergence_short(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 103.7,
+                "open": 104.5,
+                "high": 105.0,
+                "low": 103.0,
+                "close": 103.7,
+                "previous_high": 104.4,
+                "swing_high": 104.0,
+                "swing_high_touch_count": 2,
+                "upper_wick_ratio": 0.62,
+                "lower_wick_ratio": 0.12,
+                "volume_spike": 1.8,
+                "rsi_14": 68.0,
+            }
+        )
+        alpha_context = AlphaMarketContext(
+            symbol="BTCUSDT",
+            timeframe="15m",
+            timestamp=features.timestamp,
+            delta_divergence="bearish_divergence",
+            cvd_change=-120.0,
+            aggressive_delta=-80.0,
+            data_quality={"missing_sources": ["orderbook_l2", "liquidation_data"]},
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(
+            features,
+            {"alpha_context": alpha_context, "min_cvd_divergence_score": 0.8},
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].direction, "SHORT")
+        self.assertEqual(candidates[0].status, "actionable")
+        self.assertIn("CVD/delta divergence", " ".join(candidates[0].explanation))
+        metadata = candidates[0].trade_plan.metadata if candidates[0].trade_plan else {}
+        self.assertGreaterEqual(
+            metadata.get("liquidity_sweep_score_breakdown", {}).get("cvd_divergence_score", 0),
+            1.0,
+        )
+
+    async def test_liquidity_sweep_missing_alpha_context_uses_explicit_proxy_metadata(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 98.8,
+                "open": 99.2,
+                "high": 100.5,
+                "low": 96.2,
+                "close": 98.8,
+                "swing_low": 98.0,
+                "lower_wick_ratio": 0.6,
+                "upper_wick_ratio": 0.3,
+                "volume_spike": 1.8,
+            }
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        metadata = candidates[0].trade_plan.metadata if candidates[0].trade_plan else {}
+        self.assertFalse(metadata.get("alpha_context_used"))
+        self.assertIn("alpha_context", metadata.get("missing_alpha_sources", []))
+        self.assertIn("Alpha context unavailable", " ".join(candidates[0].risks))
+
     async def test_liquidity_sweep_confirmation_candle_can_be_actionable(self) -> None:
         features = _breakout_features().model_copy(
             update={
@@ -697,7 +806,9 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
 
         candidates = await LiquiditySweepReversalStrategy().evaluate(features)
 
-        self.assertEqual(candidates, [])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].status, "rejected")
+        self.assertIn("continued the breakout", candidates[0].status_reason or "")
 
     def test_strategy_pipeline_warns_on_low_rr_without_blocking_discovery_by_default(self) -> None:
         features = _breakout_features()
@@ -1388,7 +1499,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             candidates = await strategy.evaluate(features)
             self.assertIsInstance(candidates, list)
 
-    async def test_liquidity_sweep_without_reclaim_is_ready(self) -> None:
+    async def test_liquidity_sweep_without_reclaim_is_not_actionable(self) -> None:
         features = _breakout_features().model_copy(
             update={
                 "close": 95.5,
@@ -1402,6 +1513,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+        self.assertIn("waiting for reclaim", candidates[0].status_reason or "")
 
         signal = StrategySignalPipeline().finalize(
             candidates[0],
@@ -1409,8 +1521,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(signal)
-        self.assertEqual(signal.status, "ready")
-        self.assertIn("waiting for reclaim", signal.status_reason or "")
+        self.assertNotEqual(signal.status, "actionable")
 
     async def test_liquidity_sweep_targets_midpoint_and_opposite_boundary(self) -> None:
         features = _breakout_features().model_copy(
@@ -1436,6 +1547,9 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(targets[1].source, "swing_high")
         self.assertAlmostEqual(targets[0].price or 0, 101.0)
         self.assertAlmostEqual(targets[1].price or 0, 104.0)
+        self.assertEqual(targets[0].metadata.get("market_target_source"), "range_midpoint")
+        self.assertEqual(targets[1].metadata.get("market_target_source"), "swing_high")
+        self.assertEqual(candidates[0].trade_plan.metadata.get("market_target_source"), "range_midpoint")
 
     async def test_liquidity_sweep_records_oi_flush_when_available(self) -> None:
         features = _breakout_features().model_copy(
@@ -1452,11 +1566,42 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
                 "oi_change": -0.04,
             }
         )
+        no_oi_candidates = await LiquiditySweepReversalStrategy().evaluate(
+            features.model_copy(update={"oi_change": None})
+        )
 
         candidates = await LiquiditySweepReversalStrategy().evaluate(features)
 
         self.assertEqual(len(candidates), 1)
-        self.assertIn("Open interest flushed", " ".join(candidates[0].explanation))
+        self.assertIn("Open interest flush score", " ".join(candidates[0].explanation))
+        self.assertGreater(candidates[0].score, no_oi_candidates[0].score)
+
+    async def test_liquidity_sweep_blocks_when_market_target_room_is_too_small(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 98.8,
+                "open": 99.2,
+                "high": 99.4,
+                "low": 97.5,
+                "close": 98.8,
+                "session_high": 99.2,
+                "swing_low": 98.0,
+                "swing_high": None,
+                "donchian_high_20": None,
+                "lower_wick_ratio": 0.6,
+                "upper_wick_ratio": 0.3,
+                "volume_spike": 1.8,
+            }
+        )
+
+        candidates = await LiquiditySweepReversalStrategy().evaluate(
+            features,
+            {"min_target_distance_r": 0.75},
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].status, "watchlist")
+        self.assertIn("Nearest market target", candidates[0].status_reason or "")
 
     async def test_liquidity_sweep_blocks_against_strong_trend_without_confirmation(self) -> None:
         features = _breakout_features().model_copy(
@@ -1476,7 +1621,10 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        candidates = await LiquiditySweepReversalStrategy().evaluate(features)
+        candidates = await LiquiditySweepReversalStrategy().evaluate(
+            features,
+            {"require_absorption": True, "min_absorption_score": 0.5},
+        )
 
         self.assertEqual(candidates, [])
 

@@ -847,7 +847,9 @@ class InvalidationLayer:
                     "Volume disappears after breakdown",
                 ]
         elif signal.strategy == "liquidity_sweep_reversal":
-            swept_level = features.swing_low if direction == "long" else features.swing_high
+            strategy_swept_level = _trade_plan_metadata_number(signal, "swept_level")
+            swept_level = strategy_swept_level or (features.swing_low if direction == "long" else features.swing_high)
+            strategy_sweep_extreme = _trade_plan_metadata_number(signal, "sweep_extreme")
             conservative_trigger = features.high if direction == "long" else features.low
             conservative_zone = _entry_zone_around_level(conservative_trigger, features.atr_14)
             wick_ratio = features.lower_wick_ratio if direction == "long" else features.upper_wick_ratio
@@ -862,7 +864,7 @@ class InvalidationLayer:
                     "swept_level": swept_level,
                     "reclaim_level": swept_level if direction == "long" else None,
                     "rejection_level": swept_level if direction == "short" else None,
-                    "sweep_extreme": features.low if direction == "long" else features.high,
+                    "sweep_extreme": strategy_sweep_extreme or (features.low if direction == "long" else features.high),
                     "wick_ratio": wick_ratio,
                     "level_touch_count": touch_count,
                     "level_volume_score": level_volume_score,
@@ -1042,6 +1044,19 @@ def _trade_plan_entry_model(signal: StrategySignal) -> str | None:
         return None
     raw = signal.trade_plan.entry.metadata.get("entry_model")
     return str(raw) if raw is not None else None
+
+
+def _trade_plan_metadata_number(signal: StrategySignal, key: str) -> float | None:
+    if signal.trade_plan is None:
+        return None
+    metadata_sources = [signal.trade_plan.entry.metadata, signal.trade_plan.metadata]
+    if signal.trade_plan.invalidation is not None:
+        metadata_sources.append(signal.trade_plan.invalidation.metadata)
+    for metadata in metadata_sources:
+        value = _number_or_none(metadata.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def _liquidity_sweep_range_targets(signal: StrategySignal) -> tuple[float | None, float | None]:

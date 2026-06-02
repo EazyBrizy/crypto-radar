@@ -63,7 +63,7 @@ candle-state, and exit changes against the saved LAB-02 baseline artifact.
 4. [x] AUD-04: Refactor StrategySignalPipeline services without behavior regression.
 5. [x] AUD-05: Introduce unified SignalDecisionSnapshot contract across pipeline/API/UI.
 6. [x] AUD-06: Add AlphaMarketContext and smart-money/orderflow features.
-7. [ ] AUD-07: reserved follow-up for deeper decision snapshot cleanup if needed.
+7. [x] AUD-07: Improve liquidity_sweep_reversal with smart-money/orderflow context.
 8. [ ] AUD-08: reserved alpha/context calibration follow-up if needed.
 9. [ ] AUD-09: strategy upgrades.
 10. [ ] AUD-10: market-based exits.
@@ -90,6 +90,24 @@ market-based exits are complete.
 - [x] Add targeted tests for schema optionality, trade delta aggregation,
   orderbook imbalance/depth walls, derivative missing-history behavior,
   scanner handoff, and backtest no-alpha operation.
+
+### AUD-07 Checklist
+
+- [x] Extend liquidity sweep setup metadata with obvious-liquidity, reclaim,
+  absorption, CVD divergence, OI/liquidation flush, failed continuation, target
+  room, alpha usage, and missing-source fields.
+- [x] Score session, previous-day, range, swing/equal, high-volume, and alpha
+  liquidity-pool levels instead of relying on a single wick pattern.
+- [x] Require reclaim/acceptance context for actionable reversal; continued
+  breakout is rejected/watchlist research context.
+- [x] Use optional `AlphaMarketContext` for absorption, CVD, orderbook, OI, and
+  liquidation evidence while preserving explicit missing-alpha metadata.
+- [x] Prefer market targets and target thesis metadata when available; keep
+  fallback targets explicit.
+- [x] Add threshold experiment params for Strategy Lab/backtests without
+  fabricating baseline or alpha results.
+- [x] Add targeted tests for reclaim/absorption, CVD divergence, missing alpha,
+  OI boost, target room, failed continuation, and target metadata.
 
 ## Remaining Follow-Ups
 

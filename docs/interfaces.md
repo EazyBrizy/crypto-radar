@@ -877,9 +877,17 @@ Strategy runtime params include:
 - `volatility_squeeze_breakout.oi_no_expansion_penalty`
 - `liquidity_sweep_reversal.require_reclaim`
 - `liquidity_sweep_reversal.require_absorption`
+- `liquidity_sweep_reversal.min_absorption_score`
+- `liquidity_sweep_reversal.min_cvd_divergence_score`
+- `liquidity_sweep_reversal.min_oi_flush_score`
+- `liquidity_sweep_reversal.min_obvious_liquidity_score`
+- `liquidity_sweep_reversal.min_target_distance_r`
+- `liquidity_sweep_reversal.alpha_context_required`
+- `liquidity_sweep_reversal.require_oi_flush`
 - `liquidity_sweep_reversal.max_obstacle_distance_r`
 - `liquidity_sweep_reversal.oi_flush_threshold`
 - `liquidity_sweep_reversal.oi_flush_bonus`
+- `liquidity_sweep_reversal.liquidation_flush_bonus`
 - `trend_pullback_continuation.funding_warning_threshold`
 - `trend_pullback_continuation.funding_block_threshold`
 - `trend_pullback_continuation.crowded_oi_change_threshold`
@@ -996,6 +1004,43 @@ Backtests must not use future or live alpha data. When historical trades, L2,
 or derivative history are unavailable, backtest assumptions and trade metadata
 must expose `alpha_context_available=false` and
 `alpha_context_missing_sources` rather than filling synthetic orderflow values.
+
+## Liquidity Sweep Reversal AUD-07 Additive Metadata
+
+`liquidity_sweep_reversal` keeps the existing `StrategySignal` and `TradePlan`
+schemas. AUD-07 adds only strategy/trade-plan metadata and runtime params.
+
+The strategy may write `TradePlan.metadata.liquidity_sweep_score_breakdown`:
+
+```python
+LiquiditySweepScoreBreakdown = {
+    "obvious_liquidity_score": float,      # 0..1
+    "reclaim_score": float,                # 0..1
+    "absorption_score": float,             # 0..1
+    "cvd_divergence_score": float,         # 0..1
+    "oi_flush_score": float,               # 0..1
+    "liquidation_flush_score": float,      # 0..1
+    "failed_continuation_score": float,    # 0..1
+    "htf_target_distance_r": float | None,
+    "market_target_source": str | None,
+    "alpha_context_used": bool,
+    "missing_alpha_sources": list[str],
+}
+```
+
+Targets remain `TradePlanTarget` objects. When a market target is available,
+target `source` and `metadata.market_target_source` identify the market level,
+such as `range_midpoint`, `swing_high`, `session_high`,
+`previous_day_low`, `liquidity_pool_*`, or `htf_1h_resistance`. If no market
+target exists, fallback R-multiple targets remain explicitly marked through the
+existing fallback metadata.
+
+Missing alpha context is never silently filled. If no `AlphaMarketContext` is
+provided, `alpha_context_used=false` and `missing_alpha_sources` includes
+`alpha_context`; candle/volume proxy evidence may still be scored as research
+context. Backtests without historical alpha data continue to expose
+`alpha_context_available=false` and do not synthesize CVD, L2, derivative, or
+liquidation values.
 
 Risk gate consumes `RiskContext.trade_plan` when it is present. Take-profit
 precedence is:

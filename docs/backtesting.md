@@ -305,6 +305,25 @@ Funding assumptions must state whether they model one interval, full holding
 duration, or are unavailable. Results without funding data must not be presented
 as production-realistic futures performance.
 
+## Liquidity Sweep Threshold Experiments
+
+AUD-07 liquidity-sweep experiments can sweep these params by pair/timeframe:
+
+- `min_absorption_score`
+- `min_cvd_divergence_score`
+- `min_target_distance_r`
+
+Pass them through `BacktestRunRequest.params` or Strategy Lab `params`.
+`ProductionBacktestRunner` records supplied values in
+`assumptions.liquidity_sweep_threshold_experiment_params` for
+`liquidity_sweep_reversal` runs so baseline and experiment comparisons are
+auditable.
+
+When historical alpha data is unavailable, these experiments must keep
+`alpha_context_available=false` and list missing alpha sources. Do not fill
+synthetic CVD, L2, OI, liquidation, or baseline outcomes. Scenarios without
+valid candle samples still return `no_data` or `insufficient_data`.
+
 ## Fill Assumptions
 
 Backtests should be conservative:

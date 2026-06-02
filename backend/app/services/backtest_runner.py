@@ -81,6 +81,12 @@ _STRATEGY_ALIASES = {
     "liquidity_sweep_reversal": "liquidity_sweep_reversal",
 }
 
+_LIQUIDITY_SWEEP_THRESHOLD_PARAM_KEYS = {
+    "min_absorption_score",
+    "min_cvd_divergence_score",
+    "min_target_distance_r",
+}
+
 _STOP_REASONS = {"stop_loss", "breakeven_stop", "trailing_stop"}
 
 
@@ -651,6 +657,9 @@ def _assumptions_for_backtest(
         "allow_opposite_signal_flip",
         _bool_param(request.params, "allow_opposite_signal_flip", False),
     )
+    threshold_params = _liquidity_sweep_threshold_params(request)
+    if threshold_params:
+        values.setdefault("liquidity_sweep_threshold_experiment_params", threshold_params)
     if mode == "discovery":
         values.setdefault("risk_gate_enabled", False)
         values.setdefault("rr_hard_gate_enabled", False)
@@ -691,6 +700,19 @@ def _request_with_mode_options(
         assumptions=assumptions,
     )
     return request.model_copy(update={"params": params})
+
+
+def _liquidity_sweep_threshold_params(request: BacktestRunRequest) -> dict[str, Any]:
+    if _resolve_strategy_code(request.strategy_code) != "liquidity_sweep_reversal":
+        return {}
+    nested = dict(_mapping_param(request.params.get("strategy_params")))
+    result: dict[str, Any] = {}
+    for key in _LIQUIDITY_SWEEP_THRESHOLD_PARAM_KEYS:
+        if key in request.params:
+            result[key] = request.params[key]
+        elif key in nested:
+            result[key] = nested[key]
+    return result
 
 
 def _risk_settings_with_mode(

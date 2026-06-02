@@ -90,6 +90,9 @@ class SignalStatusResolver:
         if signal.status == "invalidated":
             return ("invalidated", signal.status_reason or "Strategy idea is invalidated")
 
+        if signal.status == "rejected":
+            return ("rejected", signal.status_reason or "Strategy rejected the setup")
+
         if no_trade_filter.blocked:
             return ("ready", f"No-trade hard block: {'; '.join(no_trade_filter.blockers)}")
 

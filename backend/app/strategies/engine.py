@@ -49,6 +49,8 @@ class StrategyEngine:
             strategy_params.update(getattr(runtime_config, "risk_settings", {}) if runtime_config is not None else {})
             if alpha_context is not None:
                 strategy_params["alpha_context"] = alpha_context
+            if support_resistance_by_timeframe:
+                strategy_params["support_resistance_by_timeframe"] = support_resistance_by_timeframe
             context = StrategyEvaluationContext(
                 signal_features=features,
                 alpha_context=alpha_context,

@@ -181,6 +181,37 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertTrue(strategy_engine.seen_alpha_contexts)
         self.assertTrue(all(context is None for context in strategy_engine.seen_alpha_contexts))
 
+    def test_backtest_records_liquidity_sweep_threshold_experiment_params(self) -> None:
+        candles = _candles()
+        request = _request(candles)
+        request = request.model_copy(
+            update={
+                "strategy_code": "liquidity_sweep_reversal",
+                "params": {
+                    **request.params,
+                    "min_absorption_score": 0.45,
+                    "min_cvd_divergence_score": 0.6,
+                    "min_target_distance_r": 1.25,
+                },
+            }
+        )
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=AlphaRecordingStrategyEngine(),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(request)
+
+        self.assertEqual(
+            result.assumptions["liquidity_sweep_threshold_experiment_params"],
+            {
+                "min_absorption_score": 0.45,
+                "min_cvd_divergence_score": 0.6,
+                "min_target_distance_r": 1.25,
+            },
+        )
+
     def test_no_data_returns_explicit_error(self) -> None:
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         runner = ProductionBacktestRunner(

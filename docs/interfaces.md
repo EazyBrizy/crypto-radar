@@ -80,31 +80,43 @@ Contract terms:
   real-entry gates pass. This must remain false until all real execution
   readiness conditions are satisfied.
 - `decision snapshot`: an immutable decision record attached to the signal,
-  trade plan, journal row, or execution result. It should include scope, mode,
-  guard modes, RR result, trade-plan completeness, fallback flags, eligibility
-  booleans, blockers, warnings, and source metadata used by the decision.
+  trade plan, journal row, or execution result. It records setup validity,
+  trade-plan completeness, market context score, actionability, virtual/real
+  execution eligibility, blockers, warnings, and source metadata used by the
+  decision.
 
 Future decision snapshot schema changes must be additive and backward
-compatible. The canonical shape is:
+compatible. `StrategySignal.decision` and `RadarSignal.decision` are optional;
+legacy signals may omit the field or return `null`. Persisted signals store the
+unified snapshot in `features_snapshot.decision_snapshot`; the older
+`features_snapshot.decision` key remains reserved for legacy manual decision
+metadata.
 
 ```python
-DecisionSnapshot = {
-    "decision_scope": (
-        "discovery" | "backtest" | "strategy_test" | "virtual" | "real"
-    ),
-    "research_mode": bool,
-    "production_mode": bool,
-    "signal_actionable": bool,
-    "execution_allowed_virtual": bool,
-    "execution_allowed_real": bool,
-    "trade_plan_complete": bool,
-    "fallback_used": bool,
-    "fallback_stop_used": bool,
-    "fallback_targets_used": bool,
-    "rr": dict,
-    "blockers": list[str],
-    "warnings": list[str],
+DecisionReasonSource = (
+    "setup" | "market_quality" | "rr" | "no_trade" | "risk" | "execution" | "data"
+)
+DecisionReasonSeverity = "info" | "warning" | "blocker"
+DecisionReasonScope = "discovery" | "virtual" | "real" | "backtest"
+
+DecisionReason = {
+    "code": str,
+    "message": str,
+    "source": DecisionReasonSource,
+    "severity": DecisionReasonSeverity,
+    "scope": DecisionReasonScope,
     "metadata": dict,
+}
+
+SignalDecisionSnapshot = {
+    "setup_valid": bool,
+    "trade_plan_valid": bool,
+    "market_context_score": float,
+    "signal_actionable": bool,
+    "execution_allowed_virtual": bool | None,
+    "execution_allowed_real": bool | None,
+    "blockers": list[DecisionReason],
+    "warnings": list[DecisionReason],
 }
 ```
 
@@ -894,6 +906,96 @@ may include:
 `(current_open_interest - previous_open_interest) / previous_open_interest`.
 It remains `None` when the exchange omits open interest or no previous open
 interest exists.
+
+## Alpha Market Context v1
+
+AUD-06 adds an optional alpha/context layer between `Features` and strategy
+evaluation. The layer turns available orderflow, derivative, orderbook, and
+level-reaction data into a strategy-readable `AlphaMarketContext` without
+letting strategies call APIs, DB, Redis, or exchanges directly.
+
+`MarketData` remains backward compatible and may include optional normalized
+trade identity:
+
+- `trade_id: str | None`
+- `side: "buy" | "sell" | None`
+- `is_buyer_maker: bool | None`
+
+When trade side is unavailable, buy/sell volume, aggressive delta, and CVD must
+remain `None`; the alpha context must record `recent_trade_side` in
+`data_quality.missing_sources` instead of inferring side from price movement.
+
+`AlphaMarketContext` is optional for strategy evaluation and backtests. Live
+scanner orchestration may pass it through `StrategyEvaluationContext` and
+runtime params after it has been built by services. Strategies may read it, but
+must remain pure trading logic.
+
+```python
+RecentTrade = {
+    "exchange": str,
+    "symbol": str,
+    "price": float,
+    "quantity": float,
+    "timestamp": int,
+    "side": "buy" | "sell" | None,
+    "trade_id": str | None,
+    "is_buyer_maker": bool | None,
+}
+
+RecentTradesAggregate = {
+    "trades_count": int,
+    "buy_volume": float | None,
+    "sell_volume": float | None,
+    "total_volume": float,
+    "aggressive_delta": float | None,
+    "cvd": float | None,
+    "side_available": bool,
+}
+
+AlphaMarketContext = {
+    "symbol": str,
+    "timeframe": str,
+    "timestamp": int,
+    "buy_volume": float | None,
+    "sell_volume": float | None,
+    "aggressive_delta": float | None,
+    "cvd": float | None,
+    "cvd_change": float | None,
+    "delta_divergence": str | None,
+    "oi_delta_5m": float | None,
+    "oi_delta_15m": float | None,
+    "funding_rate": float | None,
+    "funding_pressure": float | None,
+    "liquidation_proximity": float | None,
+    "liquidation_clusters": list[dict] | None,
+    "orderbook_imbalance": float | None,
+    "bid_depth_usd": float | None,
+    "ask_depth_usd": float | None,
+    "depth_wall_side": "bid" | "ask" | "none" | None,
+    "depth_wall_price": float | None,
+    "absorption_score": float | None,
+    "sweep_through_book": bool | None,
+    "session_liquidity_pools": list[dict],
+    "pdh_pdl_reaction": str | None,
+    "vwap_deviation": float | None,
+    "vwap_acceptance": str | None,
+    "data_quality": dict,
+}
+```
+
+Market-quality/risk orderbook usage remains separate from alpha/context
+orderflow usage:
+
+- `RiskMarketDataService` reads L2 to decide spread, depth, freshness, and real
+  or virtual entry eligibility.
+- `AlphaMarketContextService` reads the same normalized hot L2 snapshot only as
+  alpha evidence: imbalance, depth-wall side/price, and optional absorption or
+  sweep-through-book annotations.
+
+Backtests must not use future or live alpha data. When historical trades, L2,
+or derivative history are unavailable, backtest assumptions and trade metadata
+must expose `alpha_context_available=false` and
+`alpha_context_missing_sources` rather than filling synthetic orderflow values.
 
 Risk gate consumes `RiskContext.trade_plan` when it is present. Take-profit
 precedence is:

@@ -4,7 +4,7 @@ import { Activity, ArrowDownRight, ArrowUpRight, Clock3 } from "lucide-react";
 import { Badge } from "./Badge";
 import { useSignalPrice } from "@/stores/price-store";
 import { useSignalStore } from "@/stores/signal-store";
-import type { RadarSignal, SignalEdgeStatus } from "../types";
+import type { DecisionReason, RadarSignal, SignalEdgeStatus } from "../types";
 import {
   formatPrice,
   isRiskRewardBlocked,
@@ -38,6 +38,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
   const edge = edgeBadge(signal.edge?.status ?? "unknown", signal.edge?.sample_size, signal.edge?.min_sample_size);
   const formingCandle = isFormingCandleSignal(signal);
   const openCandleAllowed = isOpenCandleActionableAllowed(signal);
+  const decisionBadge = decisionBadgeInfo(signal.decision);
 
   return (
     <button className={`signal-card ${selected ? "selected" : ""}`} onClick={() => onSelect(signal)} type="button">
@@ -73,6 +74,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
       </div>
 
       <div className="signal-badge-row">
+        {decisionBadge ? <Badge tone={decisionBadge.tone}>{decisionBadge.label}</Badge> : null}
         {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
         <Badge tone={edge.tone}>{edge.label}</Badge>
         {rrBlocked ? <Badge tone="red">RR blocked</Badge> : null}
@@ -140,6 +142,22 @@ function edgeBadge(
   if (status === "negative") return { label: `Edge - ${sampleSize} sample`, tone: "red" };
   if (status === "insufficient_sample") return { label: `Edge low ${sampleSize}/${minSampleSize}`, tone: "yellow" };
   return { label: "Edge unknown", tone: "neutral" };
+}
+
+function decisionBadgeInfo(
+  decision: RadarSignal["decision"]
+): { label: string; tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral" } | null {
+  if (!decision) return null;
+  const reason = decision.blockers[0] ?? decision.warnings[0] ?? null;
+  if (!reason) return null;
+  return {
+    label: `${decisionSourceLabel(reason)} ${reason.severity}`,
+    tone: reason.severity === "blocker" ? "red" : reason.severity === "warning" ? "yellow" : "blue"
+  };
+}
+
+function decisionSourceLabel(reason: DecisionReason): string {
+  return reason.source.replaceAll("_", " ");
 }
 
 export const SignalCardById = memo(function SignalCardById({

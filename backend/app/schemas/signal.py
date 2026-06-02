@@ -3,6 +3,7 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.decision import SignalDecisionSnapshot
 from app.schemas.trade_plan import TradePlan
 from app.schemas.market import CandleState
 
@@ -173,6 +174,7 @@ class StrategySignal(BaseModel):
     auto_entry: Optional[SignalAutoEntrySnapshot] = None
     edge: Optional[SignalEdgeSnapshot] = None
     no_trade_filter: Optional[NoTradeFilterResult] = None
+    decision: Optional[SignalDecisionSnapshot] = None
 
 
 class RadarSignal(BaseModel):
@@ -214,6 +216,7 @@ class RadarSignal(BaseModel):
     auto_entry: Optional[SignalAutoEntrySnapshot] = None
     edge: Optional[SignalEdgeSnapshot] = None
     no_trade_filter: Optional[NoTradeFilterResult] = None
+    decision: Optional[SignalDecisionSnapshot] = None
     created_at: datetime
     updated_at: datetime
     expires_at: Optional[datetime] = None

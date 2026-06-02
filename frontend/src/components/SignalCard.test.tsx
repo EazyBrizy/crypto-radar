@@ -196,4 +196,33 @@ describe("SignalCard", () => {
     expect(screen.getByText("preview")).toBeInTheDocument();
     expect(screen.queryByText("actionable")).not.toBeInTheDocument();
   });
+
+  it("shows the top decision blocker source", () => {
+    const signal: RadarSignal = {
+      ...baseSignal,
+      decision: {
+        setup_valid: true,
+        trade_plan_valid: true,
+        market_context_score: 42,
+        signal_actionable: false,
+        execution_allowed_virtual: false,
+        execution_allowed_real: null,
+        blockers: [
+          {
+            code: "high_spread",
+            message: "Spread is above the configured entry limit",
+            source: "market_quality",
+            severity: "blocker",
+            scope: "discovery",
+            metadata: {}
+          }
+        ],
+        warnings: []
+      }
+    };
+
+    render(<SignalCard signal={signal} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("market quality blocker")).toBeInTheDocument();
+  });
 });

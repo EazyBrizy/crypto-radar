@@ -14,7 +14,7 @@ from typing import Any, List, Optional
 import websockets
 
 from app.schemas.candle import OHLCVCandle, Timeframe
-from app.schemas.market import MarketData
+from app.schemas.market import MarketData, TradeSide
 from app.schemas.trade import ExecutionPlannedOrder
 
 logger = logging.getLogger(__name__)
@@ -617,6 +617,17 @@ def _parse_book_side(value: object) -> list[tuple[float, float]]:
     return levels
 
 
+def _normalize_trade_side(value: object) -> TradeSide | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized == "buy":
+        return "buy"
+    if normalized == "sell":
+        return "sell"
+    return None
+
+
 def _float_or_none(value: object) -> float | None:
     if value is None or value == "":
         return None
@@ -679,6 +690,8 @@ class BybitAdapter:
                 price=float(trade["p"]),
                 volume=float(trade["v"]),
                 timestamp=int(trade["T"]),
+                side=_normalize_trade_side(trade.get("S")),
+                trade_id=str(trade["i"]) if trade.get("i") is not None else None,
             )
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Skipping malformed trade entry: %s", exc)

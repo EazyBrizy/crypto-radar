@@ -18,6 +18,10 @@ import type {
 } from "@/features/server-state/types";
 import type {
   CandleResponse,
+  DecisionReason,
+  DecisionReasonScope,
+  DecisionReasonSeverity,
+  DecisionReasonSource,
   ExecutionGateStatus,
   ExecutionQualityGate,
   HealthStatus,
@@ -30,6 +34,7 @@ import type {
   RadarSignal,
   RadarStatus,
   SignalEdgeSnapshot,
+  SignalDecisionSnapshot,
   SignalLayerCheck,
   TradeJournalEntry,
   TradeJournalResponse,
@@ -142,6 +147,7 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     auto_entry: enriched.auto_entry ?? null,
     edge: normalizeSignalEdge(enriched.edge),
     no_trade_filter: normalizeNoTradeFilter(enriched.no_trade_filter),
+    decision: normalizeDecisionSnapshot(enriched.decision),
     confirmed_trade_id: signal.confirmed_trade_id ?? null
   };
 }
@@ -293,6 +299,32 @@ function normalizeNoTradeFilter(value: unknown): NoTradeFilterResult | null {
     checks: normalizeLayerChecks(value.checks),
     metadata: normalizeMetadata(value.metadata)
   };
+}
+
+function normalizeDecisionSnapshot(value: unknown): SignalDecisionSnapshot | null {
+  if (!isRecord(value)) return null;
+  return {
+    setup_valid: Boolean(value.setup_valid ?? false),
+    trade_plan_valid: Boolean(value.trade_plan_valid ?? false),
+    market_context_score: Number(value.market_context_score ?? 0),
+    signal_actionable: Boolean(value.signal_actionable ?? false),
+    execution_allowed_virtual: optionalBoolean(value.execution_allowed_virtual),
+    execution_allowed_real: optionalBoolean(value.execution_allowed_real),
+    blockers: normalizeDecisionReasons(value.blockers),
+    warnings: normalizeDecisionReasons(value.warnings)
+  };
+}
+
+function normalizeDecisionReasons(value: unknown): DecisionReason[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((reason) => ({
+    code: String(reason.code ?? "decision_reason"),
+    message: String(reason.message ?? reason.code ?? "Decision reason"),
+    source: normalizeDecisionReasonSource(reason.source),
+    severity: normalizeDecisionReasonSeverity(reason.severity),
+    scope: normalizeDecisionReasonScope(reason.scope),
+    metadata: normalizeMetadata(reason.metadata)
+  }));
 }
 
 function normalizeLayerChecks(value: unknown): SignalLayerCheck[] {
@@ -1394,6 +1426,35 @@ function optionalNumber(value: unknown): number | null {
 
 function optionalString(value: unknown): string | null {
   return typeof value === "string" && value ? value : null;
+}
+
+function optionalBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function normalizeDecisionReasonSource(value: unknown): DecisionReasonSource {
+  if (
+    value === "setup" ||
+    value === "market_quality" ||
+    value === "rr" ||
+    value === "no_trade" ||
+    value === "risk" ||
+    value === "execution" ||
+    value === "data"
+  ) {
+    return value;
+  }
+  return "data";
+}
+
+function normalizeDecisionReasonSeverity(value: unknown): DecisionReasonSeverity {
+  if (value === "info" || value === "blocker") return value;
+  return "warning";
+}
+
+function normalizeDecisionReasonScope(value: unknown): DecisionReasonScope {
+  if (value === "virtual" || value === "real" || value === "backtest") return value;
+  return "discovery";
 }
 
 function normalizeClosePercent(value: unknown): number | string | null {

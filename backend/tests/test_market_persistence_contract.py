@@ -211,6 +211,7 @@ class MarketScannerPersistenceIntegrationTest(unittest.IsolatedAsyncioTestCase):
             market_quality=None,
             virtual_trading=None,
             derivative_market=FakeDerivativeMarket(),  # type: ignore[arg-type]
+            alpha_market_context=None,
         )
 
         await scanner.process_tick(

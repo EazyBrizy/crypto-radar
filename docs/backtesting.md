@@ -240,9 +240,17 @@ auditable tags or equivalent structured metadata. Required keys:
 - `sample_batch`
 - `fees_model`
 - `slippage_model`
+- `alpha_context_available`
+- `alpha_context_missing_sources`
 
 Tags must reflect the decision snapshot used for the simulated trade. Baseline
 and experiment comparisons must not reuse tags from a different run or scenario.
+
+When historical trades, L2 orderbook snapshots, derivative history, or
+liquidation context are unavailable, baseline output must keep
+`alpha_context_available=false` and list the missing alpha sources. These runs
+must not be compared one-for-one against full-alpha experiments without that
+metadata because the alpha feature set is materially different.
 
 ## No Lookahead
 
@@ -255,6 +263,9 @@ Rules:
   backtest runner or Strategy Test Lab;
 - backtest features/signals/trades must expose `candle_state=closed`, and
   simulated trade tags must include `candle_state=closed`;
+- backtests must not read live `AlphaMarketContext`; if historical alpha data is
+  unavailable, assumptions and feature snapshots must expose the missing
+  sources instead of filling zero-value orderflow metrics;
 - indicators for candle `N` may use candle `N` only after it is closed;
 - an entry generated from candle `N` cannot depend on candle `N + 1`;
 - higher-timeframe context must be aligned to the latest closed higher-timeframe

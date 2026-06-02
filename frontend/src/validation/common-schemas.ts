@@ -144,6 +144,26 @@ export const NoTradeFilterResultSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).default({})
 });
 
+export const DecisionReasonSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  source: z.enum(["setup", "market_quality", "rr", "no_trade", "risk", "execution", "data"]),
+  severity: z.enum(["info", "warning", "blocker"]),
+  scope: z.enum(["discovery", "virtual", "real", "backtest"]),
+  metadata: z.record(z.string(), z.unknown()).default({})
+});
+
+export const SignalDecisionSnapshotSchema = z.object({
+  setup_valid: z.boolean(),
+  trade_plan_valid: z.boolean(),
+  market_context_score: z.number(),
+  signal_actionable: z.boolean(),
+  execution_allowed_virtual: z.boolean().nullable().optional(),
+  execution_allowed_real: z.boolean().nullable().optional(),
+  blockers: z.array(DecisionReasonSchema).default([]),
+  warnings: z.array(DecisionReasonSchema).default([])
+});
+
 export const RadarSignalSchema = z.object({
   id: z.string(),
   symbol: z.string(),
@@ -225,6 +245,7 @@ export const RadarSignalSchema = z.object({
   }).nullable().optional(),
   edge: SignalEdgeSnapshotSchema.nullable().optional(),
   no_trade_filter: NoTradeFilterResultSchema.nullable().optional(),
+  decision: SignalDecisionSnapshotSchema.nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   expires_at: z.string().nullable().optional(),

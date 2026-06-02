@@ -1,17 +1,24 @@
 import asyncio
 import logging
 import time
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
 from app.exchanges.bybit import BybitAdapter, fetch_bybit_klines
 from app.schemas.candle import OHLCVCandle
-from app.schemas.market import Features, MarketData
+from app.schemas.market import AlphaMarketContext, Features, MarketData, RecentTrade
 from app.schemas.signal import StrategySignal
 from app.schemas.trade import VirtualTrade
+from app.services.alpha_market_context import (
+    AlphaMarketContextService,
+    alpha_market_context_service,
+    recent_trade_from_market_data,
+)
 from app.services.candle_service import CandleService, candle_service
 from app.services.derivative_market import (
+    DerivativeMarketSnapshot,
     DerivativeMarketSnapshotService,
     derivative_market_snapshot_service,
 )
@@ -47,6 +54,7 @@ HISTORY_WARMUP_LIMIT = 250
 OPEN_CANDLE_EVALUATION_INTERVAL_SEC = 2.0
 COOPERATIVE_YIELD_EVERY = 2
 TRADE_UPDATE_EVENT_MIN_INTERVAL_SEC = 3.0
+RECENT_ALPHA_TRADES_LIMIT = 500
 
 DEFAULT_SYMBOLS = [
     "BTCUSDT",
@@ -97,6 +105,7 @@ class MarketScanner:
         strategy_configs: StrategyConfigService | None = strategy_config_service,
         virtual_trading: VirtualTradingPriceUpdater | None = virtual_trading_service,
         derivative_market: DerivativeMarketSnapshotService | None = derivative_market_snapshot_service,
+        alpha_market_context: AlphaMarketContextService | None = alpha_market_context_service,
     ) -> None:
         self._symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
         self._exchanges = [exchange.lower() for exchange in (exchanges or ["bybit"])]
@@ -111,12 +120,17 @@ class MarketScanner:
         self._strategy_configs = strategy_configs
         self._virtual_trading = virtual_trading
         self._derivative_market = derivative_market
+        self._alpha_market_context = alpha_market_context
         self._feature_engine = FeatureEngine()
         self._strategy_engine = StrategyEngine()
         self._stats = ScannerRuntimeStats()
         self._last_heartbeat_monotonic = 0.0
         self._last_series_evaluation_monotonic: dict[str, float] = {}
         self._last_trade_update_event_monotonic: dict[str, float] = {}
+        self._recent_trades_by_symbol: defaultdict[tuple[str, str], deque[RecentTrade]] = defaultdict(
+            lambda: deque(maxlen=RECENT_ALPHA_TRADES_LIMIT)
+        )
+        self._last_alpha_context_by_series: dict[tuple[str, str, str], AlphaMarketContext] = {}
         self._history_warmed_up = False
 
     def _build_adapters(self) -> list[BybitAdapter]:
@@ -135,6 +149,7 @@ class MarketScanner:
         self._stats.last_symbol = data.symbol
         self._stats.last_price = data.price
 
+        self._record_recent_trade(data)
         await self._persist_market_tick(data)
         updated_trades = (
             self._virtual_trading.update_market_price(data.exchange, data.symbol, data.price)
@@ -169,7 +184,8 @@ class MarketScanner:
             )
             if features is None:
                 continue
-            features = await self._enrich_derivative_context(features)
+            derivative_snapshot = await self._derivative_snapshot_for(features)
+            features = _features_with_derivative_context(features, derivative_snapshot)
             context_features_by_timeframe = await self._context_features_for(candle)
             primary_context_timeframe = context_timeframe_for(candle.timeframe)
             context_features = (
@@ -182,6 +198,10 @@ class MarketScanner:
                 context_features_by_timeframe,
             )
             quality = await self._market_quality_for(features)
+            alpha_context = await self._alpha_context_for(
+                features,
+                derivative_snapshot=derivative_snapshot,
+            )
             strategy_configs = self._strategy_configs_for(features)
             await self._persist_market_features(features)
             self._stats.features_built += 1
@@ -198,6 +218,7 @@ class MarketScanner:
                     support_resistance_by_timeframe=support_resistance_by_timeframe,
                     market_quality=quality,
                     strategy_configs=strategy_configs,
+                    alpha_context=alpha_context,
                 )
             )
             evaluated_candles += 1
@@ -396,21 +417,68 @@ class MarketScanner:
         return _quality_input(snapshot)
 
     async def _enrich_derivative_context(self, features: Features) -> Features:
+        snapshot = await self._derivative_snapshot_for(features)
+        return _features_with_derivative_context(features, snapshot)
+
+    async def _derivative_snapshot_for(self, features: Features) -> DerivativeMarketSnapshot | None:
         if self._derivative_market is None:
-            return features
+            return None
         snapshot = await asyncio.to_thread(
             self._derivative_market.hot_snapshot,
             exchange=features.exchange,
             symbol=features.symbol,
         )
-        if snapshot is None:
-            return features
-        return features.model_copy(
-            update={
-                "funding_rate": snapshot.funding_rate,
-                "oi_change": snapshot.oi_change,
-            }
-        )
+        return snapshot
+
+    async def _alpha_context_for(
+        self,
+        features: Features,
+        *,
+        derivative_snapshot: DerivativeMarketSnapshot | None,
+    ) -> AlphaMarketContext | None:
+        if self._alpha_market_context is None:
+            return None
+        symbol_key = _symbol_key(features.exchange, features.symbol)
+        series_key = (symbol_key[0], symbol_key[1], features.timeframe)
+        recent_trades = list(self._recent_trades_by_symbol.get(symbol_key, ()))
+        previous_context = self._last_alpha_context_by_series.get(series_key)
+        try:
+            context = await asyncio.to_thread(
+                self._alpha_market_context.build_context,
+                features=features,
+                recent_trades=recent_trades,
+                derivative_snapshot=derivative_snapshot,
+                previous_context=previous_context,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Alpha context build failed for %s:%s:%s: %s",
+                features.exchange,
+                features.symbol,
+                features.timeframe,
+                exc,
+            )
+            context = AlphaMarketContext(
+                symbol=features.symbol,
+                timeframe=features.timeframe,
+                timestamp=features.timestamp,
+                data_quality={
+                    "available_sources": [],
+                    "missing_sources": ["alpha_context_error"],
+                    "warnings": [str(exc)],
+                    "source": "alpha_market_context",
+                },
+            )
+        self._last_alpha_context_by_series[series_key] = context
+        return context
+
+    def _record_recent_trade(self, data: MarketData) -> None:
+        try:
+            trade = recent_trade_from_market_data(data)
+        except ValueError as exc:
+            logger.warning("Recent trade alpha buffer skipped malformed tick: %s", exc)
+            return
+        self._recent_trades_by_symbol[_symbol_key(data.exchange, data.symbol)].append(trade)
 
     def _strategy_configs_for(self, features: Features):
         if self._strategy_configs is None:
@@ -615,3 +683,21 @@ def _quality_input(snapshot: MarketQualityData) -> MarketQualityInput:
         source=snapshot.source,
         warnings=snapshot.warnings,
     )
+
+
+def _features_with_derivative_context(
+    features: Features,
+    snapshot: DerivativeMarketSnapshot | None,
+) -> Features:
+    if snapshot is None:
+        return features
+    return features.model_copy(
+        update={
+            "funding_rate": snapshot.funding_rate,
+            "oi_change": snapshot.oi_change,
+        }
+    )
+
+
+def _symbol_key(exchange: str, symbol: str) -> tuple[str, str]:
+    return (exchange.strip().lower(), symbol.strip().upper())

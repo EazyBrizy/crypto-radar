@@ -63,10 +63,9 @@ def orderbook_hot_key(*, exchange: str, symbol: str) -> str:
 
 
 def _tick_source_id(tick: MarketData) -> str:
-    return (
-        f"{tick.exchange}:{tick.symbol}:{tick.timestamp}:"
-        f"{tick.price:.18g}:{tick.volume:.18g}"
-    )
+    if tick.trade_id:
+        return f"{tick.exchange}:{tick.symbol}:{tick.trade_id}"
+    return f"{tick.exchange}:{tick.symbol}:{tick.timestamp}:{tick.price:.18g}:{tick.volume:.18g}"
 
 
 class MarketDataPersistenceService:
@@ -217,12 +216,12 @@ class MarketDataPersistenceService:
                     tick.exchange,
                     tick.symbol,
                     source_id,
-                    "unknown",
+                    tick.side or "unknown",
                     _decimal(tick.price),
                     _decimal(tick.volume),
                     event_ts,
                     ingest_ts,
-                    None,
+                    tick.is_buyer_maker,
                 ]
             ],
             column_names=self._trade_columns,

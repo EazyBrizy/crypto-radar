@@ -187,6 +187,30 @@ export interface NoTradeFilterResult {
   metadata: Record<string, unknown>;
 }
 
+export type DecisionReasonSource = "setup" | "market_quality" | "rr" | "no_trade" | "risk" | "execution" | "data";
+export type DecisionReasonSeverity = "info" | "warning" | "blocker";
+export type DecisionReasonScope = "discovery" | "virtual" | "real" | "backtest";
+
+export interface DecisionReason {
+  code: string;
+  message: string;
+  source: DecisionReasonSource;
+  severity: DecisionReasonSeverity;
+  scope: DecisionReasonScope;
+  metadata: Record<string, unknown>;
+}
+
+export interface SignalDecisionSnapshot {
+  setup_valid: boolean;
+  trade_plan_valid: boolean;
+  market_context_score: number;
+  signal_actionable: boolean;
+  execution_allowed_virtual: boolean | null;
+  execution_allowed_real: boolean | null;
+  blockers: DecisionReason[];
+  warnings: DecisionReason[];
+}
+
 export interface MarketRegimeSnapshot {
   signal_timeframe: string;
   context_timeframe: string | null;
@@ -271,6 +295,7 @@ export interface RadarSignal {
   auto_entry: SignalAutoEntrySnapshot | null;
   edge?: SignalEdgeSnapshot | null;
   no_trade_filter?: NoTradeFilterResult | null;
+  decision?: SignalDecisionSnapshot | null;
   created_at: string;
   updated_at: string;
   expires_at: string | null;

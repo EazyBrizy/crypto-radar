@@ -632,6 +632,11 @@ def _assumptions_for_backtest(
     values.setdefault("initial_capital", str(request.initial_capital))
     values.setdefault("same_candle_policy", request.params.get("same_candle_policy") or "stop_first")
     values.setdefault("candle_state", "closed")
+    values.setdefault("alpha_context_available", False)
+    values.setdefault(
+        "alpha_context_missing_sources",
+        ["historical_trades", "historical_l2", "historical_derivative_history"],
+    )
     values.setdefault(
         "signal_selection_policy",
         _normalize_signal_selection_policy(
@@ -796,7 +801,11 @@ def _simulated_trade_from_position(
         warnings=_position_warnings(position),
         features_snapshot=dict(position.features_snapshot),
         trade_plan=_trade_plan_snapshot(position.signal),
-        tags=["backtest", "candle_state=closed"],
+        tags=[
+            "backtest",
+            "candle_state=closed",
+            "alpha_context_available=false",
+        ],
         created_at=trade.closed_at or trade.opened_at,
     )
 
@@ -862,6 +871,12 @@ def _position_warnings(position: _SimulatedPosition) -> list[str]:
 
 def _features_snapshot(features: Features, signal: RadarSignal) -> dict[str, Any]:
     snapshot = features.model_dump(mode="json")
+    snapshot["alpha_context_available"] = False
+    snapshot["alpha_context_missing_sources"] = [
+        "historical_trades",
+        "historical_l2",
+        "historical_derivative_history",
+    ]
     if signal.trade_plan is not None:
         snapshot["trade_plan"] = signal.trade_plan.model_dump(mode="json")
     if signal.no_trade_filter is not None:

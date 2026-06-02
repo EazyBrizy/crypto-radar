@@ -84,6 +84,15 @@ class RepeatingStrategyEngine:
         return [signal.model_copy(update={"status": "actionable"})]
 
 
+class AlphaRecordingStrategyEngine:
+    def __init__(self) -> None:
+        self.seen_alpha_contexts: list[object] = []
+
+    async def generate_signals(self, features: Features, **kwargs: object) -> list[object]:
+        self.seen_alpha_contexts.append(kwargs.get("alpha_context"))
+        return []
+
+
 class BacktestRunnerTest(unittest.TestCase):
     def test_runner_creates_trade_and_computes_cost_aware_metrics(self) -> None:
         candles = _candles()
@@ -148,7 +157,29 @@ class BacktestRunnerTest(unittest.TestCase):
             self.assertNotIn(open_preview.open_time, [candle.open_time for candle in window])
         for trade in result.trades:
             self.assertEqual(trade.features_snapshot.get("candle_state"), "closed")
+            self.assertFalse(trade.features_snapshot.get("alpha_context_available"))
             self.assertIn("candle_state=closed", trade.tags)
+            self.assertIn("alpha_context_available=false", trade.tags)
+
+    def test_backtest_works_without_alpha_context(self) -> None:
+        candles = _candles()
+        strategy_engine = AlphaRecordingStrategyEngine()
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=strategy_engine,  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(_request(candles))
+
+        self.assertEqual(result.run_result.status, "completed")
+        self.assertFalse(result.assumptions["alpha_context_available"])
+        self.assertEqual(
+            result.assumptions["alpha_context_missing_sources"],
+            ["historical_trades", "historical_l2", "historical_derivative_history"],
+        )
+        self.assertTrue(strategy_engine.seen_alpha_contexts)
+        self.assertTrue(all(context is None for context in strategy_engine.seen_alpha_contexts))
 
     def test_no_data_returns_explicit_error(self) -> None:
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)

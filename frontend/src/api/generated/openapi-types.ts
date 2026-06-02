@@ -1699,6 +1699,32 @@ export interface components {
              */
             reason: "take_profit" | "stop_loss" | "manual_close" | "invalidation" | "cancelled" | "partial_take_profit" | "breakeven_stop" | "trailing_stop" | "time_stop";
         };
+        /** DecisionReason */
+        DecisionReason: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "setup" | "market_quality" | "rr" | "no_trade" | "risk" | "execution" | "data";
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "blocker";
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "discovery" | "virtual" | "real" | "backtest";
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         /** ExchangeConnectionActionResponse */
         ExchangeConnectionActionResponse: {
             connection: components["schemas"]["ExchangeConnectionResponse"];
@@ -2695,6 +2721,7 @@ export interface components {
             auto_entry?: components["schemas"]["SignalAutoEntrySnapshot"] | null;
             edge?: components["schemas"]["SignalEdgeSnapshot"] | null;
             no_trade_filter?: components["schemas"]["NoTradeFilterResult"] | null;
+            decision?: components["schemas"]["SignalDecisionSnapshot"] | null;
             /**
              * Created At
              * Format: date-time
@@ -3684,6 +3711,25 @@ export interface components {
             passed: boolean;
             /** Checks */
             checks?: components["schemas"]["SignalLayerCheck"][];
+        };
+        /** SignalDecisionSnapshot */
+        SignalDecisionSnapshot: {
+            /** Setup Valid */
+            setup_valid: boolean;
+            /** Trade Plan Valid */
+            trade_plan_valid: boolean;
+            /** Market Context Score */
+            market_context_score: number;
+            /** Signal Actionable */
+            signal_actionable: boolean;
+            /** Execution Allowed Virtual */
+            execution_allowed_virtual?: boolean | null;
+            /** Execution Allowed Real */
+            execution_allowed_real?: boolean | null;
+            /** Blockers */
+            blockers?: components["schemas"]["DecisionReason"][];
+            /** Warnings */
+            warnings?: components["schemas"]["DecisionReason"][];
         };
         /** SignalEdgeSnapshot */
         SignalEdgeSnapshot: {

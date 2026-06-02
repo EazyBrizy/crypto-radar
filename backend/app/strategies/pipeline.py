@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from app.schemas.market import Features
+from app.schemas.market import AlphaMarketContext, Features
 from app.schemas.signal import (
     MarketQualitySnapshot,
     MarketRegimeSnapshot,
@@ -30,6 +30,7 @@ from app.services.signal_status_resolver import SignalStatusResolver
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.services.trade_plan_completeness import TradePlanCompletenessCheck
+from app.services.signal_decision import signal_decision_service
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
 MAJOR_BASE_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP"}
@@ -103,6 +104,7 @@ class MarketQualityInput:
 @dataclass(frozen=True)
 class StrategyEvaluationContext:
     signal_features: Features
+    alpha_context: AlphaMarketContext | None = None
     context_features: Features | None = None
     context_features_by_timeframe: Mapping[str, Features] = field(default_factory=dict)
     support_resistance_by_timeframe: Mapping[str, SupportResistanceSnapshot] = field(default_factory=dict)
@@ -308,6 +310,19 @@ class StrategySignalPipeline:
                     entry_min=target.entry_min,
                     entry_max=target.entry_max,
                 )
+        updates["decision"] = signal_decision_service.from_pipeline_outputs(
+            signal=signal,
+            quality=quality,
+            confirmation=confirmation,
+            risk_reward=risk_reward,
+            no_trade_filter=no_trade,
+            completeness=completeness,
+            trade_plan=trade_plan,
+            candle_state=candle_state,
+            production_mode=production_mode,
+            status=status,
+            rr_guard_context=context.rr_guard_context,
+        )
         if auto_entry is not None:
             updates["auto_entry"] = auto_entry
         updates["trade_plan"] = trade_plan

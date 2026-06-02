@@ -102,6 +102,16 @@ and Redis every 30-60 seconds, while scanner-time strategy evaluation only reads
 the Redis hot snapshot. If the snapshot is absent or stale, `funding_rate`
 remains `None` and funding filters become non-blocking.
 
+AUD-06 adds optional `AlphaMarketContext` for strategy-readable orderflow and
+smart-money context. `MarketScanner` builds it from recent normalized trades,
+hot L2 orderbook snapshots, derivative snapshots, and deterministic
+`Features` level/VWAP fields before strategy evaluation. Strategies may read
+`alpha_context` from `StrategyEvaluationContext` or runtime params, but they
+must not call exchange, API, Redis, or DB sources directly. Missing trade side,
+historical L2, derivative history, or liquidation data must remain explicit in
+`alpha_context.data_quality.missing_sources`; strategies must not infer missing
+buy/sell volume or CVD from price movement.
+
 Derivatives поля пока могут быть `None`, но стратегия должна быть готова использовать их позже.
 
 Сигналы MVP должны строиться от свечной серии, а не от одиночного тика. Тик обновляет OHLCV-свечу в `CandleService`, затем `FeatureEngine` считает derived-поля по серии свечей, после чего `StrategyEngine` запускает три MVP-стратегии.
@@ -358,6 +368,12 @@ must not mark it actionable or arm auto-entry unless
 `allow_open_candle_actionable=true` explicitly allows that source. Lower
 timeframe trigger actionability is likewise disabled unless
 `allow_lower_timeframe_trigger_actionable=true`.
+
+Strategies may also receive `AlphaMarketContext` as optional alpha evidence:
+recent trade delta/CVD, orderbook imbalance/depth-wall data, derivative
+funding/OI deltas, liquidity pools, and VWAP/PDH/PDL reactions. These fields
+are alpha/context inputs only; risk freshness, spread, depth, and execution
+eligibility remain owned by the market-quality and risk layers.
 
 Shared lifecycle:
 

@@ -61,10 +61,10 @@ candle-state, and exit changes against the saved LAB-02 baseline artifact.
 2. [x] AUD-02: Remove production fallback stop/TP while keeping research compatibility.
 3. [x] AUD-03: Separate open candle preview signals from closed candle actionable signals.
 4. [x] AUD-04: Refactor StrategySignalPipeline services without behavior regression.
-5. [ ] AUD-05: reserved follow-up for deeper candle-state/backtest cleanup if needed.
-6. [ ] AUD-06: pipeline cleanup.
-7. [ ] AUD-07: unified decision snapshot.
-8. [ ] AUD-08: alpha market context.
+5. [x] AUD-05: Introduce unified SignalDecisionSnapshot contract across pipeline/API/UI.
+6. [x] AUD-06: Add AlphaMarketContext and smart-money/orderflow features.
+7. [ ] AUD-07: reserved follow-up for deeper decision snapshot cleanup if needed.
+8. [ ] AUD-08: reserved alpha/context calibration follow-up if needed.
 9. [ ] AUD-09: strategy upgrades.
 10. [ ] AUD-10: market-based exits.
 11. [ ] AUD-11: real execution readiness. Blocked by AUD-01, AUD-02, AUD-03,
@@ -74,6 +74,22 @@ AUD-11 must not add real execution paths until research/backtest evidence,
 strategy calibration, fallback cleanup, candle-state separation, pipeline
 cleanup, decision snapshots, market context, strategy upgrades, and
 market-based exits are complete.
+
+### AUD-06 Checklist
+
+- [x] Add optional alpha schemas: `RecentTrade`, `RecentTradesAggregate`,
+  `DeltaFeatures`, `OrderBookAlphaFeatures`, `DerivativeAlphaFeatures`,
+  `LiquidityPoolFeatures`, `VwapReactionFeatures`, and `AlphaMarketContext`.
+- [x] Build alpha context in `AlphaMarketContextService` without strategy-side
+  API/DB/exchange calls.
+- [x] Pass optional alpha context from `MarketScanner` to `StrategyEngine` and
+  `StrategyEvaluationContext`.
+- [x] Keep missing alpha data explicit through `data_quality.missing_sources`.
+- [x] Keep backtests free of live alpha data and record
+  `alpha_context_available=false` metadata.
+- [x] Add targeted tests for schema optionality, trade delta aggregation,
+  orderbook imbalance/depth walls, derivative missing-history behavior,
+  scanner handoff, and backtest no-alpha operation.
 
 ## Remaining Follow-Ups
 

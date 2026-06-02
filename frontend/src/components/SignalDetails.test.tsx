@@ -241,4 +241,67 @@ describe("SignalDetails", () => {
     expect(screen.getByText("forming allowed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Paper Trade/u })).toBeEnabled();
   });
+
+  it("renders decision snapshot blockers and warnings", () => {
+    const decisionSignal: RadarSignal = {
+      ...signal,
+      decision: {
+        setup_valid: true,
+        trade_plan_valid: false,
+        market_context_score: 58,
+        signal_actionable: false,
+        execution_allowed_virtual: false,
+        execution_allowed_real: null,
+        blockers: [
+          {
+            code: "risk_reward_guard",
+            message: "Risk/reward is below the hard guard.",
+            source: "rr",
+            severity: "blocker",
+            scope: "virtual",
+            metadata: {}
+          }
+        ],
+        warnings: [
+          {
+            code: "candle_state_gate",
+            message: "Open candle preview.",
+            source: "data",
+            severity: "warning",
+            scope: "discovery",
+            metadata: {}
+          }
+        ]
+      }
+    };
+
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={decisionSignal}
+      />
+    );
+
+    expect(screen.getByText("Decision Snapshot")).toBeInTheDocument();
+    expect(screen.getByText(/rr \/ virtual: Risk\/reward is below the hard guard\./u)).toBeInTheDocument();
+    expect(screen.getByText(/data \/ discovery: Open candle preview\./u)).toBeInTheDocument();
+  });
+
+  it("renders old signals without decision snapshots", () => {
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={{ ...signal, decision: null }}
+      />
+    );
+
+    expect(screen.getByText("Trade Plan")).toBeInTheDocument();
+    expect(screen.queryByText("Decision Snapshot")).not.toBeInTheDocument();
+  });
 });

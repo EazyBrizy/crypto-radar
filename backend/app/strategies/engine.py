@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any, List, Mapping
 
-from app.schemas.market import Features
+from app.schemas.market import AlphaMarketContext, Features
 from app.schemas.signal import StrategySignal
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
@@ -38,6 +38,7 @@ class StrategyEngine:
         market_quality: MarketQualityInput | None = None,
         strategy_configs: Mapping[str, Any] | None = None,
         rr_guard_context: str = "discovery",
+        alpha_context: AlphaMarketContext | None = None,
     ) -> List[StrategySignal]:
         signals: List[StrategySignal] = []
         for strategy in self._strategies:
@@ -46,8 +47,11 @@ class StrategyEngine:
                 continue
             strategy_params = dict(getattr(runtime_config, "params", {}) if runtime_config is not None else {})
             strategy_params.update(getattr(runtime_config, "risk_settings", {}) if runtime_config is not None else {})
+            if alpha_context is not None:
+                strategy_params["alpha_context"] = alpha_context
             context = StrategyEvaluationContext(
                 signal_features=features,
+                alpha_context=alpha_context,
                 context_features=context_features,
                 context_features_by_timeframe=context_features_by_timeframe or {},
                 support_resistance_by_timeframe=support_resistance_by_timeframe or {},

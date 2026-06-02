@@ -1,8 +1,13 @@
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 CandleState = Literal["open", "closed"]
+TradeSide = Literal["buy", "sell"]
+DepthWallSide = Literal["bid", "ask", "none"]
+DeltaDivergence = Literal["bullish_divergence", "bearish_divergence"]
+VwapAcceptance = Literal["above_vwap", "below_vwap", "at_vwap", "rejected_from_vwap"]
+LiquidityPoolSide = Literal["above", "below", "neutral"]
 
 
 class MarketData(BaseModel):
@@ -11,6 +16,9 @@ class MarketData(BaseModel):
     price: float
     volume: float
     timestamp: int
+    side: Optional[TradeSide] = None
+    trade_id: Optional[str] = None
+    is_buyer_maker: Optional[bool] = None
 
 
 class OrderBookLevel(BaseModel):
@@ -34,6 +42,104 @@ class OrderBookSnapshot(BaseModel):
     ask_depth_usd_0_5_pct: float = Field(default=0.0, ge=0)
     bid_depth_usd_1_pct: float = Field(default=0.0, ge=0)
     ask_depth_usd_1_pct: float = Field(default=0.0, ge=0)
+
+
+class RecentTrade(BaseModel):
+    exchange: str = "bybit"
+    symbol: str
+    price: float = Field(..., gt=0)
+    quantity: float = Field(..., ge=0)
+    timestamp: int = Field(..., ge=0)
+    side: Optional[TradeSide] = None
+    trade_id: Optional[str] = None
+    is_buyer_maker: Optional[bool] = None
+
+
+class RecentTradesAggregate(BaseModel):
+    trades_count: int = Field(default=0, ge=0)
+    buy_volume: Optional[float] = Field(default=None, ge=0)
+    sell_volume: Optional[float] = Field(default=None, ge=0)
+    total_volume: float = Field(default=0.0, ge=0)
+    aggressive_delta: Optional[float] = None
+    cvd: Optional[float] = None
+    side_available: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeltaFeatures(BaseModel):
+    buy_volume: Optional[float] = Field(default=None, ge=0)
+    sell_volume: Optional[float] = Field(default=None, ge=0)
+    aggressive_delta: Optional[float] = None
+    cvd: Optional[float] = None
+    cvd_change: Optional[float] = None
+    delta_divergence: Optional[DeltaDivergence] = None
+
+
+class OrderBookAlphaFeatures(BaseModel):
+    orderbook_imbalance: Optional[float] = None
+    bid_depth_usd: Optional[float] = Field(default=None, ge=0)
+    ask_depth_usd: Optional[float] = Field(default=None, ge=0)
+    depth_wall_side: Optional[DepthWallSide] = None
+    depth_wall_price: Optional[float] = Field(default=None, gt=0)
+    absorption_score: Optional[float] = Field(default=None, ge=0)
+    sweep_through_book: Optional[bool] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DerivativeAlphaFeatures(BaseModel):
+    oi_delta_5m: Optional[float] = None
+    oi_delta_15m: Optional[float] = None
+    funding_rate: Optional[float] = None
+    funding_pressure: Optional[float] = None
+    liquidation_proximity: Optional[float] = None
+    liquidation_clusters: Optional[list[dict[str, Any]]] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LiquidityPoolFeatures(BaseModel):
+    name: str
+    price: float = Field(..., gt=0)
+    side: LiquidityPoolSide
+    source: str
+    distance_pct: Optional[float] = None
+    strength: Optional[float] = Field(default=None, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class VwapReactionFeatures(BaseModel):
+    pdh_pdl_reaction: Optional[str] = None
+    vwap_deviation: Optional[float] = None
+    vwap_acceptance: Optional[VwapAcceptance] = None
+
+
+class AlphaMarketContext(BaseModel):
+    symbol: str
+    timeframe: str
+    timestamp: int
+    buy_volume: Optional[float] = Field(default=None, ge=0)
+    sell_volume: Optional[float] = Field(default=None, ge=0)
+    aggressive_delta: Optional[float] = None
+    cvd: Optional[float] = None
+    cvd_change: Optional[float] = None
+    delta_divergence: Optional[DeltaDivergence] = None
+    oi_delta_5m: Optional[float] = None
+    oi_delta_15m: Optional[float] = None
+    funding_rate: Optional[float] = None
+    funding_pressure: Optional[float] = None
+    liquidation_proximity: Optional[float] = None
+    liquidation_clusters: Optional[list[dict[str, Any]]] = None
+    orderbook_imbalance: Optional[float] = None
+    bid_depth_usd: Optional[float] = Field(default=None, ge=0)
+    ask_depth_usd: Optional[float] = Field(default=None, ge=0)
+    depth_wall_side: Optional[DepthWallSide] = None
+    depth_wall_price: Optional[float] = Field(default=None, gt=0)
+    absorption_score: Optional[float] = Field(default=None, ge=0)
+    sweep_through_book: Optional[bool] = None
+    session_liquidity_pools: list[LiquidityPoolFeatures] = Field(default_factory=list)
+    pdh_pdl_reaction: Optional[str] = None
+    vwap_deviation: Optional[float] = None
+    vwap_acceptance: Optional[VwapAcceptance] = None
+    data_quality: dict[str, Any] = Field(default_factory=dict)
 
 
 class Features(BaseModel):

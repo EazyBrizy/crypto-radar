@@ -760,6 +760,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         auto_entry=snapshot.get("auto_entry") if isinstance(snapshot.get("auto_entry"), dict) else None,
         edge=snapshot.get("edge") if isinstance(snapshot.get("edge"), dict) else None,
         no_trade_filter=snapshot.get("no_trade_filter") if isinstance(snapshot.get("no_trade_filter"), dict) else None,
+        decision=snapshot.get("decision_snapshot") if isinstance(snapshot.get("decision_snapshot"), dict) else None,
         created_at=created_at,
         updated_at=updated_at,
         expires_at=_as_utc(record.expires_at) if record.expires_at else None,
@@ -894,9 +895,14 @@ def _apply_signal_updates(
         "min_rr_ratio",
         "edge",
         "no_trade_filter",
+        "decision",
     ):
         if key in updates:
-            snapshot[key] = _model_dump_optional(updates[key]) if key in {"edge", "no_trade_filter"} else updates[key]
+            snapshot_key = "decision_snapshot" if key == "decision" else key
+            if key in {"edge", "no_trade_filter", "decision"}:
+                snapshot[snapshot_key] = _model_dump_optional(updates[key])
+            else:
+                snapshot[snapshot_key] = updates[key]
 
 
 def _snapshot_entry_price(snapshot: dict[str, Any]) -> float | None:
@@ -932,6 +938,7 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "auto_entry": _model_dump_optional(signal.auto_entry),
         "edge": _model_dump_optional(signal.edge),
         "no_trade_filter": _model_dump_optional(signal.no_trade_filter),
+        "decision_snapshot": _model_dump_optional(signal.decision),
         "decision": {
             "confirmed_trade_id": signal.confirmed_trade_id,
             "decision_mode": signal.decision_mode,
@@ -970,6 +977,7 @@ def _snapshot_from_strategy_signal(
         "auto_entry": _model_dump_optional(signal.auto_entry),
         "edge": _model_dump_optional(signal.edge),
         "no_trade_filter": _model_dump_optional(signal.no_trade_filter),
+        "decision_snapshot": _model_dump_optional(signal.decision),
     }
 
 
@@ -977,7 +985,7 @@ def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str
     if not existing:
         return incoming
     merged = dict(incoming)
-    for key in ("auto_entry", "decision", "lifecycle_events"):
+    for key in ("auto_entry", "decision", "decision_snapshot", "lifecycle_events"):
         value = existing.get(key)
         if value is not None and key not in merged:
             merged[key] = value

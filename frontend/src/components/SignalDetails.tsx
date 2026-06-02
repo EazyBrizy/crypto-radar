@@ -5,7 +5,7 @@ import { useState } from "react";
 import { BarChart3, CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert, XCircle } from "lucide-react";
 
 import { Badge } from "./Badge";
-import type { ExecutionGateStatus, ImpactRisk, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
+import type { DecisionReason, ExecutionGateStatus, ImpactRisk, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
 import {
   entryZone,
   formingCandleReason,
@@ -118,6 +118,7 @@ export function SignalDetails({
       <TradePlanDetailBlock signal={signal} />
       <RiskRewardDetailBlock signal={signal} />
       <EdgeSnapshotBlock signal={signal} />
+      <DecisionSnapshotBlock signal={signal} />
       <RiskBlockersDetailBlock signal={signal} execution={executionPreview} />
 
       <ExecutionQualityBlock
@@ -551,6 +552,45 @@ function EdgeSnapshotBlock({ signal }: { signal: RadarSignal }) {
   );
 }
 
+function DecisionSnapshotBlock({ signal }: { signal: RadarSignal }) {
+  const decision = signal.decision ?? null;
+  if (!decision) return null;
+  const topReason = decision.blockers[0] ?? decision.warnings[0] ?? null;
+  return (
+    <div className="risk-reward-detail-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Decision Snapshot</h3>
+        {topReason ? <Badge tone={topReason.severity === "blocker" ? "red" : "yellow"}>{formatDecisionSource(topReason.source)}</Badge> : null}
+      </div>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Setup valid" value={formatDecisionBool(decision.setup_valid)} />
+        <MetricLine label="Trade plan valid" value={formatDecisionBool(decision.trade_plan_valid)} />
+        <MetricLine label="Signal actionable" value={formatDecisionBool(decision.signal_actionable)} />
+        <MetricLine label="Virtual execution" value={formatDecisionOptionalBool(decision.execution_allowed_virtual)} />
+        <MetricLine label="Real execution" value={formatDecisionOptionalBool(decision.execution_allowed_real)} />
+        <MetricLine label="Market context" value={decision.market_context_score.toFixed(0)} />
+      </div>
+      <DecisionReasonList title="Blockers" reasons={decision.blockers} />
+      <DecisionReasonList title="Warnings" reasons={decision.warnings} />
+    </div>
+  );
+}
+
+function DecisionReasonList({ title, reasons }: { title: string; reasons: DecisionReason[] }) {
+  if (!reasons.length) return null;
+  return (
+    <div className="layer-check-group">
+      <strong>{title}</strong>
+      {reasons.map((reason) => (
+        <span className={`layer-check-${reason.severity === "blocker" ? "failed" : reason.severity}`} key={`${reason.source}:${reason.scope}:${reason.code}:${reason.message}`}>
+          {formatDecisionSource(reason.source)} / {reason.scope}: {reason.message}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function RiskBlockersDetailBlock({
   signal,
   execution
@@ -716,6 +756,19 @@ function edgeStatusBadge(status: SignalEdgeStatus): { label: string; tone: "gree
   if (status === "negative") return { label: "negative edge", tone: "red" };
   if (status === "insufficient_sample") return { label: "insufficient sample", tone: "yellow" };
   return { label: "unknown edge", tone: "neutral" };
+}
+
+function formatDecisionBool(value: boolean): string {
+  return value ? "yes" : "no";
+}
+
+function formatDecisionOptionalBool(value: boolean | null): string {
+  if (value == null) return "not evaluated";
+  return formatDecisionBool(value);
+}
+
+function formatDecisionSource(value: DecisionReason["source"]): string {
+  return value.replaceAll("_", " ");
 }
 
 function dedupe(values: string[]): string[] {

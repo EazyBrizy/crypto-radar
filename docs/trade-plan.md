@@ -154,6 +154,13 @@ record whether the signal remained research-visible, whether
 `signal_actionable` was true for the scope, and whether virtual or real
 execution was allowed.
 
+Trade-plan completeness issues must also be surfaced through the unified
+decision snapshot. Production scopes should mark missing structural stop,
+target, or invalidation data as setup blockers, while research scopes may keep
+the signal visible with setup warnings. Completeness details should stay in
+metadata so clients can explain why the plan is incomplete without re-running
+strategy logic.
+
 ## Backward Compatibility
 
 `TradePlan` is additive. Existing clients can continue reading legacy signal

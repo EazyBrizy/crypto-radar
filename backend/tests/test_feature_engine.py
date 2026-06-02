@@ -183,6 +183,7 @@ class FeatureDerivativeEnrichmentTest(unittest.IsolatedAsyncioTestCase):
             market_quality=None,
             virtual_trading=None,
             derivative_market=_FakeDerivativeMarket(),  # type: ignore[arg-type]
+            alpha_market_context=None,
         )
         features = Features(
             exchange="bybit",
@@ -235,6 +236,7 @@ class FeatureDerivativeEnrichmentTest(unittest.IsolatedAsyncioTestCase):
             strategy_configs=None,
             virtual_trading=None,
             derivative_market=None,
+            alpha_market_context=None,
         )
         scanner._strategy_engine = _PreviewStrategyEngine()  # noqa: SLF001
 

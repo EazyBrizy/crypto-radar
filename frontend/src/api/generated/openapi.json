@@ -4784,6 +4784,64 @@
         ],
         "title": "BillingProviderNotReadyResponse"
       },
+      "DecisionReason": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "market_quality",
+              "rr",
+              "no_trade",
+              "risk",
+              "execution",
+              "data"
+            ],
+            "title": "Source"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "blocker"
+            ],
+            "title": "Severity"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "discovery",
+              "virtual",
+              "real",
+              "backtest"
+            ],
+            "title": "Scope"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "source",
+          "severity",
+          "scope"
+        ],
+        "title": "DecisionReason"
+      },
       "BillingSubscriptionResponse": {
         "properties": {
           "user_id": {
@@ -7643,6 +7701,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/NoTradeFilterResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalDecisionSnapshot"
               },
               {
                 "type": "null"
@@ -10566,6 +10634,70 @@
         },
         "type": "object",
         "title": "SignalConfirmationSnapshot"
+      },
+      "SignalDecisionSnapshot": {
+        "properties": {
+          "setup_valid": {
+            "type": "boolean",
+            "title": "Setup Valid"
+          },
+          "trade_plan_valid": {
+            "type": "boolean",
+            "title": "Trade Plan Valid"
+          },
+          "market_context_score": {
+            "type": "number",
+            "title": "Market Context Score"
+          },
+          "signal_actionable": {
+            "type": "boolean",
+            "title": "Signal Actionable"
+          },
+          "execution_allowed_virtual": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Allowed Virtual"
+          },
+          "execution_allowed_real": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Allowed Real"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionReason"
+            },
+            "type": "array",
+            "title": "Blockers"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionReason"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "setup_valid",
+          "trade_plan_valid",
+          "market_context_score",
+          "signal_actionable"
+        ],
+        "title": "SignalDecisionSnapshot"
       },
       "SignalEdgeSnapshot": {
         "properties": {

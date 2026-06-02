@@ -65,7 +65,12 @@ class SignalDecisionTest(unittest.TestCase):
         self.assertEqual(signal.status, "ready")
         self.assertIsNotNone(signal.decision)
         assert signal.decision is not None
-        self.assertTrue(any(reason.source == "rr" for reason in signal.decision.blockers))
+        self.assertTrue(
+            any(
+                reason.source == "rr" and reason.code == "blocked_by_rr"
+                for reason in signal.decision.blockers
+            )
+        )
 
     def test_no_trade_creates_no_trade_blocker(self) -> None:
         features = _features()

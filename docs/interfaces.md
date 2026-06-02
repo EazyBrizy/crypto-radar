@@ -146,7 +146,11 @@ Boundary rules:
   API/service layer resolves `radar_display_mode` and decides which persisted
   opportunities are displayed to the user. RR is soft by default for discovery,
   research, virtual confirmation, and backtests; it affects execution
-  eligibility only when the active RR guard mode is `hard`.
+  eligibility only when the active RR guard mode is `hard`. Legacy
+  strategy-risk flags such as `hide_failed_rr_signals`,
+  `hide_low_rr_signals`, `show_only_active_setups`, and `only_active_setups`
+  are backward-compatible display preferences only; the strategy pipeline must
+  record that they were ignored and still persist the market opportunity.
 - `RiskGate` is the single business boundary for virtual and real entry
   eligibility decisions. It consumes `RiskContext`, `TradePlan`, market quality,
   edge, and configured user risk settings. It does not decide whether a market
@@ -1929,7 +1933,8 @@ Context-specific defaults:
 `risk_reward_guard` pipeline/layer check semantics:
 
 - `hard` mode plus failed RR => failed check, `risk_reward_blocked = true`,
-  and `risk_reward_block_reason`.
+  `risk_reward_block_reason`, and decision blocker code `blocked_by_rr`.
+  This blocks execution and auto-entry eligibility, not discovery visibility.
 - `soft` mode plus failed RR => warning check, `risk_reward_warning = true`,
   and `risk_reward_warning_reason`; signal discovery/research/virtual/backtest
   status is not blocked by RR alone.
@@ -1939,11 +1944,16 @@ Context-specific defaults:
 RR metadata snapshots expose:
 
 - `selected_rr`
+- `rr_value`
+- `rr_status`
 - `min_rr_ratio`
 - `risk_reward_guard_mode`
 - `signal_actionable`
+- `auto_entry_allowed`
 - `execution_allowed_virtual`
 - `execution_allowed_real`
+- `blockers`
+- `warnings`
 - `risk_reward_warning`
 - `risk_reward_warning_reason`
 - `risk_reward_blocked`

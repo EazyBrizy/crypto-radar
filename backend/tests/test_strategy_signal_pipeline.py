@@ -1076,7 +1076,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(candidate.risk_reward, 0)
         self.assertEqual(candidate.score_breakdown.risk_reward_score, 0)
 
-    def test_strategy_pipeline_can_hide_low_rr_cards_by_strategy_setting(self) -> None:
+    def test_strategy_pipeline_ignores_hide_low_rr_flag_and_blocks_execution(self) -> None:
         features = _breakout_features()
         candidate = build_signal(
             features=features,
@@ -1104,9 +1104,43 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.assertIsNone(signal)
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal.status, "ready")
+        self.assertIn("Risk/reward blocked", signal.status_reason or "")
+        self.assertIsNotNone(signal.decision)
+        assert signal.decision is not None
+        self.assertTrue(
+            any(reason.source == "rr" and reason.code == "blocked_by_rr" for reason in signal.decision.blockers)
+        )
+        self.assertFalse(signal.decision.signal_actionable)
+        self.assertFalse(signal.decision.execution_allowed_virtual)
+        self.assertIsNotNone(signal.auto_entry)
+        self.assertFalse(signal.auto_entry.enabled if signal.auto_entry else True)
+        self.assertEqual(signal.auto_entry.status if signal.auto_entry else None, "cancelled")
+        rr_check = next(
+            check
+            for check in (signal.confirmation.checks if signal.confirmation else [])
+            if check.name == "risk_reward_guard"
+        )
+        self.assertEqual(rr_check.status, "failed")
+        self.assertEqual(rr_check.metadata.get("rr_status"), "failed")
+        self.assertAlmostEqual(rr_check.metadata.get("rr_value") or 0, signal.selected_rr or 0)
+        self.assertEqual(rr_check.metadata.get("blocker_codes"), ["blocked_by_rr"])
+        self.assertFalse(rr_check.metadata.get("auto_entry_allowed"))
+        legacy_check = next(
+            check
+            for check in (signal.confirmation.checks if signal.confirmation else [])
+            if check.name == "legacy_pipeline_display_filter"
+        )
+        self.assertTrue(legacy_check.metadata.get("ignored"))
+        self.assertTrue(legacy_check.metadata.get("rr_filter_would_have_hidden"))
+        self.assertEqual(
+            signal.trade_plan.metadata.get("execution_block_reason") if signal.trade_plan else None,
+            "blocked_by_rr",
+        )
 
-    def test_strategy_pipeline_can_show_only_active_setups_by_strategy_setting(self) -> None:
+    def test_strategy_pipeline_ignores_show_only_active_setups_flag(self) -> None:
         features = _breakout_features()
         candidate = build_signal(
             features=features,
@@ -1136,7 +1170,16 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.assertIsNone(signal)
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal.status, "watchlist")
+        legacy_check = next(
+            check
+            for check in (signal.confirmation.checks if signal.confirmation else [])
+            if check.name == "legacy_pipeline_display_filter"
+        )
+        self.assertTrue(legacy_check.metadata.get("ignored"))
+        self.assertTrue(legacy_check.metadata.get("active_only_filter_would_have_hidden"))
 
     def test_market_quality_blocks_low_liquidity_in_all_pairs_scope(self) -> None:
         features = _breakout_features().model_copy(update={"symbol": "1000PEPEUSDT"})

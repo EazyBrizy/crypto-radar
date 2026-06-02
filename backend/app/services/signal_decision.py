@@ -19,7 +19,7 @@ from app.schemas.signal import (
     StrategySignal,
 )
 from app.schemas.trade_plan import TradePlan, TradePlanCompletenessResult
-from app.services.risk_reward_assessment import RiskRewardAssessment
+from app.services.risk_reward_assessment import RiskRewardAssessment, risk_reward_metadata
 
 ACTIONABLE_STATUSES = {"actionable", "active", "entry_touched"}
 TERMINAL_INVALID_STATUSES = {"rejected", "expired", "invalidated", "closed"}
@@ -157,19 +157,14 @@ class SignalDecisionService:
         *,
         scope: DecisionReasonScope = "discovery",
     ) -> SignalDecisionSnapshot:
-        metadata = {
-            "selected_rr": risk_reward.rr,
-            "min_rr_ratio": risk_reward.min_rr,
-            "risk_reward_guard_mode": risk_reward.guard_mode,
-            "selected_rr_target": risk_reward.target_key,
-        }
+        metadata = risk_reward_metadata(risk_reward)
         if risk_reward.blocked:
             return self._finalize_snapshot(
                 _snapshot_with_reasons(
                     snapshot,
                     blockers=[
                         DecisionReason(
-                            code="risk_reward_guard",
+                            code="blocked_by_rr",
                             message=risk_reward.block_reason or risk_reward.reason,
                             source="rr",
                             severity="blocker",

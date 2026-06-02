@@ -806,20 +806,21 @@ risk = abs(entry - stop)
 reward = abs(primary_target - entry)
 rr = reward / risk
 
-if rr < 1.5:
-  status = watchlist or invalidated_by_rr
-if 1.5 <= rr < 2.0:
-  status can be actionable only for high-quality major/context-aligned setups
-if rr >= 2.0:
-  status can be actionable
+if rr < configured minimum and rr_guard_mode = hard:
+  status = ready / blocked for execution, decision.reason = blocked_by_rr
+  auto_entry_allowed = false
+if rr < configured minimum and rr_guard_mode = soft:
+  status can remain actionable when other setup checks allow it, with RR warning metadata
+if rr_guard_mode = off:
+  RR is recorded as a metric only
 ```
 
 Для UI:
 
 - показывать `RR blocked` как причину;
 - показывать ближайшую цель, из-за которой RR не проходит;
-- не давать кнопку входа, если backend status не `actionable` или risk preview
-  failed.
+- не давать кнопку входа, если backend status не `actionable`, RR hard block
+  disabled auto-entry, или risk preview failed.
 
 Implementation status for point 1.5:
 
@@ -833,11 +834,13 @@ Implementation status for point 1.5:
     risk-management gate;
   - `nearest` can enforce the nearest/TP1 target when we want stricter
     strategy classification.
-- If RR fails and cards are not hidden, the signal remains visible with status
-  `ready`, status reason `Risk/reward blocked...`, and the reason is added to
-  signal risks.
-- Strategy settings support `hide_failed_rr_signals`; when enabled, failed RR
-  ideas are not returned to Radar.
+- If RR fails in `hard` mode, the signal remains visible as a market
+  opportunity with status `ready`, status reason `Risk/reward blocked...`,
+  decision blocker `blocked_by_rr`, and disabled auto-entry metadata.
+- Legacy settings `hide_failed_rr_signals` / `hide_low_rr_signals` and
+  `show_only_active_setups` / `only_active_setups` are ignored by the strategy
+  pipeline. They may be retained for backward compatibility and annotated as
+  ignored display preferences; Radar service decides visibility.
 - Settings UI exposes per-strategy `Min RR`, `RR target`, and
   `Hide low-RR cards`.
 - Backend signal response exposes `first_target_rr`, `final_target_rr`,
@@ -847,7 +850,7 @@ Implementation status for point 1.5:
 - Signal Details shows nearest/final/selected RR and the target used by the
   strategy guard.
 - Paper Trade remains blocked because frontend entry actions require
-  `actionable`/`active`/`entry_touched`.
+  `actionable`/`active`/`entry_touched` and no hard execution blockers.
 
 Remaining for point 1.5:
 
@@ -1025,9 +1028,11 @@ Remaining for point 1.6:
 - Remaining for point 1.4: tune thresholds after backtests.
 - Current point 1.5 is implemented at MVP infrastructure level:
   RR guard before `actionable`, risk-management `min_rr_ratio` inheritance,
-  per-strategy `min_rr_ratio`, `rr_target`, and `hide_failed_rr_signals`, plus
-  Settings UI controls, strategy-specific final/nearest defaults, explicit
-  first/final/selected RR response fields, and Signal Details RR comparison.
+  per-strategy `min_rr_ratio` and `rr_target`, ignored legacy display flags
+  with debug metadata, Settings UI controls, strategy-specific final/nearest
+  defaults, explicit first/final/selected RR response fields, and Signal
+  Details RR comparison. RR hard blocks execution readiness, not discovery
+  visibility.
 - Remaining for point 1.5: tune RR defaults per strategy/timeframe after
   backtests.
 - Current point 1.6 is implemented at MVP infrastructure level:
@@ -1048,7 +1053,8 @@ Remaining for point 1.6:
 - `StrategySignal` now carries `status`, `status_reason`, `quality`, `regime`,
   `setup`, `confirmation`, `invalidation`, and `exit_plan` snapshots.
 - `build_signal` calculates RR, and the strategy pipeline now blocks
-  `actionable` classification when configured RR is too low.
+  `actionable` classification and auto-entry when configured hard RR is too
+  low, while preserving the discovered market opportunity for Radar all mode.
 - Overextension has a shared dynamic pipeline downgrade to
   `wait_for_pullback`.
 - Market-quality filter is centralized for 24h volume/spread/history/roughness;

@@ -205,14 +205,26 @@ class RiskRewardAssessmentService:
 
 
 def risk_reward_metadata(risk_reward: RiskRewardAssessment) -> dict[str, Any]:
+    blockers = [risk_reward.block_reason or risk_reward.reason] if risk_reward.blocked else []
+    warnings = [risk_reward.warning_reason or risk_reward.reason] if risk_reward.warning else []
     return {
         "first_target_rr": risk_reward.first_target_rr,
         "final_target_rr": risk_reward.final_target_rr,
         "selected_rr": risk_reward.rr,
+        "rr_value": risk_reward.rr,
+        "rr_status": risk_reward.status,
         "selected_rr_target": risk_reward.target_key,
         "selected_rr_label": risk_reward.target_label,
         "min_rr_ratio": risk_reward.min_rr,
         "risk_reward_guard_mode": risk_reward.guard_mode,
+        "signal_actionable": not risk_reward.blocked,
+        "auto_entry_allowed": not risk_reward.blocked,
+        "execution_allowed_virtual": not risk_reward.blocked,
+        "execution_allowed_real": False if risk_reward.blocked else None,
+        "blockers": blockers,
+        "warnings": warnings,
+        "blocker_codes": ["blocked_by_rr"] if risk_reward.blocked else [],
+        "warning_codes": ["rr_warning"] if risk_reward.warning else [],
         "risk_reward_warning": risk_reward.warning,
         "risk_reward_warning_reason": risk_reward.warning_reason,
         "risk_reward_blocked": risk_reward.blocked,

@@ -33,7 +33,7 @@ from app.services.support_resistance import SupportResistanceSnapshot
 from app.services.target_resolver import TargetResolverService
 from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.services.trade_plan_completeness import TradePlanCompletenessCheck
-from app.services.signal_decision import signal_decision_service
+from app.services.signal_decision import ACTIONABLE_STATUSES, signal_decision_service
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
 MAJOR_BASE_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP"}
@@ -184,8 +184,6 @@ class StrategySignalPipeline:
             pipeline_settings,
             context.rr_guard_context,
         )
-        if risk_reward.blocked and _hide_failed_rr_signals(pipeline_settings):
-            return None
         confirmation = ConfirmationLayer().evaluate(signal, context, risk_reward)
         no_trade = NoTradeFilterService().evaluate(
             signal=signal,
@@ -243,8 +241,21 @@ class StrategySignalPipeline:
         confirmation = status_decision.confirmation
         setup = status_decision.setup
         trade_plan = status_decision.trade_plan
-        if _show_only_active_setups(pipeline_settings) and not _is_active_setup_status(status):
-            return None
+        trade_plan = _trade_plan_with_risk_reward_metadata(trade_plan, risk_reward)
+        legacy_display_note = _legacy_display_filter_note(
+            pipeline_settings,
+            risk_reward=risk_reward,
+            status=status,
+        )
+        if legacy_display_note is not None:
+            confirmation = _confirmation_with_legacy_display_filter_note(
+                confirmation,
+                legacy_display_note,
+            )
+            trade_plan = _trade_plan_with_legacy_display_filter_note(
+                trade_plan,
+                legacy_display_note,
+            )
 
         auto_entry = AutoEntryEligibilityService().evaluate(
             signal=signal,
@@ -2665,16 +2676,131 @@ def _target_reward(signal: StrategySignal, target: float, entry: float | None = 
     return entry - target
 
 
-def _hide_failed_rr_signals(params: Mapping[str, Any]) -> bool:
-    return bool(params.get("hide_failed_rr_signals") or params.get("hide_low_rr_signals"))
+def _trade_plan_with_risk_reward_metadata(
+    trade_plan: TradePlan,
+    risk_reward: RiskRewardAssessment,
+) -> TradePlan:
+    rr_metadata = risk_reward_metadata(risk_reward)
+    metadata = dict(trade_plan.metadata)
+    risk_metadata = dict(trade_plan.risk_rules.metadata)
+    _merge_risk_reward_metadata(metadata, rr_metadata, risk_reward=risk_reward)
+    _merge_risk_reward_metadata(risk_metadata, rr_metadata, risk_reward=risk_reward)
+    if risk_reward.blocked:
+        blocked_updates = {
+            "signal_actionable": False,
+            "execution_allowed_virtual": False,
+            "execution_allowed_real": False,
+            "auto_entry_allowed": False,
+            "auto_entry_enabled": False,
+            "execution_block_reason": "blocked_by_rr",
+        }
+        metadata.update(blocked_updates)
+        risk_metadata.update(blocked_updates)
+        metadata.setdefault("actionability_block_reason", "blocked_by_rr")
+        risk_metadata.setdefault("actionability_block_reason", "blocked_by_rr")
+    risk_rules = trade_plan.risk_rules.model_copy(update={"metadata": risk_metadata})
+    return trade_plan.model_copy(
+        update={
+            "metadata": metadata,
+            "risk_rules": risk_rules,
+        },
+        deep=True,
+    )
 
 
-def _show_only_active_setups(params: Mapping[str, Any]) -> bool:
-    return bool(params.get("show_only_active_setups") or params.get("only_active_setups"))
+def _merge_risk_reward_metadata(
+    metadata: dict[str, Any],
+    rr_metadata: Mapping[str, Any],
+    *,
+    risk_reward: RiskRewardAssessment,
+) -> None:
+    existing_actionability = {
+        key: metadata.get(key)
+        for key in (
+            "signal_actionable",
+            "execution_allowed_virtual",
+            "execution_allowed_real",
+            "auto_entry_allowed",
+            "auto_entry_enabled",
+            "actionability_block_reason",
+        )
+        if key in metadata
+    }
+    metadata.update(dict(rr_metadata))
+    if risk_reward.blocked:
+        return
+    for key, value in existing_actionability.items():
+        metadata[key] = value
 
 
-def _is_active_setup_status(status: str) -> bool:
-    return status in {"actionable", "active", "entry_touched"}
+def _legacy_display_filter_note(
+    params: Mapping[str, Any],
+    *,
+    risk_reward: RiskRewardAssessment,
+    status: str,
+) -> dict[str, Any] | None:
+    rr_flags = _truthy_flags(params, ("hide_failed_rr_signals", "hide_low_rr_signals"))
+    active_only_flags = _truthy_flags(params, ("show_only_active_setups", "only_active_setups"))
+    ignored_flags = [*rr_flags, *active_only_flags]
+    if not ignored_flags:
+        return None
+    return {
+        "reason_code": "legacy_pipeline_display_filter_ignored",
+        "ignored": True,
+        "ignored_flags": ignored_flags,
+        "message": (
+            "Legacy pipeline display filters are ignored; Radar service resolves "
+            "all_market_opportunities versus execution_ready visibility."
+        ),
+        "rr_filter_requested": bool(rr_flags),
+        "rr_filter_would_have_hidden": bool(rr_flags and risk_reward.blocked),
+        "active_only_filter_requested": bool(active_only_flags),
+        "active_only_filter_would_have_hidden": bool(
+            active_only_flags and status not in ACTIONABLE_STATUSES
+        ),
+        "signal_status": status,
+        "risk_reward_blocked": risk_reward.blocked,
+    }
+
+
+def _truthy_flags(params: Mapping[str, Any], keys: tuple[str, ...]) -> list[str]:
+    return [key for key in keys if _bool_param(params, key, False)]
+
+
+def _confirmation_with_legacy_display_filter_note(
+    confirmation: SignalConfirmationSnapshot,
+    metadata: Mapping[str, Any],
+) -> SignalConfirmationSnapshot:
+    check = SignalLayerCheck(
+        name="legacy_pipeline_display_filter",
+        status="warning",
+        reason=str(metadata["message"]),
+        metadata=dict(metadata),
+    )
+    return confirmation.model_copy(
+        update={
+            "checks": [*confirmation.checks, check],
+        }
+    )
+
+
+def _trade_plan_with_legacy_display_filter_note(
+    trade_plan: TradePlan,
+    metadata: Mapping[str, Any],
+) -> TradePlan:
+    note = {"legacy_pipeline_display_filter": dict(metadata)}
+    trade_plan_metadata = dict(trade_plan.metadata)
+    trade_plan_metadata.update(note)
+    risk_metadata = dict(trade_plan.risk_rules.metadata)
+    risk_metadata.update(note)
+    risk_rules = trade_plan.risk_rules.model_copy(update={"metadata": risk_metadata})
+    return trade_plan.model_copy(
+        update={
+            "metadata": trade_plan_metadata,
+            "risk_rules": risk_rules,
+        },
+        deep=True,
+    )
 
 
 def _entry_price(signal: StrategySignal) -> float | None:

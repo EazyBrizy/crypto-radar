@@ -17,7 +17,7 @@ from app.schemas.trade_plan import (
     TradePlanTarget,
     build_trade_plan_from_legacy_fields,
 )
-from app.services.risk_reward_assessment import RiskRewardAssessment
+from app.services.risk_reward_assessment import RiskRewardAssessment, risk_reward_metadata
 
 
 class TradePlanEnrichmentService:
@@ -43,6 +43,7 @@ class TradePlanEnrichmentService:
             value = invalidation.metadata.get(key)
             if value is not None:
                 risk_metadata[key] = value
+        risk_metadata.update(risk_reward_metadata(risk_reward))
         risk_rules = trade_plan.risk_rules.model_copy(
             update={
                 "risk_reward": signal.risk_reward,

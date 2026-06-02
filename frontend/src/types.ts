@@ -123,6 +123,19 @@ export interface TradePlanRiskRules {
   metadata: Record<string, unknown>;
 }
 
+export interface TradePlanCompletenessResult {
+  complete: boolean;
+  fallback_used: boolean;
+  fallback_stop_used: boolean;
+  fallback_targets_used: boolean;
+  has_structural_stop: boolean;
+  has_invalidation_thesis: boolean;
+  has_structural_target: boolean;
+  missing: string[];
+  warnings: string[];
+  metadata: Record<string, unknown>;
+}
+
 export interface TradePlan {
   version: "v1";
   entry: TradePlanEntry;

@@ -53,6 +53,19 @@ class TradePlan(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class TradePlanCompletenessResult(BaseModel):
+    complete: bool
+    fallback_used: bool = False
+    fallback_stop_used: bool = False
+    fallback_targets_used: bool = False
+    has_structural_stop: bool = False
+    has_invalidation_thesis: bool = False
+    has_structural_target: bool = False
+    missing: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 def build_trade_plan_from_legacy_fields(
     *,
     entry_min: float | None = None,

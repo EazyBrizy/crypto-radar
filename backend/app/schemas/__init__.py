@@ -128,6 +128,7 @@ from app.schemas.trade import (
 )
 from app.schemas.trade_plan import (
     TradePlan,
+    TradePlanCompletenessResult,
     TradePlanEntry,
     TradePlanInvalidation,
     TradePlanRiskRules,
@@ -240,6 +241,7 @@ __all__ = [
     "TradeJournalEntry",
     "TradeJournalResponse",
     "TradePlan",
+    "TradePlanCompletenessResult",
     "TradePlanEntry",
     "TradePlanInvalidation",
     "TradePlanRiskRules",

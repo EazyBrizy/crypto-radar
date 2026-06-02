@@ -148,7 +148,7 @@ def _lifecycle_decision(signal: RadarSignal, features: Features) -> _LifecycleDe
                 signal_updates=_confirmation_signal_updates(signal, features),
             )
 
-    if signal.status == "watchlist" and _entry_zone_touched(signal, features):
+    if signal.status == "watchlist" and _entry_zone_touched(signal, features) and not _status_reason_blocks_actionable(signal):
         rr_warning_reason = signal_rr_warning_reason(signal)
         return _LifecycleDecision(
             status="ready",
@@ -273,6 +273,7 @@ def _status_reason_blocks_actionable(signal: RadarSignal) -> bool:
     blockers = (
         "risk/reward blocked",
         "no-trade hard block",
+        "trade plan incomplete",
         "support/resistance is too close",
         "higher timeframe is strongly against",
         "low-liquidity asset needs",

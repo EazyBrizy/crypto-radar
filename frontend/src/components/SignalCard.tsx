@@ -72,6 +72,8 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
         <Badge tone={edge.tone}>{edge.label}</Badge>
         {rrBlocked ? <Badge tone="red">RR blocked</Badge> : null}
         {!rrBlocked && rrWarning ? <Badge tone="yellow">RR warning</Badge> : null}
+        {plan.fallbackUsed ? <Badge tone="yellow">Fallback plan</Badge> : null}
+        {!plan.fallbackUsed && plan.tradePlanComplete === false ? <Badge tone="yellow">Plan incomplete</Badge> : null}
         {noTrade ? <Badge tone={noTrade.blocked ? "red" : noTrade.warnings.length ? "yellow" : "green"}>{noTrade.blocked ? "No-trade" : noTrade.warnings.length ? "No-trade warn" : "No-trade clear"}</Badge> : null}
       </div>
 

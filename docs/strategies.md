@@ -47,6 +47,14 @@ or structural targets, it may still return the setup for `research_mode`, but
 fallback ATR stops or fallback R-multiple targets must be marked in TradePlan
 metadata and must not be silently treated as production-complete.
 
+Strategy runtime may request production semantics with
+`production_mode = true` or `signal_mode = "production"`. The default remains
+research-compatible for discovery, backtests, and Strategy Test Lab. In
+production mode, `trade_plan_completeness` blocks actionability when fallback
+stop/targets are used or when structural stop, invalidation thesis, or
+structural target thesis is missing. The setup remains visible as a watchlist
+candidate with the blocker reason.
+
 Каждый сигнал должен объяснять:
 
 - что за сигнал;

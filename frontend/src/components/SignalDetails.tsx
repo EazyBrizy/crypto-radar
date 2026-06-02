@@ -444,15 +444,31 @@ function formatRrTarget(value: string | null): string {
   return value.replaceAll("_", " ");
 }
 
+function formatTradePlanCompleteness(plan: ReturnType<typeof signalTradePlanSummary>): string {
+  if (plan.tradePlanComplete === true) return "complete";
+  if (plan.tradePlanComplete === false && plan.missing.length) return `missing ${plan.missing.join(", ").replaceAll("_", " ")}`;
+  if (plan.tradePlanComplete === false) return "incomplete";
+  return "-";
+}
+
+function formatTradePlanFallback(plan: ReturnType<typeof signalTradePlanSummary>): string {
+  if (!plan.fallbackUsed) return "none";
+  const parts = [];
+  if (plan.fallbackStopUsed) parts.push("stop");
+  if (plan.fallbackTargetsUsed) parts.push("targets");
+  return parts.length ? parts.join(", ") : "used";
+}
+
 function TradePlanDetailBlock({ signal }: { signal: RadarSignal }) {
   const plan = signalTradePlanSummary(signal);
   const invalidation = signal.trade_plan?.invalidation ?? null;
+  const planBadgeTone = plan.fallbackUsed || plan.tradePlanComplete === false ? "yellow" : plan.hasTradePlan ? "blue" : "neutral";
   return (
     <div className="risk-reward-detail-block">
       <div className="section-title">
         <ShieldAlert size={18} />
         <h3>Trade Plan</h3>
-        <Badge tone={plan.hasTradePlan ? "blue" : "neutral"}>{plan.hasTradePlan ? "trade_plan" : "legacy fallback"}</Badge>
+        <Badge tone={planBadgeTone}>{plan.hasTradePlan ? "trade_plan" : "legacy fallback"}</Badge>
       </div>
       <p>{plan.hasTradePlan ? "Backend trade_plan is active for entry, stop, targets and selected RR." : "Old signal contract is displayed through legacy entry, SL and TP fields."}</p>
       <div className="risk-reward-detail-grid">
@@ -460,6 +476,8 @@ function TradePlanDetailBlock({ signal }: { signal: RadarSignal }) {
         <MetricLine label="Entry zone" value={plan.entryZone} />
         <MetricLine label="Entry price" value={formatPrice(plan.entryPrice)} />
         <MetricLine label="Stop loss" value={formatPrice(plan.stopLoss)} />
+        <MetricLine label="Completeness" value={formatTradePlanCompleteness(plan)} />
+        <MetricLine label="Fallback" value={formatTradePlanFallback(plan)} />
         <MetricLine label="Selected RR" value={formatRMultiple(plan.selectedRr)} />
         <MetricLine label="RR target" value={formatRrTarget(plan.selectedRrTarget)} />
         <MetricLine label="Min execution/reporting RR" value={formatRMultiple(plan.minRr)} />
@@ -473,6 +491,7 @@ function TradePlanDetailBlock({ signal }: { signal: RadarSignal }) {
               {target.rMultiple == null ? "" : ` | ${formatRMultiple(target.rMultiple)}`}
               {target.closePercent == null ? "" : ` | ${target.closePercent}%`}
               {target.action ? ` | ${formatLayerCheckName(target.action)}` : ""}
+              {target.source ? ` | ${formatLayerCheckName(target.source)}` : ""}
             </span>
           ))}
         </div>

@@ -307,7 +307,7 @@ copy .env.example .env
 Не коммить реальные API-ключи. Файл `.env` игнорируется git.
 
 
-## Запуск одним скриптом весь проект
+## проект в докере. Запуск одним скриптом весь проект
 
 cd C:\Users\gvenv\Desktop\crypto-radar
 
@@ -321,13 +321,11 @@ This script starts backend and frontend, opens the Radar page with Playwright,
 checks API + UI, writes a local screenshot, and then stops the spawned process
 trees so ports are free again.
 
-```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\smoke.ps1
-```
+
 
 If old dev servers are still occupying `8000` or `3000`, allow the smoke runner
 to stop them first:
 
-```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\smoke.ps1 -KillExisting
-```
+

@@ -34,12 +34,19 @@ export interface SignalTradePlanSummary {
   selectedRr: number | null;
   selectedRrTarget: string | null;
   minRr: number | null;
+  tradePlanComplete: boolean | null;
+  fallbackUsed: boolean;
+  fallbackStopUsed: boolean;
+  fallbackTargetsUsed: boolean;
+  missing: string[];
 }
 
 export function signalTradePlanSummary(signal: RadarSignal): SignalTradePlanSummary {
   const plan = signal.trade_plan ?? null;
   const entry = plan?.entry ?? null;
   const riskRules = plan?.risk_rules ?? null;
+  const planMetadata = plan?.metadata ?? {};
+  const completeness = recordMetadata(planMetadata, "trade_plan_completeness");
   const targets = plan?.targets?.length
     ? plan.targets.map((target) => ({
         label: target.label,
@@ -60,7 +67,12 @@ export function signalTradePlanSummary(signal: RadarSignal): SignalTradePlanSumm
     targets,
     selectedRr: riskRules?.selected_rr ?? signal.selected_rr ?? signal.risk_reward,
     selectedRrTarget: riskRules?.selected_rr_target ?? signal.selected_rr_target,
-    minRr: riskRules?.min_rr_ratio ?? signal.min_rr_ratio
+    minRr: riskRules?.min_rr_ratio ?? signal.min_rr_ratio,
+    tradePlanComplete: booleanMetadata(planMetadata, "trade_plan_complete") ?? booleanMetadata(completeness, "complete"),
+    fallbackUsed: booleanMetadata(planMetadata, "fallback_used") ?? booleanMetadata(completeness, "fallback_used") ?? false,
+    fallbackStopUsed: booleanMetadata(planMetadata, "fallback_stop_used") ?? booleanMetadata(completeness, "fallback_stop_used") ?? false,
+    fallbackTargetsUsed: booleanMetadata(planMetadata, "fallback_targets_used") ?? booleanMetadata(completeness, "fallback_targets_used") ?? false,
+    missing: stringArrayMetadata(planMetadata, "missing") ?? stringArrayMetadata(completeness, "missing") ?? []
   };
 }
 
@@ -249,6 +261,29 @@ function stringMetadata(metadata: Record<string, unknown>, key: string): string 
 function numberMetadata(metadata: Record<string, unknown>, key: string): number | null {
   const value = metadata[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function booleanMetadata(metadata: Record<string, unknown>, key: string): boolean | null {
+  const value = metadata[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+  return null;
+}
+
+function recordMetadata(metadata: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = metadata[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringArrayMetadata(metadata: Record<string, unknown>, key: string): string[] | null {
+  const value = metadata[key];
+  if (!Array.isArray(value)) return null;
+  const strings = value.filter((item): item is string => typeof item === "string");
+  return strings.length ? strings : [];
 }
 
 function asRiskRewardWarning(reason: string | null | undefined): string | null {

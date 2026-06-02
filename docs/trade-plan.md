@@ -59,6 +59,17 @@ Test Lab can measure incomplete ideas. Any fallback must be explicit:
 - `metadata.target_source` should identify `structural`, `r_multiple`,
   `atr_fallback`, `mixed`, or a more specific strategy source.
 
+`build_signal()` may still populate legacy `stop_loss`, `take_profit_1`, and
+`take_profit_2` for compatibility when a strategy omitted them. When it does,
+the generated `TradePlan` must mark provenance explicitly:
+
+- fallback ATR stop: `metadata.fallback_stop_used = true` and
+  `metadata.fallback_stop_source = "atr"`;
+- fallback R-multiple targets: target `source = "r_multiple_fallback"` and
+  target metadata `fallback_target_source = "r_multiple"`;
+- `TradePlan.metadata.trade_plan_completeness` stores the
+  `TradePlanCompletenessResult` used by the pipeline and risk gate.
+
 `production_mode` actionability requires a complete structural trade plan:
 entry model, structural stop, invalidation thesis, and structural target thesis.
 A fallback plan may remain visible as a research/watchlist/blocked candidate,
@@ -155,6 +166,8 @@ Compatibility rules:
 - restore the plan to signal response models when it exists;
 - use risk-settings-generated take-profit plans only when no `TradePlan` is
   present;
+- keep fallback/completeness metadata when exit-plan enrichment replaces
+  targets or invalidation snapshots;
 - preserve existing response fields even when the plan adds richer metadata.
 
 No backend or frontend contract should be changed silently. If the plan schema

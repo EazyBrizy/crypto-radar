@@ -9,6 +9,7 @@ from app.schemas.risk import (
 )
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualTrade
+from app.schemas.trade_plan import TradePlanCompletenessResult
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_management import (
     TradePlanValidationError,
@@ -23,6 +24,7 @@ from app.services.risk_management import (
     calculate_trailing_stop_plan,
     position_sizing_for_notional,
 )
+from app.services.trade_plan_completeness import TradePlanCompletenessCheck
 
 
 class RiskContextService:
@@ -364,6 +366,28 @@ class RiskGateService:
             strategy=context.strategy,
             signal_edge=context.signal_edge,
         )
+        completeness = (
+            TradePlanCompletenessCheck().evaluate(context.trade_plan)
+            if context.trade_plan is not None
+            else None
+        )
+        completeness_blockers, completeness_warnings = _trade_plan_completeness_policy(
+            context=context,
+            completeness=completeness,
+        )
+        if completeness_blockers or completeness_warnings:
+            completeness_status = (
+                "failed"
+                if completeness_blockers
+                else "warning" if risk_check.status == "passed" else risk_check.status
+            )
+            risk_check = risk_check.model_copy(
+                update={
+                    "status": completeness_status,
+                    "blockers": _dedupe([*risk_check.blockers, *completeness_blockers]),
+                    "warnings": _dedupe([*risk_check.warnings, *completeness_warnings]),
+                }
+            )
         no_trade_blockers = _no_trade_blockers(context)
         no_trade_warnings = _no_trade_warnings(context)
         if no_trade_blockers or no_trade_warnings:
@@ -450,6 +474,47 @@ class RiskGateService:
             side=context.side,
             risk_settings=risk_settings,
         )
+
+
+def _trade_plan_completeness_policy(
+    *,
+    context: RiskContext,
+    completeness: TradePlanCompletenessResult | None,
+) -> tuple[list[str], list[str]]:
+    if completeness is None or completeness.complete:
+        return [], []
+    message = _trade_plan_completeness_message(completeness)
+    if _is_trade_plan_production_context(context):
+        return [message], []
+    return [], [message]
+
+
+def _trade_plan_completeness_message(completeness: TradePlanCompletenessResult) -> str:
+    missing = ", ".join(completeness.missing) if completeness.missing else "structural trade plan"
+    return f"Trade plan incomplete: {missing}; production execution is blocked."
+
+
+def _is_trade_plan_production_context(context: RiskContext) -> bool:
+    if context.mode == "real":
+        return True
+    if context.rr_guard_context in {"real", "production", "production_like"}:
+        return True
+    if context.trade_plan is None:
+        return False
+    metadata = context.trade_plan.metadata
+    if _truthy_metadata_value(metadata, "production_mode"):
+        return True
+    signal_mode = metadata.get("signal_mode")
+    return isinstance(signal_mode, str) and signal_mode.strip().lower() == "production"
+
+
+def _truthy_metadata_value(metadata: dict[str, object], key: str) -> bool:
+    value = metadata.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _dedupe(values: list[str]) -> list[str]:

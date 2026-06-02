@@ -18,6 +18,7 @@ from app.schemas.signal import (
 )
 from app.schemas.trade_plan import (
     TradePlan,
+    TradePlanCompletenessResult,
     TradePlanInvalidation,
     TradePlanTarget,
     build_trade_plan_from_legacy_fields,
@@ -25,6 +26,7 @@ from app.schemas.trade_plan import (
 from app.services.no_trade_filter import NoTradeFilterService
 from app.services.risk_management import resolve_rr_guard_mode
 from app.services.support_resistance import SupportResistanceSnapshot
+from app.services.trade_plan_completeness import TradePlanCompletenessCheck
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
 MAJOR_BASE_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP"}
@@ -214,6 +216,18 @@ class StrategySignalPipeline:
             invalidation=invalidation,
             risk_reward=risk_reward,
         )
+        production_mode = _is_production_mode(context.strategy_params)
+        completeness = TradePlanCompletenessCheck().evaluate(trade_plan)
+        trade_plan = _trade_plan_with_completeness_metadata(
+            trade_plan=trade_plan,
+            completeness=completeness,
+            production_mode=production_mode,
+        )
+        confirmation = _confirmation_with_trade_plan_completeness(
+            confirmation=confirmation,
+            completeness=completeness,
+            production_mode=production_mode,
+        )
 
         status, status_reason = RiskInvalidationLayer().status(
             signal=signal,
@@ -224,6 +238,9 @@ class StrategySignalPipeline:
             risk_reward=risk_reward,
             no_trade_filter=no_trade,
         )
+        if production_mode and not completeness.complete:
+            status = "watchlist"
+            status_reason = _trade_plan_incomplete_status_reason(completeness)
         if _show_only_active_setups(context.strategy_params) and not _is_active_setup_status(status):
             return None
 
@@ -245,6 +262,9 @@ class StrategySignalPipeline:
             risks.append(risk_reward.warning_reason)
         if risk_reward.blocked:
             risks.append(risk_reward.reason)
+        for warning in completeness.warnings:
+            if warning not in risks:
+                risks.append(warning)
         for reason in [*no_trade.blockers, *no_trade.warnings]:
             if reason not in risks:
                 risks.append(reason)
@@ -283,6 +303,12 @@ class StrategySignalPipeline:
                 enabled=False,
                 status="cancelled",
                 message=risk_reward.reason,
+            )
+        if production_mode and not completeness.complete:
+            updates["auto_entry"] = SignalAutoEntrySnapshot(
+                enabled=False,
+                status="cancelled",
+                message=status_reason,
             )
         if no_trade.blocked:
             updates["auto_entry"] = SignalAutoEntrySnapshot(
@@ -1053,12 +1079,22 @@ class ExitManagementLayer:
                 "metadata": risk_metadata,
             }
         )
+        enriched_invalidation = TradePlanInvalidation.model_validate(
+            invalidation.model_dump(mode="json")
+        )
+        if trade_plan.invalidation is not None:
+            enriched_invalidation = enriched_invalidation.model_copy(
+                update={
+                    "metadata": {
+                        **trade_plan.invalidation.metadata,
+                        **enriched_invalidation.metadata,
+                    }
+                }
+            )
         return trade_plan.model_copy(
             update={
                 "targets": targets or trade_plan.targets,
-                "invalidation": TradePlanInvalidation.model_validate(
-                    invalidation.model_dump(mode="json")
-                ),
+                "invalidation": enriched_invalidation,
                 "risk_rules": risk_rules,
             },
             deep=True,
@@ -1258,6 +1294,15 @@ def _bool_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _is_production_mode(params: Mapping[str, Any]) -> bool:
+    if _bool_param(params, "production_mode", False):
+        return True
+    signal_mode = params.get("signal_mode")
+    if isinstance(signal_mode, str):
+        return signal_mode.strip().lower() == "production"
+    return False
 
 
 def _optional_positive_float(value: Any) -> float | None:
@@ -2068,6 +2113,92 @@ def _confirmation_with_no_trade_check(
             ],
         }
     )
+
+
+def _confirmation_with_trade_plan_completeness(
+    *,
+    confirmation: SignalConfirmationSnapshot,
+    completeness: TradePlanCompletenessResult,
+    production_mode: bool,
+) -> SignalConfirmationSnapshot:
+    if completeness.complete:
+        status = "passed"
+    elif production_mode:
+        status = "failed"
+    else:
+        status = "warning"
+    check = SignalLayerCheck(
+        name="trade_plan_completeness",
+        status=status,
+        reason=_trade_plan_completeness_reason(completeness, production_mode),
+        metadata=_trade_plan_completeness_metadata(completeness, production_mode),
+    )
+    return confirmation.model_copy(
+        update={
+            "passed": confirmation.passed and status != "failed",
+            "checks": [*confirmation.checks, check],
+        }
+    )
+
+
+def _trade_plan_with_completeness_metadata(
+    *,
+    trade_plan: TradePlan,
+    completeness: TradePlanCompletenessResult,
+    production_mode: bool,
+) -> TradePlan:
+    completeness_metadata = _trade_plan_completeness_metadata(completeness, production_mode)
+    metadata = dict(trade_plan.metadata)
+    metadata.update(completeness_metadata)
+    metadata["trade_plan_completeness"] = completeness.model_dump(mode="json")
+    risk_metadata = dict(trade_plan.risk_rules.metadata)
+    risk_metadata.update(completeness_metadata)
+    risk_rules = trade_plan.risk_rules.model_copy(update={"metadata": risk_metadata})
+    return trade_plan.model_copy(
+        update={
+            "metadata": metadata,
+            "risk_rules": risk_rules,
+        },
+        deep=True,
+    )
+
+
+def _trade_plan_completeness_metadata(
+    completeness: TradePlanCompletenessResult,
+    production_mode: bool,
+) -> dict[str, Any]:
+    return {
+        "trade_plan_complete": completeness.complete,
+        "fallback_used": completeness.fallback_used,
+        "fallback_stop_used": completeness.fallback_stop_used,
+        "fallback_targets_used": completeness.fallback_targets_used,
+        "has_structural_stop": completeness.has_structural_stop,
+        "has_invalidation_thesis": completeness.has_invalidation_thesis,
+        "has_structural_target": completeness.has_structural_target,
+        "missing": list(completeness.missing),
+        "research_mode": not production_mode,
+        "production_mode": production_mode,
+        "signal_actionable": completeness.complete or not production_mode,
+        "execution_allowed_virtual": completeness.complete or not production_mode,
+        "execution_allowed_real": completeness.complete and production_mode,
+        "decision_scope": "production" if production_mode else "research",
+    }
+
+
+def _trade_plan_completeness_reason(
+    completeness: TradePlanCompletenessResult,
+    production_mode: bool,
+) -> str:
+    if completeness.complete:
+        return "Trade plan has structural stop, invalidation and target thesis."
+    if production_mode:
+        return _trade_plan_incomplete_status_reason(completeness)
+    return "Trade plan is research-compatible but incomplete for production actionability."
+
+
+def _trade_plan_incomplete_status_reason(completeness: TradePlanCompletenessResult) -> str:
+    missing = ", ".join(completeness.missing) if completeness.missing else "structural trade plan"
+    return f"Trade plan incomplete: {missing}; production actionability is blocked."
 
 
 def _overextension_check(confirmation: SignalConfirmationSnapshot) -> SignalLayerCheck | None:

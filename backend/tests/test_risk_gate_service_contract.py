@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
-from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanRiskRules, TradePlanTarget
+from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanInvalidation, TradePlanRiskRules, TradePlanTarget
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_gate import RiskContextService, RiskGateService
@@ -523,6 +523,47 @@ class RiskGateServiceContractTest(unittest.TestCase):
             [110.0, 120.0, 130.0],
         )
 
+    def test_real_gate_blocks_fallback_trade_plan(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(
+                    trade_plan=_trade_plan(
+                        targets=[
+                            TradePlanTarget(
+                                label="TP1",
+                                price=112.0,
+                                close_percent=100,
+                                source="r_multiple_fallback",
+                                metadata={"fallback_target_used": True},
+                            )
+                        ],
+                        metadata={
+                            "fallback_used": True,
+                            "fallback_targets_used": True,
+                            "fallback_target_source": "r_multiple",
+                        },
+                    )
+                ),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "real_requires_positive_edge": False,
+                    "real_requires_fresh_market_data": False,
+                }
+            ),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn("Trade plan incomplete", " ".join(decision.blockers))
+
     def test_invalid_long_trade_plan_target_below_entry_is_blocked(self) -> None:
         decision = RiskGateService().evaluate(
             context=RiskContextService().build_virtual_context(
@@ -940,12 +981,24 @@ def _trade_plan(
     targets: list[TradePlanTarget],
     stop_loss: float = 90.0,
     selected_rr_target: str | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> TradePlan:
+    normalized_targets = [
+        target.model_copy(update={"source": target.source or "test_structure"})
+        for target in targets
+    ]
     return TradePlan(
         entry=TradePlanEntry(price=100.0, min_price=100.0, max_price=100.0),
         stop_loss=stop_loss,
-        targets=targets,
+        targets=normalized_targets,
+        invalidation=TradePlanInvalidation(
+            price=stop_loss,
+            hard_stop=stop_loss,
+            conditions=["Close beyond test structure"],
+            metadata={"source": "test_structure"},
+        ),
         risk_rules=TradePlanRiskRules(selected_rr_target=selected_rr_target),
+        metadata=metadata or {},
     )
 
 

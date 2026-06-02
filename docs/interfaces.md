@@ -722,6 +722,39 @@ Trade plan completeness is explicit:
   Fallback plans may remain visible for research/backtest/watchlist purposes,
   but they must not be silently treated as complete production plans.
 
+`TradePlanCompletenessResult` is the service-level result attached to
+`TradePlan.metadata.trade_plan_completeness` and mirrored into
+`TradePlan.risk_rules.metadata` as summary flags:
+
+```python
+TradePlanCompletenessResult = {
+    "complete": bool,
+    "fallback_used": bool,
+    "fallback_stop_used": bool,
+    "fallback_targets_used": bool,
+    "has_structural_stop": bool,
+    "has_invalidation_thesis": bool,
+    "has_structural_target": bool,
+    "missing": list[str],
+    "warnings": list[str],
+    "metadata": dict,
+}
+```
+
+Summary metadata keys are additive and backward-compatible:
+`trade_plan_complete`, `fallback_used`, `fallback_stop_used`,
+`fallback_targets_used`, `has_structural_stop`,
+`has_invalidation_thesis`, `has_structural_target`, `missing`,
+`research_mode`, `production_mode`, `signal_actionable`,
+`execution_allowed_virtual`, and `execution_allowed_real`.
+
+In `research_mode`, incomplete or fallback plans remain visible with a
+`trade_plan_completeness` warning check. In `production_mode`, an incomplete or
+fallback plan makes the signal non-actionable, disables auto-entry metadata, and
+sets virtual/real execution eligibility false for the completeness layer. Real
+risk-gate evaluation blocks an explicit incomplete `TradePlan`; research and
+backtest contexts may continue with warnings.
+
 Strategy trade plans are level-aware when strategy context exposes structure:
 
 - `trend_pullback_continuation` uses an EMA20/EMA50 pullback-zone entry model,

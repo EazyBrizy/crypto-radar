@@ -91,6 +91,102 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(targets[0].close_percent, 40)
         self.assertEqual(targets[-1].source, "range_measured_move")
 
+    def test_research_mode_keeps_fallback_trade_plan_visible_with_warning(self) -> None:
+        features = _breakout_features()
+        candidate = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            scoring=score_breakdown(
+                trend_score=35,
+                volume_score=20,
+                volatility_score=20,
+                risk_reward_score=15,
+            ),
+            reasons=["Research fallback setup"],
+            entry=features.close,
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(signal_features=features, context_features=_bullish_context_features()),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "actionable")
+        self.assertTrue(signal.trade_plan.metadata.get("fallback_used") if signal and signal.trade_plan else False)
+        check = next(
+            item
+            for item in (signal.confirmation.checks if signal and signal.confirmation else [])
+            if item.name == "trade_plan_completeness"
+        )
+        self.assertEqual(check.status, "warning")
+        self.assertTrue(check.metadata.get("research_mode"))
+        self.assertTrue(check.metadata.get("execution_allowed_virtual"))
+
+    def test_production_mode_blocks_fallback_trade_plan_actionability(self) -> None:
+        features = _breakout_features()
+        candidate = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            scoring=score_breakdown(
+                trend_score=35,
+                volume_score=20,
+                volatility_score=20,
+                risk_reward_score=15,
+            ),
+            reasons=["Production fallback setup"],
+            entry=features.close,
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"production_mode": True},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "watchlist")
+        self.assertIn("Trade plan incomplete", signal.status_reason or "")
+        self.assertIsNotNone(signal.auto_entry)
+        self.assertFalse(signal.auto_entry.enabled if signal and signal.auto_entry else True)
+        self.assertFalse(signal.trade_plan.metadata.get("signal_actionable") if signal and signal.trade_plan else True)
+        self.assertFalse(signal.trade_plan.metadata.get("execution_allowed_virtual") if signal and signal.trade_plan else True)
+        self.assertFalse(signal.trade_plan.metadata.get("execution_allowed_real") if signal and signal.trade_plan else True)
+        check = next(
+            item
+            for item in (signal.confirmation.checks if signal and signal.confirmation else [])
+            if item.name == "trade_plan_completeness"
+        )
+        self.assertEqual(check.status, "failed")
+        self.assertTrue(check.metadata.get("production_mode"))
+
+    def test_production_mode_allows_complete_structural_trade_plan(self) -> None:
+        features = _breakout_features()
+
+        signal = StrategySignalPipeline().finalize(
+            _quality_candidate(features),
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"production_mode": True},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "actionable")
+        self.assertTrue(signal.trade_plan.metadata.get("trade_plan_complete") if signal and signal.trade_plan else False)
+        check = next(
+            item
+            for item in (signal.confirmation.checks if signal and signal.confirmation else [])
+            if item.name == "trade_plan_completeness"
+        )
+        self.assertEqual(check.status, "passed")
+
     async def test_breakout_signal_is_enriched_with_six_layers(self) -> None:
         signals = await StrategyEngine().generate_signals(
             _breakout_features(),

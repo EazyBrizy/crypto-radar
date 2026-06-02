@@ -138,6 +138,82 @@ If the underlying runner reports `no_historical_data`, the scenario status is
 `insufficient_data`. In both cases Strategy Lab must leave metrics empty rather
 than fabricating zero-value baseline or experiment results.
 
+## LAB-02 Strategy Baseline Harness
+
+Use `scripts/run_strategy_baseline.py` to create the reproducible current
+strategy baseline before AUD-02..AUD-10 changes to smart-money logic, fallback
+handling, pipeline boundaries, candle-state separation, and exits.
+
+Default matrix strategies are read from the current strategy implementations:
+
+- `liquidity_sweep_reversal`
+- `volatility_squeeze_breakout`
+- `trend_pullback_continuation`
+
+Run with CLI flags:
+
+```powershell
+python scripts/run_strategy_baseline.py `
+  --symbols BTCUSDT ETHUSDT `
+  --timeframes 1h 4h `
+  --start-time 2026-01-01T00:00:00Z `
+  --end-time 2026-02-01T00:00:00Z `
+  --initial-equity 1000 `
+  --fees-bps 10 `
+  --slippage-bps 1 `
+  --warmup-bars 200 `
+  --max-bars-in-trade 20 `
+  --output-path .codex-dev-logs/strategy-baseline.json
+```
+
+Or use a JSON config:
+
+```json
+{
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "timeframes": ["1h", "4h"],
+  "start_time": "2026-01-01T00:00:00Z",
+  "end_time": "2026-02-01T00:00:00Z",
+  "initial_equity": "1000",
+  "fees_bps": "10",
+  "slippage_bps": "1",
+  "warmup_bars": 200,
+  "max_bars_in_trade": 20,
+  "strategy_params": {
+    "liquidity_sweep_reversal": {},
+    "volatility_squeeze_breakout": {},
+    "trend_pullback_continuation": {}
+  },
+  "output_path": ".codex-dev-logs/strategy-baseline.json"
+}
+```
+
+```powershell
+python scripts/run_strategy_baseline.py --config baseline-config.json
+```
+
+The script calls `StrategyTestLabService` in `baseline` mode and keeps the
+baseline separate from later experiments with `source=baseline`,
+`baseline_version`, `baseline_id`, per-scenario strategy/symbol/timeframe tags,
+and `candle_state=closed`. It includes `code_revision` when git can read it
+safely.
+
+Interpretation rules:
+
+- `completed` means the scenario ran through the lab runner; metrics are
+  observed research metrics, not execution permission.
+- `no_data` means no closed historical candles were returned for that
+  strategy/symbol/timeframe.
+- `insufficient_data` means closed candles existed but did not satisfy warmup
+  and minimum sample requirements.
+- `failed` means infrastructure or validation failed and the run should not be
+  compared as a strategy result.
+
+The harness is ready even when the repository has no historical ClickHouse
+dataset. In that case the JSON should contain `no_data` or
+`insufficient_data`, and metric fields stay `null`. Do not replace those values
+with synthetic wins, losses, PnL, or zero-value baseline metrics.
+
 ## Backtest Journal Tags
 
 Every backtest or Strategy Test Lab trade projected into the journal must carry
@@ -264,6 +340,7 @@ Backtest reports keep the existing response shape and should include:
   `rr_block_count`;
 - `trades_count`, `wins`, `losses`, `winrate`;
 - `avg_win_r`, `avg_loss_r`, `expectancy_r`, `profit_factor`;
+- `realized_pnl`;
 - `max_drawdown_pct`;
 - `fees_total`, `slippage_total`, `funding_total`;
 - `avg_bars_in_trade`, `mfe_r_avg`, `mae_r_avg`;

@@ -1182,6 +1182,7 @@ def _metrics_from_state(state: _BacktestState) -> dict[str, Any]:
         "avg_loss_r": sum(losses) / len(losses) if losses else 0.0,
         "expectancy_r": sum(trade_rs) / trades_count if trades_count else 0.0,
         "profit_factor": profit_sum / loss_sum if loss_sum > 0 else None,
+        "realized_pnl": sum(_net_pnl(position) for position in positions),
         "max_drawdown_pct": _max_drawdown_pct(state.equity_curve),
         "fees_total": sum(position.trade.fees for position in positions),
         "slippage_total": sum(_slippage_cost(position) for position in positions),

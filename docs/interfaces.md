@@ -215,6 +215,7 @@ analytics in `metrics`:
 - `selected_rr`, `rr_bucket`, `rr_pass_rate`
 - `trades_count`, `wins`, `losses`, `winrate`
 - `avg_win_r`, `avg_loss_r`, `expectancy_r`, `profit_factor`
+- `realized_pnl`
 - `max_drawdown_pct`
 - `fees_total`, `slippage_total`, `funding_total`
 - `avg_bars_in_trade`, `mfe_r_avg`, `mae_r_avg`
@@ -350,6 +351,69 @@ StrategyLabRunSummary = {
 expanded `runs`. Historical-data failures must be explicit: runner
 `no_historical_data` errors become `no_data`, runner `not_enough_data` errors
 become `insufficient_data`, and metrics must remain empty for those scenarios.
+
+## LAB-02 Baseline Harness
+
+`scripts/run_strategy_baseline.py` is the reproducible local baseline harness
+for current strategies before AUD-02..AUD-10 behavior changes. It is not an API
+surface and it does not persist orders, positions, portfolio balances, scanner
+state, or live/virtual `risk_state`.
+
+The baseline matrix must use real strategy codes from `backend/app/strategies`:
+
+- `liquidity_sweep_reversal`
+- `volatility_squeeze_breakout`
+- `trend_pullback_continuation`
+
+The script accepts a JSON config or CLI flags for:
+
+- `symbols`, `timeframes`, `start_time`, `end_time`
+- `initial_equity`, `fees_bps`, `slippage_bps`
+- `warmup_bars`, `max_bars_in_trade`
+- per-strategy `strategy_params` overrides
+- `output_path`
+
+Baseline output is machine-readable JSON:
+
+```python
+StrategyBaselineOutput = {
+    "baseline_id": str,
+    "baseline_version": str,
+    "run_id": str,
+    "lab_run_ids": list[str],
+    "created_at": str,
+    "code_revision": str | None,
+    "code_revision_available": bool,
+    "status": "completed" | "no_data" | "insufficient_data" | "failed",
+    "tags": dict[str, str],
+    "config": dict,
+    "summary": dict,
+    "results": list[StrategyBaselineScenario],
+}
+
+StrategyBaselineScenario = {
+    "run_id": str,
+    "baseline_id": str,
+    "scenario_id": str,
+    "status": "completed" | "no_data" | "insufficient_data" | "failed",
+    "strategy": str,
+    "exchange": str,
+    "symbol": str,
+    "timeframe": str,
+    "tags": dict[str, str],
+    "metrics": dict[str, int | float | str | None],
+    "assumptions": dict,
+    "error": str | None,
+    "created_at": str,
+}
+```
+
+Every scenario tag must include `source=baseline`, `baseline_version`,
+`strategy`, `symbol`, `timeframe`, `candle_state=closed`, `created_at`, and
+`code_revision` when it can be read safely from git. Scenarios without
+historical candles must be reported as `no_data`; scenarios with too few
+closed candles must be reported as `insufficient_data`. Missing baseline metrics
+must be `null`, not fabricated zero values.
 
 Canonical discovery test flow:
 

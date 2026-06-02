@@ -50,6 +50,12 @@ LAB prerequisites:
 - [x] LAB-01: Implement synchronous Strategy Test Lab batch/matrix API on top
   of `ProductionBacktestRunner.run_detailed`. This is a prerequisite for
   AUD-03 baseline work.
+- [x] LAB-02: Baseline current strategies through Strategy Test Lab with
+  reproducible JSON output and explicit `no_data` / `insufficient_data`
+  statuses.
+
+AUD-02 and later AUD patches must compare strategy, fallback, pipeline,
+candle-state, and exit changes against the saved LAB-02 baseline artifact.
 
 1. [x] AUD-01: contract cleanup after RR and Strategy Test Lab.
 2. [ ] AUD-02: Strategy Test Lab.

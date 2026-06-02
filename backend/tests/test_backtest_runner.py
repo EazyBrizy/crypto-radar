@@ -102,6 +102,7 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertEqual(result.result.metrics["trades_count"], result.result.trades_count)
         self.assertGreater(result.result.metrics["fees_total"], 0)
         self.assertGreater(result.result.metrics["slippage_total"], 0)
+        self.assertIn("realized_pnl", result.result.metrics)
         self.assertIn("mfe_r_avg", result.result.metrics)
         self.assertIn("mae_r_avg", result.result.metrics)
         self.assertIn("by_strategy", result.result.metrics)

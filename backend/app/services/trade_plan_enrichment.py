@@ -10,6 +10,7 @@ from app.schemas.signal import (
     StrategySignal,
 )
 from app.schemas.trade_plan import (
+    TargetThesis,
     TradePlan,
     TradePlanCompletenessResult,
     TradePlanInvalidation,
@@ -181,11 +182,12 @@ def _trade_plan_target_from_exit_target(target: dict[str, Any]) -> TradePlanTarg
     metadata = {
         key: value
         for key, value in target.items()
-        if key not in {"label", "price", "r_multiple", "action", "close_percent", "source"}
+        if key not in {"label", "price", "r_multiple", "action", "close_percent", "source", "thesis"}
     }
     existing_metadata = target.get("metadata")
     if isinstance(existing_metadata, dict):
         metadata.update(existing_metadata)
+    thesis = _target_thesis_or_none(target.get("thesis"))
     return TradePlanTarget(
         label=str(target.get("label") or "target"),
         price=_number_or_none(target.get("price")),
@@ -193,6 +195,7 @@ def _trade_plan_target_from_exit_target(target: dict[str, Any]) -> TradePlanTarg
         action=str(target["action"]) if target.get("action") is not None else None,
         close_percent=target.get("close_percent"),
         source=str(target["source"]) if target.get("source") is not None else None,
+        thesis=thesis,
         metadata=metadata,
     )
 
@@ -202,6 +205,16 @@ def _number_or_none(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _target_thesis_or_none(value: Any) -> TargetThesis | None:
+    if value is None:
+        return None
+    if isinstance(value, TargetThesis):
+        return value
+    if isinstance(value, dict):
+        return TargetThesis.model_validate(value)
+    return None
 
 
 trade_plan_enrichment_service = TradePlanEnrichmentService()

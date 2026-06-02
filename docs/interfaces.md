@@ -864,6 +864,71 @@ Strategy trade plans are level-aware when strategy context exposes structure:
 - `liquidity_sweep_reversal` uses range midpoint and opposite boundary targets
   where available.
 
+## Market-Based Exits / TargetThesis AUD-10
+
+`TradePlanTarget` remains backward compatible and adds optional
+`thesis: TargetThesis | None`. Legacy clients may ignore it and continue to
+read `price`, `r_multiple`, `source`, and `metadata`.
+
+```python
+TargetSource = (
+    "nearest_liquidity_pool"
+    | "previous_day_high"
+    | "previous_day_low"
+    | "session_high"
+    | "session_low"
+    | "range_midpoint"
+    | "range_opposite_boundary"
+    | "vwap"
+    | "vwap_deviation_band"
+    | "htf_support"
+    | "htf_resistance"
+    | "measured_move"
+    | "risk_multiple_fallback"
+)
+
+TargetThesis = {
+    "source": TargetSource,
+    "price": float | None,
+    "direction": "LONG" | "SHORT",
+    "confidence": float,
+    "priority": int,
+    "close_percent": float | None,
+    "requires_acceptance": bool,
+    "invalidation_hint": str | None,
+    "metadata": dict,
+}
+```
+
+`TargetResolverService` is the service boundary for resolving ordered target
+theses from already available `Features`, optional `AlphaMarketContext`,
+higher-timeframe support/resistance snapshots, and strategy metadata. It must
+not call exchange, DB, Redis, or API sources. It filters target prices by
+direction: LONG targets are above entry, SHORT targets are below entry.
+
+R-multiple targets are represented by `source="risk_multiple_fallback"` and
+must set fallback metadata. They are allowed only when explicitly requested for
+research/backtest fallback, and fallback-only target plans are incomplete for
+production actionability. Trade-plan completeness treats a target as structural
+when `TargetThesis.source != "risk_multiple_fallback"` or the legacy target
+source is structural.
+
+Backtest and Strategy Lab params may include:
+
+- `exit_policy`: `legacy_r_multiple`, `market_targets`, `liquidity_first`,
+  `structure_runner`, or `measured_move_after_acceptance`;
+- `target_sources_enabled`: list of enabled `TargetSource` values;
+- `partial_exit_policy`: source-specific partial/main/final mapping;
+- `allow_r_multiple_fallback`: explicit research fallback flag.
+
+Backtest metrics include grouped exit views:
+
+- `by_exit_policy`
+- `by_first_target_source`
+- `by_final_target_source`
+- `by_runner_used`
+- `by_fallback_target_used`
+
 Strategy runtime params include:
 
 - `trend_pullback_continuation.entry_model`

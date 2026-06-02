@@ -106,6 +106,13 @@ _TREND_PULLBACK_EXPERIMENT_PARAM_KEYS = {
     "min_htf_target_distance_r",
 }
 
+_EXIT_POLICY_PARAM_KEYS = {
+    "exit_policy",
+    "target_sources_enabled",
+    "partial_exit_policy",
+    "allow_r_multiple_fallback",
+}
+
 _STOP_REASONS = {"stop_loss", "breakeven_stop", "trailing_stop"}
 
 
@@ -633,7 +640,7 @@ class ProductionBacktestRunner:
             funding_buffer_per_unit=_float_param(request.params, "funding_buffer_per_unit", 0.0) or 0.0,
             strategy=radar_signal.strategy,
             regime=_regime_key(radar_signal),
-            features_snapshot=_features_snapshot(features, radar_signal),
+            features_snapshot=_features_snapshot(features, radar_signal, request=request),
             warnings=_dedupe_strings([*pre_execution_decision.warnings, *post_execution_decision.warnings]),
         )
 
@@ -685,6 +692,32 @@ def _assumptions_for_backtest(
     trend_pullback_params = _trend_pullback_experiment_params(request)
     if trend_pullback_params:
         values.setdefault("trend_pullback_experiment_params", trend_pullback_params)
+    exit_policy_params = _exit_policy_experiment_params(request)
+    if exit_policy_params:
+        values.setdefault("exit_policy_experiment_params", exit_policy_params)
+    values.setdefault("exit_policy", request.params.get("exit_policy") or "market_targets")
+    values.setdefault(
+        "target_sources_enabled",
+        request.params.get(
+            "target_sources_enabled",
+            [
+                "nearest_liquidity_pool",
+                "previous_day_high",
+                "previous_day_low",
+                "session_high",
+                "session_low",
+                "range_midpoint",
+                "range_opposite_boundary",
+                "vwap",
+                "vwap_deviation_band",
+                "htf_support",
+                "htf_resistance",
+                "measured_move",
+            ],
+        ),
+    )
+    values.setdefault("partial_exit_policy", request.params.get("partial_exit_policy") or "source_default")
+    values.setdefault("allow_r_multiple_fallback", _bool_param(request.params, "allow_r_multiple_fallback", False))
     if mode == "discovery":
         values.setdefault("risk_gate_enabled", False)
         values.setdefault("rr_hard_gate_enabled", False)
@@ -759,6 +792,17 @@ def _trend_pullback_experiment_params(request: BacktestRunRequest) -> dict[str, 
     nested = dict(_mapping_param(request.params.get("strategy_params")))
     result: dict[str, Any] = {}
     for key in _TREND_PULLBACK_EXPERIMENT_PARAM_KEYS:
+        if key in request.params:
+            result[key] = request.params[key]
+        elif key in nested:
+            result[key] = nested[key]
+    return result
+
+
+def _exit_policy_experiment_params(request: BacktestRunRequest) -> dict[str, Any]:
+    nested = dict(_mapping_param(request.params.get("strategy_params")))
+    result: dict[str, Any] = {}
+    for key in _EXIT_POLICY_PARAM_KEYS:
         if key in request.params:
             result[key] = request.params[key]
         elif key in nested:
@@ -879,6 +923,11 @@ def _simulated_trade_from_position(
             "candle_state=closed",
             "alpha_context_available=false",
             f"entry_model={_entry_model_key(position)}",
+            f"exit_policy={_exit_policy_key(position)}",
+            f"first_target_source={_target_source_key(position, first=True)}",
+            f"final_target_source={_target_source_key(position, first=False)}",
+            f"runner_used={str(_runner_used(position)).lower()}",
+            f"fallback_target_used={str(_fallback_target_used(position)).lower()}",
             f"accepted_breakout_score_bucket={_classifier_score_bucket_from_position(position, 'accepted_breakout_score')}",
             f"fakeout_risk_score_bucket={_classifier_score_bucket_from_position(position, 'fakeout_risk_score')}",
         ],
@@ -945,7 +994,12 @@ def _position_warnings(position: _SimulatedPosition) -> list[str]:
     return _dedupe_strings([*position.warnings, *execution_warnings])
 
 
-def _features_snapshot(features: Features, signal: RadarSignal) -> dict[str, Any]:
+def _features_snapshot(
+    features: Features,
+    signal: RadarSignal,
+    *,
+    request: BacktestRunRequest,
+) -> dict[str, Any]:
     snapshot = features.model_dump(mode="json")
     snapshot["alpha_context_available"] = False
     snapshot["alpha_context_missing_sources"] = [
@@ -953,6 +1007,9 @@ def _features_snapshot(features: Features, signal: RadarSignal) -> dict[str, Any
         "historical_l2",
         "historical_derivative_history",
     ]
+    assumptions = _mapping_param(request.params.get("strategy_test_assumptions"))
+    if assumptions:
+        snapshot["strategy_test_assumptions"] = dict(assumptions)
     if signal.trade_plan is not None:
         snapshot["trade_plan"] = signal.trade_plan.model_dump(mode="json")
     if signal.no_trade_filter is not None:
@@ -1304,6 +1361,23 @@ def _metrics_from_state(state: _BacktestState) -> dict[str, Any]:
             positions,
             lambda position: _classifier_score_bucket_from_position(position, "fakeout_risk_score"),
         ),
+        "by_exit_policy": _group_metrics_by_key(positions, _exit_policy_key),
+        "by_first_target_source": _group_metrics_by_key(
+            positions,
+            lambda position: _target_source_key(position, first=True),
+        ),
+        "by_final_target_source": _group_metrics_by_key(
+            positions,
+            lambda position: _target_source_key(position, first=False),
+        ),
+        "by_runner_used": _group_metrics_by_key(
+            positions,
+            lambda position: str(_runner_used(position)).lower(),
+        ),
+        "by_fallback_target_used": _group_metrics_by_key(
+            positions,
+            lambda position: str(_fallback_target_used(position)).lower(),
+        ),
         "signals_seen": state.signals_seen,
         "risk_rejections": state.risk_rejections,
         "execution_rejections": state.execution_rejections,
@@ -1345,6 +1419,74 @@ def _entry_model_key(position: _SimulatedPosition) -> str:
     if trade_plan is not None and trade_plan.entry.source:
         return trade_plan.entry.source
     return "unknown"
+
+
+def _exit_policy_key(position: _SimulatedPosition) -> str:
+    value = _trade_plan_metadata_value(position.signal, "exit_policy")
+    if value is not None:
+        return str(value)
+    assumptions = position.features_snapshot.get("strategy_test_assumptions")
+    if isinstance(assumptions, Mapping) and assumptions.get("exit_policy") is not None:
+        return str(assumptions["exit_policy"])
+    if _fallback_target_used(position):
+        return "legacy_r_multiple"
+    if _runner_used(position):
+        return "structure_runner"
+    first_source = _target_source_key(position, first=True)
+    if first_source == "nearest_liquidity_pool":
+        return "liquidity_first"
+    return "market_targets"
+
+
+def _target_source_key(position: _SimulatedPosition, *, first: bool) -> str:
+    trade_plan = position.signal.trade_plan
+    if trade_plan is None:
+        return "unknown"
+    targets = [target for target in trade_plan.targets if target.price is not None]
+    if not targets:
+        return "unknown"
+    target = targets[0] if first else targets[-1]
+    if target.thesis is not None:
+        return target.thesis.source
+    for key in ("target_thesis_source", "market_target_source", "target_source"):
+        value = target.metadata.get(key)
+        if value is not None:
+            return str(value)
+    return str(target.source or "unknown")
+
+
+def _runner_used(position: _SimulatedPosition) -> bool:
+    trade_plan = position.signal.trade_plan
+    if trade_plan is None:
+        return False
+    for target in trade_plan.targets:
+        action = (target.action or "").lower()
+        close_percent = str(target.close_percent or "").lower()
+        if "runner" in action or close_percent == "runner":
+            return True
+    return False
+
+
+def _fallback_target_used(position: _SimulatedPosition) -> bool:
+    trade_plan = position.signal.trade_plan
+    if trade_plan is None:
+        return False
+    if bool(trade_plan.metadata.get("fallback_targets_used")):
+        return True
+    for target in trade_plan.targets:
+        if target.thesis is not None and target.thesis.source == "risk_multiple_fallback":
+            return True
+        source = str(target.source or "").lower()
+        metadata_source = str(
+            target.metadata.get("fallback_target_source")
+            or target.metadata.get("target_source")
+            or ""
+        ).lower()
+        if bool(target.metadata.get("fallback_target_used")):
+            return True
+        if "fallback" in source or "fallback" in metadata_source or metadata_source == "r_multiple":
+            return True
+    return False
 
 
 def _classifier_score_bucket_from_position(position: _SimulatedPosition, key: str) -> str:

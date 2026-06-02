@@ -100,6 +100,49 @@ Targets are ordered by execution priority and must be directional:
 - total executable `close_percent` must not exceed `100`;
 - each target's `r_multiple` is recalculated from actual entry, stop, and target
   prices by the risk layer.
+- each market target should carry a `TargetThesis` or equivalent metadata that
+  explains the market level behind the target.
+
+`TradePlanTarget.thesis` is optional and additive:
+
+```python
+TargetThesis = {
+    "source": (
+        "nearest_liquidity_pool"
+        | "previous_day_high"
+        | "previous_day_low"
+        | "session_high"
+        | "session_low"
+        | "range_midpoint"
+        | "range_opposite_boundary"
+        | "vwap"
+        | "vwap_deviation_band"
+        | "htf_support"
+        | "htf_resistance"
+        | "measured_move"
+        | "risk_multiple_fallback"
+    ),
+    "price": float | None,
+    "direction": "LONG" | "SHORT",
+    "confidence": float,
+    "priority": int,
+    "close_percent": float | None,
+    "requires_acceptance": bool,
+    "invalidation_hint": str | None,
+    "metadata": dict,
+}
+```
+
+Target source taxonomy:
+
+- liquidity: `nearest_liquidity_pool`, `previous_day_high`,
+  `previous_day_low`, `session_high`, `session_low`;
+- range: `range_midpoint`, `range_opposite_boundary`;
+- VWAP: `vwap`, `vwap_deviation_band`;
+- higher timeframe: `htf_support`, `htf_resistance`;
+- expansion: `measured_move`, only after accepted breakout/continuation
+  evidence;
+- fallback: `risk_multiple_fallback`, explicit research/backtest fallback only.
 
 Typical target usage:
 
@@ -108,8 +151,23 @@ Typical target usage:
 - TP3/runner: optional measured move, range boundary, or trend continuation
   target.
 
+Partial exit policy is source-specific rather than universal:
+
+- nearest liquidity pool and range midpoint usually act as partial exits;
+- session high/low may be partial or main depending distance and context;
+- PDH/PDL and range opposite boundary are main liquidity targets;
+- HTF support/resistance is main or final depending whether it is the nearest
+  obstacle or the final planned target;
+- measured move is final/runner only after accepted breakout evidence;
+- unpriced runners must include trailing or invalidation metadata. A naked TP
+  without price, trailing source, or invalidation context is not a production
+  target.
+
 Malformed targets must fail the risk decision. The system must not silently fall
 back to risk-settings targets when a signal supplied an invalid `TradePlan`.
+Risk management skips unpriced runner instructions when building fixed
+take-profit orders, but keeps their notes/metadata for lifecycle and research
+reporting.
 
 ## Invalidation
 
@@ -176,6 +234,8 @@ Compatibility rules:
 - keep fallback/completeness metadata when exit-plan enrichment replaces
   targets or invalidation snapshots;
 - preserve existing response fields even when the plan adds richer metadata.
+- preserve `TradePlanTarget.thesis` through response, persistence snapshots, and
+  backtest trade-plan snapshots when it is present.
 
 No backend or frontend contract should be changed silently. If the plan schema
 changes, update `docs/interfaces.md` first and then update the corresponding

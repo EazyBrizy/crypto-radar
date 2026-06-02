@@ -285,6 +285,42 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertIn("entry_model=aggressive_breakout", result.trades[0].tags)
         self.assertIn("accepted_breakout_score_bucket=0.75-1.00", result.trades[0].tags)
 
+    def test_backtest_records_exit_policy_experiment_without_changing_entry_policy(self) -> None:
+        candles = _candles()
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "exit_policy": "structure_runner",
+                    "partial_exit_policy": "source_default",
+                    "target_sources_enabled": ["previous_day_high", "measured_move"],
+                    "allow_r_multiple_fallback": True,
+                }
+            }
+        )
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=DeterministicStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(request)
+
+        self.assertEqual(
+            result.assumptions["exit_policy_experiment_params"],
+            {
+                "exit_policy": "structure_runner",
+                "partial_exit_policy": "source_default",
+                "target_sources_enabled": ["previous_day_high", "measured_move"],
+                "allow_r_multiple_fallback": True,
+            },
+        )
+        assert result.run_result.result is not None
+        metrics = result.run_result.result.metrics
+        self.assertIn("legacy_fields", metrics["by_entry_model"])
+        self.assertIn("structure_runner", metrics["by_exit_policy"])
+        self.assertIn("exit_policy=structure_runner", result.trades[0].tags)
+
     def test_backtest_records_trend_pullback_experiment_params(self) -> None:
         candles = _candles()
         request = _request(candles).model_copy(

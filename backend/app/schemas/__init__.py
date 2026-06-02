@@ -143,6 +143,8 @@ from app.schemas.trade import (
     VirtualTradeResponse,
 )
 from app.schemas.trade_plan import (
+    TargetSource,
+    TargetThesis,
     TradePlan,
     TradePlanCompletenessResult,
     TradePlanEntry,
@@ -261,6 +263,8 @@ __all__ = [
     "StrategyPairScope",
     "TakeProfitPlan",
     "TakeProfitTarget",
+    "TargetSource",
+    "TargetThesis",
     "Trade",
     "TradeAnalysis",
     "TradeInvalidationAlert",

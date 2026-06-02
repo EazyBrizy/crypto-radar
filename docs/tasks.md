@@ -66,7 +66,7 @@ candle-state, and exit changes against the saved LAB-02 baseline artifact.
 7. [x] AUD-07: Improve liquidity_sweep_reversal with smart-money/orderflow context.
 8. [x] AUD-08: Improve breakout strategy with accepted breakout vs fakeout classifier.
 9. [x] AUD-09: Improve trend_pullback with structural pullback and exhaustion filters.
-10. [ ] AUD-10: market-based exits.
+10. [x] AUD-10: market-based exits.
 11. [ ] AUD-11: real execution readiness. Blocked by AUD-01, AUD-02, AUD-03,
     AUD-04, AUD-05, AUD-06, AUD-07, AUD-08, AUD-09, and AUD-10.
 
@@ -151,6 +151,26 @@ market-based exits are complete.
 - [x] Add targeted tests for structural zones, EMA-only watchlist behavior,
   exhaustion, crowded funding/OI, missing alpha, HTF target room, invalidation,
   and backtest experiment params.
+
+### AUD-10 Checklist
+
+- [x] Add additive `TargetThesis` / `TargetSource` contract on
+  `TradePlanTarget.thesis` without removing legacy TP fields.
+- [x] Add service-layer `TargetResolverService` for ordered market target
+  theses from `Features`, optional `AlphaMarketContext`, HTF S/R snapshots, and
+  strategy metadata.
+- [x] Filter target theses by direction and keep R-multiple targets explicit as
+  `risk_multiple_fallback`.
+- [x] Attach target thesis metadata in exit-plan enrichment while preserving
+  legacy TP1/TP2 and runner behavior.
+- [x] Keep production completeness blocked for fallback-only targets.
+- [x] Keep risk management on `TradePlan` targets and handle unpriced runner
+  instructions without falling back to risk-settings targets.
+- [x] Record exit-policy experiment assumptions and grouped backtest metrics by
+  exit policy, first/final target source, runner usage, and fallback target use.
+- [x] Add targeted tests for resolver directionality, liquidity-pool source,
+  R-multiple fallback metadata, production completeness, pipeline thesis
+  attachment, and backtest exit-policy grouping.
 
 ## Remaining Follow-Ups
 

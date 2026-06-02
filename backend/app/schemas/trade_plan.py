@@ -6,6 +6,33 @@ from pydantic import BaseModel, Field
 
 
 TradePlanVersion = Literal["v1"]
+TargetSource = Literal[
+    "nearest_liquidity_pool",
+    "previous_day_high",
+    "previous_day_low",
+    "session_high",
+    "session_low",
+    "range_midpoint",
+    "range_opposite_boundary",
+    "vwap",
+    "vwap_deviation_band",
+    "htf_support",
+    "htf_resistance",
+    "measured_move",
+    "risk_multiple_fallback",
+]
+
+
+class TargetThesis(BaseModel):
+    source: TargetSource
+    price: float | None = None
+    direction: Literal["LONG", "SHORT"]
+    confidence: float = Field(..., ge=0, le=1)
+    priority: int
+    close_percent: float | None = None
+    requires_acceptance: bool = False
+    invalidation_hint: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class TradePlanEntry(BaseModel):
@@ -23,6 +50,7 @@ class TradePlanTarget(BaseModel):
     action: str | None = None
     close_percent: float | str | None = None
     source: str | None = None
+    thesis: TargetThesis | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

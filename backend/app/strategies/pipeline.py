@@ -16,6 +16,7 @@ from app.schemas.signal import (
     StrategySignal,
 )
 from app.schemas.trade_plan import (
+    TargetThesis,
     TradePlan,
     TradePlanTarget,
 )
@@ -28,6 +29,7 @@ from app.services.risk_reward_assessment import (
 )
 from app.services.signal_status_resolver import SignalStatusResolver
 from app.services.support_resistance import SupportResistanceSnapshot
+from app.services.target_resolver import TargetResolverService
 from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.services.trade_plan_completeness import TradePlanCompletenessCheck
 from app.services.signal_decision import signal_decision_service
@@ -957,6 +959,16 @@ class ExitManagementLayer:
         entry = _entry_price(signal)
         targets: list[dict[str, Any]] = []
         planned_targets = _planned_targets_by_label(signal)
+        resolved_targets = TargetResolverService().resolve(
+            direction=signal.direction,
+            entry=entry,
+            stop_loss=signal.stop_loss,
+            features=context.signal_features,
+            alpha_context=context.alpha_context,
+            support_resistance_by_timeframe=context.support_resistance_by_timeframe,
+            strategy_metadata=_target_strategy_metadata(signal),
+            allow_r_multiple_fallback=_allow_r_multiple_fallback(context.strategy_params),
+        )
         for label, price in (("TP1", signal.take_profit_1), ("TP2", signal.take_profit_2)):
             if price is None:
                 continue
@@ -967,6 +979,23 @@ class ExitManagementLayer:
             close_percent = 40 if label == "TP1" else 30
             planned = planned_targets.get(label)
             metadata = dict(planned.metadata) if planned is not None else {}
+            source = planned.source if planned is not None else None
+            target_source = _target_source_for_resolver(
+                source,
+                metadata.get("market_target_source"),
+                metadata.get("target_source"),
+            )
+            thesis = TargetResolverService().thesis_for_target(
+                target_price=price,
+                target_source=target_source,
+                direction=signal.direction,
+                entry=entry,
+                stop_loss=signal.stop_loss,
+                resolved=resolved_targets,
+                close_percent=float(close_percent),
+            )
+            if thesis is not None:
+                metadata = _metadata_with_target_thesis(metadata, thesis)
             targets.append(
                 {
                     "label": label,
@@ -974,12 +1003,27 @@ class ExitManagementLayer:
                     "r_multiple": r_multiple,
                     "action": action,
                     "close_percent": close_percent,
-                    "source": planned.source if planned is not None else None,
+                    "source": source or (thesis.source if thesis is not None else None),
+                    "thesis": thesis.model_dump(mode="json") if thesis is not None else None,
                     "metadata": metadata,
                 }
             )
+        if not targets:
+            targets.extend(
+                _exit_targets_from_resolved_theses(
+                    theses=resolved_targets,
+                    signal=signal,
+                    entry=entry,
+                )
+            )
         if signal.strategy == "trend_pullback_continuation":
             if _strong_trend_for_runner(context.signal_features, context.context_features):
+                runner_thesis = _runner_thesis(
+                    signal=signal,
+                    entry=entry,
+                    stop_loss=signal.stop_loss,
+                    resolved_targets=resolved_targets,
+                )
                 targets.append(
                     {
                         "label": "Runner",
@@ -988,7 +1032,18 @@ class ExitManagementLayer:
                         "action": "runner_trailing",
                         "close_percent": "runner",
                         "source": "EMA20" if context.signal_features.ema_20 is not None else "ATR",
-                        "metadata": {"enabled_when": "strong_trend"},
+                        "thesis": runner_thesis.model_dump(mode="json") if runner_thesis is not None else None,
+                        "metadata": _metadata_with_target_thesis(
+                            {
+                                "enabled_when": "strong_trend",
+                                "runner_instruction": "trail_after_structure_continuation",
+                                "trailing_source": "swing_or_vwap_structure"
+                                if context.signal_features.vwap is not None
+                                else "atr_fallback",
+                                "fallback_trailing_used": context.signal_features.vwap is None,
+                            },
+                            runner_thesis,
+                        ),
                     }
                 )
         elif signal.strategy == "volatility_squeeze_breakout":
@@ -999,6 +1054,15 @@ class ExitManagementLayer:
             ):
                 r_multiple = _target_rr(signal, measured_target)
                 if r_multiple is not None:
+                    thesis = TargetResolverService().thesis_for_target(
+                        target_price=measured_target,
+                        target_source="measured_move",
+                        direction=signal.direction,
+                        entry=entry,
+                        stop_loss=signal.stop_loss,
+                        resolved=resolved_targets,
+                        close_percent=None,
+                    )
                     targets.append(
                         {
                             "label": "Measured Move",
@@ -1007,14 +1071,22 @@ class ExitManagementLayer:
                             "action": "measured_move_runner",
                             "close_percent": "runner",
                             "source": "range_measured_move",
+                            "thesis": thesis.model_dump(mode="json") if thesis is not None else None,
                             "metadata": {
                                 "range_high": context.signal_features.donchian_high_20,
                                 "range_low": context.signal_features.donchian_low_20,
                                 "entry_model": _trade_plan_entry_model(signal),
+                                **_metadata_with_target_thesis({}, thesis),
                             },
                         }
                     )
         elif signal.strategy == "liquidity_sweep_reversal":
+            runner_thesis = _runner_thesis(
+                signal=signal,
+                entry=entry,
+                stop_loss=signal.stop_loss,
+                resolved_targets=resolved_targets,
+            )
             targets.append(
                 {
                     "label": "Runner",
@@ -1023,6 +1095,14 @@ class ExitManagementLayer:
                     "action": "runner_trailing",
                     "close_percent": "runner",
                     "source": "micro_BOS_or_ATR_trailing",
+                    "thesis": runner_thesis.model_dump(mode="json") if runner_thesis is not None else None,
+                    "metadata": _metadata_with_target_thesis(
+                        {
+                            "runner_instruction": "trail_after_micro_bos_or_range_reclaim",
+                            "trailing_source": "micro_bos_or_range_boundary",
+                        },
+                        runner_thesis,
+                    ),
                 }
             )
 
@@ -1077,6 +1157,142 @@ def _planned_targets_by_label(signal: StrategySignal) -> dict[str, TradePlanTarg
     if signal.trade_plan is None:
         return {}
     return {target.label: target for target in signal.trade_plan.targets}
+
+
+def _target_strategy_metadata(signal: StrategySignal) -> dict[str, Any]:
+    if signal.trade_plan is None:
+        return {}
+    metadata = {
+        **signal.trade_plan.metadata,
+        **signal.trade_plan.entry.metadata,
+        **signal.trade_plan.risk_rules.metadata,
+    }
+    if signal.trade_plan.invalidation is not None:
+        metadata.update(signal.trade_plan.invalidation.metadata)
+    return metadata
+
+
+def _allow_r_multiple_fallback(params: Mapping[str, Any]) -> bool:
+    return _bool_param(params, "allow_r_multiple_fallback", False)
+
+
+def _target_source_for_resolver(*values: Any) -> str | None:
+    for value in values:
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _metadata_with_target_thesis(
+    metadata: dict[str, Any],
+    thesis: TargetThesis | None,
+) -> dict[str, Any]:
+    if thesis is None:
+        return metadata
+    enriched = dict(metadata)
+    thesis_payload = thesis.model_dump(mode="json")
+    enriched["target_thesis"] = thesis_payload
+    enriched["target_thesis_source"] = thesis.source
+    enriched["market_target_source"] = thesis.source
+    enriched["target_source"] = thesis.source
+    enriched["target_confidence"] = thesis.confidence
+    enriched["target_priority"] = thesis.priority
+    if thesis.invalidation_hint is not None:
+        enriched["target_invalidation_hint"] = thesis.invalidation_hint
+    if thesis.source == "risk_multiple_fallback":
+        enriched["fallback_target_used"] = True
+        enriched["fallback_target_source"] = "r_multiple"
+    return enriched
+
+
+def _exit_targets_from_resolved_theses(
+    *,
+    theses: list[TargetThesis],
+    signal: StrategySignal,
+    entry: float | None,
+) -> list[dict[str, Any]]:
+    if entry is None:
+        return []
+    priced = [thesis for thesis in theses if thesis.price is not None]
+    if not priced:
+        return []
+    selected = priced[:2]
+    targets: list[dict[str, Any]] = []
+    for index, thesis in enumerate(selected, start=1):
+        label = f"TP{index}"
+        action = _target_action_from_thesis(thesis, is_final=index == len(selected))
+        close_percent = _target_close_percent_from_thesis(thesis, is_final=index == len(selected))
+        targets.append(
+            {
+                "label": label,
+                "price": thesis.price,
+                "r_multiple": _target_rr(signal, thesis.price),
+                "action": action,
+                "close_percent": close_percent,
+                "source": thesis.source,
+                "thesis": thesis.model_dump(mode="json"),
+                "metadata": _metadata_with_target_thesis(
+                    {
+                        "generated_by": "target_resolver",
+                        "exit_policy": "market_targets",
+                    },
+                    thesis.model_copy(update={"close_percent": float(close_percent)}),
+                ),
+            }
+        )
+    return targets
+
+
+def _runner_thesis(
+    *,
+    signal: StrategySignal,
+    entry: float | None,
+    stop_loss: float | None,
+    resolved_targets: list[TargetThesis],
+) -> TargetThesis | None:
+    if entry is None:
+        return None
+    priced = [thesis for thesis in resolved_targets if thesis.price is not None]
+    if not priced:
+        return None
+    furthest = max(
+        priced,
+        key=lambda thesis: float(thesis.metadata.get("distance") or 0.0),
+    )
+    metadata = {
+        **furthest.metadata,
+        "runner_used": True,
+        "runner_source": furthest.source,
+        "stop_loss_for_r": stop_loss,
+        "strategy": signal.strategy,
+    }
+    return furthest.model_copy(update={"close_percent": None, "metadata": metadata})
+
+
+def _target_action_from_thesis(thesis: TargetThesis, *, is_final: bool) -> str:
+    if thesis.source in {"nearest_liquidity_pool", "range_midpoint"}:
+        return "partial_close"
+    if thesis.source in {"measured_move", "htf_support", "htf_resistance"}:
+        return "full_close" if is_final else "reduce_and_keep_runner"
+    if thesis.source in {"previous_day_high", "previous_day_low", "range_opposite_boundary"}:
+        return "reduce_and_keep_runner"
+    return "full_close" if is_final else "partial_close"
+
+
+def _target_close_percent_from_thesis(thesis: TargetThesis, *, is_final: bool) -> float:
+    if thesis.close_percent is not None:
+        return thesis.close_percent
+    if thesis.source in {"nearest_liquidity_pool", "range_midpoint"}:
+        return 40.0
+    if thesis.source in {"session_high", "session_low"}:
+        return 50.0 if is_final else 35.0
+    if thesis.source in {"previous_day_high", "previous_day_low", "range_opposite_boundary"}:
+        return 60.0 if is_final else 40.0
+    if thesis.source in {"htf_support", "htf_resistance"}:
+        return 70.0 if is_final else 50.0
+    if thesis.source == "measured_move":
+        return 100.0 if is_final else 30.0
+    return 60.0 if is_final else 40.0
 
 
 def _trade_plan_entry_model(signal: StrategySignal) -> str | None:

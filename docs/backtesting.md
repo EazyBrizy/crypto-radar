@@ -394,6 +394,37 @@ synthesize delta, CVD, L2, derivative, OI, funding pressure, VWAP acceptance,
 or baseline outcomes. Scenarios without valid candle samples still return
 `no_data` or `insufficient_data`.
 
+## Exit Policy Experiments
+
+AUD-10 Strategy Test Lab and backtests can compare exits independently from
+entry policy. Pass these params through `BacktestRunRequest.params`, nested
+`params.strategy_params`, or Strategy Lab `params`:
+
+- `exit_policy`: `legacy_r_multiple`, `market_targets`, `liquidity_first`,
+  `structure_runner`, or `measured_move_after_acceptance`;
+- `target_sources_enabled`: list of enabled market target sources;
+- `partial_exit_policy`: source-specific partial/main/final mapping;
+- `allow_r_multiple_fallback`: explicit research fallback flag.
+
+`ProductionBacktestRunner` records supplied values in
+`assumptions.exit_policy_experiment_params` and records the resolved
+`exit_policy`, `target_sources_enabled`, `partial_exit_policy`, and
+`allow_r_multiple_fallback` assumptions for auditability.
+
+Metrics include grouped exit research views when trades carry trade-plan target
+metadata:
+
+- `by_exit_policy`
+- `by_first_target_source`
+- `by_final_target_source`
+- `by_runner_used`
+- `by_fallback_target_used`
+
+Exit experiments must not change the entry policy unless entry params are also
+changed. If historical market targets, alpha context, or HTF snapshots are
+unavailable, the run must keep missing-source metadata and may return fallback
+or insufficient-data status; it must not fabricate market target levels.
+
 ## Fill Assumptions
 
 Backtests should be conservative:

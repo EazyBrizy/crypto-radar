@@ -20,6 +20,7 @@ FALLBACK_TARGET_SOURCES = {
     "three_r",
 }
 NON_STRUCTURAL_TARGET_SOURCES = {"legacy_fields", *FALLBACK_TARGET_SOURCES}
+FALLBACK_TARGET_THESIS_SOURCES = {"risk_multiple_fallback"}
 
 
 class TradePlanCompletenessCheck:
@@ -121,6 +122,7 @@ def _is_fallback_target(target: TradePlanTarget) -> bool:
         return True
     source_values = [
         target.source,
+        target.thesis.source if target.thesis is not None else None,
         _metadata_string(target.metadata, "fallback_target_source"),
         _metadata_string(target.metadata, "target_source"),
     ]
@@ -136,6 +138,8 @@ def _is_fallback_target(target: TradePlanTarget) -> bool:
 def _is_structural_target(target: TradePlanTarget) -> bool:
     if target.price is None or _is_fallback_target(target):
         return False
+    if target.thesis is not None:
+        return target.thesis.source not in FALLBACK_TARGET_THESIS_SOURCES
     source = target.source
     if source is None:
         return False

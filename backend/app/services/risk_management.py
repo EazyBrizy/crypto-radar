@@ -878,15 +878,15 @@ def calculate_take_profit_plan_from_trade_plan(
     targets: list[TakeProfitTarget] = []
     total_close_percent = 0.0
     for target in trade_plan.targets:
+        if target.price is None and _is_unpriced_runner_target(target):
+            notes.append(
+                f"TradePlan target {target.label} has no fixed price; risk gate skipped it."
+            )
+            continue
         label = _trade_plan_target_label(target, errors)
         if label is None:
             continue
         if target.price is None:
-            if _is_unpriced_runner_target(target):
-                notes.append(
-                    f"TradePlan target {label} has no fixed price; risk gate skipped it."
-                )
-                continue
             errors.append(f"TradePlan target {label} price is required.")
             continue
         if target.price <= 0:
@@ -1539,6 +1539,8 @@ def _trade_plan_target_label(
     label = target.label.strip().upper()
     if label in _TAKE_PROFIT_LABELS:
         return label
+    if label in {"RUNNER", "MEASURED MOVE", "MEASURED_MOVE"}:
+        return "TP3"
     errors.append(f"TradePlan target label {target.label!r} is not supported.")
     return None
 

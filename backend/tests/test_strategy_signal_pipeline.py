@@ -105,6 +105,25 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(targets[0].close_percent, 40)
         self.assertEqual(targets[-1].source, "range_measured_move")
 
+    def test_pipeline_attaches_market_target_thesis_to_legacy_targets(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "previous_day_high": _breakout_features().close + 2.0,
+                "session_high": _breakout_features().close + 4.0,
+            }
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            _quality_candidate(features),
+            StrategyEvaluationContext(signal_features=features, context_features=_bullish_context_features()),
+        )
+
+        self.assertIsNotNone(signal)
+        targets = signal.trade_plan.targets if signal and signal.trade_plan else []
+        self.assertIsNotNone(targets[0].thesis)
+        self.assertEqual(targets[0].thesis.source if targets[0].thesis else None, "previous_day_high")
+        self.assertEqual(targets[0].metadata.get("target_thesis_source"), "previous_day_high")
+
     def test_finalize_public_contract_is_preserved(self) -> None:
         method_signature = signature(StrategySignalPipeline.finalize)
         self.assertEqual(list(method_signature.parameters), ["self", "signal", "context"])

@@ -466,9 +466,14 @@ Invalidation:
 
 Targets:
 
-- TP1: first structure-aware target, usually around `1R` or nearby liquidity.
-- TP2: continuation target around `2R` or the next structure level.
-- Optional runner/trailing metadata can be used after continuation is confirmed.
+- TP1: nearest continuation liquidity, prior swing, VWAP/deviation band, or
+  nearby HTF target when available; R-multiple remains fallback/research
+  metadata.
+- TP2: next liquidity pool, prior swing, VWAP deviation/HTF target, or
+  continuation structure.
+- Optional runner/trailing metadata can be used after continuation is confirmed
+  and should reference swing structure, VWAP reclaim/loss, or HTF invalidation
+  before ATR fallback.
 
 Good regime:
 
@@ -537,9 +542,12 @@ Invalidation:
 
 Targets:
 
-- TP1: around `1.5R` or first post-breakout liquidity.
-- TP2: around `2.5R`.
-- TP3: measured move from the Donchian/compression range when enabled and valid.
+- TP1: first post-breakout liquidity, HTF S/R, session extension, or
+  R-multiple fallback when no market target exists.
+- TP2: HTF S/R, session extension, or range expansion target.
+- TP3: measured move from the Donchian/compression range only after accepted
+  breakout evidence; otherwise it remains unavailable or explicit fallback
+  research metadata.
 
 Good regime:
 
@@ -620,8 +628,8 @@ Targets:
 - TP3/runner: optional micro-BOS/ATR trailing target when continuation develops.
 - If no market target exists, R-multiple fallback targets remain explicit via
   fallback metadata. When a market target exists, `TradePlanTarget.source`,
-  `metadata.market_target_source`, and `TradePlan.metadata.target_thesis`
-  explain the target.
+  `TradePlanTarget.thesis`, `metadata.market_target_source`, and
+  `TradePlan.metadata.target_thesis` explain the target.
 
 Good regime:
 

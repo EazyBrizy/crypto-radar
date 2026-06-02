@@ -2,6 +2,7 @@ import unittest
 
 from app.schemas.market import Features
 from app.schemas.trade_plan import (
+    TargetThesis,
     TradePlan,
     TradePlanEntry,
     TradePlanInvalidation,
@@ -86,6 +87,35 @@ class TradePlanCompletenessCheckTest(unittest.TestCase):
 
         self.assertFalse(result.complete)
         self.assertTrue(result.fallback_targets_used)
+        self.assertIn("structural_target", result.missing)
+
+    def test_fallback_target_thesis_keeps_production_plan_incomplete(self) -> None:
+        plan = _structural_plan().model_copy(
+            update={
+                "targets": [
+                    TradePlanTarget(
+                        label="TP1",
+                        price=102.0,
+                        source="legacy_fields",
+                        thesis=TargetThesis(
+                            source="risk_multiple_fallback",
+                            price=102.0,
+                            direction="LONG",
+                            confidence=0.3,
+                            priority=1,
+                            metadata={"fallback_target_used": True},
+                        ),
+                    )
+                ],
+            },
+            deep=True,
+        )
+
+        result = TradePlanCompletenessCheck().evaluate(plan)
+
+        self.assertFalse(result.complete)
+        self.assertTrue(result.fallback_targets_used)
+        self.assertFalse(result.has_structural_target)
         self.assertIn("structural_target", result.missing)
 
 

@@ -324,6 +324,45 @@ When historical alpha data is unavailable, these experiments must keep
 synthetic CVD, L2, OI, liquidation, or baseline outcomes. Scenarios without
 valid candle samples still return `no_data` or `insufficient_data`.
 
+## Breakout Acceptance Experiments
+
+AUD-08 volatility-squeeze breakout experiments can compare:
+
+- aggressive breakout entry versus conservative retest entry;
+- delta/OI confirmation on versus off;
+- `accepted_breakout_min_score` sweeps;
+- `fakeout_risk_max_score` sweeps;
+- `require_retest_after_large_candle` on versus off.
+
+Pass these params through `BacktestRunRequest.params`, nested
+`params.strategy_params`, or Strategy Lab `params`:
+
+- `allow_aggressive_entry`
+- `require_retest_after_large_candle`
+- `require_delta_expansion`
+- `require_oi_expansion`
+- `min_delta_expansion_score`
+- `min_oi_expansion_score`
+- `accepted_breakout_min_score`
+- `fakeout_risk_max_score`
+
+`ProductionBacktestRunner` records supplied breakout classifier values in
+`assumptions.breakout_classifier_experiment_params` for
+`volatility_squeeze_breakout` runs so baseline and experiment comparisons are
+auditable.
+
+Metrics include grouped breakout research views when trades carry the
+classifier metadata:
+
+- `by_entry_model`
+- `by_accepted_breakout_score_bucket`
+- `by_fakeout_risk_score_bucket`
+
+When historical alpha data is unavailable, these experiments must keep
+`alpha_context_available=false` and list missing alpha sources. They must not
+synthesize CVD, L2, derivative, OI, VWAP, or baseline outcomes. Scenarios
+without valid candle samples still return `no_data` or `insufficient_data`.
+
 ## Fill Assumptions
 
 Backtests should be conservative:

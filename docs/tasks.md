@@ -64,7 +64,7 @@ candle-state, and exit changes against the saved LAB-02 baseline artifact.
 5. [x] AUD-05: Introduce unified SignalDecisionSnapshot contract across pipeline/API/UI.
 6. [x] AUD-06: Add AlphaMarketContext and smart-money/orderflow features.
 7. [x] AUD-07: Improve liquidity_sweep_reversal with smart-money/orderflow context.
-8. [ ] AUD-08: reserved alpha/context calibration follow-up if needed.
+8. [x] AUD-08: Improve breakout strategy with accepted breakout vs fakeout classifier.
 9. [ ] AUD-09: strategy upgrades.
 10. [ ] AUD-10: market-based exits.
 11. [ ] AUD-11: real execution readiness. Blocked by AUD-01, AUD-02, AUD-03,
@@ -108,6 +108,29 @@ market-based exits are complete.
   fabricating baseline or alpha results.
 - [x] Add targeted tests for reclaim/absorption, CVD divergence, missing alpha,
   OI boost, target room, failed continuation, and target metadata.
+
+### AUD-08 Checklist
+
+- [x] Extend volatility squeeze breakout state and TradePlan metadata with
+  accepted breakout, fakeout risk, hold, retest, delta, OI, volume acceptance,
+  failed breakout, alpha usage, and missing alpha source fields.
+- [x] Add accepted breakout classifier using close outside range, close
+  location, body quality, volume/VWAP acceptance, ATR expansion, optional
+  delta/OI expansion, and post-breakout hold/retest quality.
+- [x] Add fakeout risk classifier using wick close-back-inside, missing or weak
+  delta/OI confirmation, low acceptance, large candle without hold, crowded
+  funding/OI pressure, sweep-through-book without acceptance, and failed hold.
+- [x] Keep delta/OI confirmations optional through params and disabled by
+  default.
+- [x] Add conservative retest mode for large or fakeout-prone breakouts with
+  structured `retest_required_after_large_breakout` decision warning.
+- [x] Add explicit failed-breakout invalidation conditions while preserving the
+  legacy hard stop.
+- [x] Record breakout classifier experiment params and grouped backtest metrics
+  by entry model, accepted-breakout score bucket, and fakeout-risk score bucket.
+- [x] Add targeted tests for accepted breakout, fakeout wick, large retest,
+  missing alpha context, invalidation metadata, aggressive/conservative params,
+  and backtest grouping.
 
 ## Remaining Follow-Ups
 

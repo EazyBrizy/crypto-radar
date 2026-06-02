@@ -733,6 +733,7 @@ class ConfirmationLayer:
                 score=round(features.volume_spike, 3),
             ),
         ]
+        checks.extend(_breakout_classifier_checks(signal, context.strategy_params))
         return SignalConfirmationSnapshot(
             passed=all(check.status != "failed" for check in checks),
             checks=checks,
@@ -816,6 +817,8 @@ class InvalidationLayer:
                 {
                     "range_high": range_high,
                     "range_low": range_low,
+                    "source": "breakout_structure",
+                    "structural_invalidation": True,
                     "range_height": range_height,
                     "range_20": features.range_20,
                     "range_50_average": features.range_50_average,
@@ -832,19 +835,39 @@ class InvalidationLayer:
                     "close_position": _directional_close_location(signal.direction, features),
                     "rejection_wick_ratio": _rejection_wick_ratio(signal.direction, features),
                     "volume_disappears_below": 1.0,
+                    "accepted_breakout_score": _trade_plan_metadata_number(signal, "accepted_breakout_score"),
+                    "fakeout_risk_score": _trade_plan_metadata_number(signal, "fakeout_risk_score"),
+                    "post_breakout_hold_score": _trade_plan_metadata_number(signal, "post_breakout_hold_score"),
+                    "retest_quality_score": _trade_plan_metadata_number(signal, "retest_quality_score"),
+                    "delta_expansion_score": _trade_plan_metadata_number(signal, "delta_expansion_score"),
+                    "oi_expansion_score": _trade_plan_metadata_number(signal, "oi_expansion_score"),
+                    "volume_acceptance_score": _trade_plan_metadata_number(signal, "volume_acceptance_score"),
+                    "failed_breakout_invalidation": _trade_plan_metadata_bool(
+                        signal,
+                        "failed_breakout_invalidation",
+                    ),
+                    "retest_required": _trade_plan_metadata_bool(signal, "retest_required"),
+                    "alpha_context_used": _trade_plan_metadata_bool(signal, "alpha_context_used"),
+                    "missing_alpha_sources": _trade_plan_metadata_list(signal, "missing_alpha_sources"),
                 }
             )
             if direction == "long":
                 conditions = [
                     "Close returns inside the previous Donchian range",
+                    "Loss of breakout level",
+                    "Failed retest accepts price back inside the previous range",
                     "Breakout candle is fully retraced",
                     "Volume disappears after breakout",
+                    "Delta/OI reversal against continuation when available",
                 ]
             else:
                 conditions = [
                     "Close returns inside the previous Donchian range",
+                    "Loss of breakout level",
+                    "Failed retest accepts price back inside the previous range",
                     "Breakdown candle is fully retraced",
                     "Volume disappears after breakdown",
+                    "Delta/OI reversal against continuation when available",
                 ]
         elif signal.strategy == "liquidity_sweep_reversal":
             strategy_swept_level = _trade_plan_metadata_number(signal, "swept_level")
@@ -1046,17 +1069,133 @@ def _trade_plan_entry_model(signal: StrategySignal) -> str | None:
     return str(raw) if raw is not None else None
 
 
+def _breakout_classifier_checks(
+    signal: StrategySignal,
+    params: Mapping[str, Any],
+) -> list[SignalLayerCheck]:
+    if signal.strategy != "volatility_squeeze_breakout" or signal.trade_plan is None:
+        return []
+
+    accepted_score = _trade_plan_metadata_number(signal, "accepted_breakout_score")
+    fakeout_score = _trade_plan_metadata_number(signal, "fakeout_risk_score")
+    if accepted_score is None and fakeout_score is None:
+        return []
+
+    accepted_min = _strategy_numeric_param(
+        params,
+        "accepted_breakout_min_score",
+        signal.strategy,
+        0.55,
+    )
+    fakeout_max = _strategy_numeric_param(
+        params,
+        "fakeout_risk_max_score",
+        signal.strategy,
+        0.55,
+    )
+    retest_required = _trade_plan_metadata_bool(signal, "retest_required")
+    metadata = {
+        "accepted_breakout_score": accepted_score,
+        "fakeout_risk_score": fakeout_score,
+        "post_breakout_hold_score": _trade_plan_metadata_number(signal, "post_breakout_hold_score"),
+        "retest_quality_score": _trade_plan_metadata_number(signal, "retest_quality_score"),
+        "delta_expansion_score": _trade_plan_metadata_number(signal, "delta_expansion_score"),
+        "oi_expansion_score": _trade_plan_metadata_number(signal, "oi_expansion_score"),
+        "volume_acceptance_score": _trade_plan_metadata_number(signal, "volume_acceptance_score"),
+        "failed_breakout_invalidation": _trade_plan_metadata_bool(signal, "failed_breakout_invalidation"),
+        "retest_required": retest_required,
+        "entry_model": _trade_plan_entry_model(signal),
+        "entry_source": _trade_plan_metadata_string(signal, "entry_source"),
+        "alpha_context_used": _trade_plan_metadata_bool(signal, "alpha_context_used"),
+        "missing_alpha_sources": _trade_plan_metadata_list(signal, "missing_alpha_sources"),
+        "accepted_breakout_min_score": accepted_min,
+        "fakeout_risk_max_score": fakeout_max,
+    }
+    accepted_ok = accepted_score is None or accepted_score >= accepted_min
+    fakeout_ok = fakeout_score is None or fakeout_score <= fakeout_max
+    classifier_status = "passed" if accepted_ok and fakeout_ok else "warning"
+    classifier_reason = (
+        "Breakout acceptance classifier passed"
+        if classifier_status == "passed"
+        else "Breakout acceptance classifier requires more evidence before immediate entry"
+    )
+    checks = [
+        SignalLayerCheck(
+            name="breakout_acceptance_classifier",
+            status=classifier_status,
+            score=round(float(accepted_score or 0.0), 4),
+            reason=classifier_reason,
+            metadata=metadata,
+        )
+    ]
+    if retest_required:
+        checks.append(
+            SignalLayerCheck(
+                name="retest_required_after_large_breakout",
+                status="warning",
+                score=round(float(fakeout_score or 0.0), 4),
+                reason=(
+                    "Retest required after large or fakeout-prone breakout; "
+                    "immediate breakout entry is not actionable"
+                ),
+                metadata={
+                    **metadata,
+                    "reason_code": "retest_required_after_large_breakout",
+                    "source": "setup",
+                    "scope": "discovery",
+                },
+            )
+        )
+    return checks
+
+
 def _trade_plan_metadata_number(signal: StrategySignal, key: str) -> float | None:
     if signal.trade_plan is None:
         return None
-    metadata_sources = [signal.trade_plan.entry.metadata, signal.trade_plan.metadata]
-    if signal.trade_plan.invalidation is not None:
-        metadata_sources.append(signal.trade_plan.invalidation.metadata)
-    for metadata in metadata_sources:
+    for metadata in _trade_plan_metadata_sources(signal):
         value = _number_or_none(metadata.get(key))
         if value is not None:
             return value
     return None
+
+
+def _trade_plan_metadata_bool(signal: StrategySignal, key: str) -> bool | None:
+    for metadata in _trade_plan_metadata_sources(signal):
+        value = metadata.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+    return None
+
+
+def _trade_plan_metadata_list(signal: StrategySignal, key: str) -> list[Any]:
+    for metadata in _trade_plan_metadata_sources(signal):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            return list(value)
+    return []
+
+
+def _trade_plan_metadata_string(signal: StrategySignal, key: str) -> str | None:
+    for metadata in _trade_plan_metadata_sources(signal):
+        value = metadata.get(key)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _trade_plan_metadata_sources(signal: StrategySignal) -> list[dict[str, Any]]:
+    if signal.trade_plan is None:
+        return []
+    metadata_sources = [
+        signal.trade_plan.entry.metadata,
+        signal.trade_plan.metadata,
+        signal.trade_plan.risk_rules.metadata,
+    ]
+    if signal.trade_plan.invalidation is not None:
+        metadata_sources.append(signal.trade_plan.invalidation.metadata)
+    return metadata_sources
 
 
 def _liquidity_sweep_range_targets(signal: StrategySignal) -> tuple[float | None, float | None]:

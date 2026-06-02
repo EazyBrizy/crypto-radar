@@ -235,6 +235,26 @@ Runtime implementation notes:
 - Signal metadata exposes both entries:
   aggressive entry at breakout close, and conservative retest zone around the
   Donchian breakout/breakdown level.
+- AUD-08 classifies accepted breakouts separately from liquidity raids/fakeouts.
+  Accepted breakout evidence includes close outside the compression range,
+  close position near the breakout side, candle body quality, volume/VWAP
+  acceptance, ATR expansion, optional delta expansion, optional OI expansion,
+  and hold/retest quality around the broken level.
+- Fakeout risk evidence includes wick-through-and-close-back-inside behavior,
+  missing or weak delta/OI confirmation when available or required, low volume
+  acceptance, a large candle into liquidity without hold, crowded funding/OI
+  pressure against continuation, sweep-through-book without acceptance, and
+  failure to hold the broken level on the next evaluation.
+- `require_delta_expansion` and `require_oi_expansion` are optional params and
+  default to false. If they are enabled, the strategy waits for confirmation
+  instead of silently treating missing alpha data as zero-quality evidence.
+- Large or fakeout-prone breakouts can set `retest_required=true`, keep the
+  signal non-actionable, use `entry_model=conservative_retest`, and mark the
+  executable entry source as `breakout_retest` or `conservative_breakout`.
+- Breakout invalidation includes close back inside the range, loss of the
+  breakout level, failed retest acceptance back inside the old range, and
+  delta/OI reversal when that context is available, while preserving the
+  legacy hard stop.
 - User-tunable params live in `user_strategy_configs.params`; no extra DB
   columns are required for this MVP.
 
@@ -514,6 +534,11 @@ Required confirmations:
 - Volume spike.
 - Close in directional candle area.
 - ATR expansion or configured volatility confirmation.
+- Accepted breakout score above `accepted_breakout_min_score`.
+- Fakeout risk score below `fakeout_risk_max_score`, unless the setup is kept
+  as a conservative retest candidate.
+- Optional delta/OI expansion when `require_delta_expansion` or
+  `require_oi_expansion` is enabled.
 - RR measured and annotated; failed RR affects execution eligibility only in
   the active guard mode.
 

@@ -67,6 +67,7 @@ class SignalDecisionService:
             candle_state=candle_state,
             confirmation=confirmation,
         )
+        snapshot = self.merge_setup_confirmation(snapshot, confirmation)
         return self._finalize_snapshot(snapshot)
 
     def merge_market_quality(
@@ -272,6 +273,36 @@ class SignalDecisionService:
         if blocked:
             return self._finalize_snapshot(_snapshot_with_reasons(snapshot, blockers=[decision_reason]))
         return self._finalize_snapshot(_snapshot_with_reasons(snapshot, warnings=[decision_reason]))
+
+    def merge_setup_confirmation(
+        self,
+        snapshot: SignalDecisionSnapshot,
+        confirmation: SignalConfirmationSnapshot,
+    ) -> SignalDecisionSnapshot:
+        setup_check_names = {
+            "breakout_acceptance_classifier",
+            "retest_required_after_large_breakout",
+        }
+        blockers: list[DecisionReason] = []
+        warnings: list[DecisionReason] = []
+        for check in confirmation.checks:
+            if check.name not in setup_check_names or check.status not in {"warning", "failed"}:
+                continue
+            metadata = dict(check.metadata)
+            scope = _scope_from_context(str(metadata.get("scope") or "discovery"))
+            reason = DecisionReason(
+                code=str(metadata.get("reason_code") or check.name),
+                message=check.reason or check.name.replace("_", " "),
+                source="setup",
+                severity="blocker" if check.status == "failed" else "warning",
+                scope=scope,
+                metadata=metadata,
+            )
+            if check.status == "failed":
+                blockers.append(reason)
+            else:
+                warnings.append(reason)
+        return self._finalize_snapshot(_snapshot_with_reasons(snapshot, blockers=blockers, warnings=warnings))
 
     def merge_risk_decision(
         self,

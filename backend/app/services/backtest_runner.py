@@ -6,7 +6,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Awaitable, Mapping, Sequence, TypeVar
+from typing import Any, Awaitable, Callable, Mapping, Sequence, TypeVar
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
 
 from app.schemas.backtest import BacktestResultResponse, BacktestRunRequest, BacktestRunResult
@@ -85,6 +85,17 @@ _LIQUIDITY_SWEEP_THRESHOLD_PARAM_KEYS = {
     "min_absorption_score",
     "min_cvd_divergence_score",
     "min_target_distance_r",
+}
+
+_BREAKOUT_EXPERIMENT_PARAM_KEYS = {
+    "allow_aggressive_entry",
+    "require_retest_after_large_candle",
+    "require_delta_expansion",
+    "require_oi_expansion",
+    "min_delta_expansion_score",
+    "min_oi_expansion_score",
+    "accepted_breakout_min_score",
+    "fakeout_risk_max_score",
 }
 
 _STOP_REASONS = {"stop_loss", "breakeven_stop", "trailing_stop"}
@@ -660,6 +671,9 @@ def _assumptions_for_backtest(
     threshold_params = _liquidity_sweep_threshold_params(request)
     if threshold_params:
         values.setdefault("liquidity_sweep_threshold_experiment_params", threshold_params)
+    breakout_params = _breakout_experiment_params(request)
+    if breakout_params:
+        values.setdefault("breakout_classifier_experiment_params", breakout_params)
     if mode == "discovery":
         values.setdefault("risk_gate_enabled", False)
         values.setdefault("rr_hard_gate_enabled", False)
@@ -708,6 +722,19 @@ def _liquidity_sweep_threshold_params(request: BacktestRunRequest) -> dict[str, 
     nested = dict(_mapping_param(request.params.get("strategy_params")))
     result: dict[str, Any] = {}
     for key in _LIQUIDITY_SWEEP_THRESHOLD_PARAM_KEYS:
+        if key in request.params:
+            result[key] = request.params[key]
+        elif key in nested:
+            result[key] = nested[key]
+    return result
+
+
+def _breakout_experiment_params(request: BacktestRunRequest) -> dict[str, Any]:
+    if _resolve_strategy_code(request.strategy_code) != "volatility_squeeze_breakout":
+        return {}
+    nested = dict(_mapping_param(request.params.get("strategy_params")))
+    result: dict[str, Any] = {}
+    for key in _BREAKOUT_EXPERIMENT_PARAM_KEYS:
         if key in request.params:
             result[key] = request.params[key]
         elif key in nested:
@@ -827,6 +854,9 @@ def _simulated_trade_from_position(
             "backtest",
             "candle_state=closed",
             "alpha_context_available=false",
+            f"entry_model={_entry_model_key(position)}",
+            f"accepted_breakout_score_bucket={_classifier_score_bucket_from_position(position, 'accepted_breakout_score')}",
+            f"fakeout_risk_score_bucket={_classifier_score_bucket_from_position(position, 'fakeout_risk_score')}",
         ],
         created_at=trade.closed_at or trade.opened_at,
     )
@@ -1241,6 +1271,15 @@ def _metrics_from_state(state: _BacktestState) -> dict[str, Any]:
         else 0.0,
         "by_strategy": _group_metrics(positions, "strategy"),
         "by_regime": _group_metrics(positions, "regime"),
+        "by_entry_model": _group_metrics_by_key(positions, _entry_model_key),
+        "by_accepted_breakout_score_bucket": _group_metrics_by_key(
+            positions,
+            lambda position: _classifier_score_bucket_from_position(position, "accepted_breakout_score"),
+        ),
+        "by_fakeout_risk_score_bucket": _group_metrics_by_key(
+            positions,
+            lambda position: _classifier_score_bucket_from_position(position, "fakeout_risk_score"),
+        ),
         "signals_seen": state.signals_seen,
         "risk_rejections": state.risk_rejections,
         "execution_rejections": state.execution_rejections,
@@ -1249,9 +1288,16 @@ def _metrics_from_state(state: _BacktestState) -> dict[str, Any]:
 
 
 def _group_metrics(positions: Sequence[_SimulatedPosition], attribute: str) -> dict[str, dict[str, Any]]:
+    return _group_metrics_by_key(positions, lambda position: str(getattr(position, attribute)))
+
+
+def _group_metrics_by_key(
+    positions: Sequence[_SimulatedPosition],
+    key_func: Callable[[_SimulatedPosition], str],
+) -> dict[str, dict[str, Any]]:
     groups: dict[str, list[_SimulatedPosition]] = {}
     for position in positions:
-        groups.setdefault(str(getattr(position, attribute)), []).append(position)
+        groups.setdefault(str(key_func(position)), []).append(position)
     result: dict[str, dict[str, Any]] = {}
     for key, group in groups.items():
         rs = [_realized_r(position) for position in group]
@@ -1265,6 +1311,51 @@ def _group_metrics(positions: Sequence[_SimulatedPosition], attribute: str) -> d
             "pnl": sum(_net_pnl(position) for position in group),
         }
     return result
+
+
+def _entry_model_key(position: _SimulatedPosition) -> str:
+    value = _trade_plan_metadata_value(position.signal, "entry_model")
+    if value is not None:
+        return str(value)
+    trade_plan = position.signal.trade_plan
+    if trade_plan is not None and trade_plan.entry.source:
+        return trade_plan.entry.source
+    return "unknown"
+
+
+def _classifier_score_bucket_from_position(position: _SimulatedPosition, key: str) -> str:
+    return _classifier_score_bucket(_trade_plan_metadata_value(position.signal, key))
+
+
+def _classifier_score_bucket(value: Any) -> str:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if score < 0.25:
+        return "0.00-0.24"
+    if score < 0.50:
+        return "0.25-0.49"
+    if score < 0.75:
+        return "0.50-0.74"
+    return "0.75-1.00"
+
+
+def _trade_plan_metadata_value(signal: RadarSignal, key: str) -> Any:
+    trade_plan = signal.trade_plan
+    if trade_plan is None:
+        return None
+    metadata_sources = [
+        trade_plan.entry.metadata,
+        trade_plan.metadata,
+        trade_plan.risk_rules.metadata,
+    ]
+    if trade_plan.invalidation is not None:
+        metadata_sources.append(trade_plan.invalidation.metadata)
+    for metadata in metadata_sources:
+        if key in metadata:
+            return metadata[key]
+    return None
 
 
 def _target_hit_rate(positions: Sequence[_SimulatedPosition], label: str) -> float:

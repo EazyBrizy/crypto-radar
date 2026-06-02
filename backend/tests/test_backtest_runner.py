@@ -93,6 +93,43 @@ class AlphaRecordingStrategyEngine:
         return []
 
 
+class BreakoutClassifierStrategyEngine:
+    def __init__(self, trigger_timestamp: int) -> None:
+        self.trigger_timestamp = trigger_timestamp
+
+    async def generate_signals(self, features: Features, **_: object):
+        if features.timestamp != self.trigger_timestamp:
+            return []
+        signal = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            reasons=["synthetic accepted breakout"],
+            score=90,
+            entry=features.close,
+            stop_loss=features.close - 1.0,
+            take_profit_1=features.close + 1.0,
+            take_profit_2=features.close + 2.0,
+        )
+        assert signal.trade_plan is not None
+        entry = signal.trade_plan.entry.model_copy(
+            update={"metadata": {"entry_model": "aggressive_breakout"}}
+        )
+        trade_plan = signal.trade_plan.model_copy(
+            update={
+                "entry": entry,
+                "metadata": {
+                    **signal.trade_plan.metadata,
+                    "entry_model": "aggressive_breakout",
+                    "accepted_breakout_score": 0.82,
+                    "fakeout_risk_score": 0.18,
+                },
+            },
+            deep=True,
+        )
+        return [signal.model_copy(update={"status": "actionable", "trade_plan": trade_plan})]
+
+
 class BacktestRunnerTest(unittest.TestCase):
     def test_runner_creates_trade_and_computes_cost_aware_metrics(self) -> None:
         candles = _candles()
@@ -211,6 +248,42 @@ class BacktestRunnerTest(unittest.TestCase):
                 "min_target_distance_r": 1.25,
             },
         )
+
+    def test_backtest_records_breakout_classifier_experiments_and_groups(self) -> None:
+        candles = _candles()
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "accepted_breakout_min_score": 0.60,
+                    "fakeout_risk_max_score": 0.45,
+                    "require_oi_expansion": True,
+                }
+            }
+        )
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=BreakoutClassifierStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(request)
+
+        self.assertEqual(
+            result.assumptions["breakout_classifier_experiment_params"],
+            {
+                "accepted_breakout_min_score": 0.60,
+                "fakeout_risk_max_score": 0.45,
+                "require_oi_expansion": True,
+            },
+        )
+        assert result.run_result.result is not None
+        metrics = result.run_result.result.metrics
+        self.assertIn("aggressive_breakout", metrics["by_entry_model"])
+        self.assertIn("0.75-1.00", metrics["by_accepted_breakout_score_bucket"])
+        self.assertIn("0.00-0.24", metrics["by_fakeout_risk_score_bucket"])
+        self.assertIn("entry_model=aggressive_breakout", result.trades[0].tags)
+        self.assertIn("accepted_breakout_score_bucket=0.75-1.00", result.trades[0].tags)
 
     def test_no_data_returns_explicit_error(self) -> None:
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)

@@ -438,19 +438,41 @@ def _squeeze_breakout_conditions(
         breakout_level = _number(metadata.get("breakout_level"), metadata.get("range_high"), features.donchian_high_20)
         if breakout_level is not None and features.close < breakout_level:
             triggered.append("Close returns inside the previous Donchian range")
+        if breakout_level is not None and features.close <= breakout_level:
+            triggered.append("Loss of breakout level")
+        if (
+            breakout_level is not None
+            and _metadata_bool(metadata, "retest_required")
+            and features.low <= breakout_level
+            and features.close < breakout_level
+        ):
+            triggered.append("Failed retest accepts price back inside the previous range")
         if signal_open is not None and features.close <= signal_open:
             triggered.append("Breakout candle is fully retraced")
         if features.volume_spike < volume_threshold and features.close <= features.open:
             triggered.append("Volume disappears after breakout")
+        if features.oi_change is not None and features.oi_change < 0:
+            triggered.append("Delta/OI reversal against continuation when available")
         return triggered
 
     breakdown_level = _number(metadata.get("breakout_level"), metadata.get("range_low"), features.donchian_low_20)
     if breakdown_level is not None and features.close > breakdown_level:
         triggered.append("Close returns inside the previous Donchian range")
+    if breakdown_level is not None and features.close >= breakdown_level:
+        triggered.append("Loss of breakout level")
+    if (
+        breakdown_level is not None
+        and _metadata_bool(metadata, "retest_required")
+        and features.high >= breakdown_level
+        and features.close > breakdown_level
+    ):
+        triggered.append("Failed retest accepts price back inside the previous range")
     if signal_open is not None and features.close >= signal_open:
         triggered.append("Breakdown candle is fully retraced")
     if features.volume_spike < volume_threshold and features.close >= features.open:
         triggered.append("Volume disappears after breakdown")
+    if features.oi_change is not None and features.oi_change < 0:
+        triggered.append("Delta/OI reversal against continuation when available")
     return triggered
 
 
@@ -540,6 +562,15 @@ def _number(*values: Any) -> float | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _metadata_bool(metadata: dict[str, Any], key: str) -> bool:
+    value = metadata.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _alert_fingerprint(alert: TradeInvalidationAlert) -> str:

@@ -94,6 +94,12 @@ DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
         "oi_expansion_threshold": 0.01,
         "oi_expansion_bonus": 5,
         "oi_no_expansion_penalty": 10,
+        "require_delta_expansion": False,
+        "require_oi_expansion": False,
+        "min_delta_expansion_score": 0.45,
+        "min_oi_expansion_score": 0.45,
+        "accepted_breakout_min_score": 0.55,
+        "fakeout_risk_max_score": 0.55,
     },
     "liquidity_sweep_reversal": {
         "min_sweep_wick_ratio": 0.45,

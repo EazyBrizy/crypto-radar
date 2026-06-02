@@ -1283,7 +1283,143 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].status, "wait_for_pullback")
         self.assertIn("conservative retest", candidates[0].status_reason or "")
-        self.assertEqual(candidates[0].trade_plan.entry.source if candidates[0].trade_plan else None, "conservative_retest")
+        self.assertEqual(candidates[0].trade_plan.entry.source if candidates[0].trade_plan else None, "breakout_retest")
+        self.assertTrue(candidates[0].trade_plan.metadata.get("retest_required") if candidates[0].trade_plan else False)
+
+        signal = StrategySignalPipeline().finalize(
+            candidates[0],
+            StrategyEvaluationContext(signal_features=features, context_features=_bullish_context_features()),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "wait_for_pullback")
+        self.assertTrue(
+            any(
+                reason.code == "retest_required_after_large_breakout"
+                for reason in (signal.decision.warnings if signal and signal.decision else [])
+            )
+        )
+
+    async def test_breakout_accepted_with_hold_delta_and_oi_is_actionable(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "open": 101.0,
+                "high": 101.6,
+                "low": 100.9,
+                "close": 101.4,
+                "price": 101.4,
+                "previous_close": 101.0,
+                "volume_spike": 2.0,
+                "oi_change": 0.02,
+            }
+        )
+        alpha_context = _breakout_alpha_context(features)
+
+        candidates = await VolatilitySqueezeBreakoutStrategy().evaluate(
+            features,
+            {
+                "alpha_context": alpha_context,
+                "require_delta_expansion": True,
+                "require_oi_expansion": True,
+            },
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].status, "actionable")
+        metadata = candidates[0].trade_plan.metadata if candidates[0].trade_plan else {}
+        self.assertTrue(metadata.get("alpha_context_used"))
+        self.assertGreater(metadata.get("accepted_breakout_score") or 0.0, 0.75)
+        self.assertLess(metadata.get("fakeout_risk_score") or 1.0, 0.25)
+
+        signal = StrategySignalPipeline().finalize(
+            candidates[0],
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                alpha_context=alpha_context,
+                strategy_params={
+                    "alpha_context": alpha_context,
+                    "require_delta_expansion": True,
+                    "require_oi_expansion": True,
+                },
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status, "actionable")
+        self.assertEqual(signal.trade_plan.entry.metadata.get("entry_model") if signal and signal.trade_plan else None, "aggressive_breakout")
+
+    async def test_breakout_wick_close_back_inside_is_high_fakeout_not_actionable(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "open": 100.4,
+                "high": 101.2,
+                "low": 100.0,
+                "close": 100.8,
+                "price": 100.8,
+                "upper_wick_ratio": 0.30,
+                "volume_spike": 1.8,
+            }
+        )
+
+        candidates = await VolatilitySqueezeBreakoutStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertNotEqual(candidates[0].status, "actionable")
+        metadata = candidates[0].trade_plan.metadata if candidates[0].trade_plan else {}
+        self.assertGreaterEqual(metadata.get("fakeout_risk_score") or 0.0, 0.55)
+        self.assertTrue(metadata.get("retest_required"))
+
+        signal = StrategySignalPipeline().finalize(
+            candidates[0],
+            StrategyEvaluationContext(signal_features=features, context_features=_bullish_context_features()),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertNotEqual(signal.status, "actionable")
+
+    async def test_breakout_missing_alpha_context_records_warning_metadata(self) -> None:
+        features = _breakout_features()
+
+        candidates = await VolatilitySqueezeBreakoutStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        metadata = candidates[0].trade_plan.metadata if candidates[0].trade_plan else {}
+        self.assertFalse(metadata.get("alpha_context_used"))
+        self.assertIn("alpha_context", metadata.get("missing_alpha_sources") or [])
+        self.assertIn("AlphaMarketContext is unavailable", " ".join(candidates[0].risks))
+
+    async def test_breakout_trade_plan_invalidation_includes_failed_breakout_structure(self) -> None:
+        features = _breakout_features()
+        candidates = await VolatilitySqueezeBreakoutStrategy().evaluate(features)
+
+        signal = StrategySignalPipeline().finalize(
+            candidates[0],
+            StrategyEvaluationContext(signal_features=features, context_features=_bullish_context_features()),
+        )
+
+        self.assertIsNotNone(signal)
+        conditions = signal.trade_plan.invalidation.conditions if signal and signal.trade_plan and signal.trade_plan.invalidation else []
+        self.assertIn("Close returns inside the previous Donchian range", conditions)
+        self.assertIn("Failed retest accepts price back inside the previous range", conditions)
+        self.assertIn("Loss of breakout level", conditions)
+        self.assertIn("Delta/OI reversal against continuation when available", conditions)
+
+    async def test_breakout_aggressive_vs_conservative_params_change_entry_model(self) -> None:
+        features = _breakout_features()
+
+        aggressive = await VolatilitySqueezeBreakoutStrategy().evaluate(
+            features,
+            {"allow_aggressive_entry": True},
+        )
+        conservative = await VolatilitySqueezeBreakoutStrategy().evaluate(
+            features,
+            {"allow_aggressive_entry": False},
+        )
+
+        self.assertEqual(aggressive[0].trade_plan.entry.metadata.get("entry_model") if aggressive[0].trade_plan else None, "aggressive_breakout")
+        self.assertEqual(conservative[0].trade_plan.entry.metadata.get("entry_model") if conservative[0].trade_plan else None, "conservative_retest")
+        self.assertEqual(conservative[0].trade_plan.entry.source if conservative[0].trade_plan else None, "conservative_breakout")
 
     async def test_squeeze_settings_can_raise_volume_confirmation_threshold(self) -> None:
         features = _breakout_features()
@@ -2052,6 +2188,26 @@ def _quality_candidate(features: Features):
         stop_loss=features.close - 1.0,
         take_profit_1=features.close + 2.0,
         take_profit_2=features.close + 3.0,
+    )
+
+
+def _breakout_alpha_context(features: Features) -> AlphaMarketContext:
+    return AlphaMarketContext(
+        symbol=features.symbol,
+        timeframe=features.timeframe,
+        timestamp=features.timestamp,
+        buy_volume=140.0,
+        sell_volume=60.0,
+        aggressive_delta=80.0,
+        cvd=80.0,
+        cvd_change=40.0,
+        oi_delta_5m=0.02,
+        oi_delta_15m=0.03,
+        funding_rate=0.0002,
+        funding_pressure=0.1,
+        sweep_through_book=False,
+        vwap_acceptance="above_vwap",
+        data_quality={"available_sources": ["recent_trades", "derivative_snapshot"], "missing_sources": []},
     )
 
 

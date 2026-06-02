@@ -875,6 +875,12 @@ Strategy runtime params include:
 - `volatility_squeeze_breakout.oi_expansion_threshold`
 - `volatility_squeeze_breakout.oi_expansion_bonus`
 - `volatility_squeeze_breakout.oi_no_expansion_penalty`
+- `volatility_squeeze_breakout.require_delta_expansion`
+- `volatility_squeeze_breakout.require_oi_expansion`
+- `volatility_squeeze_breakout.min_delta_expansion_score`
+- `volatility_squeeze_breakout.min_oi_expansion_score`
+- `volatility_squeeze_breakout.accepted_breakout_min_score`
+- `volatility_squeeze_breakout.fakeout_risk_max_score`
 - `liquidity_sweep_reversal.require_reclaim`
 - `liquidity_sweep_reversal.require_absorption`
 - `liquidity_sweep_reversal.min_absorption_score`
@@ -1041,6 +1047,71 @@ provided, `alpha_context_used=false` and `missing_alpha_sources` includes
 context. Backtests without historical alpha data continue to expose
 `alpha_context_available=false` and do not synthesize CVD, L2, derivative, or
 liquidation values.
+
+## Volatility Squeeze Breakout AUD-08 Additive Metadata
+
+`volatility_squeeze_breakout` keeps the existing `StrategySignal` and
+`TradePlan` schemas. AUD-08 adds strategy/trade-plan metadata for classifying
+accepted breakouts versus liquidity raids/fakeouts.
+
+The strategy may write these additive metadata keys to `TradePlan.metadata`,
+`TradePlan.entry.metadata`, `TradePlan.risk_rules.metadata`, and
+`TradePlan.invalidation.metadata`:
+
+```python
+BreakoutAcceptanceMetadata = {
+    "accepted_breakout_score": float,      # 0..1
+    "fakeout_risk_score": float,           # 0..1
+    "post_breakout_hold_score": float,     # 0..1
+    "retest_quality_score": float,         # 0..1
+    "delta_expansion_score": float,        # 0..1
+    "oi_expansion_score": float,           # 0..1
+    "volume_acceptance_score": float,      # 0..1
+    "failed_breakout_invalidation": bool,
+    "retest_required": bool,
+    "alpha_context_used": bool,
+    "missing_alpha_sources": list[str],
+}
+```
+
+`entry_model` remains backward-compatible and records
+`aggressive_breakout` or `conservative_retest`. `TradePlan.entry.source` may
+identify the executable source more specifically as `aggressive_breakout`,
+`breakout_retest`, or `conservative_breakout`.
+
+Accepted breakout scoring uses candle close outside the compression range,
+directional close location, body quality, volume/VWAP acceptance, ATR
+expansion, optional delta expansion, optional OI expansion, and hold/retest
+quality around the broken level. Missing alpha context is never silently filled:
+`alpha_context_used=false` and `missing_alpha_sources` includes
+`alpha_context` when no `AlphaMarketContext` is supplied.
+
+Fakeout risk scoring uses wick-through-and-close-back-inside behavior, failed
+hold on the next evaluation, missing or weak delta/OI confirmation when
+available or required, low volume/VWAP acceptance, large candle without hold,
+crowded funding/OI pressure, and sweep-through-book without acceptance when
+available.
+
+Optional confirmation params are disabled by default and must not become
+hardcoded mandatory gates:
+
+- `require_delta_expansion: bool = false`
+- `require_oi_expansion: bool = false`
+- `min_delta_expansion_score`
+- `min_oi_expansion_score`
+- `accepted_breakout_min_score`
+- `fakeout_risk_max_score`
+- `require_retest_after_large_candle`
+
+When a large or fakeout-prone breakout requires a conservative retest, the
+pipeline emits a setup warning with
+`code="retest_required_after_large_breakout"`, `source="setup"`, and
+`scope="discovery"` unless a stricter scope is explicitly configured.
+
+Breakout invalidation remains backward compatible with the legacy hard stop,
+but the structural invalidation thesis must include close back inside the
+range, loss of the breakout level, failed retest back inside the old range, and
+delta/OI reversal against continuation when that data is available.
 
 Risk gate consumes `RiskContext.trade_plan` when it is present. Take-profit
 precedence is:

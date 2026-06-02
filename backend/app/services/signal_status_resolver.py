@@ -100,6 +100,13 @@ class SignalStatusResolver:
         if overextension_reason is not None:
             return ("wait_for_pullback", overextension_reason)
 
+        retest_reason = _retest_required_status_reason(confirmation)
+        if retest_reason is not None:
+            return ("wait_for_pullback", retest_reason)
+
+        if signal.status == "wait_for_pullback":
+            return ("wait_for_pullback", signal.status_reason or "Strategy requires pullback/retest before entry")
+
         if signal.status == "watchlist":
             return ("watchlist", signal.status_reason or "Strategy conditions are forming")
 
@@ -241,6 +248,13 @@ def _overextension_status_reason(confirmation: SignalConfirmationSnapshot) -> st
     for check in confirmation.checks:
         if check.name == "overextension_guard" and check.status in {"warning", "failed"}:
             return check.reason or "Entry candle is overextended; wait for pullback"
+    return None
+
+
+def _retest_required_status_reason(confirmation: SignalConfirmationSnapshot) -> str | None:
+    for check in confirmation.checks:
+        if check.name == "retest_required_after_large_breakout" and check.status in {"warning", "failed"}:
+            return check.reason or "Retest required before immediate breakout entry"
     return None
 
 

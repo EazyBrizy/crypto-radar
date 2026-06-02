@@ -28,6 +28,7 @@ from app.services.risk_reward_assessment import (
     RiskRewardAssessmentService,
     risk_reward_metadata,
 )
+from app.services.risk_reward_plan import risk_reward_plan_service
 from app.services.signal_status_resolver import SignalStatusResolver
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.services.target_resolver import TargetResolverService
@@ -2655,25 +2656,13 @@ def _number_or_none(value: Any) -> float | None:
 
 def _target_rr(signal: StrategySignal, target: float | None) -> float | None:
     entry = _entry_price(signal)
-    stop = signal.stop_loss
-    if entry is None or stop is None or target is None:
-        return None
-    risk = abs(entry - stop)
-    if risk <= 0:
-        return None
-    reward = _target_reward(signal, target, entry)
-    if reward <= 0:
-        return None
-    return round(reward / risk, 4)
-
-
-def _target_reward(signal: StrategySignal, target: float, entry: float | None = None) -> float:
-    entry = _entry_price(signal) if entry is None else entry
-    if entry is None:
-        return 0.0
-    if signal.direction.lower() == "long":
-        return target - entry
-    return entry - target
+    calculation = risk_reward_plan_service.calculate_rr(
+        entry,
+        signal.stop_loss,
+        target,
+        signal.direction,
+    )
+    return calculation.rr_value
 
 
 def _trade_plan_with_risk_reward_metadata(

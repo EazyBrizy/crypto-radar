@@ -5,6 +5,7 @@ from typing import Any, List, Literal, Mapping, Optional
 
 from app.schemas.market import AlphaMarketContext, Features, LiquidityPoolFeatures
 from app.schemas.signal import SignalScoreBreakdown, StrategySignal
+from app.services.risk_reward_plan import risk_reward_plan_service
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.common import build_signal, has_minimum_market_data, score_breakdown
 
@@ -1382,10 +1383,13 @@ def _target_distance_r(
 ) -> float | None:
     if risk <= 0:
         return None
-    reward = _target_reward(direction, entry, target)
-    if reward <= 0:
-        return None
-    return reward / risk
+    synthetic_stop = entry - risk if direction == "LONG" else entry + risk
+    return risk_reward_plan_service.calculate_rr(
+        entry,
+        synthetic_stop,
+        target,
+        direction,
+    ).rr_value
 
 
 def _cluster_price(cluster: Mapping[str, Any]) -> float | None:

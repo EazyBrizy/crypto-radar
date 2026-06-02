@@ -5,6 +5,7 @@ from typing import Any, List, Literal, Mapping, Optional
 
 from app.schemas.market import AlphaMarketContext, Features, LiquidityPoolFeatures
 from app.schemas.signal import SignalScoreBreakdown, StrategySignal
+from app.services.risk_reward_plan import risk_reward_plan_service
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.common import build_signal, has_minimum_market_data, score_breakdown
 
@@ -1675,11 +1676,18 @@ def _htf_target_assessment(
     if not directional:
         return HtfTargetAssessment(None, None, None, False, min_distance)
     source, price = directional[0]
-    distance_r = _target_reward(direction, entry, price) / risk
+    distance_r = risk_reward_plan_service.calculate_rr(
+        entry,
+        stop_loss,
+        price,
+        direction,
+    ).rr_value
+    if distance_r is None:
+        return HtfTargetAssessment(None, None, None, False, min_distance)
     return HtfTargetAssessment(
         price=price,
         source=source,
-        distance_r=round(distance_r, 4),
+        distance_r=distance_r,
         too_close=min_distance > 0 and distance_r < min_distance,
         min_distance_r=min_distance,
     )

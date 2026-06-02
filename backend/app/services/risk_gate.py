@@ -24,6 +24,7 @@ from app.services.risk_management import (
     calculate_trailing_stop_plan,
     position_sizing_for_notional,
 )
+from app.services.risk_reward_plan import risk_reward_plan_service
 from app.services.trade_plan_completeness import TradePlanCompletenessCheck
 
 
@@ -559,15 +560,17 @@ def _manual_take_profit_plan(
     take_profit_price: float,
     side: str,
 ) -> TakeProfitPlan:
-    risk_per_unit = abs(entry_price - stop_loss_price)
-    reward_per_unit = (
-        take_profit_price - entry_price
-        if side == "long"
-        else entry_price - take_profit_price
+    rr_calculation = risk_reward_plan_service.calculate_rr(
+        entry_price,
+        stop_loss_price,
+        take_profit_price,
+        side,
     )
-    r_multiple = reward_per_unit / risk_per_unit if risk_per_unit > 0 else 0.0
-    if r_multiple <= 0:
-        r_multiple = 0.000001
+    risk_per_unit = rr_calculation.risk_per_unit or abs(entry_price - stop_loss_price)
+    r_multiple = rr_calculation.rr_value if rr_calculation.rr_value is not None else 0.000001
+    notes = ["Manual take-profit override is used instead of signal trade_plan targets."]
+    if rr_calculation.rr_value is None:
+        notes.append(f"Manual take-profit override RR calculation reason: {rr_calculation.reason}.")
     return TakeProfitPlan(
         mode="risk_multiple",
         side=side,
@@ -587,7 +590,7 @@ def _manual_take_profit_plan(
         source="manual_override",
         selected_rr=r_multiple,
         selected_rr_target="manual",
-        notes=["Manual take-profit override is used instead of signal trade_plan targets."],
+        notes=notes,
     )
 
 

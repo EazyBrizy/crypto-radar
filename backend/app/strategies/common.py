@@ -3,6 +3,7 @@ from typing import Literal, Optional
 from app.schemas.market import Features
 from app.schemas.signal import SignalScoreBreakdown, StrategySignal
 from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
+from app.services.risk_reward_plan import risk_reward_plan_service
 
 ACTIONABLE_SCORE = 70
 WATCHLIST_SCORE = 60
@@ -36,16 +37,6 @@ def risk_reward_score(risk_reward: float) -> int:
     if risk_reward >= 1:
         return 5
     return 0
-
-
-def _target_reward(
-    direction: Literal["LONG", "SHORT"],
-    entry_price: float,
-    target_price: float,
-) -> float:
-    if direction == "LONG":
-        return target_price - entry_price
-    return entry_price - target_price
 
 
 def score_from_breakdown(breakdown: SignalScoreBreakdown) -> int:
@@ -127,8 +118,10 @@ def build_signal(
             stop_loss = entry_price + atr * 1.5
 
     risk = abs(entry_price - stop_loss)
+    rr_stop_loss = stop_loss
     if risk == 0:
         risk = max(atr, abs(entry_price) * 0.001, 1e-8)
+        rr_stop_loss = entry_price - risk if direction == "LONG" else entry_price + risk
 
     if take_profit_1 is None:
         take_profit_1 = entry_price + risk if direction == "LONG" else entry_price - risk
@@ -144,10 +137,24 @@ def build_signal(
     entry_padding = atr * 0.15
     entry_min = entry_price - entry_padding
     entry_max = entry_price + entry_padding
-    first_reward = max(0.0, _target_reward(direction, entry_price, take_profit_1))
-    final_reward = max(0.0, _target_reward(direction, entry_price, take_profit_2))
-    first_target_rr = first_reward / risk
-    final_target_rr = final_reward / risk
+    first_target_rr = (
+        risk_reward_plan_service.calculate_rr(
+            entry_price,
+            rr_stop_loss,
+            take_profit_1,
+            direction,
+        ).rr_value
+        or 0.0
+    )
+    final_target_rr = (
+        risk_reward_plan_service.calculate_rr(
+            entry_price,
+            rr_stop_loss,
+            take_profit_2,
+            direction,
+        ).rr_value
+        or 0.0
+    )
     risk_reward = final_target_rr
     if scoring is None:
         scoring = legacy_score_breakdown(score or 0)

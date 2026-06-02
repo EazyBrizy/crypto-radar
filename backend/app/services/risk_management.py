@@ -22,6 +22,7 @@ from app.schemas.risk import (
 from app.schemas.signal import SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan, TradePlanTarget
 from app.schemas.user import RRGuardMode, RiskManagementPatch, RiskManagementSettings, RiskProfileName
+from app.services.risk_reward_plan import risk_reward_plan_service
 
 RISK_PROFILE_PRESETS: dict[RiskProfileName, RiskManagementSettings] = {
     "conservative": RiskManagementSettings(
@@ -1058,6 +1059,13 @@ def calculate_take_profit_plan(
             partial_enabled=settings.partial_take_profit_enabled,
         ),
     ]
+    rr_selection = risk_reward_plan_service.select_rr_target(
+        policy="final",
+        entry=entry_price,
+        stop=stop_loss_price,
+        targets=targets,
+        side=side,
+    )
     return TakeProfitPlan(
         mode=settings.take_profit_mode,
         side=side,
@@ -1067,8 +1075,8 @@ def calculate_take_profit_plan(
         partial_take_profit_enabled=settings.partial_take_profit_enabled,
         targets=targets,
         source="risk_settings",
-        selected_rr=targets[-1].r_multiple if targets else None,
-        selected_rr_target="final",
+        selected_rr=rr_selection.rr_value,
+        selected_rr_target=rr_selection.selected_target_key,
     )
 
 
@@ -1137,15 +1145,19 @@ def calculate_take_profit_plan_from_trade_plan(
             continue
 
         total_close_percent += close_percent
-        reward_per_unit = _target_reward_per_unit(
-            entry_price=entry_price,
-            target_price=target.price,
-            side=side,
+        rr_calculation = risk_reward_plan_service.calculate_rr(
+            entry_price,
+            stop_loss_price,
+            target.price,
+            side,
         )
+        if rr_calculation.rr_value is None:
+            errors.append(f"TradePlan target {label} R:R could not be calculated.")
+            continue
         targets.append(
             TakeProfitTarget(
                 label=label,
-                r_multiple=reward_per_unit / risk_per_unit,
+                r_multiple=rr_calculation.rr_value,
                 price=target.price,
                 close_percent=close_percent,
                 action=_trade_plan_take_profit_action(target, label),
@@ -1157,20 +1169,24 @@ def calculate_take_profit_plan_from_trade_plan(
     if not targets:
         errors.append("TradePlan must include at least one executable take-profit target.")
 
-    selected_rr_target = trade_plan.risk_rules.selected_rr_target
-    selected_target = _selected_take_profit_target(
+    requested_rr_target = trade_plan.risk_rules.selected_rr_target or "final"
+    rr_selection = risk_reward_plan_service.select_rr_target(
         targets=targets,
-        selected_rr_target=selected_rr_target,
-        errors=errors,
+        policy=requested_rr_target,
+        entry=entry_price,
+        stop=stop_loss_price,
+        side=side,
     )
+    selected_target = rr_selection.selected_target
+    if selected_target is None or rr_selection.rr_value is None:
+        errors.append(_selected_rr_target_error(requested_rr_target, rr_selection.reason))
     if errors:
         raise TradePlanValidationError(_dedupe(errors))
 
-    resolved_selected_rr_target = selected_rr_target or "final"
     if selected_target is not None:
         notes.append(
-            f"TradePlan selected_rr_target={resolved_selected_rr_target} resolved "
-            f"to {selected_target.label} at {selected_target.r_multiple:.4f}R."
+            f"TradePlan selected_rr_target={rr_selection.selected_target_key} resolved "
+            f"to {selected_target.label} at {rr_selection.rr_value:.4f}R."
         )
     return TakeProfitPlan(
         mode=settings.take_profit_mode,
@@ -1181,8 +1197,8 @@ def calculate_take_profit_plan_from_trade_plan(
         partial_take_profit_enabled=settings.partial_take_profit_enabled,
         targets=targets,
         source="trade_plan",
-        selected_rr=selected_target.r_multiple if selected_target is not None else None,
-        selected_rr_target=resolved_selected_rr_target,
+        selected_rr=rr_selection.rr_value,
+        selected_rr_target=rr_selection.selected_target_key,
         notes=notes,
     )
 
@@ -1940,15 +1956,6 @@ def _target_matches_side(entry_price: float, target_price: float, side: str) -> 
     return target_price < entry_price
 
 
-def _target_reward_per_unit(
-    *,
-    entry_price: float,
-    target_price: float,
-    side: str,
-) -> float:
-    return target_price - entry_price if side == "long" else entry_price - target_price
-
-
 def _trade_plan_close_percent(
     *,
     target: TradePlanTarget,
@@ -1999,33 +2006,15 @@ def _trade_plan_take_profit_action(target: TradePlanTarget, label: str) -> str:
     return "full_close"
 
 
-def _selected_take_profit_target(
-    *,
-    targets: list[TakeProfitTarget],
-    selected_rr_target: str | None,
-    errors: list[str],
-) -> TakeProfitTarget | None:
-    if not targets:
-        return None
-    if selected_rr_target is None:
-        return targets[-1]
-
-    normalized = selected_rr_target.strip().lower().replace("_", " ")
-    if normalized in {"final", "planned final target"}:
-        return targets[-1]
-    if normalized in {"nearest", "first", "nearest target", "nearest valid target"}:
-        return targets[0]
-
+def _selected_rr_target_error(selected_rr_target: str, reason: str) -> str:
     label = selected_rr_target.strip().upper()
-    if label in _TAKE_PROFIT_LABELS:
-        for target in targets:
-            if target.label == label:
-                return target
-        errors.append(f"TradePlan selected_rr_target {selected_rr_target!r} has no executable target.")
-        return None
-
-    errors.append(f"TradePlan selected_rr_target {selected_rr_target!r} is not supported.")
-    return None
+    if reason == "selected_target_not_found" and label in _TAKE_PROFIT_LABELS:
+        return f"TradePlan selected_rr_target {selected_rr_target!r} has no executable target."
+    if reason == "selected_target_not_found":
+        return f"TradePlan selected_rr_target {selected_rr_target!r} is not supported."
+    if reason == "no_planned_target_beyond_entry":
+        return "TradePlan selected_rr_target has no target beyond entry."
+    return f"TradePlan selected_rr_target {selected_rr_target!r} could not be resolved."
 
 
 def _dedupe(values: list[str]) -> list[str]:

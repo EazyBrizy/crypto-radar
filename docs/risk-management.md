@@ -320,6 +320,13 @@ now attached to virtual execution previews and opened virtual trades.
 risk budget. If `size_usd` would risk more than the backend-calculated limit,
 the decision is `failed` with `Risk per trade exceeds the adjusted risk limit.`
 
+RR target basis is centralized in `RiskRewardPlanService`. Pipeline RR
+assessment and RiskGate RR checks both select the policy target from TradePlan
+with the same `nearest` / `final` rules and then calculate RR from actual
+entry, stop, selected target, and side. Legacy `take_profit_1` /
+`take_profit_2` values are supported only through the TradePlan adapter before
+RR calculation.
+
 Base formula:
 
 ```text

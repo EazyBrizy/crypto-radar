@@ -525,7 +525,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(measured_targets), 1)
         self.assertAlmostEqual(measured_targets[0].price or 0, 105.4)
         self.assertAlmostEqual(signal.first_target_rr or 0, 1.5)
-        self.assertAlmostEqual(signal.final_target_rr or 0, 2.5)
+        self.assertAlmostEqual(signal.final_target_rr or 0, 3.0)
         self.assertEqual(signal.regime.context_timeframe if signal.regime else None, "1h")
         self.assertEqual(signal.regime.alignment if signal.regime else None, "aligned")
         self.assertTrue(signal.explanation[0].startswith("Status:"))

@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from app.schemas.signal import StrategySignal
+from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
 from app.services.risk_management import resolve_rr_guard_mode
+from app.services.risk_reward_plan import RiskRewardPlanResult, risk_reward_plan_service
 
 
 DEFAULT_MIN_RR_RATIO = 2.0
@@ -55,10 +57,16 @@ class RiskRewardAssessmentService:
             strategy=signal.strategy,
             strategy_risk_settings=params,
         )
+        rr_target = _rr_target_key(params, signal.strategy)
+        rr_plan = risk_reward_plan_service.select_rr_target(
+            _trade_plan_for_signal(signal),
+            rr_target,
+            side=signal.direction,
+        )
         if min_rr <= 0:
             return RiskRewardAssessment(
                 passed=True,
-                rr=signal.risk_reward,
+                rr=rr_plan.rr_value if rr_plan.rr_value is not None else signal.risk_reward,
                 min_rr=min_rr,
                 guard_mode=guard_mode,
                 status="skipped",
@@ -69,24 +77,19 @@ class RiskRewardAssessmentService:
                 block_reason=None,
                 target_key="disabled",
                 target_label="disabled",
-                first_target_rr=_target_rr(signal, signal.take_profit_1),
-                final_target_rr=_target_rr(signal, signal.take_profit_2 or signal.take_profit_1),
+                first_target_rr=rr_plan.first_target_rr,
+                final_target_rr=rr_plan.final_target_rr,
                 reason="Risk/reward guard is disabled for this strategy",
             )
 
-        first_target_rr = _target_rr(signal, signal.take_profit_1)
-        final_target_rr = _target_rr(signal, signal.take_profit_2 or signal.take_profit_1)
-        rr_target = _rr_target_key(params, signal.strategy)
-        if rr_target == "nearest":
-            selected_rr = first_target_rr if first_target_rr is not None else final_target_rr
-            target_label = "nearest target" if first_target_rr is not None else "nearest valid target"
-        else:
-            selected_rr = final_target_rr if final_target_rr is not None else signal.risk_reward
-            target_label = "planned final target"
+        first_target_rr = rr_plan.first_target_rr
+        final_target_rr = rr_plan.final_target_rr
+        selected_rr = rr_plan.rr_value
+        target_label = rr_plan.selected_target_label
 
         if selected_rr is None:
             reason = "Risk/reward blocked: entry, stop or target is missing"
-            if _has_unusable_profit_target(signal):
+            if _has_unusable_profit_target(rr_plan):
                 reason = "Risk/reward blocked: no planned target is beyond the entry price"
             return RiskRewardAssessment(
                 passed=False,
@@ -109,13 +112,13 @@ class RiskRewardAssessmentService:
         if selected_rr < min_rr:
             nearest_text = (
                 "not beyond entry"
-                if first_target_rr is None and signal.take_profit_1 is not None
+                if first_target_rr is None and rr_plan.first_target is not None
                 else "-" if first_target_rr is None else f"{first_target_rr:.2f}R"
             )
             final_text = "-" if final_target_rr is None else f"{final_target_rr:.2f}R"
             target_context = (
-                f"(TP1 {nearest_text}, final {final_text})"
-                if rr_target == "nearest" and first_target_rr is None and signal.take_profit_1 is not None
+                f"({rr_plan.first_target.label} {nearest_text}, final {final_text})"
+                if rr_target == "nearest" and first_target_rr is None and rr_plan.first_target is not None
                 else f"(nearest {nearest_text}, final {final_text})"
             )
             threshold_reason = (
@@ -239,45 +242,26 @@ def _rr_target_key(params: Mapping[str, Any], strategy: str) -> str:
     return "final"
 
 
-def _target_rr(signal: StrategySignal, target: float | None) -> float | None:
-    entry = _entry_price(signal)
-    stop = signal.stop_loss
-    if entry is None or stop is None or target is None:
-        return None
-    risk = abs(entry - stop)
-    if risk <= 0:
-        return None
-    reward = _target_reward(signal, target, entry)
-    if reward <= 0:
-        return None
-    return round(reward / risk, 4)
-
-
-def _target_reward(signal: StrategySignal, target: float, entry: float | None = None) -> float:
-    entry = _entry_price(signal) if entry is None else entry
-    if entry is None:
-        return 0.0
-    if signal.direction.lower() == "long":
-        return target - entry
-    return entry - target
-
-
-def _has_unusable_profit_target(signal: StrategySignal) -> bool:
-    entry = _entry_price(signal)
-    if entry is None or signal.stop_loss is None:
-        return False
-    return any(
-        target is not None and _target_reward(signal, target, entry) <= 0
-        for target in (signal.take_profit_1, signal.take_profit_2)
+def _trade_plan_for_signal(signal: StrategySignal) -> TradePlan:
+    if signal.trade_plan is not None:
+        return signal.trade_plan
+    return build_trade_plan_from_legacy_fields(
+        entry_min=signal.entry_min,
+        entry_max=signal.entry_max,
+        stop_loss=signal.stop_loss,
+        take_profit_1=signal.take_profit_1,
+        take_profit_2=signal.take_profit_2,
+        risk_reward=signal.risk_reward,
+        first_target_rr=signal.first_target_rr,
+        final_target_rr=signal.final_target_rr,
+        selected_rr=signal.selected_rr,
+        selected_rr_target=signal.selected_rr_target,
+        min_rr_ratio=signal.min_rr_ratio,
     )
 
 
-def _entry_price(signal: StrategySignal) -> float | None:
-    if signal.entry_min is not None and signal.entry_max is not None:
-        return (signal.entry_min + signal.entry_max) / 2
-    if signal.entry_min is not None:
-        return signal.entry_min
-    return signal.entry_max
+def _has_unusable_profit_target(rr_plan: RiskRewardPlanResult) -> bool:
+    return rr_plan.reason in {"no_planned_target_beyond_entry", "target_not_beyond_entry"}
 
 
 def _strategy_numeric_param(

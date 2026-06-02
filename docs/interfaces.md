@@ -922,6 +922,14 @@ legacy signal entry/stop/target fields. Existing signal fields remain available:
 `TradePlan` is persisted in `features_snapshot.trade_plan` and restored to
 `StrategySignal.trade_plan` / `RadarSignal.trade_plan` when present.
 
+RR target basis is resolved from `TradePlan` before RR calculation.
+`nearest` means the first executable target in plan order; `final` means the
+last planned priced/executable target after TradePlan normalization. Legacy
+`take_profit_1` / `take_profit_2` fields are adapted into TradePlan targets
+before RR is calculated. When an enriched TradePlan contains a later structural
+target such as a measured move, `final_target_rr` represents that final
+TradePlan target rather than being capped to legacy `take_profit_2`.
+
 Trade plan completeness is explicit:
 
 - A complete structural trade plan has a market-based entry model, structural

@@ -20,7 +20,11 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         settings = normalize_risk_management_settings({}, None)
 
         self.assertEqual(settings["risk_profile"], "balanced")
+        self.assertEqual(settings["risk_mode"], "percent")
         self.assertEqual(settings["risk_per_trade_percent"], 1.0)
+        self.assertIsNone(settings["fixed_risk_amount"])
+        self.assertEqual(settings["fixed_risk_currency"], "USDT")
+        self.assertEqual(settings["radar_display_mode"], "all_market_opportunities")
         self.assertEqual(settings["min_rr_ratio"], 2.0)
         self.assertEqual(settings["rr_guard_mode"], "soft")
         self.assertEqual(settings["discovery_rr_guard_mode"], "soft")

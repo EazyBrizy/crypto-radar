@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 from pydantic import model_validator
 
 from app.schemas.risk import (
+    RadarDisplayMode,
+    RiskAmountMode,
     StopLossMode,
     TakeProfitMode,
     TrailingMode,
@@ -35,7 +37,11 @@ DEFAULT_STRATEGY_RISK_MULTIPLIERS: dict[str, float] = {
 
 class RiskManagementSettings(BaseModel):
     risk_profile: RiskProfileName = "balanced"
+    risk_mode: RiskAmountMode = "percent"
     risk_per_trade_percent: float = Field(default=1.0, gt=0, le=10)
+    fixed_risk_amount: float | None = Field(default=None, gt=0)
+    fixed_risk_currency: str = Field(default="USDT", min_length=1, max_length=16)
+    radar_display_mode: RadarDisplayMode = "all_market_opportunities"
     min_rr_ratio: float = Field(default=2.0, ge=0, le=10)
     rr_guard_mode: RRGuardMode = "soft"
     discovery_rr_guard_mode: RRGuardMode = "soft"
@@ -113,6 +119,9 @@ class RiskManagementSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_exit_plan(self) -> "RiskManagementSettings":
+        self.fixed_risk_currency = self.fixed_risk_currency.strip().upper() or "USDT"
+        if self.risk_mode == "fixed" and self.fixed_risk_amount is None:
+            raise ValueError("fixed_risk_amount is required when risk_mode is fixed")
         if not (self.tp1_r_multiple <= self.tp2_r_multiple <= self.tp3_r_multiple):
             raise ValueError("take-profit R multiples must be ordered from TP1 to TP3")
         if self.partial_take_profit_enabled:
@@ -124,7 +133,11 @@ class RiskManagementSettings(BaseModel):
 
 class RiskManagementPatch(BaseModel):
     risk_profile: RiskProfileName | None = None
+    risk_mode: RiskAmountMode | None = None
     risk_per_trade_percent: float | None = Field(default=None, gt=0, le=10)
+    fixed_risk_amount: float | None = Field(default=None, gt=0)
+    fixed_risk_currency: str | None = Field(default=None, min_length=1, max_length=16)
+    radar_display_mode: RadarDisplayMode | None = None
     min_rr_ratio: float | None = Field(default=None, ge=0, le=10)
     rr_guard_mode: RRGuardMode | None = None
     discovery_rr_guard_mode: RRGuardMode | None = None
@@ -195,6 +208,14 @@ class RiskManagementPatch(BaseModel):
     allow_risk_increase_after_profit: bool | None = None
     increase_risk_after_profit_streak: bool | None = None
     max_risk_boost: float | None = Field(default=None, ge=1, le=5)
+
+    @model_validator(mode="after")
+    def validate_fixed_risk_patch(self) -> "RiskManagementPatch":
+        if self.fixed_risk_currency is not None:
+            self.fixed_risk_currency = self.fixed_risk_currency.strip().upper() or "USDT"
+        if self.risk_mode == "fixed" and self.fixed_risk_amount is None:
+            raise ValueError("fixed_risk_amount is required when risk_mode is fixed")
+        return self
 
 
 class UserProfileResponse(BaseModel):

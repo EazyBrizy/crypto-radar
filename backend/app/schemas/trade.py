@@ -12,6 +12,7 @@ from app.schemas.risk import (
     RiskCheckResult,
     RiskDecision,
     StopLossPlan,
+    StrategyExecutionSettings,
     TakeProfitPlan,
     TrailingStopPlan,
 )
@@ -234,6 +235,7 @@ class ManualConfirmRequest(BaseModel):
     auto_enter_on_confirmation: bool = False
     account_balance: float = Field(default=100.0, gt=0)
     risk_percent: float = Field(default=10.0, gt=0, le=100)
+    execution_profile: StrategyExecutionSettings | None = None
     leverage: int = Field(default=1, ge=1, le=100)
     liquidation_price: Optional[float] = Field(default=None, gt=0)
     size_usd: Optional[float] = Field(default=None, gt=0)

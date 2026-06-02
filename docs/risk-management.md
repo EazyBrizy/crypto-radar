@@ -59,7 +59,11 @@ Current JSON shape:
 ```json
 {
   "risk_profile": "balanced",
+  "risk_mode": "percent",
   "risk_per_trade_percent": 1.0,
+  "fixed_risk_amount": null,
+  "fixed_risk_currency": "USDT",
+  "radar_display_mode": "all_market_opportunities",
   "min_rr_ratio": 2.0,
   "max_daily_loss_percent": 3.0,
   "max_weekly_loss_percent": 7.0,
@@ -130,6 +134,33 @@ The preset values are product defaults, not immutable trading rules. They can be
 rebalanced as the risk engine becomes more sophisticated.
 For the MVP, fee and slippage inclusion is mandatory and exposed as read-only
 settings rather than user toggles.
+
+## Execution Profile Resolution
+
+Risk settings are resolved as a typed execution profile before RiskGate. The
+resolver is deterministic and does not read the database itself; callers pass
+the already-loaded user risk settings, strategy `risk_settings` JSON, optional
+explicit request override, execution mode, and instrument type.
+
+Precedence:
+
+```text
+request explicit execution profile override
+> strategy risk_settings
+> user risk_management settings
+> schema/config defaults
+```
+
+Legacy percent keys remain readable for backward compatibility:
+`risk_per_trade_percent`, `spot_risk_per_trade_percent`,
+`futures_risk_per_trade_percent`, and `virtual_risk_per_trade_percent`.
+The legacy request value `risk_percent = 10.0` is not treated as an explicit
+override unless the request also sends the typed execution profile, because that
+value was historically an API default.
+
+Invalid profile combinations must fail with an auditable validation reason.
+Examples: `risk_mode = "fixed"` without `fixed_risk_amount`, non-positive
+fixed risk amount, unsupported RR target, or an invalid Radar display mode.
 
 ## Profiles
 
@@ -285,6 +316,20 @@ position_size_base = risk_amount / effective_risk_per_unit
 notional = position_size_base * entry_price
 required_margin = notional / leverage
 ```
+
+Fixed-risk mode uses the same sizing path after resolving the budget:
+
+```text
+risk_amount = fixed_risk_amount
+risk_per_trade_percent = fixed_risk_amount / account_equity * 100
+position_size_base = risk_amount / effective_risk_per_unit
+notional = position_size_base * entry_price
+required_margin = notional / leverage
+```
+
+Fixed-risk mode still respects open-risk, correlated-risk, leverage,
+liquidation, exchange-rule, market-quality, no-trade, RR, and real-readiness
+gates. The fixed amount is a maximum loss budget, not a requested notional.
 
 `effective_risk_per_unit` currently includes:
 

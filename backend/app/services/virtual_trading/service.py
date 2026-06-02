@@ -26,6 +26,7 @@ from app.core.redis_client import get_redis_client
 from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import RadarSignal
 from app.schemas.risk import RiskDecision
+from app.schemas.risk import StrategyExecutionSettings
 from app.schemas.trade import (
     CloseReason,
     CloseVirtualTradeRequest,
@@ -40,11 +41,16 @@ from app.schemas.user import RiskManagementSettings
 from app.services.risk_audit import RiskAuditService, risk_audit_service
 from app.services.risk_fee_rate import RiskFeeRateService, RiskFeeRateSnapshot, risk_fee_rate_service
 from app.services.risk_gate import RiskContextService, RiskGateService
-from app.services.risk_management import get_user_risk_management_settings, resolve_rr_guard_mode
+from app.services.risk_management import (
+    execution_profile_resolver,
+    get_user_risk_management_settings,
+    resolve_rr_guard_mode,
+)
 from app.services.risk_market_data import RiskMarketDataService, RiskMarketDataSnapshot, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
 from app.services.signal_risk_reward import ensure_signal_execution_eligible, signal_rr_warning_reason
 from app.services.signal_service import ClickHouseSignalAnalyticsWriter, RedisSignalHotStore
+from app.services.strategy_config_service import strategy_config_service
 from app.services.trade_repository import (
     PostgresVirtualTradeRepository,
     TradeRepository,
@@ -290,6 +296,11 @@ class VirtualTradingService:
         confirm_with_trade = getattr(self._repository, "confirm_signal_with_trade", None)
         existing = self.get_virtual_trade_by_signal(signal.id)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
+        request, risk_settings, _, _ = self._resolved_execution_profile(
+            signal=signal,
+            request=request,
+            risk_settings=risk_settings,
+        )
         if existing is None or signal.status != "confirmed":
             ensure_signal_execution_eligible(
                 signal,
@@ -348,6 +359,11 @@ class VirtualTradingService:
         if existing is not None:
             return existing
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
+        request, risk_settings, _, _ = self._resolved_execution_profile(
+            signal=signal,
+            request=request,
+            risk_settings=risk_settings,
+        )
         ensure_signal_execution_eligible(
             signal,
             mode="virtual",
@@ -413,6 +429,11 @@ class VirtualTradingService:
     ) -> VirtualTrade:
         raw_entry = self._entry_price(signal)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
+        request, risk_settings, execution_profile, strategy_risk_settings_source = self._resolved_execution_profile(
+            signal=signal,
+            request=request,
+            risk_settings=risk_settings,
+        )
         virtual_rr_guard_mode = resolve_rr_guard_mode(
             risk_settings,
             context="virtual",
@@ -512,7 +533,13 @@ class VirtualTradingService:
             risk_settings=risk_settings,
         )
         if not raw_decision.can_enter:
-            self._record_blocked_risk_decision(signal, gate_request, raw_decision)
+            self._record_blocked_risk_decision(
+                signal,
+                gate_request,
+                raw_decision,
+                execution_profile=execution_profile,
+                strategy_risk_settings_source=strategy_risk_settings_source,
+            )
             raise ValueError("; ".join(raw_decision.blockers))
 
         requested_size_usd = gate_request.size_usd or raw_decision.position_sizing.notional
@@ -605,7 +632,13 @@ class VirtualTradingService:
             risk_settings=risk_settings,
         )
         if not filled_decision.can_enter:
-            self._record_blocked_risk_decision(signal, gate_request, filled_decision)
+            self._record_blocked_risk_decision(
+                signal,
+                gate_request,
+                filled_decision,
+                execution_profile=execution_profile,
+                strategy_risk_settings_source=strategy_risk_settings_source,
+            )
             raise ValueError("; ".join(filled_decision.blockers))
 
         execution = self._execution_with_risk_decision(
@@ -660,6 +693,11 @@ class VirtualTradingService:
     ) -> _VirtualEntrySimulation:
         raw_entry = self._entry_price(signal)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
+        request, risk_settings, execution_profile, strategy_risk_settings_source = self._resolved_execution_profile(
+            signal=signal,
+            request=request,
+            risk_settings=risk_settings,
+        )
         virtual_rr_guard_mode = resolve_rr_guard_mode(
             risk_settings,
             context="virtual",
@@ -760,7 +798,13 @@ class VirtualTradingService:
             ),
             risk_settings=risk_settings,
         )
-        self._record_preview_risk_decision(signal, gate_request, decision)
+        self._record_preview_risk_decision(
+            signal,
+            gate_request,
+            decision,
+            execution_profile=execution_profile,
+            strategy_risk_settings_source=strategy_risk_settings_source,
+        )
         requested_size_usd = gate_request.size_usd or decision.position_sizing.notional
         execution = self._execution_engine.simulate_entry(
             signal=signal,
@@ -778,6 +822,39 @@ class VirtualTradingService:
             account=account,
             side=signal.direction,
             stop_loss=decision.stop_loss_plan.stop_loss_price,
+        )
+
+    def _resolved_execution_profile(
+        self,
+        *,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        risk_settings: RiskManagementSettings,
+    ) -> tuple[ManualConfirmRequest, RiskManagementSettings, Any, str]:
+        strategy_risk_settings, strategy_risk_settings_source = _strategy_risk_settings(
+            signal,
+            user_id=request.user_id,
+        )
+        execution_profile = execution_profile_resolver.resolve(
+            user_risk_settings=risk_settings,
+            strategy_execution_settings=strategy_risk_settings,
+            request_override=_request_execution_profile(
+                request.execution_profile,
+                leverage=request.leverage,
+            ),
+            mode="virtual",
+            instrument_type=_virtual_profile_instrument_type(request),
+        )
+        resolved_risk_settings = execution_profile_resolver.apply_to_risk_settings(
+            risk_settings,
+            execution_profile,
+        )
+        resolved_request = request.model_copy(update={"leverage": int(execution_profile.leverage)})
+        return (
+            resolved_request,
+            resolved_risk_settings,
+            execution_profile,
+            strategy_risk_settings_source,
         )
 
     def _risk_market_snapshot(
@@ -845,6 +922,9 @@ class VirtualTradingService:
         signal: RadarSignal,
         request: ManualConfirmRequest,
         decision: RiskDecision,
+        *,
+        execution_profile: Any,
+        strategy_risk_settings_source: str,
     ) -> None:
         if self._risk_audit is None:
             return
@@ -857,6 +937,8 @@ class VirtualTradingService:
                     "flow": "virtual_trade.blocked_attempt",
                     "request": request.model_dump(mode="json"),
                     "signal": signal.model_dump(mode="json"),
+                    "execution_profile": execution_profile.model_dump(mode="json"),
+                    "strategy_risk_settings_source": strategy_risk_settings_source,
                 },
             )
         except Exception as exc:
@@ -867,6 +949,9 @@ class VirtualTradingService:
         signal: RadarSignal,
         request: ManualConfirmRequest,
         decision: RiskDecision,
+        *,
+        execution_profile: Any,
+        strategy_risk_settings_source: str,
     ) -> None:
         if self._risk_audit is None:
             return
@@ -879,6 +964,8 @@ class VirtualTradingService:
                     "flow": "virtual_execution.preview",
                     "request": request.model_dump(mode="json"),
                     "signal": signal.model_dump(mode="json"),
+                    "execution_profile": execution_profile.model_dump(mode="json"),
+                    "strategy_risk_settings_source": strategy_risk_settings_source,
                 },
             )
         except Exception as exc:
@@ -1175,6 +1262,54 @@ def _fee_context_kwargs(fee_rate: RiskFeeRateSnapshot) -> dict[str, Any]:
 
 def _virtual_fee_instrument_type(request: ManualConfirmRequest) -> str:
     return "futures" if request.leverage > 1 else "spot"
+
+
+def _virtual_profile_instrument_type(request: ManualConfirmRequest) -> str:
+    if request.execution_profile is not None and request.execution_profile.instrument_type is not None:
+        return request.execution_profile.instrument_type
+    return "futures" if request.leverage > 1 else "spot"
+
+
+def _request_execution_profile(
+    execution_profile: StrategyExecutionSettings | None,
+    *,
+    leverage: int,
+) -> StrategyExecutionSettings | None:
+    values: dict[str, Any] = (
+        execution_profile.to_legacy_dict(exclude_unset=True)
+        if execution_profile is not None
+        else {}
+    )
+    if leverage != 1 and "leverage" not in values:
+        values["leverage"] = leverage
+    if not values:
+        return None
+    return StrategyExecutionSettings.model_validate(values)
+
+
+def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:
+    try:
+        configs = strategy_config_service.list_configs(user_id=user_id)
+    except Exception as exc:
+        return {}, f"unavailable:{exc.__class__.__name__}"
+    signal_exchange = signal.exchange.strip().lower()
+    signal_symbol = signal.symbol.strip().upper()
+    for config in configs:
+        if config.strategy_code != signal.strategy:
+            continue
+        if config.timeframes and signal.timeframe not in config.timeframes:
+            continue
+        if config.pairs:
+            pairs = {
+                (pair.exchange.strip().lower(), pair.symbol.strip().upper())
+                for pair in config.pairs
+            }
+            if (signal_exchange, signal_symbol) not in pairs:
+                continue
+        elif config.exchanges and signal_exchange not in {exchange.strip().lower() for exchange in config.exchanges}:
+            continue
+        return config.risk_settings.to_legacy_dict(), "strategy_config"
+    return {}, "not_configured"
 
 
 def _market_snapshot_reference_price(

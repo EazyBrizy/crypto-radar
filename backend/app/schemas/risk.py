@@ -1,7 +1,8 @@
 from datetime import datetime
-from typing import Literal
+from decimal import Decimal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.signal import NoTradeFilterResult, SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan
@@ -15,7 +16,12 @@ VirtualFeeModel = Literal["manual", "exchange_based"]
 TradeInstrumentType = Literal["spot", "futures", "virtual"]
 RiskCheckStatus = Literal["passed", "warning", "failed"]
 RiskExecutionMode = Literal["virtual", "real"]
+ExecutionMode = Literal["virtual", "real"]
+InstrumentType = Literal["spot", "futures"]
+RiskAmountMode = Literal["percent", "fixed"]
+RadarDisplayMode = Literal["all_market_opportunities", "execution_ready"]
 RRGuardMode = Literal["off", "soft", "hard"]
+RRTarget = Literal["nearest", "final"]
 RiskDecisionStage = Literal["preview", "pre_execution", "post_execution", "confirm"]
 RiskProtectionMode = Literal["normal", "reduced", "virtual_only", "blocked"]
 ExchangeRuleStatus = Literal["fresh", "missing", "stale", "unknown"]
@@ -51,6 +57,63 @@ class PositionSizingResult(BaseModel):
     slippage_bps: float = Field(default=0.0, ge=0)
     include_fees_in_risk: bool = True
     include_slippage_in_risk: bool = True
+
+
+class StrategyExecutionSettings(BaseModel):
+    """Typed execution profile stored over legacy JSON risk settings."""
+
+    model_config = ConfigDict(extra="allow")
+
+    risk_mode: RiskAmountMode = "percent"
+    risk_percent: Decimal | None = Field(default=None, gt=0, le=100)
+    fixed_risk_amount: Decimal | None = Field(default=None, gt=0)
+    fixed_risk_currency: str = Field(default="USDT", min_length=1, max_length=16)
+    leverage: Decimal | None = Field(default=None, ge=1, le=125)
+    instrument_type: InstrumentType | None = None
+    rr_guard_mode: RRGuardMode | None = None
+    min_rr_ratio: Decimal | None = Field(default=None, ge=0, le=100)
+    rr_target: RRTarget | None = None
+    radar_display_mode: RadarDisplayMode | None = None
+
+    # Legacy percent fields remain accepted for JSONB/API backward compatibility.
+    risk_per_trade_percent: Decimal | None = Field(default=None, gt=0, le=100)
+    futures_risk_per_trade_percent: Decimal | None = Field(default=None, gt=0, le=100)
+    spot_risk_per_trade_percent: Decimal | None = Field(default=None, gt=0, le=100)
+    virtual_risk_per_trade_percent: Decimal | None = Field(default=None, gt=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_execution_profile(self) -> "StrategyExecutionSettings":
+        self.fixed_risk_currency = self.fixed_risk_currency.strip().upper() or "USDT"
+        if self.risk_mode == "fixed" and self.fixed_risk_amount is None:
+            raise ValueError("fixed_risk_amount is required when risk_mode is fixed")
+        return self
+
+    def to_legacy_dict(self, *, exclude_unset: bool = False) -> dict[str, Any]:
+        return self.model_dump(mode="json", exclude_none=True, exclude_unset=exclude_unset)
+
+
+class ResolvedExecutionProfile(BaseModel):
+    execution_mode: ExecutionMode
+    instrument_type: InstrumentType
+    risk_mode: RiskAmountMode
+    risk_percent: Decimal | None = Field(default=None, gt=0, le=100)
+    fixed_risk_amount: Decimal | None = Field(default=None, gt=0)
+    fixed_risk_currency: str = Field(default="USDT", min_length=1, max_length=16)
+    leverage: Decimal = Field(default=Decimal("1"), ge=1, le=125)
+    rr_guard_mode: RRGuardMode = "soft"
+    min_rr_ratio: Decimal = Field(default=Decimal("2.0"), ge=0, le=100)
+    rr_target: RRTarget = "final"
+    radar_display_mode: RadarDisplayMode = "all_market_opportunities"
+    sources: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_resolved_profile(self) -> "ResolvedExecutionProfile":
+        self.fixed_risk_currency = self.fixed_risk_currency.strip().upper() or "USDT"
+        if self.risk_mode == "fixed" and self.fixed_risk_amount is None:
+            raise ValueError("fixed_risk_amount is required when risk_mode is fixed")
+        if self.risk_mode == "percent" and self.risk_percent is None:
+            raise ValueError("risk_percent is required when risk_mode is percent")
+        return self
 
 
 class RiskAdjustmentPlan(BaseModel):
@@ -306,6 +369,7 @@ class RiskPreviewRequest(BaseModel):
     size_usd: float | None = Field(default=None, gt=0)
     account_balance: float = Field(default=100.0, gt=0)
     risk_percent: float = Field(default=10.0, gt=0, le=100)
+    execution_profile: StrategyExecutionSettings | None = None
     fee_rate: float = Field(default=0.0, ge=0, le=0.01)
     slippage_bps: float = Field(default=0.0, ge=0, le=2_000)
     atr_value: float | None = Field(default=None, gt=0)

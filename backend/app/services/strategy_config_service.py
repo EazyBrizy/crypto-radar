@@ -67,6 +67,8 @@ DEFAULT_RR_GUARD_RISK_SETTINGS: dict[str, Any] = {
     "real_rr_guard_mode": "hard",
 }
 
+DEFAULT_EXECUTION_PROFILE_SETTINGS: dict[str, Any] = {}
+
 DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
     "trend_pullback_continuation": {
         "entry_model": "zone",
@@ -199,7 +201,10 @@ class StrategyConfigService:
             if request.params is not None:
                 config.params = _merge_params(config.params, request.params)
             if request.risk_settings is not None:
-                config.risk_settings = _merge_params(config.risk_settings, request.risk_settings)
+                config.risk_settings = _merge_params(
+                    config.risk_settings,
+                    _risk_settings_to_dict(request.risk_settings, exclude_unset=True),
+                )
             if request.is_enabled is not None:
                 config.is_enabled = request.is_enabled
             config.updated_at = datetime.now(timezone.utc)
@@ -257,7 +262,7 @@ class StrategyConfigService:
                 "pairs": [pair.model_dump(mode="json") for pair in config.pairs],
                 "timeframes": config.timeframes,
                 "params": config.params,
-                "risk_settings": config.risk_settings,
+                "risk_settings": _risk_settings_to_dict(config.risk_settings),
                 "is_enabled": config.is_enabled,
             }
             for config in self.list_configs(user_id=user_id)
@@ -374,7 +379,7 @@ def _response_to_runtime(
     default_risk_settings: dict[str, Any] | None = None,
 ) -> StrategyRuntimeConfig:
     risk_settings = dict(default_risk_settings or {})
-    risk_settings.update(config.risk_settings)
+    risk_settings.update(_risk_settings_to_dict(config.risk_settings))
     return StrategyRuntimeConfig(
         strategy_code=config.strategy_code,
         exchanges=tuple(exchange.strip().lower() for exchange in config.exchanges if exchange.strip()),
@@ -396,6 +401,7 @@ def _default_strategy_risk_settings(user_id: str) -> dict[str, Any]:
     except Exception:
         values = RiskManagementSettings().model_dump()
     return {
+        **DEFAULT_EXECUTION_PROFILE_SETTINGS,
         "min_rr_ratio": values["min_rr_ratio"],
         "rr_guard_mode": resolve_rr_guard_mode(values, context="discovery"),
         "discovery_rr_guard_mode": values["discovery_rr_guard_mode"],
@@ -420,6 +426,8 @@ def _risk_settings_for_strategy(strategy_code: str, base_settings: dict[str, Any
     settings.setdefault("show_only_active_setups", False)
     for key, value in DEFAULT_RR_GUARD_RISK_SETTINGS.items():
         settings.setdefault(key, value)
+    for key, value in DEFAULT_EXECUTION_PROFILE_SETTINGS.items():
+        settings.setdefault(key, value)
     for key, value in DEFAULT_NO_TRADE_RISK_SETTINGS.items():
         settings.setdefault(key, value)
     settings["rr_target"] = _default_rr_target_for_strategy(strategy_code)
@@ -431,6 +439,7 @@ def _persisted_risk_settings_for_strategy(strategy_code: str) -> dict[str, Any]:
     return {
         "rr_target": _default_rr_target_for_strategy(strategy_code),
         "rr_target_default_version": RR_TARGET_DEFAULT_VERSION,
+        **DEFAULT_EXECUTION_PROFILE_SETTINGS,
         **DEFAULT_RR_GUARD_RISK_SETTINGS,
         "hide_failed_rr_signals": False,
         "show_only_active_setups": False,
@@ -462,6 +471,10 @@ def _normalize_existing_strategy_defaults(configs: list[UserStrategyConfig]) -> 
             risk_settings["show_only_active_setups"] = False
             config_changed = True
         for key, value in DEFAULT_RR_GUARD_RISK_SETTINGS.items():
+            if key not in risk_settings:
+                risk_settings[key] = value
+                config_changed = True
+        for key, value in DEFAULT_EXECUTION_PROFILE_SETTINGS.items():
             if key not in risk_settings:
                 risk_settings[key] = value
                 config_changed = True
@@ -500,6 +513,7 @@ def _is_legacy_default_rr_target(strategy_code: str, risk_settings: dict[str, An
         "rr_target",
         "hide_failed_rr_signals",
         "show_only_active_setups",
+        *DEFAULT_EXECUTION_PROFILE_SETTINGS,
         *DEFAULT_RR_GUARD_RISK_SETTINGS,
         *DEFAULT_NO_TRADE_RISK_SETTINGS,
     }
@@ -633,6 +647,14 @@ def _merge_params(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, 
         else:
             merged[key] = value
     return merged
+
+
+def _risk_settings_to_dict(value: Any, *, exclude_unset: bool = False) -> dict[str, Any]:
+    if hasattr(value, "to_legacy_dict"):
+        return value.to_legacy_dict(exclude_unset=exclude_unset)
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True, exclude_unset=exclude_unset)
+    return dict(value or {})
 
 
 strategy_config_service = StrategyConfigService()

@@ -9,7 +9,9 @@ import type {
   ExchangeConnection,
   ExchangeConnectionDraft,
   MarketPairOption,
+  RadarDisplayMode,
   RiskManagementSettings,
+  RiskAmountMode,
   RiskProfileName,
   RRGuardMode,
   StopLossMode,
@@ -83,6 +85,16 @@ const RISK_PROFILES: Array<{
   { value: "balanced", label: "Balanced", caption: "Default profile" },
   { value: "aggressive", label: "Aggressive", caption: "Wider risk budget" },
   { value: "custom", label: "Custom", caption: "Manual limits" }
+];
+
+const RISK_AMOUNT_MODES: Array<{ value: RiskAmountMode; label: string }> = [
+  { value: "percent", label: "Percent" },
+  { value: "fixed", label: "Fixed" }
+];
+
+const RADAR_DISPLAY_MODES: Array<{ value: RadarDisplayMode; label: string }> = [
+  { value: "all_market_opportunities", label: "All opportunities" },
+  { value: "execution_ready", label: "Execution-ready" }
 ];
 
 const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
@@ -833,18 +845,40 @@ export function SettingsPage({
       formData.get("risk:rr_guard_mode"),
       riskManagement.discovery_rr_guard_mode
     );
+    const riskMode = formData.get("risk:risk_mode") === "fixed" ? "fixed" : "percent";
+    const riskPercent = Number(formData.get("risk:risk_percent"));
+    const fixedRiskAmount = Number(formData.get("risk:fixed_risk_amount"));
+    const leverage = Number(formData.get("risk:leverage"));
+    const radarDisplayMode = formData.get("risk:radar_display_mode") === "execution_ready"
+      ? "execution_ready"
+      : "all_market_opportunities";
+    const riskSettings: NonNullable<StrategyConfigPatch["risk_settings"]> = {
+      risk_mode: riskMode,
+      fixed_risk_currency: String(formData.get("risk:fixed_risk_currency") ?? "USDT").trim().toUpperCase() || "USDT",
+      radar_display_mode: radarDisplayMode,
+      min_rr_ratio: Number.isFinite(minRrRatio) && minRrRatio >= 0 ? minRrRatio : riskManagement.min_rr_ratio,
+      rr_guard_mode: rrGuardMode,
+      rr_target: String(formData.get("risk:rr_target") ?? defaultRrTarget(configItem.strategy_code)) === "nearest"
+        ? "nearest"
+        : "final",
+      hide_failed_rr_signals: formData.has("risk:hide_failed_rr_signals"),
+      show_only_active_setups: formData.has("risk:show_only_active_setups")
+    };
+    if (Number.isFinite(riskPercent) && riskPercent > 0) {
+      riskSettings.risk_percent = riskPercent;
+    }
+    if (Number.isFinite(fixedRiskAmount) && fixedRiskAmount > 0) {
+      riskSettings.fixed_risk_amount = fixedRiskAmount;
+    }
+    if (Number.isFinite(leverage) && leverage >= 1) {
+      riskSettings.leverage = leverage;
+    }
     await onUpdateStrategyConfig(configItem.id, {
       is_enabled: formData.has("is_enabled"),
       exchanges,
       timeframes,
       params,
-      risk_settings: {
-        min_rr_ratio: Number.isFinite(minRrRatio) && minRrRatio >= 0 ? minRrRatio : riskManagement.min_rr_ratio,
-        rr_guard_mode: rrGuardMode,
-        rr_target: String(formData.get("risk:rr_target") ?? defaultRrTarget(configItem.strategy_code)),
-        hide_failed_rr_signals: formData.has("risk:hide_failed_rr_signals"),
-        show_only_active_setups: formData.has("risk:show_only_active_setups")
-      }
+      risk_settings: riskSettings
     });
   }
 
@@ -857,7 +891,11 @@ export function SettingsPage({
       risk_profile: "custom",
       risk_management: {
         risk_profile: "custom",
+        risk_mode: riskDraft.risk_mode,
         risk_per_trade_percent: riskDraft.risk_per_trade_percent,
+        fixed_risk_amount: riskDraft.fixed_risk_amount,
+        fixed_risk_currency: riskDraft.fixed_risk_currency,
+        radar_display_mode: riskDraft.radar_display_mode,
         min_rr_ratio: riskDraft.min_rr_ratio,
         rr_guard_mode: riskDraft.rr_guard_mode,
         discovery_rr_guard_mode: riskDraft.discovery_rr_guard_mode,
@@ -1275,6 +1313,75 @@ export function SettingsPage({
                       ))
                     : null}
                   <label>
+                    <span>Risk mode</span>
+                    <select
+                      defaultValue={String(strategyConfig.risk_settings.risk_mode ?? "percent")}
+                      disabled={busy}
+                      name="risk:risk_mode"
+                    >
+                      {RISK_AMOUNT_MODES.map((mode) => (
+                        <option key={mode.value} value={mode.value}>{mode.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Strategy risk %</span>
+                    <input
+                      defaultValue={strategyConfig.risk_settings.risk_percent == null ? "" : String(strategyConfig.risk_settings.risk_percent)}
+                      disabled={busy}
+                      inputMode="decimal"
+                      min="0"
+                      name="risk:risk_percent"
+                      step="0.05"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>Fixed risk</span>
+                    <input
+                      defaultValue={strategyConfig.risk_settings.fixed_risk_amount == null ? "" : String(strategyConfig.risk_settings.fixed_risk_amount)}
+                      disabled={busy}
+                      inputMode="decimal"
+                      min="0"
+                      name="risk:fixed_risk_amount"
+                      step="1"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>Fixed currency</span>
+                    <input
+                      defaultValue={String(strategyConfig.risk_settings.fixed_risk_currency ?? "USDT")}
+                      disabled={busy}
+                      maxLength={16}
+                      name="risk:fixed_risk_currency"
+                    />
+                  </label>
+                  <label>
+                    <span>Leverage</span>
+                    <input
+                      defaultValue={strategyConfig.risk_settings.leverage == null ? "" : String(strategyConfig.risk_settings.leverage)}
+                      disabled={busy}
+                      inputMode="decimal"
+                      min="1"
+                      name="risk:leverage"
+                      step="1"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    <span>Radar mode</span>
+                    <select
+                      defaultValue={String(strategyConfig.risk_settings.radar_display_mode ?? "all_market_opportunities")}
+                      disabled={busy}
+                      name="risk:radar_display_mode"
+                    >
+                      {RADAR_DISPLAY_MODES.map((mode) => (
+                        <option key={mode.value} value={mode.value}>{mode.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
                     <span>Min R:R for execution / reporting</span>
                     <input
                       defaultValue={String(Number(strategyConfig.risk_settings.min_rr_ratio ?? riskManagement.min_rr_ratio ?? 2))}
@@ -1389,6 +1496,71 @@ export function SettingsPage({
                     {profile.label}
                   </button>
                 ))}
+              </div>
+              <div className="risk-plan-block">
+                <div className="risk-plan-heading">
+                  <strong>Execution profile</strong>
+                </div>
+                <div className="risk-mode-grid two-option-grid">
+                  {RISK_AMOUNT_MODES.map((mode) => (
+                    <button
+                      className={riskDraft.risk_mode === mode.value ? "active" : ""}
+                      disabled={busy || !customRiskEnabled}
+                      key={mode.value}
+                      onClick={() => updateRiskDraft({ risk_mode: mode.value })}
+                      type="button"
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="risk-settings-grid compact-risk-grid">
+                  <label className="risk-setting-field">
+                    <span>Fixed risk</span>
+                    <div>
+                      <input
+                        aria-label="Fixed risk"
+                        disabled={busy || !customRiskEnabled || riskDraft.risk_mode !== "fixed"}
+                        inputMode="decimal"
+                        min="0"
+                        onChange={(event) => updateRiskDraft({
+                          fixed_risk_amount: event.target.value === "" ? null : Number(event.target.value)
+                        })}
+                        step="1"
+                        type="number"
+                        value={riskDraft.fixed_risk_amount ?? ""}
+                      />
+                      <small>{riskDraft.fixed_risk_currency}</small>
+                    </div>
+                  </label>
+                  <label className="risk-setting-field">
+                    <span>Currency</span>
+                    <div>
+                      <input
+                        aria-label="Fixed risk currency"
+                        disabled={busy || !customRiskEnabled || riskDraft.risk_mode !== "fixed"}
+                        maxLength={16}
+                        onChange={(event) => updateRiskDraft({ fixed_risk_currency: event.target.value.toUpperCase() })}
+                        value={riskDraft.fixed_risk_currency}
+                      />
+                    </div>
+                  </label>
+                  <label className="risk-setting-field">
+                    <span>Radar mode</span>
+                    <div>
+                      <select
+                        aria-label="Radar mode"
+                        disabled={busy || !customRiskEnabled}
+                        onChange={(event) => updateRiskDraft({ radar_display_mode: event.target.value as RadarDisplayMode })}
+                        value={riskDraft.radar_display_mode}
+                      >
+                        {RADAR_DISPLAY_MODES.map((mode) => (
+                          <option key={mode.value} value={mode.value}>{mode.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </label>
+                </div>
               </div>
               <div className="risk-settings-grid">
                 {RISK_PROFILE_FIELD_LABELS.map((field) => (
@@ -2275,7 +2447,11 @@ function formatRiskUsageValue(used: number, limit: number): string {
 function defaultRiskManagement(): RiskManagementSettings {
   return {
     risk_profile: "balanced",
+    risk_mode: "percent",
     risk_per_trade_percent: 1,
+    fixed_risk_amount: null,
+    fixed_risk_currency: "USDT",
+    radar_display_mode: "all_market_opportunities",
     min_rr_ratio: 2,
     rr_guard_mode: "soft",
     discovery_rr_guard_mode: "soft",

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Mapping, cast
 
 from app.schemas.risk import (
     BreakevenPlan,
+    ExecutionMode,
     FuturesRiskPlan,
+    InstrumentType,
     PositionSizingResult,
+    ResolvedExecutionProfile,
     RiskAdjustmentPlan,
     RiskCheckResult,
     StopLossPlan,
+    StrategyExecutionSettings,
     TakeProfitPlan,
     TakeProfitTarget,
     TradeInstrumentType,
@@ -142,7 +147,11 @@ RISK_PROFILE_PRESETS: dict[RiskProfileName, RiskManagementSettings] = {
 }
 
 _RISK_CUSTOM_FIELDS = {
+    "risk_mode",
     "risk_per_trade_percent",
+    "fixed_risk_amount",
+    "fixed_risk_currency",
+    "radar_display_mode",
     "min_rr_ratio",
     "rr_guard_mode",
     "discovery_rr_guard_mode",
@@ -245,6 +254,218 @@ class TradePlanValidationError(ValueError):
     def __init__(self, errors: list[str]) -> None:
         self.errors = errors
         super().__init__("; ".join(errors))
+
+
+class ExecutionProfileValidationError(ValueError):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+class ExecutionProfileResolver:
+    """Resolves typed execution settings without persistence or market side effects."""
+
+    def resolve(
+        self,
+        *,
+        user_risk_settings: RiskManagementSettings | Mapping[str, Any] | None,
+        strategy_execution_settings: StrategyExecutionSettings | Mapping[str, Any] | None = None,
+        request_override: StrategyExecutionSettings | Mapping[str, Any] | None = None,
+        mode: ExecutionMode | str,
+        instrument_type: InstrumentType | str | None,
+    ) -> ResolvedExecutionProfile:
+        settings = _settings_model(user_risk_settings or RiskManagementSettings())
+        execution_mode = _execution_mode(mode)
+        default_instrument_type = _execution_instrument_type(instrument_type)
+        request_settings, request_fields = _execution_settings_model_and_fields(request_override)
+        strategy_settings, strategy_fields = _execution_settings_model_and_fields(strategy_execution_settings)
+        strategy_mapping = _execution_settings_mapping(strategy_settings, strategy_fields)
+        resolved_instrument_type_raw, instrument_source = _resolve_profile_field(
+            "instrument_type",
+            default=default_instrument_type,
+            request_settings=request_settings,
+            request_fields=request_fields,
+            strategy_settings=strategy_settings,
+            strategy_fields=strategy_fields,
+            user_value=None,
+        )
+        resolved_instrument_type = _execution_instrument_type(resolved_instrument_type_raw)
+
+        risk_mode, risk_mode_source = _resolve_profile_field(
+            "risk_mode",
+            default="percent",
+            request_settings=request_settings,
+            request_fields=request_fields,
+            strategy_settings=strategy_settings,
+            strategy_fields=strategy_fields,
+            user_value=settings.risk_mode,
+        )
+        risk_percent: Decimal | None = None
+        risk_percent_source = "none"
+        fixed_risk_amount: Decimal | None = None
+        fixed_risk_amount_source = "none"
+
+        if risk_mode == "fixed":
+            fixed_risk_amount, fixed_risk_amount_source = _resolve_profile_field(
+                "fixed_risk_amount",
+                default=None,
+                request_settings=request_settings,
+                request_fields=request_fields,
+                strategy_settings=strategy_settings,
+                strategy_fields=strategy_fields,
+                user_value=settings.fixed_risk_amount,
+            )
+            if fixed_risk_amount is None:
+                raise ExecutionProfileValidationError(
+                    "fixed_risk_amount is required when risk_mode is fixed"
+                )
+            fixed_risk_amount = Decimal(str(fixed_risk_amount))
+        else:
+            risk_percent, risk_percent_source = _resolve_risk_percent(
+                settings=settings,
+                request_settings=request_settings,
+                request_fields=request_fields,
+                strategy_settings=strategy_settings,
+                strategy_fields=strategy_fields,
+                execution_mode=execution_mode,
+                instrument_type=resolved_instrument_type,
+            )
+            if risk_percent is None:
+                raise ExecutionProfileValidationError(
+                    "risk_percent is required when risk_mode is percent"
+                )
+            risk_percent = Decimal(str(risk_percent))
+
+        fixed_currency, fixed_currency_source = _resolve_profile_field(
+            "fixed_risk_currency",
+            default="USDT",
+            request_settings=request_settings,
+            request_fields=request_fields,
+            strategy_settings=strategy_settings,
+            strategy_fields=strategy_fields,
+            user_value=settings.fixed_risk_currency,
+        )
+        leverage, leverage_source = _resolve_profile_field(
+            "leverage",
+            default=_default_leverage(settings, resolved_instrument_type),
+            request_settings=request_settings,
+            request_fields=request_fields,
+            strategy_settings=strategy_settings,
+            strategy_fields=strategy_fields,
+            user_value=None,
+        )
+        leverage_decimal = Decimal(str(leverage))
+        if resolved_instrument_type == "spot" and leverage_decimal > 1:
+            raise ExecutionProfileValidationError(
+                "leverage greater than 1 requires instrument_type futures"
+            )
+        rr_guard_mode, rr_guard_source = _resolve_profile_field(
+            "rr_guard_mode",
+            default=resolve_rr_guard_mode(
+                settings,
+                context=execution_mode,
+                strategy_risk_settings=strategy_mapping,
+            ),
+            request_settings=request_settings,
+            request_fields=request_fields,
+            strategy_settings=strategy_settings,
+            strategy_fields=strategy_fields,
+            user_value=None,
+        )
+        min_rr_ratio, min_rr_source = _resolve_profile_field(
+            "min_rr_ratio",
+            default=settings.min_rr_ratio,
+            request_settings=request_settings,
+            request_fields=request_fields,
+            strategy_settings=strategy_settings,
+            strategy_fields=strategy_fields,
+            user_value=settings.min_rr_ratio,
+        )
+        rr_target, rr_target_source = _resolve_profile_field(
+            "rr_target",
+            default="final",
+            request_settings=request_settings,
+            request_fields=request_fields,
+            strategy_settings=strategy_settings,
+            strategy_fields=strategy_fields,
+            user_value=None,
+        )
+        radar_display_mode, radar_source = _resolve_profile_field(
+            "radar_display_mode",
+            default=settings.radar_display_mode,
+            request_settings=request_settings,
+            request_fields=request_fields,
+            strategy_settings=strategy_settings,
+            strategy_fields=strategy_fields,
+            user_value=settings.radar_display_mode,
+        )
+
+        return ResolvedExecutionProfile(
+            execution_mode=execution_mode,
+            instrument_type=resolved_instrument_type,
+            risk_mode=risk_mode,
+            risk_percent=risk_percent,
+            fixed_risk_amount=fixed_risk_amount,
+            fixed_risk_currency=str(fixed_currency),
+            leverage=leverage_decimal,
+            rr_guard_mode=rr_guard_mode,
+            min_rr_ratio=Decimal(str(min_rr_ratio)),
+            rr_target=rr_target,
+            radar_display_mode=radar_display_mode,
+            sources={
+                "risk_mode": risk_mode_source,
+                "instrument_type": instrument_source,
+                "risk_percent": risk_percent_source,
+                "fixed_risk_amount": fixed_risk_amount_source,
+                "fixed_risk_currency": fixed_currency_source,
+                "leverage": leverage_source,
+                "rr_guard_mode": rr_guard_source,
+                "min_rr_ratio": min_rr_source,
+                "rr_target": rr_target_source,
+                "radar_display_mode": radar_source,
+            },
+        )
+
+    def apply_to_risk_settings(
+        self,
+        risk_settings: RiskManagementSettings | Mapping[str, Any],
+        profile: ResolvedExecutionProfile,
+    ) -> RiskManagementSettings:
+        settings = _settings_model(risk_settings)
+        values = settings.model_dump()
+        values.update(
+            {
+                "risk_mode": profile.risk_mode,
+                "fixed_risk_amount": (
+                    float(profile.fixed_risk_amount)
+                    if profile.fixed_risk_amount is not None
+                    else None
+                ),
+                "fixed_risk_currency": profile.fixed_risk_currency,
+                "min_rr_ratio": float(profile.min_rr_ratio),
+                "rr_guard_mode": profile.rr_guard_mode,
+                "radar_display_mode": profile.radar_display_mode,
+            }
+        )
+        context_guard_field = RR_CONTEXT_FIELDS.get(profile.execution_mode)
+        if context_guard_field is not None:
+            values[context_guard_field] = profile.rr_guard_mode
+        leverage = max(1, int(profile.leverage))
+        if profile.instrument_type == "futures":
+            values["max_leverage"] = leverage
+            values["futures_max_leverage"] = leverage
+
+        if profile.risk_mode == "percent" and profile.risk_percent is not None:
+            risk_percent = float(profile.risk_percent)
+            values["risk_per_trade_percent"] = risk_percent
+            if profile.execution_mode == "virtual":
+                values["virtual_risk_mode"] = "custom"
+                values["virtual_risk_per_trade_percent"] = risk_percent
+            elif profile.instrument_type == "futures":
+                values["futures_risk_per_trade_percent"] = risk_percent
+            else:
+                values["spot_risk_per_trade_percent"] = risk_percent
+        return RiskManagementSettings.model_validate(values)
 
 
 def normalize_risk_profile(value: Any) -> RiskProfileName:
@@ -369,7 +590,11 @@ def calculate_trade_risk_adjustment(
     if volatility_multiplier < 0 or user_mode_multiplier < 0:
         raise ValueError("risk multipliers must be greater than or equal to zero")
 
-    base_risk_percent = _base_risk_percent(settings, instrument_type)
+    base_risk_amount, base_risk_percent = _base_risk_amount_and_percent(
+        settings,
+        instrument_type,
+        account_equity,
+    )
     normalized_strategy_key = _normalize_strategy_key(strategy)
     strategy_key = _strategy_key(strategy)
     strategy_multiplier = _strategy_risk_multiplier(settings, normalized_strategy_key)
@@ -380,26 +605,22 @@ def calculate_trade_risk_adjustment(
     elif signal_virtual_only:
         warnings.append("Signal score is low; trade should be virtual-only.")
 
-    adjusted_risk_percent = (
-        base_risk_percent
-        * strategy_multiplier
-        * signal_multiplier
-        * volatility_multiplier
-        * user_mode_multiplier
-    )
+    multiplier = strategy_multiplier * signal_multiplier * volatility_multiplier * user_mode_multiplier
+    adjusted_risk_amount = base_risk_amount * multiplier
+    adjusted_risk_percent = adjusted_risk_amount / account_equity * 100
     return RiskAdjustmentPlan(
         instrument_type=instrument_type,
         strategy=strategy_key,
         signal_score=signal_score,
         account_equity=account_equity,
         base_risk_percent=base_risk_percent,
-        base_risk_amount=account_equity * base_risk_percent / 100,
+        base_risk_amount=base_risk_amount,
         strategy_risk_multiplier=strategy_multiplier,
         signal_score_multiplier=signal_multiplier,
         volatility_multiplier=volatility_multiplier,
         user_mode_multiplier=user_mode_multiplier,
         adjusted_risk_percent=adjusted_risk_percent,
-        adjusted_risk_amount=account_equity * adjusted_risk_percent / 100,
+        adjusted_risk_amount=adjusted_risk_amount,
         signal_trade_allowed=signal_trade_allowed,
         signal_virtual_only=signal_virtual_only,
         warnings=warnings,
@@ -1235,12 +1456,19 @@ def calculate_position_sizing(
 
     include_fees = settings.include_fees_in_risk
     include_slippage = settings.include_slippage_in_risk
-    effective_risk_percent = (
-        settings.risk_per_trade_percent
-        if risk_per_trade_percent is None
-        else risk_per_trade_percent
-    )
-    risk_amount = account_equity * effective_risk_percent / 100
+    if risk_per_trade_percent is None:
+        if settings.risk_mode == "fixed":
+            risk_amount, effective_risk_percent = _base_risk_amount_and_percent(
+                settings,
+                "spot",
+                account_equity,
+            )
+        else:
+            effective_risk_percent = settings.risk_per_trade_percent
+            risk_amount = account_equity * effective_risk_percent / 100
+    else:
+        effective_risk_percent = risk_per_trade_percent
+        risk_amount = account_equity * effective_risk_percent / 100
     estimated_entry_fee_per_unit = entry_price * fee_rate if include_fees else 0.0
     estimated_exit_fee_per_unit = stop_loss_price * fee_rate if include_fees else 0.0
     slippage_buffer_per_unit = (
@@ -1312,6 +1540,140 @@ def position_sizing_for_notional(
     )
 
 
+def _execution_mode(value: ExecutionMode | str) -> ExecutionMode:
+    normalized = str(value or "virtual").strip().lower()
+    if normalized == "real":
+        return "real"
+    return "virtual"
+
+
+def _execution_instrument_type(value: InstrumentType | str | None) -> InstrumentType:
+    normalized = str(value or "spot").strip().lower()
+    if normalized == "futures":
+        return "futures"
+    return "spot"
+
+
+def _execution_settings_model_and_fields(
+    value: StrategyExecutionSettings | Mapping[str, Any] | None,
+) -> tuple[StrategyExecutionSettings | None, set[str]]:
+    if value is None:
+        return None, set()
+    if isinstance(value, StrategyExecutionSettings):
+        return value, set(value.model_fields_set)
+    fields = {str(key) for key, raw_value in value.items() if raw_value is not None}
+    return StrategyExecutionSettings.model_validate(value), fields
+
+
+def _execution_settings_mapping(
+    settings: StrategyExecutionSettings | None,
+    fields: set[str],
+) -> dict[str, Any]:
+    if settings is None:
+        return {}
+    values = settings.to_legacy_dict()
+    return {key: value for key, value in values.items() if key in fields}
+
+
+def _resolve_profile_field(
+    field_name: str,
+    *,
+    default: Any,
+    request_settings: StrategyExecutionSettings | None,
+    request_fields: set[str],
+    strategy_settings: StrategyExecutionSettings | None,
+    strategy_fields: set[str],
+    user_value: Any,
+) -> tuple[Any, str]:
+    if request_settings is not None and field_name in request_fields:
+        return getattr(request_settings, field_name), "request"
+    if strategy_settings is not None and field_name in strategy_fields:
+        return getattr(strategy_settings, field_name), "strategy"
+    if user_value is not None:
+        return user_value, "user"
+    return default, "default"
+
+
+def _resolve_risk_percent(
+    *,
+    settings: RiskManagementSettings,
+    request_settings: StrategyExecutionSettings | None,
+    request_fields: set[str],
+    strategy_settings: StrategyExecutionSettings | None,
+    strategy_fields: set[str],
+    execution_mode: ExecutionMode,
+    instrument_type: InstrumentType,
+) -> tuple[Any, str]:
+    request_value = _legacy_percent_from_settings(
+        request_settings,
+        request_fields,
+        execution_mode=execution_mode,
+        instrument_type=instrument_type,
+    )
+    if request_value is not None:
+        return request_value, "request"
+    strategy_value = _legacy_percent_from_settings(
+        strategy_settings,
+        strategy_fields,
+        execution_mode=execution_mode,
+        instrument_type=instrument_type,
+    )
+    if strategy_value is not None:
+        return strategy_value, "strategy"
+    user_value, user_source = _user_percent_for_context(
+        settings,
+        execution_mode=execution_mode,
+        instrument_type=instrument_type,
+    )
+    return user_value, user_source
+
+
+def _legacy_percent_from_settings(
+    settings: StrategyExecutionSettings | None,
+    fields: set[str],
+    *,
+    execution_mode: ExecutionMode,
+    instrument_type: InstrumentType,
+) -> Any:
+    if settings is None:
+        return None
+    field_order = ["risk_percent"]
+    if execution_mode == "virtual":
+        field_order.append("virtual_risk_per_trade_percent")
+    if instrument_type == "futures":
+        field_order.append("futures_risk_per_trade_percent")
+    else:
+        field_order.append("spot_risk_per_trade_percent")
+    field_order.append("risk_per_trade_percent")
+    for field_name in field_order:
+        if field_name in fields:
+            value = getattr(settings, field_name)
+            if value is not None:
+                return value
+    return None
+
+
+def _user_percent_for_context(
+    settings: RiskManagementSettings,
+    *,
+    execution_mode: ExecutionMode,
+    instrument_type: InstrumentType,
+) -> tuple[float, str]:
+    if execution_mode == "virtual" and settings.virtual_risk_mode == "custom":
+        return settings.virtual_risk_per_trade_percent, "user.virtual_risk_per_trade_percent"
+    if instrument_type == "futures" and execution_mode != "virtual":
+        return settings.futures_risk_per_trade_percent, "user.futures_risk_per_trade_percent"
+    if instrument_type == "spot" and execution_mode != "virtual":
+        return settings.spot_risk_per_trade_percent, "user.spot_risk_per_trade_percent"
+    return settings.risk_per_trade_percent, "user.risk_per_trade_percent"
+
+
+def _default_leverage(settings: RiskManagementSettings, instrument_type: InstrumentType) -> int:
+    if instrument_type == "futures":
+        return settings.futures_max_leverage
+    return 1
+
+
 def _settings_model(risk_settings: RiskManagementSettings | Mapping[str, Any]) -> RiskManagementSettings:
     return (
         risk_settings
@@ -1375,6 +1737,24 @@ def _rr_policy_reason(
         "Risk/reward warning: "
         f"selected R:R {selected_rr} is below configured reporting minimum {minimum_rr}."
     )
+
+
+def _base_risk_amount_and_percent(
+    settings: RiskManagementSettings,
+    instrument_type: TradeInstrumentType,
+    account_equity: float,
+) -> tuple[float, float]:
+    if settings.risk_mode == "fixed":
+        if settings.fixed_risk_amount is None:
+            raise ExecutionProfileValidationError(
+                "fixed_risk_amount is required when risk_mode is fixed"
+            )
+        risk_amount = float(settings.fixed_risk_amount)
+        if risk_amount <= 0:
+            raise ExecutionProfileValidationError("fixed_risk_amount must be greater than zero")
+        return risk_amount, risk_amount / account_equity * 100
+    risk_percent = _base_risk_percent(settings, instrument_type)
+    return account_equity * risk_percent / 100, risk_percent
 
 
 def _base_risk_percent(settings: RiskManagementSettings, instrument_type: TradeInstrumentType) -> float:
@@ -1663,3 +2043,6 @@ def get_user_risk_management_settings(user_id: str = "demo_user") -> RiskManagem
 
     profile = user_service.get_profile(user_id)
     return RiskManagementSettings.model_validate(profile.settings["risk_management"])
+
+
+execution_profile_resolver = ExecutionProfileResolver()

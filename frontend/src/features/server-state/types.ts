@@ -11,6 +11,10 @@ export type VirtualRiskMode = "same_as_real" | "custom";
 export type VirtualSlippageModel = "none" | "fixed_percent" | "spread_based" | "orderbook_based" | "volatility_based";
 export type VirtualFeeModel = "manual" | "exchange_based";
 export type RRGuardMode = "off" | "soft" | "hard";
+export type RiskAmountMode = "percent" | "fixed";
+export type RadarDisplayMode = "all_market_opportunities" | "execution_ready";
+export type InstrumentType = "spot" | "futures";
+export type RRTarget = "nearest" | "final";
 
 export interface VirtualTradingSettings {
   simulation_level: VirtualSimulationLevel;
@@ -20,7 +24,11 @@ export interface VirtualTradingSettings {
 
 export interface RiskManagementSettings {
   risk_profile: RiskProfileName;
+  risk_mode: RiskAmountMode;
   risk_per_trade_percent: number;
+  fixed_risk_amount: number | null;
+  fixed_risk_currency: string;
+  radar_display_mode: RadarDisplayMode;
   min_rr_ratio: number;
   rr_guard_mode: RRGuardMode;
   discovery_rr_guard_mode: RRGuardMode;
@@ -82,6 +90,23 @@ export interface RiskManagementSettings {
   max_risk_boost: number;
 }
 
+export interface StrategyExecutionSettings extends Record<string, unknown> {
+  risk_mode?: RiskAmountMode;
+  risk_percent?: number | string | null;
+  fixed_risk_amount?: number | string | null;
+  fixed_risk_currency?: string;
+  leverage?: number | string | null;
+  instrument_type?: InstrumentType | null;
+  rr_guard_mode?: RRGuardMode | null;
+  min_rr_ratio?: number | string | null;
+  rr_target?: RRTarget | null;
+  radar_display_mode?: RadarDisplayMode | null;
+  risk_per_trade_percent?: number | string | null;
+  futures_risk_per_trade_percent?: number | string | null;
+  spot_risk_per_trade_percent?: number | string | null;
+  virtual_risk_per_trade_percent?: number | string | null;
+}
+
 export interface UserSettingsPatch {
   virtual_simulation_level?: VirtualSimulationLevel;
   risk_profile?: RiskProfileName;
@@ -135,7 +160,7 @@ export interface StrategyConfig {
   pairs: StrategyPairScope[];
   timeframes: string[];
   params: Record<string, unknown>;
-  risk_settings: Record<string, unknown>;
+  risk_settings: StrategyExecutionSettings;
   is_enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -147,7 +172,7 @@ export interface StrategyConfigPatch {
   pairs?: StrategyPairScope[];
   timeframes?: string[];
   params?: Record<string, unknown>;
-  risk_settings?: Record<string, unknown>;
+  risk_settings?: StrategyExecutionSettings;
   is_enabled?: boolean;
 }
 

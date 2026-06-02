@@ -1928,6 +1928,55 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             candidates = await strategy.evaluate(features)
             self.assertIsInstance(candidates, list)
 
+    async def test_strategy_evaluate_does_not_receive_execution_profile_fields(self) -> None:
+        class CapturingStrategy:
+            name = "volatility_squeeze_breakout"
+
+            def __init__(self) -> None:
+                self.params = {}
+
+            async def evaluate(self, features: Features, params=None):
+                self.params = dict(params or {})
+                return [_quality_candidate(features)]
+
+        strategy = CapturingStrategy()
+        engine = StrategyEngine()
+        engine._strategies = [strategy]
+
+        signals = await engine.generate_signals(
+            _breakout_features(),
+            strategy_configs={
+                "volatility_squeeze_breakout": type(
+                    "RuntimeConfig",
+                    (),
+                    {
+                        "params": {
+                            "min_history": 50,
+                            "risk_mode": "fixed",
+                            "account_balance": 1_000,
+                            "leverage": 5,
+                        },
+                        "risk_settings": {
+                            "risk_mode": "fixed",
+                            "fixed_risk_amount": 25,
+                            "leverage": 5,
+                            "min_rr_ratio": 1.5,
+                            "radar_display_mode": "execution_ready",
+                        },
+                        "pair_scope_configured": False,
+                    },
+                )(),
+            },
+        )
+
+        self.assertTrue(signals)
+        self.assertNotIn("risk_mode", strategy.params)
+        self.assertNotIn("fixed_risk_amount", strategy.params)
+        self.assertNotIn("account_balance", strategy.params)
+        self.assertNotIn("leverage", strategy.params)
+        self.assertNotIn("radar_display_mode", strategy.params)
+        self.assertNotIn("min_rr_ratio", strategy.params)
+
     async def test_liquidity_sweep_without_reclaim_is_not_actionable(self) -> None:
         features = _breakout_features().model_copy(
             update={

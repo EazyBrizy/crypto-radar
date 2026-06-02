@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.schemas.candle import Timeframe
+from app.schemas.risk import StrategyExecutionSettings
 
 
 class StrategyPairScope(BaseModel):
@@ -24,7 +25,7 @@ class StrategyConfigResponse(BaseModel):
     pairs: list[StrategyPairScope]
     timeframes: list[Timeframe]
     params: dict[str, Any]
-    risk_settings: dict[str, Any] = Field(default_factory=dict)
+    risk_settings: StrategyExecutionSettings = Field(default_factory=StrategyExecutionSettings)
     is_enabled: bool
     created_at: datetime
     updated_at: datetime
@@ -37,5 +38,5 @@ class StrategyConfigUpdateRequest(BaseModel):
     pairs: list[StrategyPairScope] | None = None
     timeframes: list[Timeframe] | None = None
     params: dict[str, Any] | None = None
-    risk_settings: dict[str, Any] | None = None
+    risk_settings: StrategyExecutionSettings | None = None
     is_enabled: bool | None = None

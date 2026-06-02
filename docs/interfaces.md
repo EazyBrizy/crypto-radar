@@ -132,7 +132,9 @@ Boundary rules:
   context. `StrategySignal.candle_state` mirrors the evaluated
   `Features.candle_state`. A strategy may return a setup that is not
   production-actionable. Strategies must not read/write DB, call APIs, or
-  execute trades.
+  execute trades. Strategy params must not include account balance, margin,
+  position sizing, fixed/percent risk amounts, user leverage, or Radar display
+  mode; those fields belong to the execution profile and risk layer.
 - `TradePlan` normalizes executable entry, stop, target, invalidation, and risk
   metadata from a strategy signal while keeping legacy signal fields available.
   It also records whether structural levels or fallback levels were used.
@@ -167,6 +169,71 @@ protective orders, valid exchange rules, and, when `real_rr_guard_mode = "hard"`
 Virtual execution may continue to surface research warnings for weak RR,
 unknown or weak edge, or incomplete context, but warnings must not be confused
 with production permission to send exchange orders.
+
+## Strategy Execution Profile v1
+
+`StrategyExecutionSettings` is the typed contract stored over the existing
+`user_strategy_configs.risk_settings` JSONB container and optionally supplied as
+an explicit request override. The JSONB storage remains backward-compatible:
+legacy keys are accepted, but execution settings are resolved through this
+typed profile before RiskGate.
+
+```python
+RiskAmountMode = "percent" | "fixed"
+RadarDisplayMode = "all_market_opportunities" | "execution_ready"
+ExecutionMode = "virtual" | "real"
+InstrumentType = "spot" | "futures"
+RRGuardMode = "off" | "soft" | "hard"
+RRTarget = "nearest" | "final"
+
+StrategyExecutionSettings = {
+    "risk_mode": RiskAmountMode,
+    "risk_percent": Decimal | None,
+    "fixed_risk_amount": Decimal | None,
+    "fixed_risk_currency": str,
+    "leverage": Decimal | None,
+    "instrument_type": InstrumentType | None,
+    "rr_guard_mode": RRGuardMode | None,
+    "min_rr_ratio": Decimal | None,
+    "rr_target": RRTarget | None,
+    "radar_display_mode": RadarDisplayMode | None,
+}
+```
+
+Field meanings:
+
+- `risk_mode`: chooses whether the trade risk budget is a percent of current
+  equity or a fixed currency amount.
+- `risk_percent`: percent risk per trade when `risk_mode = "percent"`.
+- `fixed_risk_amount`: fixed risk budget when `risk_mode = "fixed"`. Fixed
+  mode without this amount is invalid.
+- `fixed_risk_currency`: currency for the fixed budget, default `USDT`.
+- `leverage`: requested/default execution leverage. It is not strategy input.
+- `instrument_type`: selected execution instrument, `spot` or `futures`.
+- `rr_guard_mode`: execution RR policy mode. `hard` can block execution;
+  `soft` warns; `off` records RR only.
+- `min_rr_ratio`: minimum RR used for reporting/execution policy. It is not a
+  setup-discovery filter.
+- `rr_target`: target used for RR policy, `nearest` or `final`.
+- `radar_display_mode`: `all_market_opportunities` shows all strategy market
+  setups; `execution_ready` shows only opportunities that currently pass the
+  resolved execution profile and RiskGate preview.
+
+Resolution precedence:
+
+```text
+request explicit execution profile override
+> strategy execution settings in risk_settings JSONB
+> user risk_management settings
+> schema/config defaults
+```
+
+Legacy keys such as `risk_per_trade_percent`,
+`futures_risk_per_trade_percent`, `spot_risk_per_trade_percent`, and
+`virtual_risk_per_trade_percent` remain accepted and map to percent mode when
+the new typed field is absent. A legacy request field such as
+`risk_percent = 10.0` is not considered an explicit override by itself because
+older API clients used that value as a default.
 
 ## Pipeline Layer Services v1
 

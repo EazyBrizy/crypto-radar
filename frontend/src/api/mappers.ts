@@ -8,7 +8,9 @@ import type {
   MarketPairOption,
   NotificationDelivery,
   PersistedNotification,
+  RadarDisplayMode,
   RRGuardMode,
+  RiskAmountMode,
   StrategyConfig,
   SubscriptionState,
   SubscriptionStatus,
@@ -1147,7 +1149,11 @@ function normalizeRiskManagementSettings(
   const settings = isRecord(value) ? value : {};
   return {
     risk_profile: normalizeRiskProfile(settings.risk_profile ?? profileFallback),
+    risk_mode: normalizeRiskAmountMode(settings.risk_mode),
     risk_per_trade_percent: Number(settings.risk_per_trade_percent ?? 1),
+    fixed_risk_amount: settings.fixed_risk_amount == null ? null : Number(settings.fixed_risk_amount),
+    fixed_risk_currency: String(settings.fixed_risk_currency ?? "USDT").trim().toUpperCase() || "USDT",
+    radar_display_mode: normalizeRadarDisplayMode(settings.radar_display_mode),
     min_rr_ratio: Number(settings.min_rr_ratio ?? 2),
     rr_guard_mode: normalizeRRGuardMode(settings.rr_guard_mode, "soft"),
     discovery_rr_guard_mode: normalizeRRGuardMode(settings.discovery_rr_guard_mode, "soft"),
@@ -1215,6 +1221,14 @@ function normalizeRiskManagementSettings(
 function normalizeRiskProfile(value: unknown) {
   if (value === "conservative" || value === "aggressive" || value === "custom") return value;
   return "balanced";
+}
+
+function normalizeRiskAmountMode(value: unknown): RiskAmountMode {
+  return value === "fixed" ? "fixed" : "percent";
+}
+
+function normalizeRadarDisplayMode(value: unknown): RadarDisplayMode {
+  return value === "execution_ready" ? "execution_ready" : "all_market_opportunities";
 }
 
 function normalizeRRGuardMode(value: unknown, fallback: RRGuardMode): RRGuardMode {

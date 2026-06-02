@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from typing import Any
 
-from app.schemas.risk import RiskPreviewRequest, RiskPreviewResponse, TradeInstrumentType
+from app.schemas.risk import RiskPreviewRequest, RiskPreviewResponse, StrategyExecutionSettings, TradeInstrumentType
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualTrade
 from app.services.risk_audit import RiskAuditService, risk_audit_service
 from app.services.risk_fee_rate import RiskFeeRateService, risk_fee_rate_service
 from app.services.risk_gate import RiskContextService, RiskGateService
-from app.services.risk_management import get_user_risk_management_settings
+from app.services.risk_management import execution_profile_resolver, get_user_risk_management_settings
 from app.services.risk_market_data import RiskMarketDataService, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
 from app.services.signal_service import SignalService, signal_service
+from app.services.strategy_config_service import strategy_config_service
 from app.services.virtual_trading import virtual_trading_service
 
 
@@ -43,6 +45,28 @@ class RiskPreviewService:
         fallback_entry_price = _entry_price(signal)
         risk_settings = get_user_risk_management_settings(request.user_id)
         instrument_type = _instrument_type(request, manual_request)
+        strategy_risk_settings, strategy_risk_settings_source = _strategy_risk_settings(
+            signal,
+            user_id=request.user_id,
+        )
+        execution_profile = execution_profile_resolver.resolve(
+            user_risk_settings=risk_settings,
+            strategy_execution_settings=strategy_risk_settings,
+            request_override=_request_execution_profile(
+                request.execution_profile,
+                leverage=request.leverage,
+            ),
+            mode=request.mode,
+            instrument_type=_profile_instrument_type(instrument_type),
+        )
+        risk_settings = execution_profile_resolver.apply_to_risk_settings(
+            risk_settings,
+            execution_profile,
+        )
+        manual_request = manual_request.model_copy(
+            update={"leverage": int(execution_profile.leverage)}
+        )
+        instrument_type = execution_profile.instrument_type
         market_data = self._market_data_service.build_snapshot(
             exchange=signal.exchange,
             symbol=signal.symbol,
@@ -188,6 +212,8 @@ class RiskPreviewService:
                 "market_data": asdict(market_data),
                 "fee_rate": asdict(fee_rate),
                 "risk_state": reference.state.model_dump(mode="json"),
+                "execution_profile": execution_profile.model_dump(mode="json"),
+                "strategy_risk_settings_source": strategy_risk_settings_source,
             },
         )
         return RiskPreviewResponse(
@@ -203,6 +229,7 @@ def _manual_request(request: RiskPreviewRequest) -> ManualConfirmRequest:
         user_id=request.user_id,
         account_balance=request.account_balance,
         risk_percent=request.risk_percent,
+        execution_profile=request.execution_profile,
         leverage=request.leverage,
         liquidation_price=request.liquidation_price,
         size_usd=request.size_usd,
@@ -218,6 +245,52 @@ def _instrument_type(
     if request.instrument_type is not None:
         return request.instrument_type
     return "futures" if manual_request.leverage > 1 else "spot"
+
+
+def _profile_instrument_type(instrument_type: TradeInstrumentType) -> str:
+    return "futures" if instrument_type == "futures" else "spot"
+
+
+def _request_execution_profile(
+    execution_profile: StrategyExecutionSettings | None,
+    *,
+    leverage: int,
+) -> StrategyExecutionSettings | None:
+    values: dict[str, Any] = (
+        execution_profile.to_legacy_dict(exclude_unset=True)
+        if execution_profile is not None
+        else {}
+    )
+    if leverage != 1 and "leverage" not in values:
+        values["leverage"] = leverage
+    if not values:
+        return None
+    return StrategyExecutionSettings.model_validate(values)
+
+
+def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:
+    try:
+        configs = strategy_config_service.list_configs(user_id=user_id)
+    except Exception as exc:
+        return {}, f"unavailable:{exc.__class__.__name__}"
+    signal_exchange = signal.exchange.strip().lower()
+    signal_symbol = signal.symbol.strip().upper()
+    for config in configs:
+        if config.strategy_code != signal.strategy:
+            continue
+        if config.timeframes and signal.timeframe not in config.timeframes:
+            continue
+        if config.pairs:
+            pairs = {
+                (pair.exchange.strip().lower(), pair.symbol.strip().upper())
+                for pair in config.pairs
+            }
+            if (signal_exchange, signal_symbol) not in pairs:
+                continue
+        elif config.exchanges and signal_exchange not in {exchange.strip().lower() for exchange in config.exchanges}:
+            continue
+        return config.risk_settings.to_legacy_dict(), "strategy_config"
+    return {}, "not_configured"
 
 
 def _entry_price(signal: RadarSignal) -> float:

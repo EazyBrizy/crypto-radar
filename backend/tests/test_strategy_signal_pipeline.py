@@ -1,7 +1,21 @@
 import unittest
+from inspect import signature
 
 from app.schemas.market import Features
-from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanTarget
+from app.schemas.signal import (
+    MarketQualitySnapshot,
+    MarketRegimeSnapshot,
+    NoTradeFilterResult,
+    SignalConfirmationSnapshot,
+    SignalExitPlanSnapshot,
+    SignalInvalidationSnapshot,
+    StrategySetupSnapshot,
+)
+from app.schemas.trade_plan import TradePlan, TradePlanCompletenessResult, TradePlanEntry, TradePlanTarget
+from app.services.auto_entry_eligibility import AutoEntryEligibilityService
+from app.services.risk_reward_assessment import RiskRewardAssessmentService
+from app.services.signal_status_resolver import SignalStatusResolver
+from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
 from app.strategies.common import build_signal, score_breakdown
 from app.strategies.engine import StrategyEngine
@@ -90,6 +104,189 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(targets[0].action, "partial_close")
         self.assertEqual(targets[0].close_percent, 40)
         self.assertEqual(targets[-1].source, "range_measured_move")
+
+    def test_finalize_public_contract_is_preserved(self) -> None:
+        method_signature = signature(StrategySignalPipeline.finalize)
+        self.assertEqual(list(method_signature.parameters), ["self", "signal", "context"])
+
+        features = _breakout_features()
+        signal = StrategySignalPipeline().finalize(
+            _quality_candidate(features),
+            StrategyEvaluationContext(signal_features=features, context_features=_bullish_context_features()),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.strategy if signal else None, "volatility_squeeze_breakout")
+        self.assertIsNotNone(signal.trade_plan if signal else None)
+
+    def test_rr_assessment_service_matches_previous_rr_logic(self) -> None:
+        features = _breakout_features()
+        candidate = _quality_candidate(features)
+        params = {"min_rr_ratio": 1.5, "rr_target": "final"}
+
+        assessment = RiskRewardAssessmentService().assess(candidate, params)
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params=params,
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.selected_rr_target if signal else None, assessment.target_key)
+        self.assertAlmostEqual(signal.first_target_rr if signal and signal.first_target_rr else 0, assessment.first_target_rr or 0)
+        self.assertAlmostEqual(signal.final_target_rr if signal and signal.final_target_rr else 0, assessment.final_target_rr or 0)
+        self.assertAlmostEqual(signal.selected_rr if signal and signal.selected_rr else 0, assessment.rr or 0)
+        rr_check = next(
+            check
+            for check in (signal.confirmation.checks if signal and signal.confirmation else [])
+            if check.name == "risk_reward_guard"
+        )
+        self.assertEqual(rr_check.status, assessment.status)
+        self.assertEqual(rr_check.reason, assessment.reason)
+        self.assertEqual(rr_check.metadata.get("selected_rr_target"), assessment.target_key)
+
+    def test_status_resolver_blocks_incomplete_trade_plan(self) -> None:
+        features = _breakout_features()
+        candidate = _quality_candidate(features)
+        assert candidate.trade_plan is not None
+        assessment = RiskRewardAssessmentService().assess(
+            candidate,
+            {"min_rr_ratio": 1.5, "rr_target": "final"},
+        )
+
+        decision = SignalStatusResolver().resolve(
+            signal=candidate,
+            params={},
+            quality=MarketQualitySnapshot(passed=True, tier="major", score=100),
+            regime=MarketRegimeSnapshot(alignment="aligned", strength="normal"),
+            confirmation=SignalConfirmationSnapshot(passed=True),
+            setup=StrategySetupSnapshot(name=candidate.strategy, stage="confirmed"),
+            risk_reward=assessment,
+            no_trade_filter=NoTradeFilterResult(enabled=True, blocked=False),
+            completeness=TradePlanCompletenessResult(
+                complete=False,
+                missing=["structural_target"],
+                warnings=["Trade plan is incomplete: structural_target."],
+            ),
+            trade_plan=candidate.trade_plan,
+            candle_state="closed",
+            production_mode=True,
+            actionable_score=70,
+        )
+
+        self.assertEqual(decision.status, "watchlist")
+        self.assertIn("Trade plan incomplete", decision.status_reason)
+        self.assertFalse(decision.trade_plan.metadata.get("open_candle_preview"))
+
+    def test_status_resolver_blocks_forming_candle(self) -> None:
+        features = _breakout_features().model_copy(update={"candle_state": "open"})
+        candidate = _quality_candidate(features).model_copy(update={"candle_state": "open"})
+        assert candidate.trade_plan is not None
+        assessment = RiskRewardAssessmentService().assess(
+            candidate,
+            {"min_rr_ratio": 1.5, "rr_target": "final"},
+        )
+
+        decision = SignalStatusResolver().resolve(
+            signal=candidate,
+            params={},
+            quality=MarketQualitySnapshot(passed=True, tier="major", score=100),
+            regime=MarketRegimeSnapshot(alignment="aligned", strength="normal"),
+            confirmation=SignalConfirmationSnapshot(passed=True),
+            setup=StrategySetupSnapshot(name=candidate.strategy, stage="confirmed"),
+            risk_reward=assessment,
+            no_trade_filter=NoTradeFilterResult(enabled=True, blocked=False),
+            completeness=TradePlanCompletenessResult(complete=True),
+            trade_plan=candidate.trade_plan,
+            candle_state="open",
+            production_mode=False,
+            actionable_score=70,
+        )
+
+        self.assertEqual(decision.status, "watchlist")
+        self.assertIn("forming_candle", decision.status_reason)
+        self.assertEqual(decision.actionability_block_reason, "forming_candle")
+        self.assertEqual(decision.setup.stage, "forming")
+        candle_check = next(check for check in decision.confirmation.checks if check.name == "candle_state_gate")
+        self.assertEqual(candle_check.status, "warning")
+        self.assertFalse(decision.trade_plan.metadata.get("signal_actionable"))
+
+    def test_auto_entry_service_disabled_on_no_trade_or_incomplete(self) -> None:
+        features = _breakout_features()
+        candidate = _quality_candidate(features)
+        assessment = RiskRewardAssessmentService().assess(
+            candidate,
+            {"min_rr_ratio": 1.5, "rr_target": "final"},
+        )
+        incomplete = TradePlanCompletenessResult(
+            complete=False,
+            missing=["structural_stop"],
+        )
+
+        no_trade_snapshot = AutoEntryEligibilityService().evaluate(
+            signal=candidate,
+            risk_reward=assessment,
+            completeness=TradePlanCompletenessResult(complete=True),
+            no_trade_result=NoTradeFilterResult(
+                enabled=True,
+                blocked=True,
+                blockers=["Spread 84.0 bps is above entry limit 25.0 bps"],
+            ),
+            candle_state="closed",
+            mode="discovery",
+            status_reason="No-trade hard block: Spread 84.0 bps is above entry limit 25.0 bps",
+        )
+        incomplete_snapshot = AutoEntryEligibilityService().evaluate(
+            signal=candidate,
+            risk_reward=assessment,
+            completeness=incomplete,
+            no_trade_result=NoTradeFilterResult(enabled=True, blocked=False),
+            candle_state="closed",
+            mode="production",
+            status_reason="Trade plan incomplete: structural_stop; production actionability is blocked.",
+        )
+
+        self.assertIsNotNone(no_trade_snapshot)
+        self.assertFalse(no_trade_snapshot.enabled if no_trade_snapshot else True)
+        self.assertIn("No-trade hard block", no_trade_snapshot.message if no_trade_snapshot else "")
+        self.assertIsNotNone(incomplete_snapshot)
+        self.assertFalse(incomplete_snapshot.enabled if incomplete_snapshot else True)
+        self.assertIn("Trade plan incomplete", incomplete_snapshot.message if incomplete_snapshot else "")
+
+    def test_trade_plan_enrichment_preserves_targets(self) -> None:
+        features = _breakout_features()
+        candidate = _quality_candidate(features)
+        original_targets = [
+            TradePlanTarget(label="TP1", price=103.2, source="structural_test"),
+            TradePlanTarget(label="TP2", price=104.2, source="structural_test"),
+        ]
+        trade_plan = TradePlan(
+            entry=TradePlanEntry(price=features.close, min_price=features.close, max_price=features.close),
+            stop_loss=features.close - 1.0,
+            targets=original_targets,
+        )
+        candidate = candidate.model_copy(update={"trade_plan": trade_plan})
+        assessment = RiskRewardAssessmentService().assess(
+            candidate,
+            {"min_rr_ratio": 1.5, "rr_target": "final"},
+        )
+
+        enriched = TradePlanEnrichmentService().enrich(
+            signal=candidate,
+            exit_plan=SignalExitPlanSnapshot(targets=[]),
+            invalidation=SignalInvalidationSnapshot(
+                price=features.close - 1.0,
+                hard_stop=features.close - 1.0,
+                conditions=["test invalidation"],
+            ),
+            risk_reward=assessment,
+        )
+
+        self.assertEqual([target.model_dump() for target in enriched.targets], [target.model_dump() for target in original_targets])
+        self.assertEqual(enriched.risk_rules.selected_rr_target, "final")
 
     def test_research_mode_keeps_fallback_trade_plan_visible_with_warning(self) -> None:
         features = _breakout_features()

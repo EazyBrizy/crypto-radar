@@ -60,7 +60,7 @@ candle-state, and exit changes against the saved LAB-02 baseline artifact.
 1. [x] AUD-01: contract cleanup after RR and Strategy Test Lab.
 2. [x] AUD-02: Remove production fallback stop/TP while keeping research compatibility.
 3. [x] AUD-03: Separate open candle preview signals from closed candle actionable signals.
-4. [ ] AUD-04: fallback cleanup.
+4. [x] AUD-04: Refactor StrategySignalPipeline services without behavior regression.
 5. [ ] AUD-05: reserved follow-up for deeper candle-state/backtest cleanup if needed.
 6. [ ] AUD-06: pipeline cleanup.
 7. [ ] AUD-07: unified decision snapshot.

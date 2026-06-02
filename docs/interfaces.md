@@ -156,6 +156,36 @@ Virtual execution may continue to surface research warnings for weak RR,
 unknown or weak edge, or incomplete context, but warnings must not be confused
 with production permission to send exchange orders.
 
+## Pipeline Layer Services v1
+
+`StrategySignalPipeline.finalize(signal, context)` remains the public strategy
+facade. Strategies continue to call it with a `StrategySignal` and
+`StrategyEvaluationContext`; the facade orchestrates shared layers and attaches
+snapshots to the signal without changing the strategy call contract.
+
+Pipeline layer ownership:
+
+- `SetupDetector` / setup layer: strategy-specific setup discovery and stage
+  snapshots. This layer describes whether a setup is forming, ready, or
+  confirmed; it must not calculate stops, targets, or execution permission.
+- `TradePlanBuilder` / `TradePlanEnrichment`: ensures a `TradePlan` exists,
+  enriches exits and invalidation, and attaches fallback/completeness metadata.
+  It must not decide final status or auto-entry.
+- `ContextScorer`: higher-timeframe regime, support/resistance, macro context,
+  and score adjustment snapshots. It annotates context quality without hiding a
+  valid setup except for explicit severe strategy filters.
+- `SignalQualityService`: shared market quality and confirmation checks such as
+  history, liquidity, spread, overextension, volume confirmation, and RR
+  measurement. RR assessment records metrics and reasons separately from final
+  status resolution.
+- `SignalStatusResolver`: resolves setup validity, trade-plan completeness,
+  closed/open candle gates, RR execution eligibility, no-trade blockers,
+  invalidation, final `signal.status`, and `status_reason` from already
+  calculated snapshots. It must not calculate targets or stops.
+- `ExecutionEligibilityService`: resolves execution/auto-entry eligibility from
+  completed snapshots. Disabled auto-entry must include an explicit reason and
+  must not silently fallback to an executable path.
+
 ## Candle State Separation v1
 
 Open candle evaluation is a live preview path. It may surface forming setups

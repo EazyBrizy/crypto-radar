@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping
+from typing import Any, Mapping
 
 from app.schemas.market import Features
 from app.schemas.signal import (
     MarketQualitySnapshot,
     MarketRegimeSnapshot,
     NoTradeFilterResult,
-    SignalAutoEntrySnapshot,
     SignalConfirmationSnapshot,
     SignalExitPlanSnapshot,
     SignalInvalidationSnapshot,
@@ -18,14 +17,18 @@ from app.schemas.signal import (
 )
 from app.schemas.trade_plan import (
     TradePlan,
-    TradePlanCompletenessResult,
-    TradePlanInvalidation,
     TradePlanTarget,
-    build_trade_plan_from_legacy_fields,
 )
 from app.services.no_trade_filter import NoTradeFilterService
-from app.services.risk_management import resolve_rr_guard_mode
+from app.services.auto_entry_eligibility import AutoEntryEligibilityService
+from app.services.risk_reward_assessment import (
+    RiskRewardAssessment,
+    RiskRewardAssessmentService,
+    risk_reward_metadata,
+)
+from app.services.signal_status_resolver import SignalStatusResolver
 from app.services.support_resistance import SupportResistanceSnapshot
+from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.services.trade_plan_completeness import TradePlanCompletenessCheck
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
@@ -80,12 +83,6 @@ MIN_DYNAMIC_BODY_ATR = 1.7
 IMPULSE_BODY_RATIO = 0.7
 EXTREME_CLOSE_LOCATION = 0.8
 REJECTION_WICK_RATIO = 0.45
-DEFAULT_MIN_RR_RATIO = 2.0
-RR_TARGET_BY_STRATEGY: dict[str, str] = {
-    "trend_pullback_continuation": "final",
-    "volatility_squeeze_breakout": "final",
-    "liquidity_sweep_reversal": "nearest",
-}
 
 QUALITY_DEFAULTS_BY_TIER: dict[str, dict[str, float]] = {
     "major": {"min_24h_volume_quote": 25_000_000.0, "max_spread_bps": 15.0, "rough_chart_fail": 5.0},
@@ -135,37 +132,6 @@ class OverextensionAssessment:
     pullback_target: PullbackTarget
 
 
-@dataclass(frozen=True)
-class RiskRewardAssessment:
-    passed: bool
-    rr: float | None
-    min_rr: float
-    guard_mode: str
-    status: str
-    meets_min_rr: bool
-    blocked: bool
-    warning: bool
-    warning_reason: str | None
-    block_reason: str | None
-    target_key: str
-    target_label: str
-    first_target_rr: float | None
-    final_target_rr: float | None
-    reason: str
-
-
-@dataclass(frozen=True)
-class ActionabilitySourceDecision:
-    status: str
-    status_reason: str
-    confirmation: SignalConfirmationSnapshot
-    setup: StrategySetupSnapshot
-    trade_plan: TradePlan
-    auto_entry: SignalAutoEntrySnapshot | None = None
-    risks: tuple[str, ...] = ()
-    explanation: tuple[str, ...] = ()
-
-
 def context_timeframe_for(timeframe: str, strategy_params: Mapping[str, Any] | None = None) -> str | None:
     override = _context_timeframe_override(timeframe, strategy_params or {})
     if override is not None:
@@ -190,7 +156,8 @@ class StrategySignalPipeline:
         signal: StrategySignal,
         context: StrategyEvaluationContext,
     ) -> StrategySignal | None:
-        signal = _ensure_trade_plan(signal)
+        trade_plan_enrichment = TradePlanEnrichmentService()
+        signal = trade_plan_enrichment.ensure_trade_plan(signal)
         candle_state = _effective_candle_state(signal, context.signal_features)
         if signal.candle_state != candle_state:
             signal = signal.model_copy(update={"candle_state": candle_state})
@@ -204,7 +171,11 @@ class StrategySignalPipeline:
             return None
         signal = _apply_regime_score(signal, regime)
         setup = StrategySetupLayer().evaluate(signal)
-        risk_reward = _assess_risk_reward(signal, context.strategy_params, context.rr_guard_context)
+        risk_reward = RiskRewardAssessmentService().assess(
+            signal,
+            context.strategy_params,
+            context.rr_guard_context,
+        )
         if risk_reward.blocked and _hide_failed_rr_signals(context.strategy_params):
             return None
         confirmation = ConfirmationLayer().evaluate(signal, context, risk_reward)
@@ -225,7 +196,7 @@ class StrategySignalPipeline:
         invalidation = InvalidationLayer().build(signal, context)
         exit_management = ExitManagementLayer()
         exit_plan = exit_management.build(signal, context)
-        trade_plan = exit_management.enrich_trade_plan(
+        trade_plan = trade_plan_enrichment.enrich(
             signal=signal,
             exit_plan=exit_plan,
             invalidation=invalidation,
@@ -233,53 +204,58 @@ class StrategySignalPipeline:
         )
         production_mode = _is_production_mode(context.strategy_params)
         completeness = TradePlanCompletenessCheck().evaluate(trade_plan)
-        trade_plan = _trade_plan_with_completeness_metadata(
+        trade_plan = trade_plan_enrichment.attach_completeness_metadata(
             trade_plan=trade_plan,
             completeness=completeness,
             production_mode=production_mode,
         )
-        confirmation = _confirmation_with_trade_plan_completeness(
+        confirmation = trade_plan_enrichment.annotate_confirmation_completeness(
             confirmation=confirmation,
             completeness=completeness,
             production_mode=production_mode,
         )
 
-        status, status_reason = RiskInvalidationLayer().status(
+        status_decision = SignalStatusResolver().resolve(
             signal=signal,
-            context=context,
+            params=context.strategy_params,
             quality=quality,
             regime=regime,
             confirmation=confirmation,
+            setup=setup,
             risk_reward=risk_reward,
             no_trade_filter=no_trade,
-        )
-        if production_mode and not completeness.complete:
-            status = "watchlist"
-            status_reason = _trade_plan_incomplete_status_reason(completeness)
-        source_decision = _apply_actionability_source_rules(
-            signal=signal,
-            context=context,
-            status=status,
-            status_reason=status_reason,
-            confirmation=confirmation,
-            setup=setup,
+            completeness=completeness,
             trade_plan=trade_plan,
+            candle_state=candle_state,
+            production_mode=production_mode,
+            actionable_score=ACTIONABLE_SCORE,
         )
-        status = source_decision.status
-        status_reason = source_decision.status_reason
-        confirmation = source_decision.confirmation
-        setup = source_decision.setup
-        trade_plan = source_decision.trade_plan
+        status = status_decision.status
+        status_reason = status_decision.status_reason
+        confirmation = status_decision.confirmation
+        setup = status_decision.setup
+        trade_plan = status_decision.trade_plan
         if _show_only_active_setups(context.strategy_params) and not _is_active_setup_status(status):
             return None
 
+        auto_entry = AutoEntryEligibilityService().evaluate(
+            signal=signal,
+            risk_reward=risk_reward,
+            completeness=completeness,
+            no_trade_result=no_trade,
+            candle_state=candle_state,
+            mode="production" if production_mode else context.rr_guard_context,
+            status_reason=status_reason,
+            actionability_block_reason=status_decision.actionability_block_reason,
+            actionability_block_message=status_decision.actionability_block_message,
+        )
         explanation = [
             f"Status: {status_reason}",
-            *source_decision.explanation,
+            *status_decision.explanation,
             *signal.explanation,
         ]
         risks = list(signal.risks)
-        for reason in source_decision.risks:
+        for reason in status_decision.risks:
             if reason not in risks:
                 risks.append(reason)
         for warning in quality.warnings:
@@ -332,26 +308,8 @@ class StrategySignalPipeline:
                     entry_min=target.entry_min,
                     entry_max=target.entry_max,
                 )
-        if risk_reward.blocked:
-            updates["auto_entry"] = SignalAutoEntrySnapshot(
-                enabled=False,
-                status="cancelled",
-                message=risk_reward.reason,
-            )
-        if production_mode and not completeness.complete:
-            updates["auto_entry"] = SignalAutoEntrySnapshot(
-                enabled=False,
-                status="cancelled",
-                message=status_reason,
-            )
-        if no_trade.blocked:
-            updates["auto_entry"] = SignalAutoEntrySnapshot(
-                enabled=False,
-                status="cancelled",
-                message=status_reason,
-            )
-        if source_decision.auto_entry is not None:
-            updates["auto_entry"] = source_decision.auto_entry
+        if auto_entry is not None:
+            updates["auto_entry"] = auto_entry
         updates["trade_plan"] = trade_plan
 
         return signal.model_copy(update=updates)
@@ -752,7 +710,7 @@ class ConfirmationLayer:
                 status=risk_reward.status,
                 score=None if risk_reward.rr is None else round(risk_reward.rr, 3),
                 reason=risk_reward.reason,
-                metadata=_risk_reward_metadata(risk_reward),
+                metadata=risk_reward_metadata(risk_reward),
             ),
             SignalLayerCheck(
                 name="volume_confirmation",
@@ -764,65 +722,6 @@ class ConfirmationLayer:
             passed=all(check.status != "failed" for check in checks),
             checks=checks,
         )
-
-
-class RiskInvalidationLayer:
-    def status(
-        self,
-        *,
-        signal: StrategySignal,
-        context: StrategyEvaluationContext,
-        quality: MarketQualitySnapshot,
-        regime: MarketRegimeSnapshot,
-        confirmation: SignalConfirmationSnapshot,
-        risk_reward: RiskRewardAssessment,
-        no_trade_filter: NoTradeFilterResult,
-    ) -> tuple[str, str]:
-        if signal.status == "invalidated":
-            return ("invalidated", signal.status_reason or "Strategy idea is invalidated")
-
-        if no_trade_filter.blocked:
-            return ("ready", f"No-trade hard block: {'; '.join(no_trade_filter.blockers)}")
-
-        overextension = _assess_overextension(signal, context.signal_features, context.strategy_params)
-        if overextension.overextended:
-            return ("wait_for_pullback", overextension.reason)
-
-        if signal.status == "watchlist":
-            return ("watchlist", signal.status_reason or "Strategy conditions are forming")
-
-        if not risk_reward.passed:
-            return ("ready", risk_reward.reason)
-
-        if not confirmation.passed:
-            return ("watchlist", "Strategy setup exists, but confirmation is incomplete")
-
-        if _has_strong_regime_conflict(regime):
-            return ("watchlist", "Higher timeframe is strongly against the signal direction")
-
-        if (
-            signal.strategy == "trend_pullback_continuation"
-            and _bool_param(context.strategy_params, "require_htf_alignment", False)
-            and regime.alignment != "aligned"
-        ):
-            return ("watchlist", "Trend pullback requires higher-timeframe alignment before actionable entry")
-
-        if signal.strategy == "trend_pullback_continuation" and _has_borderline_ema200_chop(regime):
-            return ("watchlist", "EMA200 chop is elevated; trend pullback stays on watchlist")
-
-        if _has_context_obstacle(regime):
-            return ("ready", "Higher timeframe support/resistance is too close")
-
-        if signal.status == "ready":
-            return ("ready", signal.status_reason or "Strategy setup exists; waiting for confirmation")
-
-        if quality.tier == "low_liquidity" and signal.score < 85:
-            return ("ready", "Low-liquidity asset needs a stronger strategy score before actionable classification")
-
-        if signal.score >= ACTIONABLE_SCORE:
-            return ("actionable", "Strategy classification passed; entry still requires risk/reward gate")
-
-        return ("ready", "Setup is valid; waiting for stronger confirmation")
 
 
 class InvalidationLayer:
@@ -1089,354 +988,10 @@ class ExitManagementLayer:
         }
         return SignalExitPlanSnapshot(targets=targets, breakeven=breakeven, trailing=trailing)
 
-    def enrich_trade_plan(
-        self,
-        *,
-        signal: StrategySignal,
-        exit_plan: SignalExitPlanSnapshot,
-        invalidation: SignalInvalidationSnapshot,
-        risk_reward: RiskRewardAssessment,
-    ) -> TradePlan:
-        trade_plan = signal.trade_plan or _trade_plan_from_signal(signal)
-        targets = [_trade_plan_target_from_exit_target(target) for target in exit_plan.targets]
-        risk_metadata = dict(trade_plan.risk_rules.metadata)
-        for key in ("time_stop_bars", "time_stop"):
-            value = invalidation.metadata.get(key)
-            if value is not None:
-                risk_metadata[key] = value
-        risk_rules = trade_plan.risk_rules.model_copy(
-            update={
-                "risk_reward": signal.risk_reward,
-                "first_target_rr": risk_reward.first_target_rr,
-                "final_target_rr": risk_reward.final_target_rr,
-                "selected_rr": risk_reward.rr,
-                "selected_rr_target": risk_reward.target_key,
-                "min_rr_ratio": risk_reward.min_rr,
-                "metadata": risk_metadata,
-            }
-        )
-        enriched_invalidation = TradePlanInvalidation.model_validate(
-            invalidation.model_dump(mode="json")
-        )
-        if trade_plan.invalidation is not None:
-            enriched_invalidation = enriched_invalidation.model_copy(
-                update={
-                    "metadata": {
-                        **trade_plan.invalidation.metadata,
-                        **enriched_invalidation.metadata,
-                    }
-                }
-            )
-        return trade_plan.model_copy(
-            update={
-                "targets": targets or trade_plan.targets,
-                "invalidation": enriched_invalidation,
-                "risk_rules": risk_rules,
-            },
-            deep=True,
-        )
-
-
 def _effective_candle_state(signal: StrategySignal, features: Features) -> str:
     if signal.candle_state == "open" or features.candle_state == "open":
         return "open"
     return "closed"
-
-
-def _apply_actionability_source_rules(
-    *,
-    signal: StrategySignal,
-    context: StrategyEvaluationContext,
-    status: str,
-    status_reason: str,
-    confirmation: SignalConfirmationSnapshot,
-    setup: StrategySetupSnapshot,
-    trade_plan: TradePlan,
-) -> ActionabilitySourceDecision:
-    candle_state = _effective_candle_state(signal, context.signal_features)
-    allow_open = _bool_param(context.strategy_params, "allow_open_candle_actionable", False)
-    lower_timeframe_trigger = _has_lower_timeframe_trigger(signal, trade_plan)
-    allow_lower_timeframe = _bool_param(
-        context.strategy_params,
-        "allow_lower_timeframe_trigger_actionable",
-        False,
-    )
-    blocked_by_open = candle_state == "open" and not allow_open
-    blocked_by_lower_timeframe = (
-        lower_timeframe_trigger
-        and not blocked_by_open
-        and _is_actionable_status(status)
-        and not allow_lower_timeframe
-    )
-    final_status = status
-    final_reason = status_reason
-    auto_entry: SignalAutoEntrySnapshot | None = None
-    risks: list[str] = []
-    explanation: list[str] = []
-    final_setup = setup
-
-    if blocked_by_open:
-        final_status = "watchlist"
-        final_reason = "forming_candle: forming candle preview is not actionable until the candle closes"
-        auto_entry = SignalAutoEntrySnapshot(
-            enabled=False,
-            status="cancelled",
-            message=final_reason,
-        )
-        risks.append("forming_candle: forming candle preview is not actionable until the candle closes")
-        explanation.append("forming candle preview: open candle is watchlist-only until it closes.")
-        final_setup = _setup_with_actionability_source_check(
-            setup,
-            stage="forming",
-            check=SignalLayerCheck(
-                name="candle_state_gate",
-                status="warning",
-                reason=final_reason,
-                metadata={
-                    "reason_code": "forming_candle",
-                    "candle_state": candle_state,
-                    "allow_open_candle_actionable": allow_open,
-                },
-            ),
-        )
-    elif candle_state == "open" and allow_open and _is_actionable_status(status):
-        explanation.append("forming candle preview is explicitly allowed to remain actionable by configuration.")
-
-    if blocked_by_lower_timeframe:
-        final_status = "ready"
-        final_reason = (
-            "lower_timeframe_trigger: actionable classification requires "
-            "allow_lower_timeframe_trigger_actionable=true"
-        )
-        auto_entry = SignalAutoEntrySnapshot(
-            enabled=False,
-            status="cancelled",
-            message=final_reason,
-        )
-        risks.append(final_reason)
-
-    confirmation = _confirmation_with_actionability_source_checks(
-        confirmation=confirmation,
-        candle_state=candle_state,
-        allow_open=allow_open,
-        blocked_by_open=blocked_by_open,
-        lower_timeframe_trigger=lower_timeframe_trigger,
-        allow_lower_timeframe=allow_lower_timeframe,
-        blocked_by_lower_timeframe=blocked_by_lower_timeframe,
-        final_status=final_status,
-    )
-    trade_plan = _trade_plan_with_actionability_source_metadata(
-        trade_plan=trade_plan,
-        candle_state=candle_state,
-        allow_open=allow_open,
-        blocked_by_open=blocked_by_open,
-        lower_timeframe_trigger=lower_timeframe_trigger,
-        allow_lower_timeframe=allow_lower_timeframe,
-        blocked_by_lower_timeframe=blocked_by_lower_timeframe,
-        final_status=final_status,
-    )
-    return ActionabilitySourceDecision(
-        status=final_status,
-        status_reason=final_reason,
-        confirmation=confirmation,
-        setup=final_setup,
-        trade_plan=trade_plan,
-        auto_entry=auto_entry,
-        risks=tuple(risks),
-        explanation=tuple(explanation),
-    )
-
-
-def _setup_with_actionability_source_check(
-    setup: StrategySetupSnapshot,
-    *,
-    stage: Literal["forming", "ready", "confirmed"],
-    check: SignalLayerCheck,
-) -> StrategySetupSnapshot:
-    return setup.model_copy(
-        update={
-            "stage": stage,
-            "checks": [*setup.checks, check],
-        }
-    )
-
-
-def _confirmation_with_actionability_source_checks(
-    *,
-    confirmation: SignalConfirmationSnapshot,
-    candle_state: str,
-    allow_open: bool,
-    blocked_by_open: bool,
-    lower_timeframe_trigger: bool,
-    allow_lower_timeframe: bool,
-    blocked_by_lower_timeframe: bool,
-    final_status: str,
-) -> SignalConfirmationSnapshot:
-    checks = [
-        *confirmation.checks,
-        SignalLayerCheck(
-            name="candle_state_gate",
-            status="warning" if blocked_by_open else "passed",
-            reason=(
-                "forming_candle: forming candle preview is not actionable until the candle closes"
-                if blocked_by_open
-                else "Open candle actionability is explicitly allowed by configuration"
-                if candle_state == "open" and allow_open and _is_actionable_status(final_status)
-                else f"Signal evaluated on a {candle_state} candle"
-            ),
-            metadata={
-                "reason_code": "forming_candle" if blocked_by_open else None,
-                "candle_state": candle_state,
-                "allow_open_candle_actionable": allow_open,
-                "open_candle_preview": candle_state == "open",
-                "actionable_from_open_candle": candle_state == "open" and allow_open and _is_actionable_status(final_status),
-                "signal_actionable": _is_actionable_status(final_status),
-            },
-        ),
-    ]
-    if lower_timeframe_trigger:
-        checks.append(
-            SignalLayerCheck(
-                name="lower_timeframe_trigger_gate",
-                status="warning" if blocked_by_lower_timeframe else "passed",
-                reason=(
-                    "lower_timeframe_trigger: actionable classification requires "
-                    "allow_lower_timeframe_trigger_actionable=true"
-                    if blocked_by_lower_timeframe
-                    else "Lower-timeframe trigger actionability is explicitly allowed by configuration"
-                ),
-                metadata={
-                    "reason_code": "lower_timeframe_trigger" if blocked_by_lower_timeframe else None,
-                    "lower_timeframe_trigger": True,
-                    "allow_lower_timeframe_trigger_actionable": allow_lower_timeframe,
-                    "actionable_from_lower_timeframe_trigger": (
-                        allow_lower_timeframe and _is_actionable_status(final_status)
-                    ),
-                    "signal_actionable": _is_actionable_status(final_status),
-                },
-            )
-        )
-    return confirmation.model_copy(
-        update={
-            "passed": confirmation.passed and not blocked_by_open and not blocked_by_lower_timeframe,
-            "checks": checks,
-        }
-    )
-
-
-def _trade_plan_with_actionability_source_metadata(
-    *,
-    trade_plan: TradePlan,
-    candle_state: str,
-    allow_open: bool,
-    blocked_by_open: bool,
-    lower_timeframe_trigger: bool,
-    allow_lower_timeframe: bool,
-    blocked_by_lower_timeframe: bool,
-    final_status: str,
-) -> TradePlan:
-    signal_actionable = _is_actionable_status(final_status)
-    source_metadata: dict[str, Any] = {
-        "candle_state": candle_state,
-        "open_candle_preview": candle_state == "open",
-        "allow_open_candle_actionable": allow_open,
-        "actionable_from_open_candle": candle_state == "open" and allow_open and signal_actionable,
-        "lower_timeframe_trigger": lower_timeframe_trigger,
-        "allow_lower_timeframe_trigger_actionable": allow_lower_timeframe,
-        "actionable_from_lower_timeframe_trigger": lower_timeframe_trigger and allow_lower_timeframe and signal_actionable,
-    }
-    if blocked_by_open:
-        source_metadata.update(
-            {
-                "signal_actionable": False,
-                "execution_allowed_virtual": False,
-                "execution_allowed_real": False,
-                "auto_entry_enabled": False,
-                "actionability_block_reason": "forming_candle",
-            }
-        )
-    elif blocked_by_lower_timeframe:
-        source_metadata.update(
-            {
-                "signal_actionable": False,
-                "execution_allowed_virtual": False,
-                "execution_allowed_real": False,
-                "auto_entry_enabled": False,
-                "actionability_block_reason": "lower_timeframe_trigger",
-            }
-        )
-    elif candle_state == "open" and allow_open and signal_actionable:
-        source_metadata["actionability_source"] = "open_candle_explicitly_allowed"
-    elif lower_timeframe_trigger and allow_lower_timeframe and signal_actionable:
-        source_metadata["actionability_source"] = "lower_timeframe_trigger_explicitly_allowed"
-
-    metadata = dict(trade_plan.metadata)
-    metadata.update(source_metadata)
-    risk_metadata = dict(trade_plan.risk_rules.metadata)
-    risk_metadata.update(source_metadata)
-    risk_rules = trade_plan.risk_rules.model_copy(update={"metadata": risk_metadata})
-    return trade_plan.model_copy(
-        update={
-            "metadata": metadata,
-            "risk_rules": risk_rules,
-        },
-        deep=True,
-    )
-
-
-def _has_lower_timeframe_trigger(signal: StrategySignal, trade_plan: TradePlan) -> bool:
-    metadata_sources = [
-        trade_plan.metadata,
-        trade_plan.entry.metadata,
-        trade_plan.risk_rules.metadata,
-    ]
-    if trade_plan.invalidation is not None:
-        metadata_sources.append(trade_plan.invalidation.metadata)
-    if signal.invalidation is not None:
-        metadata_sources.append(signal.invalidation.metadata)
-    for metadata in metadata_sources:
-        if _bool_param(metadata, "lower_timeframe_trigger", False):
-            return True
-        trigger_source = str(metadata.get("trigger_source") or "").strip().lower()
-        if trigger_source in {"lower_timeframe", "lower_timeframe_trigger", "ltf"}:
-            return True
-        trigger_timeframe = metadata.get("trigger_timeframe") or metadata.get("lower_timeframe")
-        if isinstance(trigger_timeframe, str) and _is_lower_timeframe(trigger_timeframe, signal.timeframe):
-            return True
-    return False
-
-
-def _is_lower_timeframe(candidate: str, reference: str) -> bool:
-    order = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
-    candidate_value = order.get(candidate.strip().lower())
-    reference_value = order.get(reference.strip().lower())
-    return candidate_value is not None and reference_value is not None and candidate_value < reference_value
-
-
-def _is_actionable_status(status: str) -> bool:
-    return status in {"actionable", "active", "entry_touched"}
-
-
-def _ensure_trade_plan(signal: StrategySignal) -> StrategySignal:
-    if signal.trade_plan is not None:
-        return signal
-    return signal.model_copy(update={"trade_plan": _trade_plan_from_signal(signal)})
-
-
-def _trade_plan_from_signal(signal: StrategySignal) -> TradePlan:
-    return build_trade_plan_from_legacy_fields(
-        entry_min=signal.entry_min,
-        entry_max=signal.entry_max,
-        stop_loss=signal.stop_loss,
-        take_profit_1=signal.take_profit_1,
-        take_profit_2=signal.take_profit_2,
-        risk_reward=signal.risk_reward,
-        first_target_rr=signal.first_target_rr,
-        final_target_rr=signal.final_target_rr,
-        selected_rr=signal.selected_rr,
-        selected_rr_target=signal.selected_rr_target,
-        min_rr_ratio=signal.min_rr_ratio,
-    )
 
 
 def _sync_trade_plan_entry(
@@ -1459,26 +1014,6 @@ def _entry_price_from_bounds(entry_min: float | None, entry_max: float | None) -
     if entry_min is not None and entry_max is not None:
         return (entry_min + entry_max) / 2
     return entry_min if entry_min is not None else entry_max
-
-
-def _trade_plan_target_from_exit_target(target: dict[str, Any]) -> TradePlanTarget:
-    metadata = {
-        key: value
-        for key, value in target.items()
-        if key not in {"label", "price", "r_multiple", "action", "close_percent", "source"}
-    }
-    existing_metadata = target.get("metadata")
-    if isinstance(existing_metadata, dict):
-        metadata.update(existing_metadata)
-    return TradePlanTarget(
-        label=str(target.get("label") or "target"),
-        price=_number_or_none(target.get("price")),
-        r_multiple=_number_or_none(target.get("r_multiple")),
-        action=str(target["action"]) if target.get("action") is not None else None,
-        close_percent=target.get("close_percent"),
-        source=str(target["source"]) if target.get("source") is not None else None,
-        metadata=metadata,
-    )
 
 
 def _planned_targets_by_label(signal: StrategySignal) -> dict[str, TradePlanTarget]:
@@ -2382,23 +1917,6 @@ def _overextension_metadata(overextension: OverextensionAssessment) -> dict[str,
     }
 
 
-def _risk_reward_metadata(risk_reward: RiskRewardAssessment) -> dict[str, Any]:
-    metadata: dict[str, Any] = {
-        "first_target_rr": risk_reward.first_target_rr,
-        "final_target_rr": risk_reward.final_target_rr,
-        "selected_rr": risk_reward.rr,
-        "selected_rr_target": risk_reward.target_key,
-        "selected_rr_label": risk_reward.target_label,
-        "min_rr_ratio": risk_reward.min_rr,
-        "risk_reward_guard_mode": risk_reward.guard_mode,
-        "risk_reward_warning": risk_reward.warning,
-        "risk_reward_warning_reason": risk_reward.warning_reason,
-        "risk_reward_blocked": risk_reward.blocked,
-        "risk_reward_block_reason": risk_reward.block_reason,
-    }
-    return metadata
-
-
 def _confirmation_with_no_trade_check(
     confirmation: SignalConfirmationSnapshot,
     no_trade: NoTradeFilterResult,
@@ -2429,92 +1947,6 @@ def _confirmation_with_no_trade_check(
             ],
         }
     )
-
-
-def _confirmation_with_trade_plan_completeness(
-    *,
-    confirmation: SignalConfirmationSnapshot,
-    completeness: TradePlanCompletenessResult,
-    production_mode: bool,
-) -> SignalConfirmationSnapshot:
-    if completeness.complete:
-        status = "passed"
-    elif production_mode:
-        status = "failed"
-    else:
-        status = "warning"
-    check = SignalLayerCheck(
-        name="trade_plan_completeness",
-        status=status,
-        reason=_trade_plan_completeness_reason(completeness, production_mode),
-        metadata=_trade_plan_completeness_metadata(completeness, production_mode),
-    )
-    return confirmation.model_copy(
-        update={
-            "passed": confirmation.passed and status != "failed",
-            "checks": [*confirmation.checks, check],
-        }
-    )
-
-
-def _trade_plan_with_completeness_metadata(
-    *,
-    trade_plan: TradePlan,
-    completeness: TradePlanCompletenessResult,
-    production_mode: bool,
-) -> TradePlan:
-    completeness_metadata = _trade_plan_completeness_metadata(completeness, production_mode)
-    metadata = dict(trade_plan.metadata)
-    metadata.update(completeness_metadata)
-    metadata["trade_plan_completeness"] = completeness.model_dump(mode="json")
-    risk_metadata = dict(trade_plan.risk_rules.metadata)
-    risk_metadata.update(completeness_metadata)
-    risk_rules = trade_plan.risk_rules.model_copy(update={"metadata": risk_metadata})
-    return trade_plan.model_copy(
-        update={
-            "metadata": metadata,
-            "risk_rules": risk_rules,
-        },
-        deep=True,
-    )
-
-
-def _trade_plan_completeness_metadata(
-    completeness: TradePlanCompletenessResult,
-    production_mode: bool,
-) -> dict[str, Any]:
-    return {
-        "trade_plan_complete": completeness.complete,
-        "fallback_used": completeness.fallback_used,
-        "fallback_stop_used": completeness.fallback_stop_used,
-        "fallback_targets_used": completeness.fallback_targets_used,
-        "has_structural_stop": completeness.has_structural_stop,
-        "has_invalidation_thesis": completeness.has_invalidation_thesis,
-        "has_structural_target": completeness.has_structural_target,
-        "missing": list(completeness.missing),
-        "research_mode": not production_mode,
-        "production_mode": production_mode,
-        "signal_actionable": completeness.complete or not production_mode,
-        "execution_allowed_virtual": completeness.complete or not production_mode,
-        "execution_allowed_real": completeness.complete and production_mode,
-        "decision_scope": "production" if production_mode else "research",
-    }
-
-
-def _trade_plan_completeness_reason(
-    completeness: TradePlanCompletenessResult,
-    production_mode: bool,
-) -> str:
-    if completeness.complete:
-        return "Trade plan has structural stop, invalidation and target thesis."
-    if production_mode:
-        return _trade_plan_incomplete_status_reason(completeness)
-    return "Trade plan is research-compatible but incomplete for production actionability."
-
-
-def _trade_plan_incomplete_status_reason(completeness: TradePlanCompletenessResult) -> str:
-    missing = ", ".join(completeness.missing) if completeness.missing else "structural trade plan"
-    return f"Trade plan incomplete: {missing}; production actionability is blocked."
 
 
 def _overextension_check(confirmation: SignalConfirmationSnapshot) -> SignalLayerCheck | None:
@@ -2625,174 +2057,6 @@ def _number_or_none(value: Any) -> float | None:
         return None
 
 
-def _assess_risk_reward(
-    signal: StrategySignal,
-    params: Mapping[str, Any],
-    rr_guard_context: str = "discovery",
-) -> RiskRewardAssessment:
-    min_rr = _strategy_numeric_param(params, "min_rr_ratio", signal.strategy, DEFAULT_MIN_RR_RATIO)
-    guard_mode = resolve_rr_guard_mode(
-        params,
-        context=rr_guard_context,
-        strategy=signal.strategy,
-        strategy_risk_settings=params,
-    )
-    if min_rr <= 0:
-        return RiskRewardAssessment(
-            passed=True,
-            rr=signal.risk_reward,
-            min_rr=min_rr,
-            guard_mode=guard_mode,
-            status="skipped",
-            meets_min_rr=True,
-            blocked=False,
-            warning=False,
-            warning_reason=None,
-            block_reason=None,
-            target_key="disabled",
-            target_label="disabled",
-            first_target_rr=_target_rr(signal, signal.take_profit_1),
-            final_target_rr=_target_rr(signal, signal.take_profit_2 or signal.take_profit_1),
-            reason="Risk/reward guard is disabled for this strategy",
-        )
-
-    first_target_rr = _target_rr(signal, signal.take_profit_1)
-    final_target_rr = _target_rr(signal, signal.take_profit_2 or signal.take_profit_1)
-    rr_target = _rr_target_key(params, signal.strategy)
-    if rr_target == "nearest":
-        selected_rr = first_target_rr if first_target_rr is not None else final_target_rr
-        target_label = "nearest target" if first_target_rr is not None else "nearest valid target"
-    else:
-        selected_rr = final_target_rr if final_target_rr is not None else signal.risk_reward
-        target_label = "planned final target"
-
-    if selected_rr is None:
-        reason = "Risk/reward blocked: entry, stop or target is missing"
-        if _has_unusable_profit_target(signal):
-            reason = "Risk/reward blocked: no planned target is beyond the entry price"
-        return RiskRewardAssessment(
-            passed=False,
-            rr=None,
-            min_rr=min_rr,
-            guard_mode=guard_mode,
-            status="failed",
-            meets_min_rr=False,
-            blocked=True,
-            warning=False,
-            warning_reason=None,
-            block_reason=reason,
-            target_key=rr_target,
-            target_label=target_label,
-            first_target_rr=first_target_rr,
-            final_target_rr=final_target_rr,
-            reason=reason,
-        )
-
-    if selected_rr < min_rr:
-        nearest_text = (
-            "not beyond entry"
-            if first_target_rr is None and signal.take_profit_1 is not None
-            else "-" if first_target_rr is None else f"{first_target_rr:.2f}R"
-        )
-        final_text = "-" if final_target_rr is None else f"{final_target_rr:.2f}R"
-        target_context = (
-            f"(TP1 {nearest_text}, final {final_text})"
-            if rr_target == "nearest" and first_target_rr is None and signal.take_profit_1 is not None
-            else f"(nearest {nearest_text}, final {final_text})"
-        )
-        threshold_reason = (
-            f"Risk/reward blocked: {target_label} is {selected_rr:.2f}R, "
-            f"below configured minimum {min_rr:.2f}R "
-            f"{target_context}"
-        )
-        if guard_mode == "hard":
-            return RiskRewardAssessment(
-                passed=False,
-                rr=selected_rr,
-                min_rr=min_rr,
-                guard_mode=guard_mode,
-                status="failed",
-                meets_min_rr=False,
-                blocked=True,
-                warning=False,
-                warning_reason=None,
-                block_reason=threshold_reason,
-                target_key=rr_target,
-                target_label=target_label,
-                first_target_rr=first_target_rr,
-                final_target_rr=final_target_rr,
-                reason=threshold_reason,
-            )
-        if guard_mode == "soft":
-            warning_reason = threshold_reason.replace("Risk/reward blocked:", "Risk/reward warning:", 1)
-            return RiskRewardAssessment(
-                passed=True,
-                rr=selected_rr,
-                min_rr=min_rr,
-                guard_mode=guard_mode,
-                status="warning",
-                meets_min_rr=False,
-                blocked=False,
-                warning=True,
-                warning_reason=warning_reason,
-                block_reason=None,
-                target_key=rr_target,
-                target_label=target_label,
-                first_target_rr=first_target_rr,
-                final_target_rr=final_target_rr,
-                reason=warning_reason,
-            )
-        return RiskRewardAssessment(
-            passed=True,
-            rr=selected_rr,
-            min_rr=min_rr,
-            guard_mode=guard_mode,
-            status="skipped",
-            meets_min_rr=False,
-            blocked=False,
-            warning=False,
-            warning_reason=None,
-            block_reason=None,
-            target_key=rr_target,
-            target_label=target_label,
-            first_target_rr=first_target_rr,
-            final_target_rr=final_target_rr,
-            reason=(
-                f"Risk/reward guard is off: {target_label} is {selected_rr:.2f}R, "
-                f"minimum for reporting is {min_rr:.2f}R {target_context}"
-            ),
-        )
-
-    return RiskRewardAssessment(
-        passed=True,
-        rr=selected_rr,
-        min_rr=min_rr,
-        guard_mode=guard_mode,
-        status="skipped" if guard_mode == "off" else "passed",
-        meets_min_rr=True,
-        blocked=False,
-        warning=False,
-        warning_reason=None,
-        block_reason=None,
-        target_key=rr_target,
-        target_label=target_label,
-        first_target_rr=first_target_rr,
-        final_target_rr=final_target_rr,
-        reason=(
-            f"Risk/reward passed: {target_label} is {selected_rr:.2f}R, minimum {min_rr:.2f}R"
-            if guard_mode != "off"
-            else f"Risk/reward guard is off: {target_label} is {selected_rr:.2f}R"
-        ),
-    )
-
-
-def _rr_target_key(params: Mapping[str, Any], strategy: str) -> str:
-    raw_target = str(params.get("rr_target") or RR_TARGET_BY_STRATEGY.get(strategy, "final")).strip().lower()
-    if raw_target in {"first", "nearest", "tp1"}:
-        return "nearest"
-    return "final"
-
-
 def _target_rr(signal: StrategySignal, target: float | None) -> float | None:
     entry = _entry_price(signal)
     stop = signal.stop_loss
@@ -2814,16 +2078,6 @@ def _target_reward(signal: StrategySignal, target: float, entry: float | None = 
     if signal.direction.lower() == "long":
         return target - entry
     return entry - target
-
-
-def _has_unusable_profit_target(signal: StrategySignal) -> bool:
-    entry = _entry_price(signal)
-    if entry is None or signal.stop_loss is None:
-        return False
-    return any(
-        target is not None and _target_reward(signal, target, entry) <= 0
-        for target in (signal.take_profit_1, signal.take_profit_2)
-    )
 
 
 def _hide_failed_rr_signals(params: Mapping[str, Any]) -> bool:

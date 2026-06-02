@@ -853,9 +853,11 @@ backtest contexts may continue with warnings.
 
 Strategy trade plans are level-aware when strategy context exposes structure:
 
-- `trend_pullback_continuation` uses an EMA20/EMA50 pullback-zone entry model,
-  structure-aware TP1/TP2, and may add `time_stop_bars` in
-  `TradePlan.risk_rules.metadata`.
+- `trend_pullback_continuation` uses a structural pullback-zone entry model:
+  VWAP/deviation, liquidity/session/PDH/PDL levels, HTF support/resistance,
+  imbalance/orderbook walls, and EMA20/EMA50 fallback may all be recorded as
+  the selected pullback zone. Structure-aware TP1/TP2 and `time_stop_bars`
+  remain backward compatible in `TradePlan.risk_rules.metadata`.
 - `volatility_squeeze_breakout` records `aggressive_breakout` or
   `conservative_retest` entry metadata and stores the measured move as an
   executable `TradePlanTarget` when enabled.
@@ -898,6 +900,13 @@ Strategy runtime params include:
 - `trend_pullback_continuation.funding_block_threshold`
 - `trend_pullback_continuation.crowded_oi_change_threshold`
 - `trend_pullback_continuation.crowded_oi_penalty`
+- `trend_pullback_continuation.require_structural_zone`
+- `trend_pullback_continuation.require_delta_confirmation`
+- `trend_pullback_continuation.require_absorption_or_reclaim`
+- `trend_pullback_continuation.min_zone_quality_score`
+- `trend_pullback_continuation.min_continuation_score`
+- `trend_pullback_continuation.max_exhaustion_score`
+- `trend_pullback_continuation.min_htf_target_distance_r`
 
 `Features` may expose intraday range context for level-aware strategies:
 `session_high`, `session_low`, `previous_day_high`, and `previous_day_low`.
@@ -1010,6 +1019,71 @@ Backtests must not use future or live alpha data. When historical trades, L2,
 or derivative history are unavailable, backtest assumptions and trade metadata
 must expose `alpha_context_available=false` and
 `alpha_context_missing_sources` rather than filling synthetic orderflow values.
+
+## Trend Pullback AUD-09 Additive Metadata
+
+`trend_pullback_continuation` keeps the existing `StrategySignal` and
+`TradePlan` schemas. AUD-09 adds only internal strategy structures plus
+additive trade-plan and decision metadata.
+
+The selected structural pullback zone may be written to
+`TradePlan.metadata.structural_pullback_zone`,
+`TradePlan.entry.metadata.structural_pullback_zone`,
+`TradePlan.risk_rules.metadata.structural_pullback_zone`, and
+`TradePlan.invalidation.metadata.structural_pullback_zone`:
+
+```python
+StructuralPullbackZone = {
+    "source": (
+        "vwap" | "vwap_deviation" | "liquidity_pool" | "imbalance" |
+        "ema20" | "ema50" | "range_boundary" | "htf_support_resistance"
+    ),
+    "price": float,
+    "distance_atr": float,
+    "quality_score": float,
+    "metadata": dict,
+}
+```
+
+The strategy may also write:
+
+```python
+TrendPullbackMetadata = {
+    "structural_zone_source": str | None,
+    "structural_zone_price": float | None,
+    "structural_zone_quality_score": float | None,
+    "require_structural_zone": bool,
+    "structural_zone_ok": bool,
+    "continuation_score": float,
+    "min_continuation_score": float,
+    "delta_confirmed": bool,
+    "absorption_confirmed": bool,
+    "reclaimed_pullback_zone": bool,
+    "exhaustion_score": float,
+    "exhaustion_reasons": list[str],
+    "max_exhaustion_score": float,
+    "crowded_trade_score": float,
+    "crowded_trade_reasons": list[str],
+    "funding_pressure": float | None,
+    "funding_rate": float | None,
+    "oi_delta": float | None,
+    "nearest_htf_target": float | None,
+    "nearest_htf_target_source": str | None,
+    "nearest_htf_target_distance_r": float | None,
+    "min_htf_target_distance_r": float,
+    "alpha_context_used": bool,
+    "missing_alpha_sources": list[str],
+}
+```
+
+Trend pullback confirmation checks may add `DecisionReason` entries with
+codes `trend_structural_zone`, `trend_continuation_confirmation`,
+`trend_exhaustion`, `trend_crowded_trade`, and `trend_htf_target_room`.
+`trend_exhaustion` is setup-sourced by default. `trend_crowded_trade` is
+risk-sourced and is a warning by default; it becomes a blocker only when an
+explicit hard crowded-trade setting is enabled. Missing `AlphaMarketContext`
+must be recorded in `missing_alpha_sources` and must not be silently converted
+into zero delta, CVD, OI, or funding evidence.
 
 ## Liquidity Sweep Reversal AUD-07 Additive Metadata
 

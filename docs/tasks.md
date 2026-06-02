@@ -65,7 +65,7 @@ candle-state, and exit changes against the saved LAB-02 baseline artifact.
 6. [x] AUD-06: Add AlphaMarketContext and smart-money/orderflow features.
 7. [x] AUD-07: Improve liquidity_sweep_reversal with smart-money/orderflow context.
 8. [x] AUD-08: Improve breakout strategy with accepted breakout vs fakeout classifier.
-9. [ ] AUD-09: strategy upgrades.
+9. [x] AUD-09: Improve trend_pullback with structural pullback and exhaustion filters.
 10. [ ] AUD-10: market-based exits.
 11. [ ] AUD-11: real execution readiness. Blocked by AUD-01, AUD-02, AUD-03,
     AUD-04, AUD-05, AUD-06, AUD-07, AUD-08, AUD-09, and AUD-10.
@@ -131,6 +131,26 @@ market-based exits are complete.
 - [x] Add targeted tests for accepted breakout, fakeout wick, large retest,
   missing alpha context, invalidation metadata, aggressive/conservative params,
   and backtest grouping.
+
+### AUD-09 Checklist
+
+- [x] Add structural trend-pullback zones with priority for VWAP/deviation,
+  liquidity/session/PDH/PDL, HTF support/resistance, imbalance, and EMA
+  fallback.
+- [x] Add continuation confirmation metadata for reclaim/absorption, delta,
+  volume, and configurable minimum continuation score.
+- [x] Add exhaustion score, reasons, max threshold, and unified decision reason
+  `trend_exhaustion`.
+- [x] Add funding/OI crowded-trade penalty using `AlphaMarketContext` first and
+  `Features` fallback, with hard block only by explicit config.
+- [x] Add HTF/liquidity target-room preview metadata without changing AUD-10
+  exit behavior.
+- [x] Add structural invalidation metadata for loss of pullback zone, VWAP/zone
+  acceptance against continuation, and swing/structure loss.
+- [x] Record trend-pullback experiment params in backtest assumptions.
+- [x] Add targeted tests for structural zones, EMA-only watchlist behavior,
+  exhaustion, crowded funding/OI, missing alpha, HTF target room, invalidation,
+  and backtest experiment params.
 
 ## Remaining Follow-Ups
 

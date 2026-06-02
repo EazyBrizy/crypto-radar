@@ -98,6 +98,14 @@ _BREAKOUT_EXPERIMENT_PARAM_KEYS = {
     "fakeout_risk_max_score",
 }
 
+_TREND_PULLBACK_EXPERIMENT_PARAM_KEYS = {
+    "require_structural_zone",
+    "require_delta_confirmation",
+    "max_exhaustion_score",
+    "crowded_oi_penalty",
+    "min_htf_target_distance_r",
+}
+
 _STOP_REASONS = {"stop_loss", "breakeven_stop", "trailing_stop"}
 
 
@@ -674,6 +682,9 @@ def _assumptions_for_backtest(
     breakout_params = _breakout_experiment_params(request)
     if breakout_params:
         values.setdefault("breakout_classifier_experiment_params", breakout_params)
+    trend_pullback_params = _trend_pullback_experiment_params(request)
+    if trend_pullback_params:
+        values.setdefault("trend_pullback_experiment_params", trend_pullback_params)
     if mode == "discovery":
         values.setdefault("risk_gate_enabled", False)
         values.setdefault("rr_hard_gate_enabled", False)
@@ -735,6 +746,19 @@ def _breakout_experiment_params(request: BacktestRunRequest) -> dict[str, Any]:
     nested = dict(_mapping_param(request.params.get("strategy_params")))
     result: dict[str, Any] = {}
     for key in _BREAKOUT_EXPERIMENT_PARAM_KEYS:
+        if key in request.params:
+            result[key] = request.params[key]
+        elif key in nested:
+            result[key] = nested[key]
+    return result
+
+
+def _trend_pullback_experiment_params(request: BacktestRunRequest) -> dict[str, Any]:
+    if _resolve_strategy_code(request.strategy_code) != "trend_pullback_continuation":
+        return {}
+    nested = dict(_mapping_param(request.params.get("strategy_params")))
+    result: dict[str, Any] = {}
+    for key in _TREND_PULLBACK_EXPERIMENT_PARAM_KEYS:
         if key in request.params:
             result[key] = request.params[key]
         elif key in nested:

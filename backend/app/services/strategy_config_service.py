@@ -77,6 +77,13 @@ DEFAULT_STRATEGY_PARAMS_BY_CODE: dict[str, dict[str, Any]] = {
         "funding_block_threshold": 0.0015,
         "crowded_oi_change_threshold": 0.02,
         "crowded_oi_penalty": 15,
+        "require_structural_zone": False,
+        "require_delta_confirmation": False,
+        "require_absorption_or_reclaim": True,
+        "min_zone_quality_score": 0.35,
+        "min_continuation_score": 0.45,
+        "max_exhaustion_score": 0.70,
+        "min_htf_target_distance_r": 0.0,
     },
     "volatility_squeeze_breakout": {
         "bb_width_percentile_threshold": 20.0,

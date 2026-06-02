@@ -282,6 +282,11 @@ class SignalDecisionService:
         setup_check_names = {
             "breakout_acceptance_classifier",
             "retest_required_after_large_breakout",
+            "trend_structural_zone",
+            "trend_continuation_confirmation",
+            "trend_exhaustion",
+            "trend_crowded_trade",
+            "trend_htf_target_room",
         }
         blockers: list[DecisionReason] = []
         warnings: list[DecisionReason] = []
@@ -290,10 +295,11 @@ class SignalDecisionService:
                 continue
             metadata = dict(check.metadata)
             scope = _scope_from_context(str(metadata.get("scope") or "discovery"))
+            source = _source_from_metadata(metadata.get("source"))
             reason = DecisionReason(
                 code=str(metadata.get("reason_code") or check.name),
                 message=check.reason or check.name.replace("_", " "),
-                source="setup",
+                source=source,
                 severity="blocker" if check.status == "failed" else "warning",
                 scope=scope,
                 metadata=metadata,
@@ -601,6 +607,13 @@ def _metadata_bool(metadata: Mapping[str, Any], key: str) -> bool | None:
     if isinstance(value, bool):
         return value
     return None
+
+
+def _source_from_metadata(value: Any) -> DecisionReasonSource:
+    normalized = str(value or "setup").strip().lower()
+    if normalized in {"setup", "market_quality", "rr", "no_trade", "risk", "execution", "data"}:
+        return cast(DecisionReasonSource, normalized)
+    return "setup"
 
 
 def _scope_from_context(context: str | None) -> DecisionReasonScope:

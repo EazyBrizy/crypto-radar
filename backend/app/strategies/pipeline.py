@@ -734,6 +734,7 @@ class ConfirmationLayer:
             ),
         ]
         checks.extend(_breakout_classifier_checks(signal, context.strategy_params))
+        checks.extend(_trend_pullback_checks(signal, context.strategy_params))
         return SignalConfirmationSnapshot(
             passed=all(check.status != "failed" for check in checks),
             checks=checks,
@@ -773,8 +774,20 @@ class InvalidationLayer:
 
         if signal.strategy == "trend_pullback_continuation":
             time_stop_bars = _optional_positive_int(context.strategy_params.get("time_stop_bars"))
+            structural_zone = _trade_plan_metadata_dict(signal, "structural_pullback_zone")
             metadata.update(
                 {
+                    "source": "structural_pullback_invalidation",
+                    "structural_invalidation": True,
+                    "structural_pullback_zone": structural_zone,
+                    "structural_zone_source": _trade_plan_metadata_string(signal, "structural_zone_source"),
+                    "structural_zone_price": _trade_plan_metadata_number(signal, "structural_zone_price"),
+                    "structural_zone_quality_score": _trade_plan_metadata_number(signal, "structural_zone_quality_score"),
+                    "continuation_score": _trade_plan_metadata_number(signal, "continuation_score"),
+                    "exhaustion_score": _trade_plan_metadata_number(signal, "exhaustion_score"),
+                    "nearest_htf_target": _trade_plan_metadata_number(signal, "nearest_htf_target"),
+                    "nearest_htf_target_source": _trade_plan_metadata_string(signal, "nearest_htf_target_source"),
+                    "nearest_htf_target_distance_r": _trade_plan_metadata_number(signal, "nearest_htf_target_distance_r"),
                     "rsi_long_min": 45.0,
                     "rsi_short_max": 55.0,
                     "trend_invalidation_level": features.swing_low if direction == "long" else features.swing_high,
@@ -784,12 +797,16 @@ class InvalidationLayer:
             )
             if direction == "long":
                 conditions = [
+                    "Close loses the structural pullback zone",
+                    "Close accepts below VWAP/zone after reclaim",
                     "Close below EMA50",
                     "Break below last swing low",
                     "RSI loses the 45 zone",
                 ]
             else:
                 conditions = [
+                    "Close reclaims above the structural pullback zone",
+                    "Close accepts above VWAP/zone after rejection",
                     "Close above EMA50",
                     "Break above last swing high",
                     "RSI reclaims the 55 zone",
@@ -1149,6 +1166,173 @@ def _breakout_classifier_checks(
     return checks
 
 
+def _trend_pullback_checks(
+    signal: StrategySignal,
+    params: Mapping[str, Any],
+) -> list[SignalLayerCheck]:
+    if signal.strategy != "trend_pullback_continuation" or signal.trade_plan is None:
+        return []
+
+    structural_zone = _trade_plan_metadata_dict(signal, "structural_pullback_zone")
+    continuation_score = _trade_plan_metadata_number(signal, "continuation_score")
+    min_continuation_score = _trade_plan_metadata_number(signal, "min_continuation_score")
+    if min_continuation_score is None:
+        min_continuation_score = _strategy_numeric_param(
+            params,
+            "min_continuation_score",
+            signal.strategy,
+            0.45,
+        )
+    exhaustion_score = _trade_plan_metadata_number(signal, "exhaustion_score")
+    max_exhaustion_score = _trade_plan_metadata_number(signal, "max_exhaustion_score")
+    if max_exhaustion_score is None:
+        max_exhaustion_score = _strategy_numeric_param(
+            params,
+            "max_exhaustion_score",
+            signal.strategy,
+            0.70,
+        )
+    crowded_score = _trade_plan_metadata_number(signal, "crowded_trade_score")
+    htf_distance_r = _trade_plan_metadata_number(signal, "nearest_htf_target_distance_r")
+    min_htf_distance_r = _trade_plan_metadata_number(signal, "min_htf_target_distance_r")
+    if min_htf_distance_r is None:
+        min_htf_distance_r = _strategy_numeric_param(
+            params,
+            "min_htf_target_distance_r",
+            signal.strategy,
+            0.0,
+        )
+    require_structural_zone = bool(_trade_plan_metadata_bool(signal, "require_structural_zone"))
+    structural_zone_ok = _trade_plan_metadata_bool(signal, "structural_zone_ok")
+    delta_confirmed = _trade_plan_metadata_bool(signal, "delta_confirmed")
+    absorption_confirmed = _trade_plan_metadata_bool(signal, "absorption_confirmed")
+    reclaimed_zone = _trade_plan_metadata_bool(signal, "reclaimed_pullback_zone")
+    crowded_hard_block = bool(_trade_plan_metadata_bool(signal, "crowded_trade_hard_block"))
+
+    checks: list[SignalLayerCheck] = []
+    structural_failed = require_structural_zone and structural_zone_ok is False
+    if structural_zone is not None or require_structural_zone:
+        checks.append(
+            SignalLayerCheck(
+                name="trend_structural_zone",
+                status="failed" if structural_failed else "passed",
+                score=_number_or_none(structural_zone.get("quality_score")) if structural_zone else None,
+                reason=(
+                    "Trend pullback requires VWAP/liquidity/HTF structure; EMA-only fallback is not enough"
+                    if structural_failed
+                    else "Trend pullback structural zone is available"
+                ),
+                metadata={
+                    "reason_code": "trend_structural_zone",
+                    "source": "setup",
+                    "scope": "discovery",
+                    "structural_pullback_zone": structural_zone,
+                    "require_structural_zone": require_structural_zone,
+                    "structural_zone_ok": structural_zone_ok,
+                },
+            )
+        )
+
+    if continuation_score is not None:
+        continuation_ok = continuation_score >= min_continuation_score
+        checks.append(
+            SignalLayerCheck(
+                name="trend_continuation_confirmation",
+                status="passed" if continuation_ok else "warning",
+                score=round(continuation_score, 4),
+                reason=(
+                    "Trend pullback continuation confirmation passed"
+                    if continuation_ok
+                    else "Trend pullback continuation needs stronger reclaim, absorption, delta or volume evidence"
+                ),
+                metadata={
+                    "reason_code": "trend_continuation_confirmation",
+                    "source": "setup",
+                    "scope": "discovery",
+                    "continuation_score": continuation_score,
+                    "min_continuation_score": min_continuation_score,
+                    "delta_confirmed": delta_confirmed,
+                    "absorption_confirmed": absorption_confirmed,
+                    "reclaimed_pullback_zone": reclaimed_zone,
+                    "missing_alpha_sources": _trade_plan_metadata_list(signal, "missing_alpha_sources"),
+                },
+            )
+        )
+
+    if exhaustion_score is not None:
+        exhaustion_failed = exhaustion_score > max_exhaustion_score
+        checks.append(
+            SignalLayerCheck(
+                name="trend_exhaustion",
+                status="failed" if exhaustion_failed else "passed",
+                score=round(exhaustion_score, 4),
+                reason=(
+                    f"Trend exhaustion score {exhaustion_score:.2f} exceeds {max_exhaustion_score:.2f}"
+                    if exhaustion_failed
+                    else "Trend exhaustion filter passed"
+                ),
+                metadata={
+                    "reason_code": "trend_exhaustion",
+                    "source": "setup",
+                    "scope": "discovery",
+                    "exhaustion_score": exhaustion_score,
+                    "max_exhaustion_score": max_exhaustion_score,
+                    "exhaustion_reasons": _trade_plan_metadata_list(signal, "exhaustion_reasons"),
+                },
+            )
+        )
+
+    if crowded_score is not None and crowded_score > 0:
+        checks.append(
+            SignalLayerCheck(
+                name="trend_crowded_trade",
+                status="failed" if crowded_hard_block else "warning",
+                score=round(crowded_score, 4),
+                reason=(
+                    "Crowded funding/OI pressure is configured as a hard trend-pullback block"
+                    if crowded_hard_block
+                    else "Crowded funding/OI pressure penalizes trend continuation quality"
+                ),
+                metadata={
+                    "reason_code": "trend_crowded_trade",
+                    "source": "risk",
+                    "scope": "discovery",
+                    "crowded_trade_score": crowded_score,
+                    "crowded_trade_reasons": _trade_plan_metadata_list(signal, "crowded_trade_reasons"),
+                    "funding_pressure": _trade_plan_metadata_number(signal, "funding_pressure"),
+                    "funding_rate": _trade_plan_metadata_number(signal, "funding_rate"),
+                    "oi_delta": _trade_plan_metadata_number(signal, "oi_delta"),
+                },
+            )
+        )
+
+    if htf_distance_r is not None and min_htf_distance_r > 0:
+        target_too_close = htf_distance_r < min_htf_distance_r
+        hard_block = _bool_param(params, "block_near_htf_target", False)
+        checks.append(
+            SignalLayerCheck(
+                name="trend_htf_target_room",
+                status="failed" if target_too_close and hard_block else "warning" if target_too_close else "passed",
+                score=round(htf_distance_r, 4),
+                reason=(
+                    f"Nearest HTF/liquidity target is {htf_distance_r:.2f}R away, below {min_htf_distance_r:.2f}R"
+                    if target_too_close
+                    else "HTF/liquidity target room is sufficient"
+                ),
+                metadata={
+                    "reason_code": "trend_htf_target_room",
+                    "source": "setup",
+                    "scope": "discovery",
+                    "nearest_htf_target_distance_r": htf_distance_r,
+                    "min_htf_target_distance_r": min_htf_distance_r,
+                    "nearest_htf_target": _trade_plan_metadata_number(signal, "nearest_htf_target"),
+                    "nearest_htf_target_source": _trade_plan_metadata_string(signal, "nearest_htf_target_source"),
+                },
+            )
+        )
+    return checks
+
+
 def _trade_plan_metadata_number(signal: StrategySignal, key: str) -> float | None:
     if signal.trade_plan is None:
         return None
@@ -1156,6 +1340,14 @@ def _trade_plan_metadata_number(signal: StrategySignal, key: str) -> float | Non
         value = _number_or_none(metadata.get(key))
         if value is not None:
             return value
+    return None
+
+
+def _trade_plan_metadata_dict(signal: StrategySignal, key: str) -> dict[str, Any] | None:
+    for metadata in _trade_plan_metadata_sources(signal):
+        value = metadata.get(key)
+        if isinstance(value, dict):
+            return dict(value)
     return None
 
 

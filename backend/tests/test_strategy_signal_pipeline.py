@@ -1,7 +1,7 @@
 import unittest
 from inspect import signature
 
-from app.schemas.market import AlphaMarketContext, Features
+from app.schemas.market import AlphaMarketContext, DeltaDivergence, Features
 from app.schemas.signal import (
     MarketQualitySnapshot,
     MarketRegimeSnapshot,
@@ -1551,6 +1551,104 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signals[0].status, "actionable")
         self.assertEqual(signals[0].regime.alignment if signals[0].regime else None, "aligned")
 
+    async def test_trend_pullback_vwap_reclaim_with_delta_confirmation_is_actionable(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.6,
+                "price": 100.6,
+                "open": 100.1,
+                "high": 100.8,
+                "low": 99.8,
+                "vwap": 100.0,
+                "ema_20": 99.2,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 50.0,
+                "volume_spike": 1.25,
+                "volume_ma_20": 70.0,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "history_length": 220,
+            }
+        )
+
+        signals = await StrategyEngine().generate_signals(
+            features,
+            context_features=_bullish_context_features(),
+            alpha_context=_trend_alpha_context(features),
+            strategy_configs={
+                "trend_pullback_continuation": type(
+                    "RuntimeConfig",
+                    (),
+                    {
+                        "params": {
+                            "require_structural_zone": True,
+                            "require_delta_confirmation": True,
+                        },
+                        "risk_settings": {"min_rr_ratio": 1.0, "rr_target": "final"},
+                        "pair_scope_configured": False,
+                    },
+                )(),
+            },
+        )
+
+        self.assertEqual(len(signals), 1)
+        signal = signals[0]
+        self.assertEqual(signal.status, "actionable")
+        self.assertEqual(signal.trade_plan.entry.source if signal.trade_plan else None, "vwap_deviation_pullback_zone")
+        metadata = signal.trade_plan.metadata if signal.trade_plan else {}
+        self.assertEqual(metadata.get("structural_zone_source"), "vwap_deviation")
+        self.assertTrue(metadata.get("delta_confirmed"))
+        self.assertIn(
+            "Close loses the structural pullback zone",
+            signal.trade_plan.invalidation.conditions if signal.trade_plan and signal.trade_plan.invalidation else [],
+        )
+
+    async def test_trend_pullback_ema_only_is_watchlist_when_structural_zone_required(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.6,
+                "price": 100.6,
+                "open": 100.1,
+                "high": 100.8,
+                "low": 99.8,
+                "ema_20": 100.0,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 50.0,
+                "volume_spike": 1.2,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "history_length": 220,
+            }
+        )
+
+        signals = await StrategyEngine().generate_signals(
+            features,
+            context_features=_bullish_context_features(),
+            strategy_configs={
+                "trend_pullback_continuation": type(
+                    "RuntimeConfig",
+                    (),
+                    {
+                        "params": {"require_structural_zone": True},
+                        "risk_settings": {"min_rr_ratio": 1.0, "rr_target": "final"},
+                        "pair_scope_configured": False,
+                    },
+                )(),
+            },
+        )
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].status, "watchlist")
+        self.assertLess(signals[0].score_breakdown.overheat_penalty, 100)
+        self.assertTrue(
+            any(
+                check.name == "trend_structural_zone" and check.status == "failed"
+                for check in (signals[0].confirmation.checks if signals[0].confirmation else [])
+            )
+        )
+
     async def test_trend_pullback_far_from_ema_waits_for_new_pullback(self) -> None:
         features = _breakout_features().model_copy(
             update={
@@ -1574,7 +1672,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("entry is late", candidates[0].status_reason or "")
         self.assertEqual(candidates[0].trade_plan.entry.source if candidates[0].trade_plan else None, "ema20_ema50_pullback_zone")
 
-    async def test_trend_pullback_blocks_extreme_positive_funding_for_long(self) -> None:
+    async def test_trend_pullback_marks_extreme_funding_without_hard_block_by_default(self) -> None:
         features = _breakout_features().model_copy(
             update={
                 "close": 100.6,
@@ -1596,7 +1694,9 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
 
         candidates = await TrendPullbackContinuationStrategy().evaluate(features)
 
-        self.assertEqual(candidates, [])
+        self.assertEqual(len(candidates), 1)
+        self.assertIn("Funding pressure", " ".join(candidates[0].risks))
+        self.assertGreater(candidates[0].score_breakdown.overheat_penalty, 0)
 
     async def test_trend_pullback_penalizes_extreme_funding_with_crowded_oi(self) -> None:
         features = _breakout_features().model_copy(
@@ -1623,6 +1723,180 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(candidates), 1)
         self.assertIn("crowded open interest", " ".join(candidates[0].risks))
+
+    async def test_trend_pullback_high_exhaustion_blocks_actionable(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.9,
+                "price": 100.9,
+                "open": 99.7,
+                "high": 101.0,
+                "low": 99.6,
+                "vwap": 100.0,
+                "ema_20": 99.6,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 52.0,
+                "volume_spike": 4.0,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "history_length": 220,
+            }
+        )
+
+        signals = await StrategyEngine().generate_signals(
+            features,
+            context_features=_bullish_context_features(),
+            alpha_context=_trend_alpha_context(
+                features,
+                aggressive_delta=-20.0,
+                cvd_change=-10.0,
+                delta_divergence="bearish_divergence",
+            ),
+            strategy_configs={
+                "trend_pullback_continuation": type(
+                    "RuntimeConfig",
+                    (),
+                    {
+                        "params": {"max_exhaustion_score": 0.50},
+                        "risk_settings": {"min_rr_ratio": 1.0, "rr_target": "final"},
+                        "pair_scope_configured": False,
+                    },
+                )(),
+            },
+        )
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].status, "watchlist")
+        self.assertTrue(
+            any(reason.code == "trend_exhaustion" for reason in (signals[0].decision.blockers if signals[0].decision else []))
+        )
+        self.assertGreater(signals[0].score_breakdown.overheat_penalty, 0)
+
+    async def test_trend_pullback_crowded_funding_oi_penalizes_decision(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.6,
+                "price": 100.6,
+                "open": 100.1,
+                "high": 100.8,
+                "low": 99.8,
+                "vwap": 100.0,
+                "ema_20": 99.2,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 50.0,
+                "volume_spike": 1.2,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "history_length": 220,
+            }
+        )
+
+        clean = await TrendPullbackContinuationStrategy().evaluate(
+            features,
+            {"alpha_context": _trend_alpha_context(features)},
+        )
+        crowded = await TrendPullbackContinuationStrategy().evaluate(
+            features,
+            {
+                "crowded_oi_penalty": 80,
+                "alpha_context": _trend_alpha_context(
+                    features,
+                    funding_rate=0.0018,
+                    funding_pressure=1.2,
+                    oi_delta_15m=0.04,
+                )
+            },
+        )
+
+        self.assertEqual(len(clean), 1)
+        self.assertEqual(len(crowded), 1)
+        self.assertLess(crowded[0].score, clean[0].score)
+        self.assertGreater(crowded[0].score_breakdown.overheat_penalty, clean[0].score_breakdown.overheat_penalty)
+
+        signal = StrategySignalPipeline().finalize(
+            crowded[0],
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"min_rr_ratio": 1.0, "rr_target": "final"},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertTrue(
+            any(reason.code == "trend_crowded_trade" for reason in (signal.decision.warnings if signal and signal.decision else []))
+        )
+
+    async def test_trend_pullback_missing_alpha_context_does_not_crash(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.6,
+                "price": 100.6,
+                "open": 100.1,
+                "high": 100.8,
+                "low": 99.8,
+                "ema_20": 100.0,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 50.0,
+                "volume_spike": 1.2,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "history_length": 220,
+            }
+        )
+
+        candidates = await TrendPullbackContinuationStrategy().evaluate(features)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].trade_plan.metadata.get("alpha_context_used"), False)
+        self.assertIn("alpha_context", candidates[0].trade_plan.metadata.get("missing_alpha_sources", []))
+
+    async def test_trend_pullback_htf_target_too_close_warns_and_blocks_actionable(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "close": 100.6,
+                "price": 100.6,
+                "open": 100.1,
+                "high": 100.8,
+                "low": 99.8,
+                "vwap": 100.0,
+                "ema_20": 99.2,
+                "ema_50": 98.8,
+                "ema_200": 95.0,
+                "rsi_14": 50.0,
+                "volume_spike": 1.2,
+                "previous_high": 100.5,
+                "previous_volume": 60.0,
+                "history_length": 220,
+            }
+        )
+
+        signals = await StrategyEngine().generate_signals(
+            features,
+            context_features=_bullish_context_features(),
+            alpha_context=_trend_alpha_context(features),
+            strategy_configs={
+                "trend_pullback_continuation": type(
+                    "RuntimeConfig",
+                    (),
+                    {
+                        "params": {"min_htf_target_distance_r": 0.75},
+                        "risk_settings": {"min_rr_ratio": 1.0, "rr_target": "final"},
+                        "pair_scope_configured": False,
+                    },
+                )(),
+            },
+        )
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].status, "watchlist")
+        self.assertIsNotNone(signals[0].trade_plan.metadata.get("nearest_htf_target_distance_r"))
+        self.assertTrue(
+            any(reason.code == "trend_htf_target_room" for reason in (signals[0].decision.warnings if signals[0].decision else []))
+        )
 
     async def test_strategies_accept_missing_oi_context(self) -> None:
         features = _breakout_features().model_copy(update={"history_length": 220, "oi_change": None})
@@ -2207,6 +2481,40 @@ def _breakout_alpha_context(features: Features) -> AlphaMarketContext:
         funding_pressure=0.1,
         sweep_through_book=False,
         vwap_acceptance="above_vwap",
+        data_quality={"available_sources": ["recent_trades", "derivative_snapshot"], "missing_sources": []},
+    )
+
+
+def _trend_alpha_context(
+    features: Features,
+    *,
+    aggressive_delta: float = 80.0,
+    cvd_change: float = 40.0,
+    delta_divergence: DeltaDivergence | None = None,
+    funding_rate: float = 0.0002,
+    funding_pressure: float = 0.1,
+    oi_delta_15m: float = 0.01,
+) -> AlphaMarketContext:
+    return AlphaMarketContext(
+        symbol=features.symbol,
+        timeframe=features.timeframe,
+        timestamp=features.timestamp,
+        buy_volume=140.0,
+        sell_volume=60.0,
+        aggressive_delta=aggressive_delta,
+        cvd=80.0,
+        cvd_change=cvd_change,
+        delta_divergence=delta_divergence,
+        oi_delta_5m=oi_delta_15m,
+        oi_delta_15m=oi_delta_15m,
+        funding_rate=funding_rate,
+        funding_pressure=funding_pressure,
+        orderbook_imbalance=0.25,
+        depth_wall_side="bid",
+        depth_wall_price=100.0,
+        absorption_score=0.60,
+        vwap_acceptance="above_vwap",
+        vwap_deviation=0.001,
         data_quality={"available_sources": ["recent_trades", "derivative_snapshot"], "missing_sources": []},
     )
 

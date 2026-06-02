@@ -285,6 +285,42 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertIn("entry_model=aggressive_breakout", result.trades[0].tags)
         self.assertIn("accepted_breakout_score_bucket=0.75-1.00", result.trades[0].tags)
 
+    def test_backtest_records_trend_pullback_experiment_params(self) -> None:
+        candles = _candles()
+        request = _request(candles).model_copy(
+            update={
+                "strategy_code": "trend_pullback_continuation",
+                "params": {
+                    **_request(candles).params,
+                    "strategy_params": {
+                        "require_structural_zone": True,
+                        "require_delta_confirmation": True,
+                        "max_exhaustion_score": 0.55,
+                        "crowded_oi_penalty": 22,
+                        "min_htf_target_distance_r": 0.75,
+                    },
+                },
+            }
+        )
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=AlphaRecordingStrategyEngine(),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(request)
+
+        self.assertEqual(
+            result.assumptions["trend_pullback_experiment_params"],
+            {
+                "require_structural_zone": True,
+                "require_delta_confirmation": True,
+                "max_exhaustion_score": 0.55,
+                "crowded_oi_penalty": 22,
+                "min_htf_target_distance_r": 0.75,
+            },
+        )
+
     def test_no_data_returns_explicit_error(self) -> None:
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         runner = ProductionBacktestRunner(

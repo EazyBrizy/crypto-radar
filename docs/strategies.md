@@ -176,6 +176,24 @@ Risk:
 - TP1 = `1R`
 - TP2 = `2R`
 
+AUD-09 structural runtime notes:
+
+- EMA20/EMA50 remains fallback/context, not the only pullback source.
+- Preferred pullback zones are VWAP or VWAP deviation acceptance/rejection,
+  visible liquidity/session/PDH/PDL/range levels, HTF support/resistance,
+  imbalance/depth-wall context when available, and only then EMA20/EMA50.
+- Long continuation expects a pullback into the selected structural zone,
+  reclaim/acceptance above the zone or VWAP/EMA, optional absorption or
+  delta confirmation, and no severe exhaustion or crowded funding/OI pressure.
+  Short continuation mirrors the same rules.
+- Exhaustion score records distance from VWAP/EMA, impulse candle context,
+  volume climax, CVD/price divergence, declining delta on new highs/lows,
+  funding pressure, and crowded OI.
+- HTF target room is measured as preview metadata before AUD-10 market exits;
+  a close target keeps the setup visible but non-actionable/watchlist.
+- Structural invalidation references loss of the pullback zone, VWAP/zone
+  acceptance against the trade, and swing/structure loss.
+
 ## Strategy 2: Volatility Squeeze Breakout
 
 Назначение: найти выход из сжатия до или в момент сильного движения.
@@ -430,7 +448,8 @@ Idea:
 Entry model:
 
 - Long setup expects trend alignment above EMA200 with EMA20 above EMA50 and a
-  pullback into the EMA20/EMA50 zone.
+  pullback into a structural zone: VWAP/deviation, liquidity/session/PDH/PDL,
+  HTF support/resistance, imbalance/depth wall, or EMA fallback.
 - Short setup mirrors that structure below EMA200 with EMA20 below EMA50.
 - Preferred executable entry is a confirmation/retest entry from the pullback
   zone; aggressive entry metadata may exist but must be explicit.
@@ -438,9 +457,10 @@ Entry model:
 Invalidation:
 
 - Long invalidates when price loses the pullback structure or breaks below the
-  recent swing low/structure stop.
+  selected structural pullback zone, VWAP/zone reclaim, or recent swing
+  low/structure stop.
 - Short invalidates when price reclaims above the recent swing high/structure
-  stop.
+  stop or accepts above the selected pullback zone after rejection.
 - Time stop may be supplied through `TradePlan.risk_rules.metadata` when the
   pullback does not continue within the configured holding window.
 
@@ -467,6 +487,10 @@ Required confirmations:
 - Pullback zone touched or reclaimed.
 - Directional candle confirmation.
 - Volume confirmation.
+- Reclaim or absorption confirmation when configured.
+- Delta confirmation when `require_delta_confirmation=true`.
+- Exhaustion score below `max_exhaustion_score`.
+- HTF/liquidity target room at or above `min_htf_target_distance_r` when set.
 - RR measured and annotated; failed RR affects execution eligibility only in
   the active guard mode.
 - HTF alignment when configured.
@@ -476,7 +500,8 @@ No-trade filters:
 - overextended entry;
 - near higher-timeframe obstacle;
 - extreme funding in the trade direction;
-- crowded open-interest warning/block when configured;
+- crowded open-interest warning/penalty by default, hard block only when
+  explicitly configured;
 - low liquidity, high spread, or high slippage;
 - negative/insufficient edge for real entry.
 

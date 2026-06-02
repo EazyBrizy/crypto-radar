@@ -363,6 +363,37 @@ When historical alpha data is unavailable, these experiments must keep
 synthesize CVD, L2, derivative, OI, VWAP, or baseline outcomes. Scenarios
 without valid candle samples still return `no_data` or `insufficient_data`.
 
+## Trend Pullback Continuation Experiments
+
+AUD-09 trend-pullback experiments can compare EMA-only continuation versus
+structural pullback confirmation:
+
+- `require_structural_zone` on versus off;
+- `require_delta_confirmation` on versus off;
+- `max_exhaustion_score` sweeps;
+- `crowded_oi_penalty` sweeps;
+- `min_htf_target_distance_r` sweeps.
+
+Pass these params through `BacktestRunRequest.params`, nested
+`params.strategy_params`, or Strategy Lab `params`:
+
+- `require_structural_zone`
+- `require_delta_confirmation`
+- `max_exhaustion_score`
+- `crowded_oi_penalty`
+- `min_htf_target_distance_r`
+
+`ProductionBacktestRunner` records supplied values in
+`assumptions.trend_pullback_experiment_params` for
+`trend_pullback_continuation` runs so baseline and experiment comparisons are
+auditable.
+
+When historical alpha data is unavailable, these experiments must keep
+`alpha_context_available=false` and list missing alpha sources. They must not
+synthesize delta, CVD, L2, derivative, OI, funding pressure, VWAP acceptance,
+or baseline outcomes. Scenarios without valid candle samples still return
+`no_data` or `insufficient_data`.
+
 ## Fill Assumptions
 
 Backtests should be conservative:

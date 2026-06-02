@@ -4,8 +4,10 @@ from typing import Protocol, Sequence
 from uuid import UUID
 
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
+from app.services.strategy_testing.report_builder import build_matrix_metric_results, metric_results_to_rows
 from app.services.strategy_testing.runner import strategy_test_user_uuid
 from app.services.strategy_testing.schemas import (
+    StrategyTestMetricRow,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
     StrategyTestRunResponse,
@@ -21,6 +23,9 @@ from app.services.strategy_testing.stores import (
 
 class StrategyTestTradeStore(Protocol):
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
+        ...
+
+    def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         ...
 
 
@@ -40,15 +45,28 @@ class StrategyTestingService:
         run_id = created.run.run_id
         self._run_store.mark_running(run_id)
         try:
+            user_uuid = strategy_test_user_uuid(request.user_id)
             matrix_result = self._matrix_runner.run_matrix(
                 request=request,
                 run_id=run_id,
-                user_uuid=strategy_test_user_uuid(request.user_id),
+                user_uuid=user_uuid,
             )
             if matrix_result.all_failed:
                 return self._run_store.mark_failed(run_id, _failure_message(matrix_result)).run
+            metric_results = matrix_result.metrics or build_matrix_metric_results(
+                matrix_result.trades,
+                metric_set=request.metric_set,
+            )
             self._trade_store.write_trades(matrix_result.trades)
-            return self._run_store.mark_completed(run_id, summary=matrix_result.summary()).run
+            self._trade_store.write_metrics(
+                metric_results_to_rows(
+                    run_id=run_id,
+                    user_id=user_uuid,
+                    mode=request.mode,
+                    results=metric_results,
+                )
+            )
+            return self._run_store.mark_completed(run_id, summary=matrix_result.summary(metrics=metric_results)).run
         except Exception as exc:
             return self._run_store.mark_failed(run_id, str(exc)).run
 

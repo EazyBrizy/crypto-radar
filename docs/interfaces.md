@@ -361,6 +361,31 @@ journal projections use `mode="virtual"`, `source="backtest"`, include the
 registry:
 
 ```python
+MetricDefinition = {
+    "code": str,
+    "label": str,
+    "description": str,
+    "groupings": list[str],
+    "compute": Callable[[Sequence[StrategyTestTrade]], float | int | None],
+    "min_sample_size": int,
+}
+
+MetricResult = {
+    "code": str,
+    "label": str,
+    "value": float | int | None,
+    "sample_size": int,
+    "group": dict[str, str],
+    "warnings": list[str],
+}
+
+MetricRegistry = {
+    "register(definition)": None,
+    "get(code)": MetricDefinition,
+    "list_definitions()": list[MetricDefinition],
+    "compute(trades, metric_set=None, group_by=None)": list[MetricResult],
+}
+
 StrategyTestMetric = {
     "run_id": str,
     "scenario_id": str | None,

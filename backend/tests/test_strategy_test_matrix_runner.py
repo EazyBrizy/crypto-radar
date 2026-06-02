@@ -13,6 +13,7 @@ from app.services.strategy_testing.assumptions import build_strategy_test_assump
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
 from app.services.strategy_testing.runner import StrategyTestScenarioResult, StrategyTestScenarioRunner
 from app.services.strategy_testing.schemas import (
+    StrategyTestMetricRow,
     StrategyTestPair,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
@@ -153,6 +154,9 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         self.assertEqual(response.status, "completed")
         self.assertEqual(run_store.transitions, ["queued", "running", "completed"])
         self.assertEqual(len(trade_store.trades), 1)
+        self.assertGreater(len(trade_store.metrics), 0)
+        self.assertIn("summary_metrics", response.summary)
+        self.assertIn("trades_count", {metric["code"] for metric in response.summary["summary_metrics"]})
         self.assertEqual(response.summary["scenario_count"], 1)
 
     def test_service_completes_partial_scenario_failure(self) -> None:
@@ -282,9 +286,13 @@ class _StaticMatrixRunner:
 class _RecordingTradeStore:
     def __init__(self) -> None:
         self.trades: list[StrategyTestTrade] = []
+        self.metrics: list[StrategyTestMetricRow] = []
 
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         self.trades.extend(trades)
+
+    def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
+        self.metrics.extend(rows)
 
 
 class _EphemeralRunStore:

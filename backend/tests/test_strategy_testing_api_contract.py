@@ -13,6 +13,7 @@ from app.api.v1.strategy_tests import get_strategy_testing_service
 from app.api.v1.router import api_router
 from app.main import app
 from app.services.strategy_testing.schemas import (
+    StrategyTestMetricRow,
     StrategyTestPair,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
@@ -227,9 +228,13 @@ class _EphemeralStrategyTestRunStore:
 class _EphemeralStrategyTestTradeStore:
     def __init__(self) -> None:
         self.trades: list[StrategyTestTrade] = []
+        self.metrics: list[StrategyTestMetricRow] = []
 
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         self.trades.extend(trades)
+
+    def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
+        self.metrics.extend(rows)
 
 
 class _NoopStrategyTestMatrixRunner:

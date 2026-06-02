@@ -74,6 +74,11 @@ class StrategyTestRunRequest(BaseModel):
             tags.append("backtest")
         return tags
 
+    @field_validator("metric_set")
+    @classmethod
+    def normalize_metric_set(cls, value: list[str]) -> list[str]:
+        return _normalize_unique_strings(value, field_name="metric_set", allow_empty_list=True)
+
     @model_validator(mode="after")
     def validate_matrix(self) -> "StrategyTestRunRequest":
         if not self.pairs:
@@ -169,6 +174,17 @@ class StrategyTestMetricRow(BaseModel):
     sample_size: int = Field(ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+
+
+class StrategyTestMetric(BaseModel):
+    run_id: str
+    scenario_id: str | None = None
+    name: str
+    value: int | float | str | bool | None = None
+    unit: str | None = None
+    group: dict[str, Any] = Field(default_factory=dict)
+    confidence: Literal["high", "medium", "low", "insufficient_sample"] = "high"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class StrategyTestTradeResponse(BaseModel):

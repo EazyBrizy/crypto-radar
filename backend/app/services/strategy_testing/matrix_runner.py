@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 from uuid import UUID
 
+from app.services.strategy_testing.metrics import MetricResult
+from app.services.strategy_testing.report_builder import (
+    build_matrix_metric_results,
+    metric_results_to_summary_sections,
+)
 from app.services.strategy_testing.runner import StrategyTestScenarioResult, StrategyTestScenarioRunner
 from app.services.strategy_testing.schemas import StrategyTestPair, StrategyTestRunRequest, StrategyTestTrade
 
@@ -31,17 +36,19 @@ class StrategyTestMatrixResult:
     scenario_summaries: list[dict[str, Any]] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
     trades: list[StrategyTestTrade] = field(default_factory=list)
+    metrics: list[MetricResult] = field(default_factory=list)
 
     @property
     def all_failed(self) -> bool:
         return self.scenario_count > 0 and self.completed_scenarios == 0
 
-    def summary(self) -> dict[str, Any]:
+    def summary(self, metrics: Sequence[MetricResult] | None = None) -> dict[str, Any]:
         signals_seen = sum(_int_from_summary(item, "signals_seen") for item in self.scenario_summaries)
         risk_rejections = sum(_int_from_summary(item, "risk_rejections") for item in self.scenario_summaries)
         execution_rejections = sum(
             _int_from_summary(item, "execution_rejections") for item in self.scenario_summaries
         )
+        metric_sections = metric_results_to_summary_sections(self.metrics if metrics is None else metrics)
         return {
             "scenario_count": self.scenario_count,
             "completed_scenarios": self.completed_scenarios,
@@ -52,6 +59,7 @@ class StrategyTestMatrixResult:
             "execution_rejections": execution_rejections,
             "errors": list(self.errors),
             "scenarios": list(self.scenario_summaries),
+            **metric_sections,
         }
 
 
@@ -110,6 +118,7 @@ class StrategyTestMatrixRunner:
             scenario_summaries=scenario_summaries,
             errors=errors,
             trades=trades,
+            metrics=build_matrix_metric_results(trades, metric_set=request.metric_set),
         )
 
 

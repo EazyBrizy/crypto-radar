@@ -128,23 +128,83 @@ The default v1 policy is `stop_first`. Reports must expose the chosen policy.
 
 ## Metrics Registry
 
-Strategy Testing metrics are emitted through a registry so every metric has a
-stable name, calculation owner, unit, grouping dimensions, and confidence
-semantics. Metric calculators should be small, typed, deterministic functions.
+Strategy Testing metrics are emitted through `MetricRegistry` in
+`backend/app/services/strategy_testing/metrics.py`. Each metric is registered
+as a `MetricDefinition` with:
 
-Expected registry groups include:
+- stable `code`, `label`, and `description`;
+- supported grouping keys;
+- a small deterministic calculator over `Sequence[StrategyTestTrade]`;
+- `min_sample_size`.
 
-- summary performance;
-- R-multiple distribution;
-- drawdown;
-- costs and slippage;
-- lifecycle behavior;
-- grouped performance by strategy, regime, score bucket, direction, exchange,
-  symbol, and timeframe;
-- warnings and rejection counts.
+The registry returns `MetricResult` rows with `code`, `label`, `value`,
+`sample_size`, `group`, and `warnings`. Calculators must not read or write the
+database. If a metric cannot be computed from current `StrategyTestTrade` rows,
+it must return `None` with an explicit warning rather than synthetic data. For
+example, `funding_total` is `0` only when explicit funding cost metadata is
+tracked as zero; otherwise it returns `None` with `funding_not_modeled`.
 
-Small-sample metrics must be labeled `low` or `insufficient_sample` and must
-not be presented as production permission.
+Supported grouping keys are:
+
+- `strategy` -> `strategy_code`
+- `symbol` -> `symbol`
+- `timeframe` -> `timeframe`
+- `regime` -> `market_regime`
+- `score_bucket` -> `score_bucket`
+- `direction` -> `direction`
+
+The matrix summary computes registry metrics for:
+
+- all trades;
+- `strategy`;
+- `strategy/symbol/timeframe`;
+- `strategy/regime`;
+- `strategy/score_bucket`;
+- `strategy/direction`.
+
+Base metric codes:
+
+- `trades_count`
+- `signals_count`
+- `entry_touch_rate`
+- `winrate`
+- `avg_win_r`
+- `avg_loss_r`
+- `expectancy_r`
+- `expectancy_after_costs_r`
+- `profit_factor`
+- `max_drawdown_r`
+- `max_drawdown_pct`
+- `tp1_rate`
+- `tp2_rate`
+- `stop_rate`
+- `invalidation_rate`
+- `time_stop_rate`
+- `avg_mfe_r`
+- `avg_mae_r`
+- `median_bars_to_entry`
+- `median_bars_to_outcome`
+- `avg_bars_in_trade`
+- `fees_total`
+- `slippage_total`
+- `funding_total`
+- `risk_rejection_rate`
+- `execution_rejection_rate`
+- `false_signal_rate`
+
+To add a new metric in a future patch:
+
+1. Add a small typed calculator in `metrics.py`.
+2. Register a new `MetricDefinition` in `base_metric_definitions()`.
+3. Add tests for the calculator, grouping behavior, and empty-sample behavior.
+4. Update this document if the metric becomes part of the base set.
+
+The matrix runner and report builder consume registry output, so adding a
+metric does not require editing the runner unless a new grouping dimension or
+new source data is introduced.
+
+Small-sample metrics must be labeled through warnings/confidence and must not
+be presented as production permission.
 
 ## Journal Adapter Boundary
 

@@ -1,55 +1,33 @@
 from __future__ import annotations
 
-from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from app.services.strategy_testing.schemas import (
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
     StrategyTestRunResponse,
+    StrategyTestRunStatus,
 )
+from app.services.strategy_testing.stores import PostgresStrategyTestRunStore, StrategyTestRunStore
 
 
 class StrategyTestingService:
+    def __init__(self, run_store: StrategyTestRunStore | None = None) -> None:
+        self._run_store = run_store or PostgresStrategyTestRunStore()
+
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
-        # Temporary until BT-03 persists runs and schedules execution workers.
-        return StrategyTestRunResponse(
-            run_id=uuid4(),
-            status="queued",
-            requested_matrix=_build_requested_matrix(request),
-        )
+        return self._run_store.create_run(request).run
 
     def list_runs(
         self,
         user_id: str | None = None,
         limit: int = 50,
+        status: StrategyTestRunStatus | None = None,
     ) -> list[StrategyTestRunResponse]:
-        _ = (user_id, limit)
-        # Temporary until BT-03 adds persistence for Strategy Test Lab runs.
-        return []
+        return [
+            detail.run
+            for detail in self._run_store.list_runs(user_id=user_id, limit=limit, status=status)
+        ]
 
     def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
-        _ = run_id
-        # Temporary until BT-03 adds persistence for Strategy Test Lab runs.
-        return None
-
-
-def _build_requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:
-    pairs = [pair.model_dump() for pair in request.pairs]
-    return {
-        "user_id": request.user_id,
-        "mode": request.mode,
-        "strategies": request.strategies,
-        "pairs": pairs,
-        "timeframes": request.timeframes,
-        "start_at": request.start_at,
-        "end_at": request.end_at,
-        "initial_capital": request.initial_capital,
-        "fee_rate": request.fee_rate,
-        "slippage_bps": request.slippage_bps,
-        "same_candle_policy": request.same_candle_policy,
-        "params": request.params,
-        "metric_set": request.metric_set,
-        "tags": request.tags,
-        "scenario_count": len(request.strategies) * len(request.pairs) * len(request.timeframes),
-    }
+        return self._run_store.get_run(run_id)

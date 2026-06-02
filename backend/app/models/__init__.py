@@ -11,6 +11,7 @@ from app.models.risk import AssetRiskGroup, ExchangeInstrumentRule
 from app.models.risk import PositionRiskSnapshot, RiskDecisionRecord, RiskProtectionState
 from app.models.signal import SignalOutcome, TradingSignal, TradingSignalEvent
 from app.models.strategy import StrategyTemplate, StrategyVersion, UserStrategyConfig
+from app.models.strategy_testing import StrategyTestRun
 from app.models.trade_invalidation import TradeInvalidationAction
 from app.models.user import AppUser, SubscriptionPlan, UserProfile, UserSubscription
 from app.models.watchlist import UserAlertRule, UserWatchlist, UserWatchlistPair
@@ -41,6 +42,7 @@ __all__ = [
     "SignalAIExplanation",
     "SignalOutcome",
     "StrategyTemplate",
+    "StrategyTestRun",
     "StrategyVersion",
     "SubscriptionPlan",
     "TradingSignal",

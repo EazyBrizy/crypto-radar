@@ -83,6 +83,10 @@ class StrategyTestRunResponse(BaseModel):
     status: StrategyTestRunStatus
     requested_matrix: dict[str, Any]
     summary: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: str | None = None
 
 
 class StrategyTestRunDetailResponse(BaseModel):

@@ -1,9 +1,10 @@
 import unittest
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.schemas.risk import (
     BreakevenPlan,
+    FuturesRiskPlan,
     PositionSizingResult,
     RiskAdjustmentPlan,
     RiskCheckResult,
@@ -13,10 +14,20 @@ from app.schemas.risk import (
     TakeProfitTarget,
     TrailingStopPlan,
 )
+from app.schemas.decision import SignalDecisionSnapshot
 from app.schemas.signal import NoTradeFilterResult, RadarSignal
-from app.schemas.trade import ExecutionPlannedOrder, ManualConfirmRequest
+from app.schemas.trade import ExecutionPlannedOrder, ManualConfirmRequest, RealExecutionPlan
+from app.schemas.trade_plan import (
+    TargetThesis,
+    TradePlan,
+    TradePlanEntry,
+    TradePlanInvalidation,
+    TradePlanTarget,
+)
 from app.schemas.user import RiskManagementSettings
 from app.services.execution_service import RealExecutionService
+from app.services.real_execution_readiness import RealExecutionReadinessService
+from app.services.risk_fee_rate import RiskFeeRateSnapshot
 from app.services.risk_market_data import RiskMarketDataSnapshot
 
 
@@ -33,21 +44,24 @@ class _FakeRiskGateService:
 class _FakeExecutionAdapter:
     name = "fake"
     is_dry_run = False
+    protective_order_guarantee = True
+    position_reconciliation_enabled = True
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, ExecutionPlannedOrder]] = []
+        self.orders: dict[tuple[str, str, str], ExecutionPlannedOrder] = {}
 
     async def place_order(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
         self.calls.append(("entry", order))
-        return order.model_copy(update={"status": "submitted"})
+        return self._record(order, status="submitted")
 
     async def place_protective_stop(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
         self.calls.append(("protective_stop", order))
-        return order.model_copy(update={"status": "submitted"})
+        return self._record(order, status="submitted")
 
     async def place_take_profit(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
         self.calls.append(("take_profit", order))
-        return order.model_copy(update={"status": "submitted"})
+        return self._record(order, status="submitted")
 
     async def cancel_order(
         self,
@@ -56,7 +70,34 @@ class _FakeExecutionAdapter:
         symbol: str,
         client_order_id: str,
     ) -> ExecutionPlannedOrder | None:
-        return None
+        order = await self.get_order(exchange=exchange, symbol=symbol, client_order_id=client_order_id)
+        if order is None:
+            return None
+        cancelled = order.model_copy(update={"status": "cancelled"})
+        self.orders[_order_key(cancelled)] = cancelled
+        return cancelled
+
+    async def replace_order(
+        self,
+        *,
+        current_client_order_id: str,
+        replacement: ExecutionPlannedOrder,
+    ) -> ExecutionPlannedOrder:
+        current = await self.get_order(
+            exchange=replacement.exchange,
+            symbol=replacement.symbol,
+            client_order_id=current_client_order_id,
+        )
+        if current is None:
+            raise ValueError("missing current order")
+        if current.role != replacement.role:
+            raise ValueError("role mismatch")
+        await self.cancel_order(
+            exchange=current.exchange,
+            symbol=current.symbol,
+            client_order_id=current.client_order_id,
+        )
+        return self._record(replacement, status="submitted")
 
     async def get_order(
         self,
@@ -65,7 +106,21 @@ class _FakeExecutionAdapter:
         symbol: str,
         client_order_id: str,
     ) -> ExecutionPlannedOrder | None:
-        return None
+        return self.orders.get((exchange.strip().lower(), symbol.strip().upper(), client_order_id))
+
+    async def get_open_orders(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+    ) -> list[ExecutionPlannedOrder]:
+        return [
+            order
+            for key, order in self.orders.items()
+            if key[0] == exchange.strip().lower()
+            and key[1] == symbol.strip().upper()
+            and order.status not in {"cancelled", "canceled", "rejected", "expired"}
+        ]
 
     async def get_position(
         self,
@@ -75,18 +130,62 @@ class _FakeExecutionAdapter:
     ) -> dict | None:
         return None
 
+    def _record(self, order: ExecutionPlannedOrder, *, status: str) -> ExecutionPlannedOrder:
+        recorded = order.model_copy(
+            update={
+                "status": status,
+                "exchange_order_id": f"ex-{order.client_order_id}",
+            }
+        )
+        self.orders[_order_key(recorded)] = recorded
+        return recorded
+
+
+class _PartialFillExecutionAdapter(_FakeExecutionAdapter):
+    async def place_order(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
+        self.calls.append(("entry", order))
+        recorded = order.model_copy(
+            update={
+                "status": "partially_filled",
+                "exchange_order_id": f"ex-{order.client_order_id}",
+                "filled_qty": order.quantity / 2,
+                "remaining_qty": order.quantity / 2,
+                "avg_fill_price": order.price,
+                "fees": 0.1,
+            }
+        )
+        self.orders[_order_key(recorded)] = recorded
+        return recorded
+
+
+class _DryReadinessAdapter:
+    name = "dry_readiness"
+    is_dry_run = True
+
+
+def _order_key(order: ExecutionPlannedOrder) -> tuple[str, str, str]:
+    return (
+        order.exchange.strip().lower(),
+        order.symbol.strip().upper(),
+        order.client_order_id,
+    )
+
 
 @dataclass(frozen=True)
 class _Reference:
     exchange_min_order_size: float | None = None
     exchange_max_order_size: float | None = None
-    exchange_min_notional: float | None = None
+    exchange_min_notional: float | None = 10.0
     exchange_max_leverage: int | None = None
-    exchange_qty_step: float | None = None
-    exchange_tick_size: float | None = None
+    exchange_qty_step: float | None = 0.0001
+    exchange_tick_size: float | None = 0.01
     exchange_rule_status: str = "fresh"
     exchange_rule_age_seconds: float | None = None
     exchange_rule_ttl_seconds: int | None = None
+    real_account_snapshot_status: str = "fresh"
+    real_account_equity: float | None = 1_000.0
+    real_available_balance: float | None = 1_000.0
+    position_reconciliation_enabled: bool = True
     open_risk_amount: float = 0.0
     correlated_open_risk_amount: float = 0.0
     daily_loss_amount: float = 0.0
@@ -121,6 +220,24 @@ class _FakeMarketDataService:
             orderbook_depth_usd=100_000.0,
             market_data_status="fresh",
             market_data_source="test",
+        )
+
+
+class _FakeFeeRateService:
+    def __init__(self, *, fetched_at: datetime | None = None, source: str = "exchange_cache") -> None:
+        self.fetched_at = fetched_at or datetime.now(timezone.utc)
+        self.source = source
+
+    def resolve(self, *args, **kwargs) -> RiskFeeRateSnapshot:
+        return RiskFeeRateSnapshot(
+            fee_rate=0.00055,
+            maker_fee_rate=0.0002,
+            taker_fee_rate=0.00055,
+            source=self.source,
+            exchange=kwargs["exchange"],
+            category="spot" if kwargs["instrument_type"] == "spot" else "linear",
+            symbol=kwargs["symbol"],
+            fetched_at=self.fetched_at,
         )
 
 
@@ -204,9 +321,175 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             [order.idempotency_key for order in second.planned_orders],
         )
 
-    async def test_fake_adapter_receives_validated_plan(self) -> None:
+    async def test_real_execution_blocks_without_structural_stop(self) -> None:
+        service = _service(_decision())
+
+        result = await service.place_order(
+            _signal(trade_plan=_missing_structural_trade_plan(), decision=_real_allowed_decision(trade_plan_valid=False)),
+            _request(),
+        )
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("structural stop", result.message)
+
+    async def test_real_execution_blocks_fallback_stop(self) -> None:
+        service = _service(_decision())
+
+        result = await service.place_order(_signal(trade_plan=_fallback_stop_trade_plan()), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("fallback stop", result.message)
+
+    async def test_real_execution_blocks_without_protective_orders(self) -> None:
+        service = _service(_decision(protective_orders_allowed=False))
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("Protective orders are not allowed", result.message)
+
+    async def test_real_execution_requires_idempotency_key(self) -> None:
+        request = _request()
+        plan = RealExecutionPlan.model_construct(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=100.0,
+            quantity=1.0,
+            notional=100.0,
+            leverage=1,
+            idempotency_key="",
+            client_order_id="plan-client",
+            planned_orders=[
+                ExecutionPlannedOrder.model_construct(
+                    role="entry",
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="buy",
+                    order_type="market",
+                    quantity=1.0,
+                    price=100.0,
+                    reduce_only=False,
+                    client_order_id="entry-client",
+                    idempotency_key="",
+                    status="planned",
+                    metadata={},
+                ),
+                ExecutionPlannedOrder.model_construct(
+                    role="protective_stop",
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="sell",
+                    order_type="stop",
+                    quantity=1.0,
+                    stop_price=95.0,
+                    reduce_only=True,
+                    client_order_id="stop-client",
+                    idempotency_key="stop-key",
+                    status="planned",
+                    metadata={},
+                ),
+                ExecutionPlannedOrder.model_construct(
+                    role="take_profit",
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="sell",
+                    order_type="take_profit",
+                    quantity=1.0,
+                    price=110.0,
+                    reduce_only=True,
+                    close_percent=100.0,
+                    client_order_id="tp-client",
+                    idempotency_key="tp-key",
+                    status="planned",
+                    metadata={},
+                ),
+            ],
+            metadata={},
+        )
+
+        result = RealExecutionReadinessService().evaluate(
+            signal=_signal(),
+            request=request,
+            risk_decision=_decision(),
+            execution_plan=plan,
+            risk_settings=_risk_settings(),
+            reference=None,
+            fee_rate=None,
+            adapter=_DryReadinessAdapter(),
+        )
+
+        self.assertFalse(result.ready)
+        self.assertIn("Real execution plan idempotency key is required.", result.blockers)
+        self.assertIn("entry order idempotency_key is required.", result.blockers)
+
+    async def test_duplicate_real_execution_request_does_not_duplicate_orders(self) -> None:
         adapter = _FakeExecutionAdapter()
-        service = _service(_decision(), execution_adapter=adapter)
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+        signal = _signal()
+        request = _request()
+
+        first = await service.place_order(signal, request)
+        second = await service.place_order(signal, request)
+
+        self.assertEqual(first.status, "submitted")
+        self.assertEqual(second.status, "submitted")
+        self.assertEqual(len(adapter.calls), 4)
+        self.assertTrue(all(order.metadata.get("idempotent_replay") for order in second.planned_orders))
+
+    async def test_partial_fill_creates_reconciliation_state(self) -> None:
+        adapter = _PartialFillExecutionAdapter()
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "submitted")
+        self.assertEqual(result.planned_orders[0].status, "partially_filled")
+        self.assertIsNotNone(result.execution_plan)
+        assert result.execution_plan is not None
+        self.assertTrue(result.execution_plan.metadata["reconciliation_required"])
+        self.assertEqual(result.execution_plan.metadata["reconciliation_state"]["reason"], "partial_fill")
+
+    async def test_real_execution_feature_flag_default_false(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("real_execution_enabled=false", result.message)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_fake_adapter_receives_validated_plan_when_live_readiness_passes(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
 
         result = await service.place_order(_signal(), _request())
 
@@ -215,6 +498,7 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.execution_allowed)
         self.assertEqual([role for role, _order in adapter.calls], ["entry", "protective_stop", "take_profit", "take_profit"])
         self.assertTrue(all(order.status == "submitted" for order in result.planned_orders))
+        self.assertTrue(result.execution_plan.metadata["reconciliation_required"])
 
     async def test_exchange_rule_step_validation_blocks_adapter_call(self) -> None:
         adapter = _FakeExecutionAdapter()
@@ -232,6 +516,86 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("quantity is not aligned to qty_step", result.message)
         self.assertEqual(adapter.calls, [])
 
+    async def test_exchange_rules_validate_tick_qty_min_notional(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(quantity=1.0),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    exchange_qty_step=0.3,
+                    exchange_tick_size=0.5,
+                    exchange_min_notional=250.0,
+                )
+            ),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIn("quantity is not aligned to qty_step", result.message)
+        self.assertIn("notional is below exchange minimum notional", result.message)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_real_balance_required_not_virtual_equity(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    real_account_snapshot_status="missing",
+                    real_account_equity=None,
+                    real_available_balance=None,
+                )
+            ),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIn("Real account equity is required", result.message)
+        self.assertIn("Real available balance is required", result.message)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_fee_rate_ttl_required(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(
+                fetched_at=datetime.now(timezone.utc) - timedelta(days=2)
+            ),
+            risk_settings=_risk_settings(real_execution_enabled=True, real_fee_rate_ttl_seconds=60),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIn("Fee-rate snapshot is stale", result.message)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_liquidation_projection_required_for_derivatives(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(instrument_type="futures", leverage=2, futures_risk_plan=None),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request(leverage=2))
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIn("liquidation projection", result.message)
+        self.assertEqual(adapter.calls, [])
+
     async def test_low_rr_hard_real_policy_blocks_execution_not_signal(self) -> None:
         service = _service(
             None,
@@ -245,7 +609,10 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        result = await service.place_order(_signal(), _request())
+        result = await service.place_order(
+            _signal(trade_plan=_low_rr_trade_plan()),
+            _request(),
+        )
 
         self.assertEqual(result.status, "risk_failed")
         self.assertTrue(result.signal_valid)
@@ -274,7 +641,10 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        result = await service.place_order(_signal(), _request())
+        result = await service.place_order(
+            _signal(trade_plan=_low_rr_trade_plan()),
+            _request(),
+        )
 
         self.assertEqual(result.status, "dry_run")
         self.assertTrue(result.signal_valid)
@@ -317,6 +687,7 @@ def _service(
     execution_adapter=...,
     risk_state=None,
     market_data_service=None,
+    fee_rate_service=None,
     risk_settings: RiskManagementSettings | None = None,
 ) -> RealExecutionService:
     kwargs = {}
@@ -328,13 +699,19 @@ def _service(
         risk_audit=None,
         risk_state=risk_state,
         market_data_service=market_data_service,
-        fee_rate_service=None,
+        fee_rate_service=fee_rate_service,
         risk_settings_provider=lambda _user_id: risk_settings or _risk_settings(),
         **kwargs,
     )
 
 
-def _signal(*, no_trade_filter: NoTradeFilterResult | None = None) -> RadarSignal:
+def _signal(
+    *,
+    no_trade_filter: NoTradeFilterResult | None = None,
+    trade_plan: TradePlan | None = None,
+    decision: SignalDecisionSnapshot | None = None,
+    status: str = "actionable",
+) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
         id="sig_real_execution",
@@ -351,19 +728,109 @@ def _signal(*, no_trade_filter: NoTradeFilterResult | None = None) -> RadarSigna
         stop_loss=95.0,
         take_profit_1=105.0,
         take_profit_2=110.0,
+        status=status,
+        trade_plan=trade_plan if trade_plan is not None else _structural_trade_plan(),
+        decision=decision if decision is not None else _real_allowed_decision(),
         no_trade_filter=no_trade_filter,
         created_at=now,
         updated_at=now,
     )
 
 
-def _request() -> ManualConfirmRequest:
+def _real_allowed_decision(
+    *,
+    signal_actionable: bool = True,
+    execution_allowed_real: bool | None = True,
+    trade_plan_valid: bool = True,
+) -> SignalDecisionSnapshot:
+    return SignalDecisionSnapshot(
+        setup_valid=True,
+        trade_plan_valid=trade_plan_valid,
+        market_context_score=90.0,
+        signal_actionable=signal_actionable,
+        execution_allowed_virtual=True,
+        execution_allowed_real=execution_allowed_real,
+    )
+
+
+def _structural_trade_plan() -> TradePlan:
+    return TradePlan(
+        entry=TradePlanEntry(price=100.0, min_price=100.0, max_price=100.0, source="test_structure"),
+        stop_loss=95.0,
+        targets=[
+            TradePlanTarget(
+                label="TP1",
+                price=105.0,
+                r_multiple=1.0,
+                close_percent=50.0,
+                source="range_midpoint",
+                thesis=TargetThesis(
+                    source="range_midpoint",
+                    price=105.0,
+                    direction="LONG",
+                    confidence=0.8,
+                    priority=1,
+                    close_percent=50.0,
+                    requires_acceptance=False,
+                ),
+            ),
+            TradePlanTarget(
+                label="TP2",
+                price=110.0,
+                r_multiple=2.0,
+                close_percent=50.0,
+                source="htf_resistance",
+                thesis=TargetThesis(
+                    source="htf_resistance",
+                    price=110.0,
+                    direction="LONG",
+                    confidence=0.75,
+                    priority=2,
+                    close_percent=50.0,
+                    requires_acceptance=False,
+                ),
+            ),
+        ],
+        invalidation=TradePlanInvalidation(
+            price=95.0,
+            hard_stop=95.0,
+            conditions=["Close below pullback structure invalidates continuation."],
+            metadata={"source": "structure"},
+        ),
+        metadata={"source": "test_structure", "target_source": "structural"},
+    )
+
+
+def _fallback_stop_trade_plan() -> TradePlan:
+    plan = _structural_trade_plan()
+    return plan.model_copy(
+        update={
+            "metadata": {**plan.metadata, "fallback_used": True, "fallback_stop_used": True},
+        }
+    )
+
+
+def _low_rr_trade_plan() -> TradePlan:
+    plan = _structural_trade_plan()
+    targets = [
+        plan.targets[0].model_copy(update={"price": 102.5, "r_multiple": 0.5}),
+        plan.targets[1].model_copy(update={"price": 107.5, "r_multiple": 1.5}),
+    ]
+    return plan.model_copy(update={"targets": targets})
+
+
+def _missing_structural_trade_plan() -> TradePlan:
+    plan = _structural_trade_plan()
+    return plan.model_copy(update={"stop_loss": None})
+
+
+def _request(*, leverage: int = 1) -> ManualConfirmRequest:
     return ManualConfirmRequest(
         mode="real",
         user_id="demo_user",
         account_balance=1_000.0,
         risk_percent=1.0,
-        leverage=1,
+        leverage=leverage,
     )
 
 
@@ -374,6 +841,8 @@ def _risk_settings(
     tp1_r_multiple: float = 1.0,
     tp2_r_multiple: float = 2.0,
     tp3_r_multiple: float = 3.0,
+    real_execution_enabled: bool = False,
+    real_fee_rate_ttl_seconds: int = 86_400,
 ) -> RiskManagementSettings:
     return RiskManagementSettings(
         risk_profile="balanced",
@@ -387,6 +856,8 @@ def _risk_settings(
         tp1_r_multiple=tp1_r_multiple,
         tp2_r_multiple=tp2_r_multiple,
         tp3_r_multiple=tp3_r_multiple,
+        real_execution_enabled=real_execution_enabled,
+        real_fee_rate_ttl_seconds=real_fee_rate_ttl_seconds,
         real_requires_fresh_market_data=False,
         real_requires_positive_edge=False,
     )
@@ -396,6 +867,12 @@ def _decision(
     *,
     quantity: float = 1.0,
     targets: list[TakeProfitTarget] | None = None,
+    protective_orders_allowed: bool = True,
+    stop_loss_source: str = "signal",
+    take_profit_source: str = "trade_plan",
+    instrument_type: str = "spot",
+    leverage: int = 1,
+    futures_risk_plan: FuturesRiskPlan | None = None,
 ) -> RiskDecision:
     targets = targets or [
         TakeProfitTarget(label="TP1", r_multiple=1.0, price=105.0, close_percent=50.0, action="observe"),
@@ -412,13 +889,13 @@ def _decision(
         effective_risk_per_unit=5.0,
         position_size_base=quantity,
         notional=100.0 * quantity,
-        leverage=1,
-        required_margin=100.0 * quantity,
+        leverage=leverage,
+        required_margin=100.0 * quantity / leverage,
         fee_rate=0.0,
         slippage_bps=0.0,
     )
     risk_adjustment = RiskAdjustmentPlan(
-        instrument_type="spot",
+        instrument_type=instrument_type,
         strategy="trend_pullback_continuation",
         signal_score=80.0,
         account_equity=1_000.0,
@@ -449,6 +926,7 @@ def _decision(
         max_correlated_risk_percent=3.0,
         exchange_rule_status="fresh",
         market_data_status="fresh",
+        protective_orders_allowed=protective_orders_allowed,
     )
     stop_loss_plan = StopLossPlan(
         side="long",
@@ -456,7 +934,7 @@ def _decision(
         entry_price=100.0,
         stop_loss_price=95.0,
         risk_per_unit=5.0,
-        source="signal",
+        source=stop_loss_source,
         default_stop_loss_percent=1.5,
         atr_period=14,
         atr_multiplier=2.0,
@@ -469,7 +947,7 @@ def _decision(
         risk_per_unit=5.0,
         partial_take_profit_enabled=True,
         targets=targets,
-        source="trade_plan",
+        source=take_profit_source,
         selected_rr=targets[-1].r_multiple,
     )
     return RiskDecision(
@@ -479,7 +957,7 @@ def _decision(
         can_enter=True,
         exchange="bybit",
         symbol="BTCUSDT",
-        instrument_type="spot",
+        instrument_type=instrument_type,
         requested_notional=None,
         risk_adjustment_plan=risk_adjustment,
         position_sizing=sizing,
@@ -506,6 +984,7 @@ def _decision(
             atr_multiplier=2.0,
             source="disabled",
         ),
+        futures_risk_plan=futures_risk_plan,
     )
 
 

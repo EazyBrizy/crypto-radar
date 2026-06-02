@@ -18,6 +18,11 @@ from app.services.risk_fee_rate import RiskFeeRateService, risk_fee_rate_service
 from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.risk_management import get_user_risk_management_settings
 from app.services.risk_market_data import RiskMarketDataService, risk_market_data_service
+from app.services.real_execution_readiness import (
+    RealExecutionReadinessService,
+    RealExecutionReadinessResult,
+    real_execution_readiness_service,
+)
 from app.services.risk_state import RiskStateService, risk_state_service
 
 
@@ -41,6 +46,7 @@ class RealExecutionService:
         risk_state: RiskStateService | None = risk_state_service,
         market_data_service: RiskMarketDataService | None = risk_market_data_service,
         fee_rate_service: RiskFeeRateService | None = risk_fee_rate_service,
+        readiness_service: RealExecutionReadinessService | None = real_execution_readiness_service,
         execution_adapter: ExchangeExecutionAdapter | None | object = _DEFAULT_EXECUTION_ADAPTER,
         risk_settings_provider: RiskSettingsProvider | None = None,
     ) -> None:
@@ -50,6 +56,7 @@ class RealExecutionService:
         self._risk_state = risk_state
         self._market_data_service = market_data_service
         self._fee_rate_service = fee_rate_service
+        self._readiness_service = readiness_service or RealExecutionReadinessService()
         self._execution_adapter = (
             DryRunExecutionAdapter()
             if execution_adapter is _DEFAULT_EXECUTION_ADAPTER
@@ -241,13 +248,44 @@ class RealExecutionService:
                 idempotency_key=execution_plan.idempotency_key,
             )
 
+        readiness = self._readiness_service.evaluate(
+            signal=signal,
+            request=request,
+            risk_decision=risk_decision,
+            execution_plan=execution_plan,
+            risk_settings=risk_settings,
+            reference=reference,
+            fee_rate=fee_rate,
+            adapter=self._execution_adapter,
+        )
+        execution_plan = _execution_plan_with_readiness(execution_plan, readiness)
+        if not readiness.ready:
+            return RealExecutionResult(
+                status="risk_failed",
+                signal_valid=True,
+                execution_allowed=False,
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                message=_readiness_rejection_message(readiness.blockers),
+                risk_decision=risk_decision,
+                risk_decision_id=risk_decision_id,
+                execution_plan=execution_plan,
+                planned_orders=execution_plan.planned_orders,
+                idempotency_key=execution_plan.idempotency_key,
+                validation_errors=readiness.blockers,
+            )
+
         planned_orders = await _place_execution_plan(
             execution_plan,
             self._execution_adapter,
         )
         adapter_name = getattr(self._execution_adapter, "name", "unknown")
         status = "dry_run" if getattr(self._execution_adapter, "is_dry_run", False) else "submitted"
-        execution_plan = execution_plan.model_copy(update={"planned_orders": planned_orders})
+        execution_plan = _execution_plan_with_placed_orders(
+            execution_plan,
+            planned_orders=planned_orders,
+            adapter_is_dry_run=getattr(self._execution_adapter, "is_dry_run", False),
+        )
         return RealExecutionResult(
             status=status,
             signal_valid=True,
@@ -307,6 +345,12 @@ def _risk_rejection_message(risk_decision: RiskDecision) -> str:
     return "Real execution rejected by risk policy."
 
 
+def _readiness_rejection_message(blockers: list[str]) -> str:
+    if blockers:
+        return "Real execution readiness failed: " + "; ".join(blockers)
+    return "Real execution readiness failed."
+
+
 def _build_execution_plan(
     *,
     signal: RadarSignal,
@@ -322,10 +366,11 @@ def _build_execution_plan(
         request=request,
         risk_decision=risk_decision,
     )
+    plan_version = "real_execution_plan_v1"
     idempotency_key = f"real-exec:{digest}"
     client_order_id = f"cr-{digest[:20]}"
     entry_client_order_id = _order_client_id(digest, "entry")
-    stop_client_order_id = _order_client_id(digest, "sl")
+    stop_client_order_id = _order_client_id(digest, "protective_stop")
     orders = [
         ExecutionPlannedOrder(
             role="entry",
@@ -340,6 +385,7 @@ def _build_execution_plan(
             idempotency_key=f"{idempotency_key}:entry",
             metadata={
                 "signal_id": signal.id,
+                "plan_version": plan_version,
                 "strategy": signal.strategy,
                 "timeframe": signal.timeframe,
                 "role": "entry",
@@ -360,6 +406,7 @@ def _build_execution_plan(
             idempotency_key=f"{idempotency_key}:sl",
             metadata={
                 "signal_id": signal.id,
+                "plan_version": plan_version,
                 "stop_loss_source": risk_decision.stop_loss_plan.source,
                 "role": "protective_stop",
                 "client_order_id": stop_client_order_id,
@@ -386,6 +433,7 @@ def _build_execution_plan(
                 idempotency_key=f"{idempotency_key}:tp{index}",
                 metadata={
                     "signal_id": signal.id,
+                    "plan_version": plan_version,
                     "target_label": target.label,
                     "r_multiple": target.r_multiple,
                     "action": target.action,
@@ -409,6 +457,7 @@ def _build_execution_plan(
         planned_orders=orders,
         metadata={
             "signal_id": signal.id,
+            "plan_version": plan_version,
             "strategy": signal.strategy,
             "timeframe": signal.timeframe,
             "risk_status": risk_decision.status,
@@ -461,6 +510,19 @@ def _validate_execution_plan(
 
     qty_step = _reference_number(reference, "exchange_qty_step", "qty_step")
     tick_size = _reference_number(reference, "exchange_tick_size", "tick_size")
+    min_order_size = _reference_number(reference, "exchange_min_order_size", "min_order_size")
+    max_order_size = _reference_number(reference, "exchange_max_order_size", "max_order_size")
+    min_notional = _reference_number(reference, "exchange_min_notional", "min_notional")
+    if min_order_size is not None:
+        for order in plan.planned_orders:
+            if order.quantity < min_order_size:
+                errors.append(f"Order {order.client_order_id} quantity is below exchange minimum order size.")
+    if max_order_size is not None:
+        for order in plan.planned_orders:
+            if order.quantity > max_order_size:
+                errors.append(f"Order {order.client_order_id} quantity is above exchange maximum order size.")
+    if min_notional is not None and plan.notional < min_notional:
+        errors.append("Execution plan notional is below exchange minimum notional.")
     if qty_step is not None:
         for order in plan.planned_orders:
             if not _is_step_aligned(order.quantity, qty_step):
@@ -481,6 +543,23 @@ async def _place_execution_plan(
 ) -> list[ExecutionPlannedOrder]:
     placed: list[ExecutionPlannedOrder] = []
     for order in plan.planned_orders:
+        existing = await adapter.get_order(
+            exchange=order.exchange,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
+        )
+        if existing is not None and _same_idempotent_order(existing, order):
+            placed.append(
+                existing.model_copy(
+                    update={
+                        "metadata": {
+                            **existing.metadata,
+                            "idempotent_replay": True,
+                        }
+                    }
+                )
+            )
+            continue
         if order.role == "entry":
             placed.append(await adapter.place_order(order))
         elif order.role == "protective_stop":
@@ -488,6 +567,13 @@ async def _place_execution_plan(
         else:
             placed.append(await adapter.place_take_profit(order))
     return placed
+
+
+def _same_idempotent_order(existing: ExecutionPlannedOrder, requested: ExecutionPlannedOrder) -> bool:
+    return (
+        existing.idempotency_key == requested.idempotency_key
+        and existing.status not in {"cancelled", "canceled", "rejected", "expired"}
+    )
 
 
 def _execution_intent_digest(
@@ -573,6 +659,80 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _execution_plan_with_readiness(
+    plan: RealExecutionPlan,
+    readiness: RealExecutionReadinessResult,
+) -> RealExecutionPlan:
+    return plan.model_copy(
+        update={
+            "metadata": {
+                **plan.metadata,
+                "readiness": {
+                    "ready": readiness.ready,
+                    **readiness.metadata,
+                },
+            }
+        }
+    )
+
+
+def _execution_plan_with_placed_orders(
+    plan: RealExecutionPlan,
+    *,
+    planned_orders: list[ExecutionPlannedOrder],
+    adapter_is_dry_run: bool,
+) -> RealExecutionPlan:
+    partial_orders = [
+        order
+        for order in planned_orders
+        if order.status == "partially_filled"
+        or (order.filled_qty is not None and order.remaining_qty is not None and order.remaining_qty > 0)
+    ]
+    metadata = {
+        **plan.metadata,
+        "post_adapter_order_statuses": {
+            order.client_order_id: order.status for order in planned_orders
+        },
+    }
+    if partial_orders:
+        metadata["reconciliation_required"] = True
+        metadata["reconciliation_state"] = {
+            "reason": "partial_fill",
+            "adapter_is_dry_run": adapter_is_dry_run,
+            "orders": [
+                {
+                    "role": order.role,
+                    "client_order_id": order.client_order_id,
+                    "exchange_order_id": order.exchange_order_id,
+                    "status": order.status,
+                    "filled_qty": order.filled_qty,
+                    "remaining_qty": order.remaining_qty,
+                    "avg_fill_price": order.avg_fill_price,
+                    "fees": order.fees,
+                }
+                for order in partial_orders
+            ],
+        }
+    elif not adapter_is_dry_run:
+        metadata["reconciliation_required"] = True
+        metadata["reconciliation_state"] = {
+            "reason": "post_submission_sync",
+            "adapter_is_dry_run": False,
+            "orders": [
+                {
+                    "role": order.role,
+                    "client_order_id": order.client_order_id,
+                    "exchange_order_id": order.exchange_order_id,
+                    "status": order.status,
+                }
+                for order in planned_orders
+            ],
+        }
+    else:
+        metadata["reconciliation_required"] = False
+    return plan.model_copy(update={"planned_orders": planned_orders, "metadata": metadata})
 
 
 real_execution_service = RealExecutionService()

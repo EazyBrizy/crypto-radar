@@ -141,6 +141,14 @@ class BybitRealExecutionAdapter:
     ) -> ExecutionPlannedOrder | None:
         raise NotImplementedError("Bybit real order cancellation is not implemented")
 
+    async def replace_order(
+        self,
+        *,
+        current_client_order_id: str,
+        replacement: ExecutionPlannedOrder,
+    ) -> ExecutionPlannedOrder:
+        raise NotImplementedError("Bybit real order replace is not implemented")
+
     async def get_order(
         self,
         *,
@@ -149,6 +157,14 @@ class BybitRealExecutionAdapter:
         client_order_id: str,
     ) -> ExecutionPlannedOrder | None:
         raise NotImplementedError("Bybit real order lookup is not implemented")
+
+    async def get_open_orders(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+    ) -> list[ExecutionPlannedOrder]:
+        raise NotImplementedError("Bybit real open-order lookup is not implemented")
 
     async def get_position(
         self,

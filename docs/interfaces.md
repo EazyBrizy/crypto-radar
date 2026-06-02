@@ -1479,12 +1479,46 @@ weak edge snapshots, but the risk decision warns:
 
 ## Real Execution Adapter v1
 
-Real execution keeps the existing backend risk-gate boundary and now adds a
-safe adapter layer before any production exchange integration:
+Real execution keeps the existing backend risk-gate boundary and safe adapter
+layer before any production exchange integration:
 
 ```text
-RealExecutionService -> ExchangeExecutionAdapter -> DryRunExecutionAdapter
+RealExecutionService -> RealExecutionReadinessService -> ExchangeExecutionAdapter -> DryRunExecutionAdapter
 ```
+
+`RealExecutionReadinessService` is the service-layer guard after RiskGate and
+execution-plan validation, and before any adapter call. It does not submit
+orders and does not replace RiskGate. It blocks live adapter placement unless
+all live-readiness requirements pass:
+
+- signal status is actionable/confirmed and not terminal;
+- `SignalDecisionSnapshot.signal_actionable == true` and
+  `execution_allowed_real == true`;
+- `TradePlanCompletenessCheck` confirms structural stop, invalidation thesis,
+  and structural target, or an explicitly validated runner exit policy;
+- fallback stop or fallback-only targets are not used;
+- entry, protective stop, and take-profit order specs are built before adapter
+  placement;
+- every order has stable `client_order_id` and role-scoped
+  `idempotency_key`;
+- fresh exchange rules, `qty_step`, `tick_size`, and `min_notional` are
+  available;
+- fresh real account equity and available-balance snapshots are available;
+- fresh exchange fee rates are available within `real_fee_rate_ttl_seconds`;
+- futures requests have a passed liquidation projection;
+- position reconciliation is enabled;
+- the live adapter declares protective-order placement guarantees.
+
+`RiskManagementSettings` adds:
+
+- `real_execution_enabled: bool = False`
+- `real_fee_rate_ttl_seconds: int = 86400`
+
+`real_execution_enabled=false` blocks non-dry-run live placement. It does not
+disable virtual execution and does not prevent `DryRunExecutionAdapter` from
+returning an auditable dry-run plan. A non-dry-run adapter must never submit a
+naked entry, and duplicate calls with the same order intent must reuse existing
+orders by `client_order_id`/`idempotency_key` rather than submitting duplicates.
 
 `ExchangeExecutionAdapter` is an async protocol with these methods:
 
@@ -1492,7 +1526,9 @@ RealExecutionService -> ExchangeExecutionAdapter -> DryRunExecutionAdapter
 - `place_protective_stop(order)`
 - `place_take_profit(order)`
 - `cancel_order(exchange, symbol, client_order_id)`
+- `replace_order(current_client_order_id, replacement)`
 - `get_order(exchange, symbol, client_order_id)`
+- `get_open_orders(exchange, symbol)`
 - `get_position(exchange, symbol)`
 
 The default adapter is `DryRunExecutionAdapter`. It never sends exchange orders.
@@ -1522,13 +1558,26 @@ stable `client_order_id` values and idempotency keys.
 - `quantity`, optional `price`, optional `stop_price`;
 - `reduce_only` for protective stop and take-profit orders;
 - optional `close_percent`;
+- optional exchange state: `exchange_order_id`, `filled_qty`,
+  `avg_fill_price`, `remaining_qty`, and `fees`;
 - `client_order_id`, `idempotency_key`, `status`, and `metadata`.
+
+Order status values are additive and include `planned`, `new`, `dry_run`,
+`submitted`, `partially_filled`, `filled`, `canceled`, `cancelled`,
+`rejected`, `expired`, and `unknown`.
 
 Real execution must not place an order when no adapter is configured. In that
 case it returns `not_implemented` after the risk decision and execution plan are
 available. If exchange rule step sizes are available, quantity must align with
 `qty_step` and entry/stop/take-profit prices must align with `tick_size` before
 adapter methods are called.
+
+Partial fills must remain explicit. `RealExecutionService` must not assume a
+full fill when an adapter returns `partially_filled` or nonzero
+`remaining_qty`; the returned `RealExecutionPlan.metadata` records
+`reconciliation_required=true` and a reconciliation state snapshot. Cancel and
+replace operations are explicit guarded adapter methods, not silent mutation
+paths.
 
 ## Real Position Reconciliation v1
 

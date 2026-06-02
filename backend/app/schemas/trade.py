@@ -49,10 +49,15 @@ ExecutionOrderSide = Literal["buy", "sell"]
 ExecutionOrderType = Literal["market", "limit", "stop", "take_profit"]
 ExecutionOrderStatus = Literal[
     "planned",
+    "new",
     "dry_run",
     "submitted",
+    "partially_filled",
+    "filled",
+    "canceled",
     "cancelled",
     "rejected",
+    "expired",
     "unknown",
 ]
 
@@ -122,6 +127,11 @@ class ExecutionPlannedOrder(BaseModel):
     client_order_id: str = Field(..., min_length=1)
     idempotency_key: str = Field(..., min_length=1)
     status: ExecutionOrderStatus = "planned"
+    exchange_order_id: Optional[str] = None
+    filled_qty: Optional[float] = Field(default=None, ge=0)
+    avg_fill_price: Optional[float] = Field(default=None, gt=0)
+    remaining_qty: Optional[float] = Field(default=None, ge=0)
+    fees: Optional[float] = Field(default=None, ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -40,6 +40,14 @@ class ExchangeExecutionAdapter(Protocol):
     ) -> ExecutionPlannedOrder | None:
         ...
 
+    async def replace_order(
+        self,
+        *,
+        current_client_order_id: str,
+        replacement: ExecutionPlannedOrder,
+    ) -> ExecutionPlannedOrder:
+        ...
+
     async def get_order(
         self,
         *,
@@ -47,6 +55,14 @@ class ExchangeExecutionAdapter(Protocol):
         symbol: str,
         client_order_id: str,
     ) -> ExecutionPlannedOrder | None:
+        ...
+
+    async def get_open_orders(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+    ) -> list[ExecutionPlannedOrder]:
         ...
 
     async def get_position(
@@ -104,6 +120,50 @@ class DryRunExecutionAdapter:
                 exchange.strip().lower(),
                 symbol.strip().upper(),
                 client_order_id,
+            )
+        )
+
+    async def get_open_orders(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+    ) -> list[ExecutionPlannedOrder]:
+        exchange_key = exchange.strip().lower()
+        symbol_key = symbol.strip().upper()
+        return [
+            order
+            for key, order in self._orders.items()
+            if key[0] == exchange_key
+            and key[1] == symbol_key
+            and order.status not in {"cancelled", "canceled", "rejected", "expired"}
+        ]
+
+    async def replace_order(
+        self,
+        *,
+        current_client_order_id: str,
+        replacement: ExecutionPlannedOrder,
+    ) -> ExecutionPlannedOrder:
+        current = await self.get_order(
+            exchange=replacement.exchange,
+            symbol=replacement.symbol,
+            client_order_id=current_client_order_id,
+        )
+        if current is None:
+            raise ValueError("Cannot replace an order that is not known to the adapter.")
+        if current.role != replacement.role or current.reduce_only != replacement.reduce_only:
+            raise ValueError("Replacement order must preserve role and reduce_only guardrails.")
+        cancelled = current.model_copy(update={"status": "cancelled"})
+        self._orders[_order_key(cancelled)] = cancelled
+        return self._record(
+            replacement.model_copy(
+                update={
+                    "metadata": {
+                        **replacement.metadata,
+                        "replaces_client_order_id": current_client_order_id,
+                    }
+                }
             )
         )
 

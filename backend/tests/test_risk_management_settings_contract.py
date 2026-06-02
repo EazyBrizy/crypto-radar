@@ -71,8 +71,10 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(settings["virtual_starting_balance"], 10_000.0)
         self.assertEqual(settings["virtual_slippage_model"], "spread_based")
         self.assertEqual(settings["virtual_fee_model"], "exchange_based")
+        self.assertFalse(settings["real_execution_enabled"])
         self.assertTrue(settings["real_requires_fresh_market_data"])
         self.assertTrue(settings["real_requires_positive_edge"])
+        self.assertEqual(settings["real_fee_rate_ttl_seconds"], 86_400)
         self.assertEqual(settings["edge_min_sample_size"], 50)
         self.assertEqual(settings["min_expectancy_after_costs_r"], 0.05)
         self.assertEqual(settings["strategy_risk_multipliers"]["trend_pullback_continuation"], 1.0)
@@ -136,8 +138,10 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
                 virtual_starting_balance=50_000,
                 virtual_slippage_model="orderbook_based",
                 virtual_fee_model="exchange_based",
+                real_execution_enabled=True,
                 real_requires_fresh_market_data=False,
                 real_requires_positive_edge=False,
+                real_fee_rate_ttl_seconds=3_600,
                 rr_guard_mode="hard",
                 discovery_rr_guard_mode="soft",
                 virtual_rr_guard_mode="off",
@@ -168,8 +172,10 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(settings["max_leverage"], 5)
         self.assertEqual(settings["virtual_risk_mode"], "custom")
         self.assertEqual(settings["virtual_slippage_model"], "orderbook_based")
+        self.assertTrue(settings["real_execution_enabled"])
         self.assertFalse(settings["real_requires_fresh_market_data"])
         self.assertFalse(settings["real_requires_positive_edge"])
+        self.assertEqual(settings["real_fee_rate_ttl_seconds"], 3_600)
         self.assertEqual(settings["rr_guard_mode"], "hard")
         self.assertEqual(settings["virtual_rr_guard_mode"], "off")
         self.assertEqual(settings["strategy_rr_guard_modes"]["volatility_squeeze_breakout"], "hard")

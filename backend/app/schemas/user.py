@@ -90,8 +90,10 @@ class RiskManagementSettings(BaseModel):
     virtual_slippage_model: VirtualSlippageModel = "spread_based"
     virtual_fee_model: VirtualFeeModel = "exchange_based"
     virtual_trading_uses_realistic_execution: bool = True
+    real_execution_enabled: bool = False
     real_requires_fresh_market_data: bool = True
     real_requires_positive_edge: bool = True
+    real_fee_rate_ttl_seconds: int = Field(default=86_400, ge=0, le=2_592_000)
     no_trade_filters_enabled: bool = True
     max_spread_bps_for_entry: float = Field(default=50.0, ge=0, le=10_000)
     max_slippage_bps_for_entry: float = Field(default=150.0, ge=0, le=10_000)
@@ -175,8 +177,10 @@ class RiskManagementPatch(BaseModel):
     virtual_slippage_model: VirtualSlippageModel | None = None
     virtual_fee_model: VirtualFeeModel | None = None
     virtual_trading_uses_realistic_execution: bool | None = None
+    real_execution_enabled: bool | None = None
     real_requires_fresh_market_data: bool | None = None
     real_requires_positive_edge: bool | None = None
+    real_fee_rate_ttl_seconds: int | None = Field(default=None, ge=0, le=2_592_000)
     no_trade_filters_enabled: bool | None = None
     max_spread_bps_for_entry: float | None = Field(default=None, ge=0, le=10_000)
     max_slippage_bps_for_entry: float | None = Field(default=None, ge=0, le=10_000)

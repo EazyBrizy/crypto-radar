@@ -66,6 +66,49 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
         assert cancelled is not None
         self.assertEqual(cancelled.status, "cancelled")
 
+    async def test_cancel_replace_is_guarded(self) -> None:
+        adapter = DryRunExecutionAdapter()
+        stop = await adapter.place_protective_stop(
+            _planned_order(
+                role="protective_stop",
+                client_order_id="stop-replace-1",
+                side="sell",
+                order_type="stop",
+                reduce_only=True,
+                stop_price=95.0,
+            )
+        )
+        replacement = _planned_order(
+            role="protective_stop",
+            client_order_id="stop-replace-2",
+            side="sell",
+            order_type="stop",
+            reduce_only=True,
+            stop_price=94.0,
+        )
+
+        replaced = await adapter.replace_order(
+            current_client_order_id=stop.client_order_id,
+            replacement=replacement,
+        )
+
+        self.assertEqual(replaced.status, "dry_run")
+        self.assertEqual(replaced.metadata["replaces_client_order_id"], stop.client_order_id)
+        old = await adapter.get_order(
+            exchange=stop.exchange,
+            symbol=stop.symbol,
+            client_order_id=stop.client_order_id,
+        )
+        self.assertIsNotNone(old)
+        assert old is not None
+        self.assertEqual(old.status, "cancelled")
+
+        with self.assertRaises(ValueError):
+            await adapter.replace_order(
+                current_client_order_id=replaced.client_order_id,
+                replacement=_planned_order(role="entry", client_order_id="entry-replace-bad"),
+            )
+
     async def test_bybit_real_adapter_skeleton_does_not_submit_orders(self) -> None:
         adapter = BybitRealExecutionAdapter()
 

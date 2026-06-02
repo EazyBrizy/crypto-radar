@@ -67,13 +67,35 @@ candle-state, and exit changes against the saved LAB-02 baseline artifact.
 8. [x] AUD-08: Improve breakout strategy with accepted breakout vs fakeout classifier.
 9. [x] AUD-09: Improve trend_pullback with structural pullback and exhaustion filters.
 10. [x] AUD-10: market-based exits.
-11. [ ] AUD-11: real execution readiness. Blocked by AUD-01, AUD-02, AUD-03,
-    AUD-04, AUD-05, AUD-06, AUD-07, AUD-08, AUD-09, and AUD-10.
+11. [x] AUD-11: real execution readiness guardrails. Unblocked by completed
+    AUD-01, AUD-02, AUD-03, AUD-04, AUD-05, AUD-06, AUD-07, AUD-08, AUD-09,
+    and AUD-10.
 
-AUD-11 must not add real execution paths until research/backtest evidence,
-strategy calibration, fallback cleanup, candle-state separation, pipeline
-cleanup, decision snapshots, market context, strategy upgrades, and
-market-based exits are complete.
+AUD-11 does not enable live execution by default. It adds readiness checks,
+protective-order requirements, idempotent order planning, partial-fill state,
+and reconciliation guardrails before any non-dry-run adapter call.
+`real_execution_enabled=false` remains the default, and a real adapter cannot
+send a naked entry.
+
+### AUD-11 Checklist
+
+- [x] Add `RealExecutionReadinessService` after RiskGate and before adapter
+  placement.
+- [x] Require actionable signal status and `execution_allowed_real=true`.
+- [x] Block missing structural stop, fallback stop, fallback-only targets, and
+  incomplete production TradePlans.
+- [x] Require protective stop plus take-profit or validated runner exit before
+  entry placement.
+- [x] Keep `real_execution_enabled=false` by default; dry-run remains the safe
+  real adapter default.
+- [x] Add role-scoped idempotency/client order checks and duplicate replay
+  handling.
+- [x] Represent partial fills through planned-order state and reconciliation
+  metadata.
+- [x] Add guarded cancel/replace and open-order adapter contracts.
+- [x] Validate exchange qty/tick/min-notional rules before adapter placement.
+- [x] Require fresh real account balance/equity, fresh fee rate TTL, futures
+  liquidation projection, and position reconciliation for live adapters.
 
 ### AUD-06 Checklist
 

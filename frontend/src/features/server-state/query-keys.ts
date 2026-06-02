@@ -1,5 +1,6 @@
-import type { SignalStatus, Timeframe, TradeMode, TradeSource, TradeStatus } from "@/types";
+import type { RadarDisplayMode } from "@/features/server-state/types";
 import type { StrategyTestRunStatus } from "@/features/strategy-testing/types";
+import type { SignalStatus, Timeframe, TradeMode, TradeSource, TradeStatus } from "@/types";
 import { CandleFilterSchema, SignalHistoryFilterSchema, TradeJournalFilterSchema } from "@/validation/filter-schemas";
 
 export type TradeJournalFilters = {
@@ -86,7 +87,10 @@ export const serverStateKeys = {
   health: () => [...serverStateKeys.all, "health"] as const,
   radar: {
     all: () => [...serverStateKeys.all, "radar"] as const,
-    dashboard: () => [...serverStateKeys.radar.all(), "dashboard"] as const,
+    dashboard: (radarDisplayMode?: RadarDisplayMode) =>
+      radarDisplayMode
+        ? [...serverStateKeys.radar.all(), "dashboard", radarDisplayMode] as const
+        : [...serverStateKeys.radar.all(), "dashboard"] as const,
     status: () => [...serverStateKeys.radar.all(), "status"] as const
   },
   user: {

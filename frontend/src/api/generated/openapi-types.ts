@@ -725,6 +725,126 @@ export interface paths {
         patch: operations["update_strategy_config_api_v1_strategies_configs__config_id__patch"];
         trace?: never;
     };
+    "/api/v1/strategy-lab/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Strategy Lab */
+        post: operations["run_strategy_lab_api_v1_strategy_lab_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-lab/matrix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Strategy Lab Matrix */
+        post: operations["run_strategy_lab_matrix_api_v1_strategy_lab_matrix_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-tests/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Strategy Test Runs */
+        get: operations["list_strategy_test_runs_api_v1_strategy_tests_runs_get"];
+        put?: never;
+        /** Create Strategy Test Run */
+        post: operations["create_strategy_test_run_api_v1_strategy_tests_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-tests/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Strategy Test Run */
+        get: operations["get_strategy_test_run_api_v1_strategy_tests_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-tests/runs/{run_id}/trades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Strategy Test Trades */
+        get: operations["list_strategy_test_trades_api_v1_strategy_tests_runs__run_id__trades_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-tests/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Strategy Test Reports */
+        get: operations["list_strategy_test_reports_api_v1_strategy_tests_reports_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-tests/reports/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Strategy Test Report */
+        get: operations["get_strategy_test_report_api_v1_strategy_tests_reports__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/trades": {
         parameters: {
             query?: never;
@@ -1967,7 +2087,17 @@ export interface components {
              * @default planned
              * @enum {string}
              */
-            status: "planned" | "dry_run" | "submitted" | "cancelled" | "rejected" | "unknown";
+            status: "planned" | "new" | "dry_run" | "submitted" | "partially_filled" | "filled" | "canceled" | "cancelled" | "rejected" | "expired" | "unknown";
+            /** Exchange Order Id */
+            exchange_order_id?: string | null;
+            /** Filled Qty */
+            filled_qty?: number | null;
+            /** Avg Fill Price */
+            avg_fill_price?: number | null;
+            /** Remaining Qty */
+            remaining_qty?: number | null;
+            /** Fees */
+            fees?: number | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -2233,6 +2363,7 @@ export interface components {
              * @default 10
              */
             risk_percent: number;
+            execution_profile?: components["schemas"]["StrategyExecutionSettings-Input"] | null;
             /**
              * Leverage
              * @default 1
@@ -2694,6 +2825,12 @@ export interface components {
              * @default stream
              */
             timeframe: string;
+            /**
+             * Candle State
+             * @default closed
+             * @enum {string}
+             */
+            candle_state: "open" | "closed";
             /** Entry Min */
             entry_min?: number | null;
             /** Entry Max */
@@ -2773,6 +2910,7 @@ export interface components {
              * @default 10
              */
             risk_percent: number;
+            execution_profile?: components["schemas"]["StrategyExecutionSettings-Input"] | null;
             /**
              * Leverage
              * @default 1
@@ -3265,8 +3403,16 @@ export interface components {
         RiskManagementPatch: {
             /** Risk Profile */
             risk_profile?: ("conservative" | "balanced" | "aggressive" | "custom") | null;
+            /** Risk Mode */
+            risk_mode?: ("percent" | "fixed") | null;
             /** Risk Per Trade Percent */
             risk_per_trade_percent?: number | null;
+            /** Fixed Risk Amount */
+            fixed_risk_amount?: number | null;
+            /** Fixed Risk Currency */
+            fixed_risk_currency?: string | null;
+            /** Radar Display Mode */
+            radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
             /** Min Rr Ratio */
             min_rr_ratio?: number | null;
             /** Rr Guard Mode */
@@ -3373,10 +3519,14 @@ export interface components {
             virtual_fee_model?: ("manual" | "exchange_based") | null;
             /** Virtual Trading Uses Realistic Execution */
             virtual_trading_uses_realistic_execution?: boolean | null;
+            /** Real Execution Enabled */
+            real_execution_enabled?: boolean | null;
             /** Real Requires Fresh Market Data */
             real_requires_fresh_market_data?: boolean | null;
             /** Real Requires Positive Edge */
             real_requires_positive_edge?: boolean | null;
+            /** Real Fee Rate Ttl Seconds */
+            real_fee_rate_ttl_seconds?: number | null;
             /** No Trade Filters Enabled */
             no_trade_filters_enabled?: boolean | null;
             /** Max Spread Bps For Entry */
@@ -3450,6 +3600,7 @@ export interface components {
              * @default 10
              */
             risk_percent: number;
+            execution_profile?: components["schemas"]["StrategyExecutionSettings-Input"] | null;
             /**
              * Fee Rate
              * @default 0
@@ -3936,10 +4087,7 @@ export interface components {
             params: {
                 [key: string]: unknown;
             };
-            /** Risk Settings */
-            risk_settings?: {
-                [key: string]: unknown;
-            };
+            risk_settings?: components["schemas"]["StrategyExecutionSettings-Output"];
             /** Is Enabled */
             is_enabled: boolean;
             /**
@@ -3972,10 +4120,7 @@ export interface components {
             params?: {
                 [key: string]: unknown;
             } | null;
-            /** Risk Settings */
-            risk_settings?: {
-                [key: string]: unknown;
-            } | null;
+            risk_settings?: components["schemas"]["StrategyExecutionSettings-Input"] | null;
             /** Is Enabled */
             is_enabled?: boolean | null;
         };
@@ -4048,6 +4193,370 @@ export interface components {
             /** Slippage Bps */
             slippage_bps: number;
         };
+        /**
+         * StrategyExecutionSettings
+         * @description Typed execution profile stored over legacy JSON risk settings.
+         */
+        "StrategyExecutionSettings-Input": {
+            /**
+             * Risk Mode
+             * @default percent
+             * @enum {string}
+             */
+            risk_mode: "percent" | "fixed";
+            /** Risk Percent */
+            risk_percent?: number | string | null;
+            /** Fixed Risk Amount */
+            fixed_risk_amount?: number | string | null;
+            /**
+             * Fixed Risk Currency
+             * @default USDT
+             */
+            fixed_risk_currency: string;
+            /** Leverage */
+            leverage?: number | string | null;
+            /** Instrument Type */
+            instrument_type?: ("spot" | "futures") | null;
+            /** Rr Guard Mode */
+            rr_guard_mode?: ("off" | "soft" | "hard") | null;
+            /** Min Rr Ratio */
+            min_rr_ratio?: number | string | null;
+            /** Rr Target */
+            rr_target?: ("nearest" | "final") | null;
+            /** Radar Display Mode */
+            radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
+            /** Risk Per Trade Percent */
+            risk_per_trade_percent?: number | string | null;
+            /** Futures Risk Per Trade Percent */
+            futures_risk_per_trade_percent?: number | string | null;
+            /** Spot Risk Per Trade Percent */
+            spot_risk_per_trade_percent?: number | string | null;
+            /** Virtual Risk Per Trade Percent */
+            virtual_risk_per_trade_percent?: number | string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * StrategyExecutionSettings
+         * @description Typed execution profile stored over legacy JSON risk settings.
+         */
+        "StrategyExecutionSettings-Output": {
+            /**
+             * Risk Mode
+             * @default percent
+             * @enum {string}
+             */
+            risk_mode: "percent" | "fixed";
+            /** Risk Percent */
+            risk_percent?: string | null;
+            /** Fixed Risk Amount */
+            fixed_risk_amount?: string | null;
+            /**
+             * Fixed Risk Currency
+             * @default USDT
+             */
+            fixed_risk_currency: string;
+            /** Leverage */
+            leverage?: string | null;
+            /** Instrument Type */
+            instrument_type?: ("spot" | "futures") | null;
+            /** Rr Guard Mode */
+            rr_guard_mode?: ("off" | "soft" | "hard") | null;
+            /** Min Rr Ratio */
+            min_rr_ratio?: string | null;
+            /** Rr Target */
+            rr_target?: ("nearest" | "final") | null;
+            /** Radar Display Mode */
+            radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
+            /** Risk Per Trade Percent */
+            risk_per_trade_percent?: string | null;
+            /** Futures Risk Per Trade Percent */
+            futures_risk_per_trade_percent?: string | null;
+            /** Spot Risk Per Trade Percent */
+            spot_risk_per_trade_percent?: string | null;
+            /** Virtual Risk Per Trade Percent */
+            virtual_risk_per_trade_percent?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** StrategyLabComparisonResult */
+        StrategyLabComparisonResult: {
+            /**
+             * Lab Run Id
+             * Format: uuid
+             */
+            lab_run_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "baseline" | "experiment";
+            /** Label */
+            label?: string | null;
+            /** Tags */
+            tags?: {
+                [key: string]: string;
+            };
+            /** Scenario Count */
+            scenario_count: number;
+            /** Completed Runs */
+            completed_runs: number;
+            /** No Data Runs */
+            no_data_runs: number;
+            /** Insufficient Data Runs */
+            insufficient_data_runs: number;
+            /** Failed Runs */
+            failed_runs: number;
+            overall_summary: components["schemas"]["StrategyLabRunSummary"];
+            /** Metrics By Strategy */
+            metrics_by_strategy?: {
+                [key: string]: components["schemas"]["StrategyLabRunSummary"];
+            };
+            /** Metrics By Symbol */
+            metrics_by_symbol?: {
+                [key: string]: components["schemas"]["StrategyLabRunSummary"];
+            };
+            /** Metrics By Timeframe */
+            metrics_by_timeframe?: {
+                [key: string]: components["schemas"]["StrategyLabRunSummary"];
+            };
+            /** Runs */
+            runs?: components["schemas"]["StrategyLabRunItem"][];
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /** StrategyLabMatrixRequest */
+        StrategyLabMatrixRequest: {
+            /**
+             * User Id
+             * @default demo_user
+             */
+            user_id: string;
+            /**
+             * Exchange
+             * @default bybit
+             */
+            exchange: string;
+            /** Strategies */
+            strategies: string[];
+            /** Symbols */
+            symbols: string[];
+            /** Timeframes */
+            timeframes: string[];
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+            /**
+             * End Time
+             * Format: date-time
+             */
+            end_time: string;
+            /**
+             * Initial Equity
+             * @default 1000
+             */
+            initial_equity: number | string;
+            /**
+             * Fees Bps
+             * @default 10
+             */
+            fees_bps: number | string;
+            /**
+             * Slippage Bps
+             * @default 0
+             */
+            slippage_bps: number | string;
+            /** Max Bars In Trade */
+            max_bars_in_trade?: number | null;
+            /**
+             * Warmup Bars
+             * @default 200
+             */
+            warmup_bars: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "baseline" | "experiment";
+            /** Label */
+            label?: string | null;
+            /** Tags */
+            tags?: {
+                [key: string]: string;
+            };
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+            /** Strategy Version */
+            strategy_version?: string | null;
+        };
+        /** StrategyLabRunItem */
+        StrategyLabRunItem: {
+            /**
+             * Lab Run Id
+             * Format: uuid
+             */
+            lab_run_id: string;
+            /** Scenario Id */
+            scenario_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "no_data" | "insufficient_data" | "failed";
+            /** Strategy */
+            strategy: string;
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+            /** Timeframe */
+            timeframe: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "baseline" | "experiment";
+            /** Label */
+            label?: string | null;
+            /** Tags */
+            tags?: {
+                [key: string]: string;
+            };
+            summary: components["schemas"]["StrategyLabRunSummary"];
+            /** Metrics */
+            metrics?: {
+                [key: string]: unknown;
+            };
+            /** Assumptions */
+            assumptions?: {
+                [key: string]: unknown;
+            };
+            /** Backtest Run Id */
+            backtest_run_id?: string | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** StrategyLabRunRequest */
+        StrategyLabRunRequest: {
+            /**
+             * User Id
+             * @default demo_user
+             */
+            user_id: string;
+            /**
+             * Exchange
+             * @default bybit
+             */
+            exchange: string;
+            /** Strategies */
+            strategies: string[];
+            /** Symbols */
+            symbols: string[];
+            /** Timeframes */
+            timeframes: string[];
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+            /**
+             * End Time
+             * Format: date-time
+             */
+            end_time: string;
+            /**
+             * Initial Equity
+             * @default 1000
+             */
+            initial_equity: number | string;
+            /**
+             * Fees Bps
+             * @default 10
+             */
+            fees_bps: number | string;
+            /**
+             * Slippage Bps
+             * @default 0
+             */
+            slippage_bps: number | string;
+            /** Max Bars In Trade */
+            max_bars_in_trade?: number | null;
+            /**
+             * Warmup Bars
+             * @default 200
+             */
+            warmup_bars: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "baseline" | "experiment";
+            /** Label */
+            label?: string | null;
+            /** Tags */
+            tags?: {
+                [key: string]: string;
+            };
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+            /** Strategy Version */
+            strategy_version?: string | null;
+        };
+        /** StrategyLabRunSummary */
+        StrategyLabRunSummary: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "no_data" | "insufficient_data" | "failed";
+            /** Total Trades */
+            total_trades?: number | null;
+            /** Win Rate */
+            win_rate?: number | null;
+            /** Profit Factor */
+            profit_factor?: number | null;
+            /** Expectancy R */
+            expectancy_r?: number | null;
+            /** Avg R */
+            avg_r?: number | null;
+            /** Max Drawdown */
+            max_drawdown?: number | null;
+            /** Avg Bars In Trade */
+            avg_bars_in_trade?: number | null;
+            /** Stop Rate */
+            stop_rate?: number | null;
+            /** Tp1 Rate */
+            tp1_rate?: number | null;
+            /** Final Target Rate */
+            final_target_rate?: number | null;
+            /** Fees Paid */
+            fees_paid?: string | null;
+            /** Slippage Paid */
+            slippage_paid?: string | null;
+            /** Risk Rejections */
+            risk_rejections?: number | null;
+            /** Execution Rejections */
+            execution_rejections?: number | null;
+            /** Fallback Used Count */
+            fallback_used_count?: number | null;
+            /** Incomplete Trade Plan Count */
+            incomplete_trade_plan_count?: number | null;
+            /** Signals Seen */
+            signals_seen?: number | null;
+        };
         /** StrategyPairScope */
         StrategyPairScope: {
             /** Exchange */
@@ -4067,6 +4576,326 @@ export interface components {
             stage: "forming" | "ready" | "confirmed";
             /** Checks */
             checks?: components["schemas"]["SignalLayerCheck"][];
+        };
+        /** StrategyTestCandidateAdjustment */
+        StrategyTestCandidateAdjustment: {
+            /** Strategy Code */
+            strategy_code: string;
+            /** Scope */
+            scope: string;
+            /** Reason */
+            reason: string;
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            };
+            /** Suggested Change */
+            suggested_change: string;
+            /**
+             * Confidence
+             * @default low
+             * @enum {string}
+             */
+            confidence: "low" | "medium" | "high";
+        };
+        /** StrategyTestPair */
+        StrategyTestPair: {
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /** StrategyTestReport */
+        StrategyTestReport: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "discovery" | "research_virtual" | "production_like";
+            /** Requested Matrix */
+            requested_matrix?: {
+                [key: string]: unknown;
+            };
+            /** Assumptions */
+            assumptions?: {
+                [key: string]: unknown;
+            };
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            };
+            /** Sections */
+            sections?: components["schemas"]["StrategyTestReportSection"][];
+            /** Metrics */
+            metrics?: {
+                [key: string]: unknown;
+            }[];
+            /** Candidate Adjustments */
+            candidate_adjustments?: components["schemas"]["StrategyTestCandidateAdjustment"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Summary Metrics */
+            summary_metrics?: {
+                [key: string]: unknown;
+            }[];
+            /** Grouped Metrics */
+            grouped_metrics?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Trades Count
+             * @default 0
+             */
+            trades_count: number;
+            /** Warnings */
+            warnings?: string[];
+            /** Rejections */
+            rejections?: string[];
+        };
+        /** StrategyTestReportSection */
+        StrategyTestReportSection: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            };
+            /** Metrics */
+            metrics?: {
+                [key: string]: unknown;
+            }[];
+            /** Rows */
+            rows?: {
+                [key: string]: unknown;
+            }[];
+            /** Warnings */
+            warnings?: string[];
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /** StrategyTestRunDetailResponse */
+        StrategyTestRunDetailResponse: {
+            run: components["schemas"]["StrategyTestRunResponse"];
+            /**
+             * Trades Count
+             * @default 0
+             */
+            trades_count: number;
+            /** Warnings */
+            warnings?: string[];
+            /** Rejections */
+            rejections?: string[];
+        };
+        /** StrategyTestRunRequest */
+        StrategyTestRunRequest: {
+            /**
+             * User Id
+             * @default demo_user
+             */
+            user_id: string;
+            /** Strategies */
+            strategies: string[];
+            /** Pairs */
+            pairs: components["schemas"]["StrategyTestPair"][];
+            /** Timeframes */
+            timeframes: string[];
+            /**
+             * Start At
+             * Format: date-time
+             */
+            start_at: string;
+            /**
+             * End At
+             * Format: date-time
+             */
+            end_at: string;
+            /**
+             * Mode
+             * @default research_virtual
+             * @enum {string}
+             */
+            mode: "discovery" | "research_virtual" | "production_like";
+            /**
+             * Initial Capital
+             * @default 1000
+             */
+            initial_capital: number | string;
+            /**
+             * Fee Rate
+             * @default 0.001
+             */
+            fee_rate: number | string;
+            /**
+             * Slippage Bps
+             * @default 0
+             */
+            slippage_bps: number | string;
+            /**
+             * Same Candle Policy
+             * @default stop_first
+             * @enum {string}
+             */
+            same_candle_policy: "stop_first" | "target_first" | "ignore_ambiguous";
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+            /** Metric Set */
+            metric_set?: string[];
+            /** Tags */
+            tags?: string[];
+        };
+        /** StrategyTestRunResponse */
+        StrategyTestRunResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /** Requested Matrix */
+            requested_matrix: {
+                [key: string]: unknown;
+            };
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+        };
+        /** StrategyTestTrade */
+        StrategyTestTrade: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Trade Id */
+            trade_id: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "discovery" | "research_virtual" | "production_like";
+            /** Strategy Code */
+            strategy_code: string;
+            /** Strategy Version */
+            strategy_version: string;
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+            /** Timeframe */
+            timeframe: string;
+            /** Direction */
+            direction: string;
+            /** Signal Score */
+            signal_score?: number | null;
+            /** Market Regime */
+            market_regime: string;
+            /** Score Bucket */
+            score_bucket: string;
+            /**
+             * Entry Time
+             * Format: date-time
+             */
+            entry_time: string;
+            /** Exit Time */
+            exit_time?: string | null;
+            /** Entry Price */
+            entry_price: string;
+            /** Exit Price */
+            exit_price?: string | null;
+            /** Stop Loss */
+            stop_loss?: string | null;
+            /** Targets */
+            targets?: {
+                [key: string]: unknown;
+            }[];
+            /** Selected Rr */
+            selected_rr?: number | null;
+            /** Realized R */
+            realized_r?: number | null;
+            /** Pnl */
+            pnl: string;
+            /** Pnl Pct */
+            pnl_pct: number;
+            /** Fees */
+            fees: string;
+            /** Slippage */
+            slippage: string;
+            /** Mfe R */
+            mfe_r?: number | null;
+            /** Mae R */
+            mae_r?: number | null;
+            /** Bars To Entry */
+            bars_to_entry?: number | null;
+            /** Bars In Trade */
+            bars_in_trade?: number | null;
+            /** Close Reason */
+            close_reason: string;
+            /** Outcome */
+            outcome: string;
+            /**
+             * Risk Rejected
+             * @default false
+             */
+            risk_rejected: boolean;
+            /**
+             * Execution Rejected
+             * @default false
+             */
+            execution_rejected: boolean;
+            /** Warnings */
+            warnings?: string[];
+            /** Features Snapshot */
+            features_snapshot?: {
+                [key: string]: unknown;
+            };
+            /** Trade Plan */
+            trade_plan?: {
+                [key: string]: unknown;
+            };
+            /** Tags */
+            tags?: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** TakeProfitPlan */
         TakeProfitPlan: {
@@ -4120,6 +4949,38 @@ export interface components {
              * @enum {string}
              */
             action: "move_stop_to_breakeven" | "trailing_stop" | "full_close" | "observe";
+        };
+        /** TargetThesis */
+        TargetThesis: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "nearest_liquidity_pool" | "previous_day_high" | "previous_day_low" | "session_high" | "session_low" | "range_midpoint" | "range_opposite_boundary" | "vwap" | "vwap_deviation_band" | "htf_support" | "htf_resistance" | "measured_move" | "risk_multiple_fallback";
+            /** Price */
+            price?: number | null;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "LONG" | "SHORT";
+            /** Confidence */
+            confidence: number;
+            /** Priority */
+            priority: number;
+            /** Close Percent */
+            close_percent?: number | null;
+            /**
+             * Requires Acceptance
+             * @default false
+             */
+            requires_acceptance: boolean;
+            /** Invalidation Hint */
+            invalidation_hint?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
         };
         /** TradeInvalidationActionRequest */
         TradeInvalidationActionRequest: {
@@ -4227,6 +5088,16 @@ export interface components {
              * @enum {string}
              */
             mode: "virtual" | "real";
+            /**
+             * Source
+             * @default virtual
+             * @enum {string}
+             */
+            source: "virtual" | "real" | "backtest";
+            /** Tags */
+            tags?: string[];
+            /** Run Id */
+            run_id?: string | null;
             /** Exchange */
             exchange: string;
             /** Symbol */
@@ -4474,6 +5345,7 @@ export interface components {
             close_percent?: number | string | null;
             /** Source */
             source?: string | null;
+            thesis?: components["schemas"]["TargetThesis"] | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -6235,7 +7107,10 @@ export interface operations {
     };
     get_radar_api_v1_radar_get: {
         parameters: {
-            query?: never;
+            query?: {
+                user_id?: string;
+                radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -6249,6 +7124,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RadarResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6723,10 +7607,273 @@ export interface operations {
             };
         };
     };
+    run_strategy_lab_api_v1_strategy_lab_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyLabRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyLabComparisonResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_strategy_lab_matrix_api_v1_strategy_lab_matrix_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyLabMatrixRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyLabComparisonResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_strategy_test_runs_api_v1_strategy_tests_runs_get: {
+        parameters: {
+            query?: {
+                user_id?: string;
+                status?: ("queued" | "running" | "completed" | "failed" | "cancelled") | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestRunResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_strategy_test_run_api_v1_strategy_tests_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyTestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_strategy_test_run_api_v1_strategy_tests_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestRunDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_strategy_test_trades_api_v1_strategy_tests_runs__run_id__trades_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestTrade"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_strategy_test_reports_api_v1_strategy_tests_reports_get: {
+        parameters: {
+            query?: {
+                user_id?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestReport"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_strategy_test_report_api_v1_strategy_tests_reports__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_trade_journal_api_v1_trades_get: {
         parameters: {
             query?: {
                 mode?: string | null;
+                source?: string | null;
+                tag?: string | null;
+                run_id?: string | null;
                 status?: string | null;
                 signal_id?: string | null;
             };

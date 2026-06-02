@@ -274,6 +274,7 @@ class ExecutionProfileResolver:
         mode: ExecutionMode | str,
         instrument_type: InstrumentType | str | None,
     ) -> ResolvedExecutionProfile:
+        has_user_risk_settings = user_risk_settings is not None
         settings = _settings_model(user_risk_settings or RiskManagementSettings())
         execution_mode = _execution_mode(mode)
         default_instrument_type = _execution_instrument_type(instrument_type)
@@ -392,12 +393,12 @@ class ExecutionProfileResolver:
         )
         radar_display_mode, radar_source = _resolve_profile_field(
             "radar_display_mode",
-            default=settings.radar_display_mode,
+            default="all_market_opportunities",
             request_settings=request_settings,
             request_fields=request_fields,
             strategy_settings=strategy_settings,
             strategy_fields=strategy_fields,
-            user_value=settings.radar_display_mode,
+            user_value=settings.radar_display_mode if has_user_risk_settings else None,
         )
 
         return ResolvedExecutionProfile(

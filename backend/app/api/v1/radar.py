@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
 from app.schemas.candle import RadarConfig, RadarConfigUpdate
+from app.schemas.risk import RadarDisplayMode
 from app.schemas.signal import RadarResponse
 from app.services.candle_service import candle_service
 from app.services.message_broker import realtime_event_broker
@@ -12,8 +13,16 @@ router = APIRouter(prefix="/radar", tags=["radar"])
 
 
 @router.get("", response_model=RadarResponse)
-async def get_radar() -> RadarResponse:
-    return RadarResponse(signals=signal_service.list_open_signals())
+async def get_radar(
+    user_id: str = Query(default="demo_user"),
+    radar_display_mode: RadarDisplayMode | None = Query(default=None),
+) -> RadarResponse:
+    return RadarResponse(
+        signals=signal_service.list_open_signals_for_radar(
+            user_id=user_id,
+            radar_display_mode=radar_display_mode,
+        )
+    )
 
 
 @router.get("/config", response_model=RadarConfig)

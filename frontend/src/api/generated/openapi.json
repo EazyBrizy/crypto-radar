@@ -1636,6 +1636,38 @@
         ],
         "summary": "Get Radar",
         "operationId": "get_radar_api_v1_radar_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "demo_user",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "radar_display_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "all_market_opportunities",
+                    "execution_ready"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Radar Display Mode"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1643,6 +1675,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RadarResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2358,6 +2400,424 @@
         }
       }
     },
+    "/api/v1/strategy-lab/run": {
+      "post": {
+        "tags": [
+          "strategy-lab"
+        ],
+        "summary": "Run Strategy Lab",
+        "operationId": "run_strategy_lab_api_v1_strategy_lab_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyLabRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyLabComparisonResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy-lab/matrix": {
+      "post": {
+        "tags": [
+          "strategy-lab"
+        ],
+        "summary": "Run Strategy Lab Matrix",
+        "operationId": "run_strategy_lab_matrix_api_v1_strategy_lab_matrix_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyLabMatrixRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyLabComparisonResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy-tests/runs": {
+      "post": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "Create Strategy Test Run",
+        "operationId": "create_strategy_test_run_api_v1_strategy_tests_runs_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyTestRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyTestRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "List Strategy Test Runs",
+        "operationId": "list_strategy_test_runs_api_v1_strategy_tests_runs_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "demo_user",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "queued",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StrategyTestRunResponse"
+                  },
+                  "title": "Response List Strategy Test Runs Api V1 Strategy Tests Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy-tests/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "Get Strategy Test Run",
+        "operationId": "get_strategy_test_run_api_v1_strategy_tests_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyTestRunDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy-tests/runs/{run_id}/trades": {
+      "get": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "List Strategy Test Trades",
+        "operationId": "list_strategy_test_trades_api_v1_strategy_tests_runs__run_id__trades_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 5000,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StrategyTestTrade"
+                  },
+                  "title": "Response List Strategy Test Trades Api V1 Strategy Tests Runs  Run Id  Trades Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy-tests/reports": {
+      "get": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "List Strategy Test Reports",
+        "operationId": "list_strategy_test_reports_api_v1_strategy_tests_reports_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "demo_user",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StrategyTestReport"
+                  },
+                  "title": "Response List Strategy Test Reports Api V1 Strategy Tests Reports Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy-tests/reports/{run_id}": {
+      "get": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "Get Strategy Test Report",
+        "operationId": "get_strategy_test_report_api_v1_strategy_tests_reports__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyTestReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/trades": {
       "get": {
         "tags": [
@@ -2381,6 +2841,56 @@
                 }
               ],
               "title": "Mode"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(virtual|real|backtest)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tag"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
             }
           },
           {
@@ -4784,64 +5294,6 @@
         ],
         "title": "BillingProviderNotReadyResponse"
       },
-      "DecisionReason": {
-        "properties": {
-          "code": {
-            "type": "string",
-            "title": "Code"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "setup",
-              "market_quality",
-              "rr",
-              "no_trade",
-              "risk",
-              "execution",
-              "data"
-            ],
-            "title": "Source"
-          },
-          "severity": {
-            "type": "string",
-            "enum": [
-              "info",
-              "warning",
-              "blocker"
-            ],
-            "title": "Severity"
-          },
-          "scope": {
-            "type": "string",
-            "enum": [
-              "discovery",
-              "virtual",
-              "real",
-              "backtest"
-            ],
-            "title": "Scope"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Metadata"
-          }
-        },
-        "type": "object",
-        "required": [
-          "code",
-          "message",
-          "source",
-          "severity",
-          "scope"
-        ],
-        "title": "DecisionReason"
-      },
       "BillingSubscriptionResponse": {
         "properties": {
           "user_id": {
@@ -5173,6 +5625,64 @@
         },
         "type": "object",
         "title": "CloseVirtualTradeRequest"
+      },
+      "DecisionReason": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "market_quality",
+              "rr",
+              "no_trade",
+              "risk",
+              "execution",
+              "data"
+            ],
+            "title": "Source"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "blocker"
+            ],
+            "title": "Severity"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "discovery",
+              "virtual",
+              "real",
+              "backtest"
+            ],
+            "title": "Scope"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "source",
+          "severity",
+          "scope"
+        ],
+        "title": "DecisionReason"
       },
       "ExchangeConnectionActionResponse": {
         "properties": {
@@ -5815,14 +6325,78 @@
             "type": "string",
             "enum": [
               "planned",
+              "new",
               "dry_run",
               "submitted",
+              "partially_filled",
+              "filled",
+              "canceled",
               "cancelled",
               "rejected",
+              "expired",
               "unknown"
             ],
             "title": "Status",
             "default": "planned"
+          },
+          "exchange_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange Order Id"
+          },
+          "filled_qty": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filled Qty"
+          },
+          "avg_fill_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Fill Price"
+          },
+          "remaining_qty": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Qty"
+          },
+          "fees": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fees"
           },
           "metadata": {
             "additionalProperties": true,
@@ -6414,6 +6988,16 @@
             "exclusiveMinimum": 0,
             "title": "Risk Percent",
             "default": 10
+          },
+          "execution_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StrategyExecutionSettings-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "leverage": {
             "type": "integer",
@@ -7524,6 +8108,15 @@
             "title": "Timeframe",
             "default": "stream"
           },
+          "candle_state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ],
+            "title": "Candle State",
+            "default": "closed"
+          },
           "entry_min": {
             "anyOf": [
               {
@@ -7844,6 +8437,16 @@
             "exclusiveMinimum": 0,
             "title": "Risk Percent",
             "default": 10
+          },
+          "execution_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StrategyExecutionSettings-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "leverage": {
             "type": "integer",
@@ -9104,6 +9707,21 @@
             ],
             "title": "Risk Profile"
           },
+          "risk_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "percent",
+                  "fixed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Mode"
+          },
           "risk_per_trade_percent": {
             "anyOf": [
               {
@@ -9116,6 +9734,46 @@
               }
             ],
             "title": "Risk Per Trade Percent"
+          },
+          "fixed_risk_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Risk Amount"
+          },
+          "fixed_risk_currency": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Risk Currency"
+          },
+          "radar_display_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "all_market_opportunities",
+                  "execution_ready"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radar Display Mode"
           },
           "min_rr_ratio": {
             "anyOf": [
@@ -9811,6 +10469,17 @@
             ],
             "title": "Virtual Trading Uses Realistic Execution"
           },
+          "real_execution_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Real Execution Enabled"
+          },
           "real_requires_fresh_market_data": {
             "anyOf": [
               {
@@ -9832,6 +10501,19 @@
               }
             ],
             "title": "Real Requires Positive Edge"
+          },
+          "real_fee_rate_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2592000,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Real Fee Rate Ttl Seconds"
           },
           "no_trade_filters_enabled": {
             "anyOf": [
@@ -10127,6 +10809,16 @@
             "exclusiveMinimum": 0,
             "title": "Risk Percent",
             "default": 10
+          },
+          "execution_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StrategyExecutionSettings-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "fee_rate": {
             "type": "number",
@@ -11161,9 +11853,7 @@
             "title": "Params"
           },
           "risk_settings": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Risk Settings"
+            "$ref": "#/components/schemas/StrategyExecutionSettings-Output"
           },
           "is_enabled": {
             "type": "boolean",
@@ -11283,14 +11973,12 @@
           "risk_settings": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/StrategyExecutionSettings-Input"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Risk Settings"
+            ]
           },
           "is_enabled": {
             "anyOf": [
@@ -11529,6 +12217,1152 @@
         ],
         "title": "StrategyEdgeProfile"
       },
+      "StrategyExecutionSettings-Input": {
+        "properties": {
+          "risk_mode": {
+            "type": "string",
+            "enum": [
+              "percent",
+              "fixed"
+            ],
+            "title": "Risk Mode",
+            "default": "percent"
+          },
+          "risk_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Percent"
+          },
+          "fixed_risk_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Risk Amount"
+          },
+          "fixed_risk_currency": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Fixed Risk Currency",
+            "default": "USDT"
+          },
+          "leverage": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 125,
+                "minimum": 1
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leverage"
+          },
+          "instrument_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "spot",
+                  "futures"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instrument Type"
+          },
+          "rr_guard_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "soft",
+                  "hard"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rr Guard Mode"
+          },
+          "min_rr_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Rr Ratio"
+          },
+          "rr_target": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "nearest",
+                  "final"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rr Target"
+          },
+          "radar_display_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "all_market_opportunities",
+                  "execution_ready"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radar Display Mode"
+          },
+          "risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Per Trade Percent"
+          },
+          "futures_risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Futures Risk Per Trade Percent"
+          },
+          "spot_risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spot Risk Per Trade Percent"
+          },
+          "virtual_risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Risk Per Trade Percent"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "StrategyExecutionSettings",
+        "description": "Typed execution profile stored over legacy JSON risk settings."
+      },
+      "StrategyExecutionSettings-Output": {
+        "properties": {
+          "risk_mode": {
+            "type": "string",
+            "enum": [
+              "percent",
+              "fixed"
+            ],
+            "title": "Risk Mode",
+            "default": "percent"
+          },
+          "risk_percent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Percent"
+          },
+          "fixed_risk_amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Risk Amount"
+          },
+          "fixed_risk_currency": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Fixed Risk Currency",
+            "default": "USDT"
+          },
+          "leverage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leverage"
+          },
+          "instrument_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "spot",
+                  "futures"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instrument Type"
+          },
+          "rr_guard_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "soft",
+                  "hard"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rr Guard Mode"
+          },
+          "min_rr_ratio": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Rr Ratio"
+          },
+          "rr_target": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "nearest",
+                  "final"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rr Target"
+          },
+          "radar_display_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "all_market_opportunities",
+                  "execution_ready"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radar Display Mode"
+          },
+          "risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Per Trade Percent"
+          },
+          "futures_risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Futures Risk Per Trade Percent"
+          },
+          "spot_risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spot Risk Per Trade Percent"
+          },
+          "virtual_risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Risk Per Trade Percent"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "StrategyExecutionSettings",
+        "description": "Typed execution profile stored over legacy JSON risk settings."
+      },
+      "StrategyLabComparisonResult": {
+        "properties": {
+          "lab_run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lab Run Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "baseline",
+              "experiment"
+            ],
+            "title": "Mode"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Tags"
+          },
+          "scenario_count": {
+            "type": "integer",
+            "title": "Scenario Count"
+          },
+          "completed_runs": {
+            "type": "integer",
+            "title": "Completed Runs"
+          },
+          "no_data_runs": {
+            "type": "integer",
+            "title": "No Data Runs"
+          },
+          "insufficient_data_runs": {
+            "type": "integer",
+            "title": "Insufficient Data Runs"
+          },
+          "failed_runs": {
+            "type": "integer",
+            "title": "Failed Runs"
+          },
+          "overall_summary": {
+            "$ref": "#/components/schemas/StrategyLabRunSummary"
+          },
+          "metrics_by_strategy": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StrategyLabRunSummary"
+            },
+            "type": "object",
+            "title": "Metrics By Strategy"
+          },
+          "metrics_by_symbol": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StrategyLabRunSummary"
+            },
+            "type": "object",
+            "title": "Metrics By Symbol"
+          },
+          "metrics_by_timeframe": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StrategyLabRunSummary"
+            },
+            "type": "object",
+            "title": "Metrics By Timeframe"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyLabRunItem"
+            },
+            "type": "array",
+            "title": "Runs"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lab_run_id",
+          "mode",
+          "scenario_count",
+          "completed_runs",
+          "no_data_runs",
+          "insufficient_data_runs",
+          "failed_runs",
+          "overall_summary"
+        ],
+        "title": "StrategyLabComparisonResult"
+      },
+      "StrategyLabMatrixRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "default": "demo_user"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange",
+            "default": "bybit"
+          },
+          "strategies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Strategies"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Timeframes"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start Time"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "End Time"
+          },
+          "initial_equity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Initial Equity",
+            "default": "1000"
+          },
+          "fees_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Fees Bps",
+            "default": "10"
+          },
+          "slippage_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Slippage Bps",
+            "default": "0"
+          },
+          "max_bars_in_trade": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Bars In Trade"
+          },
+          "warmup_bars": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Warmup Bars",
+            "default": 200
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "baseline",
+              "experiment"
+            ],
+            "title": "Mode"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Tags"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "strategy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategies",
+          "symbols",
+          "timeframes",
+          "start_time",
+          "end_time",
+          "mode"
+        ],
+        "title": "StrategyLabMatrixRequest"
+      },
+      "StrategyLabRunItem": {
+        "properties": {
+          "lab_run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lab Run Id"
+          },
+          "scenario_id": {
+            "type": "string",
+            "title": "Scenario Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "no_data",
+              "insufficient_data",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "strategy": {
+            "type": "string",
+            "title": "Strategy"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "baseline",
+              "experiment"
+            ],
+            "title": "Mode"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Tags"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/StrategyLabRunSummary"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics"
+          },
+          "assumptions": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Assumptions"
+          },
+          "backtest_run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backtest Run Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lab_run_id",
+          "scenario_id",
+          "status",
+          "strategy",
+          "exchange",
+          "symbol",
+          "timeframe",
+          "mode",
+          "summary",
+          "created_at"
+        ],
+        "title": "StrategyLabRunItem"
+      },
+      "StrategyLabRunRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "default": "demo_user"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange",
+            "default": "bybit"
+          },
+          "strategies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Strategies"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Timeframes"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start Time"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "End Time"
+          },
+          "initial_equity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Initial Equity",
+            "default": "1000"
+          },
+          "fees_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Fees Bps",
+            "default": "10"
+          },
+          "slippage_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Slippage Bps",
+            "default": "0"
+          },
+          "max_bars_in_trade": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Bars In Trade"
+          },
+          "warmup_bars": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Warmup Bars",
+            "default": 200
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "baseline",
+              "experiment"
+            ],
+            "title": "Mode"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Tags"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "strategy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategies",
+          "symbols",
+          "timeframes",
+          "start_time",
+          "end_time",
+          "mode"
+        ],
+        "title": "StrategyLabRunRequest"
+      },
+      "StrategyLabRunSummary": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "no_data",
+              "insufficient_data",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "total_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Trades"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "profit_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Factor"
+          },
+          "expectancy_r": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectancy R"
+          },
+          "avg_r": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg R"
+          },
+          "max_drawdown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown"
+          },
+          "avg_bars_in_trade": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Bars In Trade"
+          },
+          "stop_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Rate"
+          },
+          "tp1_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tp1 Rate"
+          },
+          "final_target_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Target Rate"
+          },
+          "fees_paid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fees Paid"
+          },
+          "slippage_paid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slippage Paid"
+          },
+          "risk_rejections": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Rejections"
+          },
+          "execution_rejections": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Rejections"
+          },
+          "fallback_used_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Used Count"
+          },
+          "incomplete_trade_plan_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incomplete Trade Plan Count"
+          },
+          "signals_seen": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signals Seen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "StrategyLabRunSummary"
+      },
       "StrategyPairScope": {
         "properties": {
           "exchange": {
@@ -11576,6 +13410,760 @@
           "name"
         ],
         "title": "StrategySetupSnapshot"
+      },
+      "StrategyTestCandidateAdjustment": {
+        "properties": {
+          "strategy_code": {
+            "type": "string",
+            "title": "Strategy Code"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence"
+          },
+          "suggested_change": {
+            "type": "string",
+            "title": "Suggested Change"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "title": "Confidence",
+            "default": "low"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy_code",
+          "scope",
+          "reason",
+          "suggested_change"
+        ],
+        "title": "StrategyTestCandidateAdjustment"
+      },
+      "StrategyTestPair": {
+        "properties": {
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          }
+        },
+        "type": "object",
+        "required": [
+          "exchange",
+          "symbol"
+        ],
+        "title": "StrategyTestPair"
+      },
+      "StrategyTestReport": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "discovery",
+              "research_virtual",
+              "production_like"
+            ],
+            "title": "Mode"
+          },
+          "requested_matrix": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Requested Matrix"
+          },
+          "assumptions": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Assumptions"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Summary"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyTestReportSection"
+            },
+            "type": "array",
+            "title": "Sections"
+          },
+          "metrics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Metrics"
+          },
+          "candidate_adjustments": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyTestCandidateAdjustment"
+            },
+            "type": "array",
+            "title": "Candidate Adjustments"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "summary_metrics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Summary Metrics"
+          },
+          "grouped_metrics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Grouped Metrics"
+          },
+          "trades_count": {
+            "type": "integer",
+            "title": "Trades Count",
+            "default": 0
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "rejections": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rejections"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "mode",
+          "generated_at"
+        ],
+        "title": "StrategyTestReport"
+      },
+      "StrategyTestReportSection": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Summary"
+          },
+          "metrics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Metrics"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "name"
+        ],
+        "title": "StrategyTestReportSection"
+      },
+      "StrategyTestRunDetailResponse": {
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/StrategyTestRunResponse"
+          },
+          "trades_count": {
+            "type": "integer",
+            "title": "Trades Count",
+            "default": 0
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "rejections": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rejections"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run"
+        ],
+        "title": "StrategyTestRunDetailResponse"
+      },
+      "StrategyTestRunRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "default": "demo_user"
+          },
+          "strategies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Strategies"
+          },
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyTestPair"
+            },
+            "type": "array",
+            "title": "Pairs"
+          },
+          "timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Timeframes"
+          },
+          "start_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start At"
+          },
+          "end_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "End At"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "discovery",
+              "research_virtual",
+              "production_like"
+            ],
+            "title": "Mode",
+            "default": "research_virtual"
+          },
+          "initial_capital": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Initial Capital",
+            "default": "1000"
+          },
+          "fee_rate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Fee Rate",
+            "default": "0.001"
+          },
+          "slippage_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Slippage Bps",
+            "default": "0"
+          },
+          "same_candle_policy": {
+            "type": "string",
+            "enum": [
+              "stop_first",
+              "target_first",
+              "ignore_ambiguous"
+            ],
+            "title": "Same Candle Policy",
+            "default": "stop_first"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "metric_set": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Metric Set"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategies",
+          "pairs",
+          "timeframes",
+          "start_at",
+          "end_at"
+        ],
+        "title": "StrategyTestRunRequest"
+      },
+      "StrategyTestRunResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "requested_matrix": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Requested Matrix"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Summary"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "requested_matrix"
+        ],
+        "title": "StrategyTestRunResponse"
+      },
+      "StrategyTestTrade": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "trade_id": {
+            "type": "string",
+            "title": "Trade Id"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "discovery",
+              "research_virtual",
+              "production_like"
+            ],
+            "title": "Mode"
+          },
+          "strategy_code": {
+            "type": "string",
+            "title": "Strategy Code"
+          },
+          "strategy_version": {
+            "type": "string",
+            "title": "Strategy Version"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction"
+          },
+          "signal_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Score"
+          },
+          "market_regime": {
+            "type": "string",
+            "title": "Market Regime"
+          },
+          "score_bucket": {
+            "type": "string",
+            "title": "Score Bucket"
+          },
+          "entry_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Entry Time"
+          },
+          "exit_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Time"
+          },
+          "entry_price": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Entry Price"
+          },
+          "exit_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Price"
+          },
+          "stop_loss": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss"
+          },
+          "targets": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Targets"
+          },
+          "selected_rr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Rr"
+          },
+          "realized_r": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized R"
+          },
+          "pnl": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Pnl"
+          },
+          "pnl_pct": {
+            "type": "number",
+            "title": "Pnl Pct"
+          },
+          "fees": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Fees"
+          },
+          "slippage": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Slippage"
+          },
+          "mfe_r": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mfe R"
+          },
+          "mae_r": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mae R"
+          },
+          "bars_to_entry": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bars To Entry"
+          },
+          "bars_in_trade": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bars In Trade"
+          },
+          "close_reason": {
+            "type": "string",
+            "title": "Close Reason"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "risk_rejected": {
+            "type": "boolean",
+            "title": "Risk Rejected",
+            "default": false
+          },
+          "execution_rejected": {
+            "type": "boolean",
+            "title": "Execution Rejected",
+            "default": false
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "features_snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Features Snapshot"
+          },
+          "trade_plan": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Trade Plan"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "trade_id",
+          "user_id",
+          "mode",
+          "strategy_code",
+          "strategy_version",
+          "exchange",
+          "symbol",
+          "timeframe",
+          "direction",
+          "market_regime",
+          "score_bucket",
+          "entry_time",
+          "entry_price",
+          "pnl",
+          "pnl_pct",
+          "fees",
+          "slippage",
+          "close_reason",
+          "outcome",
+          "created_at"
+        ],
+        "title": "StrategyTestTrade"
       },
       "TakeProfitPlan": {
         "properties": {
@@ -11712,6 +14300,98 @@
           "action"
         ],
         "title": "TakeProfitTarget"
+      },
+      "TargetThesis": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "nearest_liquidity_pool",
+              "previous_day_high",
+              "previous_day_low",
+              "session_high",
+              "session_low",
+              "range_midpoint",
+              "range_opposite_boundary",
+              "vwap",
+              "vwap_deviation_band",
+              "htf_support",
+              "htf_resistance",
+              "measured_move",
+              "risk_multiple_fallback"
+            ],
+            "title": "Source"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "LONG",
+              "SHORT"
+            ],
+            "title": "Direction"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Confidence"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority"
+          },
+          "close_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Percent"
+          },
+          "requires_acceptance": {
+            "type": "boolean",
+            "title": "Requires Acceptance",
+            "default": false
+          },
+          "invalidation_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalidation Hint"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "direction",
+          "confidence",
+          "priority"
+        ],
+        "title": "TargetThesis"
       },
       "TradeInvalidationActionRequest": {
         "properties": {
@@ -11969,6 +14649,35 @@
               "real"
             ],
             "title": "Mode"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "real",
+              "backtest"
+            ],
+            "title": "Source",
+            "default": "virtual"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           },
           "exchange": {
             "type": "string",
@@ -12680,6 +15389,16 @@
               }
             ],
             "title": "Source"
+          },
+          "thesis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TargetThesis"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "metadata": {
             "additionalProperties": true,

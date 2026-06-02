@@ -1,6 +1,12 @@
+import type { RadarDisplayMode } from "@/features/server-state/types";
 import type { RadarResponse, RadarSignal, VirtualExecutionReport } from "@/types";
 import { openApiClient, request } from "./client";
 import { normalizeRiskPreviewResponse, normalizeSignal, riskPreviewToExecutionReport } from "./mappers";
+
+type RadarRequestOptions = {
+  radarDisplayMode?: RadarDisplayMode | null;
+  userId?: string;
+};
 
 export const signalsApi = {
   async list(): Promise<RadarSignal[]> {
@@ -18,8 +24,18 @@ export const signalsApi = {
   async historical(): Promise<RadarSignal[]> {
     return signalsApi.list();
   },
-  async radar(): Promise<RadarResponse> {
-    const response = await request(() => openApiClient.GET("/api/v1/radar"));
+  async radar(options: RadarRequestOptions = {}): Promise<RadarResponse> {
+    const query: { user_id: string; radar_display_mode?: RadarDisplayMode } = {
+      user_id: options.userId ?? "demo_user"
+    };
+    if (options.radarDisplayMode) {
+      query.radar_display_mode = options.radarDisplayMode;
+    }
+    const response = await request(() =>
+      openApiClient.GET("/api/v1/radar", {
+        params: { query }
+      })
+    );
     return { signals: response.signals.map(normalizeSignal) };
   },
   async confirmVirtual(input: string | { signalId: string; waitForConfirmation?: boolean }) {

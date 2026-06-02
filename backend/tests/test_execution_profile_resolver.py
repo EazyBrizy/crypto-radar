@@ -96,6 +96,54 @@ class ExecutionProfileResolverTest(unittest.TestCase):
         self.assertAlmostEqual(float(profile.risk_percent or 0), 0.75)
         self.assertEqual(profile.sources["risk_percent"], "user.risk_per_trade_percent")
 
+    def test_radar_display_mode_request_override_wins(self) -> None:
+        profile = execution_profile_resolver.resolve(
+            user_risk_settings=RiskManagementSettings(radar_display_mode="execution_ready"),
+            strategy_execution_settings={"radar_display_mode": "execution_ready"},
+            request_override={"radar_display_mode": "all_market_opportunities"},
+            mode="virtual",
+            instrument_type="spot",
+        )
+
+        self.assertEqual(profile.radar_display_mode, "all_market_opportunities")
+        self.assertEqual(profile.sources["radar_display_mode"], "request")
+
+    def test_radar_display_mode_strategy_override_wins_over_user(self) -> None:
+        profile = execution_profile_resolver.resolve(
+            user_risk_settings=RiskManagementSettings(radar_display_mode="execution_ready"),
+            strategy_execution_settings={"radar_display_mode": "all_market_opportunities"},
+            request_override=None,
+            mode="virtual",
+            instrument_type="spot",
+        )
+
+        self.assertEqual(profile.radar_display_mode, "all_market_opportunities")
+        self.assertEqual(profile.sources["radar_display_mode"], "strategy")
+
+    def test_radar_display_mode_user_setting_wins_over_default(self) -> None:
+        profile = execution_profile_resolver.resolve(
+            user_risk_settings=RiskManagementSettings(radar_display_mode="execution_ready"),
+            strategy_execution_settings={},
+            request_override=None,
+            mode="virtual",
+            instrument_type="spot",
+        )
+
+        self.assertEqual(profile.radar_display_mode, "execution_ready")
+        self.assertEqual(profile.sources["radar_display_mode"], "user")
+
+    def test_radar_display_mode_falls_back_to_default_without_user_setting(self) -> None:
+        profile = execution_profile_resolver.resolve(
+            user_risk_settings=None,
+            strategy_execution_settings={},
+            request_override=None,
+            mode="virtual",
+            instrument_type="spot",
+        )
+
+        self.assertEqual(profile.radar_display_mode, "all_market_opportunities")
+        self.assertEqual(profile.sources["radar_display_mode"], "default")
+
 
 if __name__ == "__main__":
     unittest.main()

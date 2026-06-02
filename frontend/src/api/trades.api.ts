@@ -47,7 +47,7 @@ export const tradesApi = {
         message: reason === "invalidation"
           ? "Virtual position closed at market because the strategy idea was invalidated."
           : "Virtual position closed at market with exit fees applied.",
-        trade: normalizeTrade(response)
+        trade: normalizeTrade({ ...response, source: "virtual" })
       };
     }
 

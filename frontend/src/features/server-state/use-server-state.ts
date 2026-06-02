@@ -11,6 +11,7 @@ import type {
   AlertRuleDraft,
   ExchangeConnectionDraft,
   NotificationDraft,
+  RadarDisplayMode,
   StrategyConfigPatch,
   SubscriptionStatus,
   UserProfile
@@ -42,10 +43,10 @@ export function useHealthQuery() {
   });
 }
 
-export function useRadarQuery() {
+export function useRadarQuery(radarDisplayMode?: RadarDisplayMode | null) {
   return useQuery({
-    queryKey: serverStateKeys.radar.dashboard(),
-    queryFn: api.radar,
+    queryKey: serverStateKeys.radar.dashboard(radarDisplayMode ?? undefined),
+    queryFn: () => api.radar({ radarDisplayMode }),
     refetchInterval: serverStatePolicy.reconciliationIntervalMs,
     staleTime: serverStatePolicy.realtimeStaleTimeMs
   });

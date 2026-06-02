@@ -10,6 +10,7 @@ from app.repositories.signal_repository import (
     SignalRepository,
     SignalWriteResult,
 )
+from app.schemas.risk import RadarDisplayMode
 from app.schemas.signal import RadarSignal, StrategySignal
 from app.services.risk_management import default_rr_guard_mode_for_context
 from app.services.signal_risk_reward import ensure_signal_execution_eligible
@@ -122,6 +123,15 @@ class SignalService:
             for signal in self._repository.list_signals()
             if signal.status in {"new", "active"}
         ]
+
+    def list_open_signals_for_radar(
+        self,
+        *,
+        user_id: str = "demo_user",
+        radar_display_mode: RadarDisplayMode | None = None,
+    ) -> list[RadarSignal]:
+        # Display-mode filtering is intentionally deferred to the Radar filter task.
+        return self.list_open_signals()
 
     def list_open_signals_for_series(
         self,

@@ -141,9 +141,12 @@ Boundary rules:
 - Pipeline checks calculate shared quality signals such as RR quality, regime,
   confirmation, freshness, no-trade filters, market quality, and actionability.
   These checks annotate the signal and feed eligibility decisions; they must not
-  hide a discovery signal only because RR failed. RR is soft by default for
-  discovery, research, virtual confirmation, and backtests; it affects
-  execution eligibility only when the active RR guard mode is `hard`.
+  hide a discovery signal only because RR failed. Pipeline/persistence keeps
+  market opportunities available with explicit decision metadata; the Radar
+  API/service layer resolves `radar_display_mode` and decides which persisted
+  opportunities are displayed to the user. RR is soft by default for discovery,
+  research, virtual confirmation, and backtests; it affects execution
+  eligibility only when the active RR guard mode is `hard`.
 - `RiskGate` is the single business boundary for virtual and real entry
   eligibility decisions. It consumes `RiskContext`, `TradePlan`, market quality,
   edge, and configured user risk settings. It does not decide whether a market
@@ -227,6 +230,19 @@ request explicit execution profile override
 > user risk_management settings
 > schema/config defaults
 ```
+
+Radar display mode uses the same field-level precedence on the Radar surface:
+
+```text
+Radar query/request radar_display_mode
+> matching strategy execution setting radar_display_mode
+> user risk_management.radar_display_mode
+> default "all_market_opportunities"
+```
+
+The Radar API may accept `radar_display_mode` as an explicit request override.
+This override is a display contract only; it must not be passed into strategy
+setup logic.
 
 Legacy keys such as `risk_per_trade_percent`,
 `futures_risk_per_trade_percent`, `spot_risk_per_trade_percent`, and

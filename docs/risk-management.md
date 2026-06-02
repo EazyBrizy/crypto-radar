@@ -151,6 +151,12 @@ request explicit execution profile override
 > schema/config defaults
 ```
 
+For Radar display, the explicit request field is
+`radar_display_mode`. The current contract accepts and resolves the field but
+does not implement the final Radar filtering step yet; filtering
+`all_market_opportunities` vs `execution_ready` belongs to the Radar
+API/service layer, not strategy setup or persistence.
+
 Legacy percent keys remain readable for backward compatibility:
 `risk_per_trade_percent`, `spot_risk_per_trade_percent`,
 `futures_risk_per_trade_percent`, and `virtual_risk_per_trade_percent`.

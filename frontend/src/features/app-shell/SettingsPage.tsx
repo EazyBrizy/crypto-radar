@@ -93,8 +93,8 @@ const RISK_AMOUNT_MODES: Array<{ value: RiskAmountMode; label: string }> = [
 ];
 
 const RADAR_DISPLAY_MODES: Array<{ value: RadarDisplayMode; label: string }> = [
-  { value: "all_market_opportunities", label: "All opportunities" },
-  { value: "execution_ready", label: "Execution-ready" }
+  { value: "all_market_opportunities", label: "Все market opportunities" },
+  { value: "execution_ready", label: "Только execution-ready" }
 ];
 
 const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];

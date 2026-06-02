@@ -10,12 +10,13 @@ import {
   useStrategyTestReport,
   useStrategyTestRuns
 } from "@/hooks/use-radar-queries";
-import { StrategyTestReportPreview } from "./StrategyTestReportPreview";
+import { StrategyTestReport } from "./StrategyTestReport";
 import { StrategyTestRunsTable } from "./StrategyTestRunsTable";
 import type {
   StrategyTestMode,
   StrategyTestPair,
   StrategyTestRunRequest,
+  StrategyTestRunStatus,
   StrategyTestSameCandlePolicy
 } from "./types";
 
@@ -40,6 +41,8 @@ const POLICY_LABELS: Record<StrategyTestSameCandlePolicy, string> = {
   stop_first: "Stop first",
   target_first: "Target first"
 };
+const ACTIVE_RUN_STATUSES = new Set<StrategyTestRunStatus>(["queued", "running"]);
+const STRATEGY_TEST_RUN_POLL_MS = 2_500;
 
 export function StrategyTestingPanel({
   availablePairs,
@@ -49,7 +52,7 @@ export function StrategyTestingPanel({
   const strategyOptions = useMemo(() => enabledStrategyOptions(strategyConfigs), [strategyConfigs]);
   const pairOptions = useMemo(() => availablePairs.slice(0, 50), [availablePairs]);
   const timeframeOptions = useMemo(() => availableTimeframes(strategyOptions), [strategyOptions]);
-  const runsQuery = useStrategyTestRuns({ limit: 25 });
+  const runsQuery = useStrategyTestRuns({ limit: 25 }, { refetchInterval: STRATEGY_TEST_RUN_POLL_MS });
   const runMutation = useRunStrategyTest();
   const [selectedStrategyCodes, setSelectedStrategyCodes] = useState<string[] | null>(null);
   const [selectedPairIds, setSelectedPairIds] = useState<string[] | null>(null);
@@ -63,7 +66,6 @@ export function StrategyTestingPanel({
   const [sameCandlePolicy, setSameCandlePolicy] = useState<StrategyTestSameCandlePolicy>(DEFAULT_SAME_CANDLE_POLICY);
   const [formError, setFormError] = useState<string | null>(null);
   const [selectedReportRunId, setSelectedReportRunId] = useState<string | null>(null);
-  const reportQuery = useStrategyTestReport(selectedReportRunId, { enabled: Boolean(selectedReportRunId) });
   const defaultStrategySelection = useMemo(() => defaultStrategyCodes(strategyOptions), [strategyOptions]);
   const defaultPairSelection = useMemo(() => defaultPairIds(pairOptions), [pairOptions]);
   const defaultTimeframeSelection = useMemo(() => defaultTimeframes(timeframeOptions), [timeframeOptions]);
@@ -79,16 +81,34 @@ export function StrategyTestingPanel({
   const dateError = validateDateRange(startAt, endAt);
   const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps);
   const scenarioEstimate = effectiveStrategyCodes.length * selectedPairs.length * validTimeframes.length;
-  const canRun = scenarioEstimate > 0 && !dateError && !numberError && !runMutation.isPending;
   const runs = runsQuery.data ?? [];
   const selectedRun = runs.find((run) => run.run_id === selectedReportRunId) ?? null;
+  const mutationSelectedRun = runMutation.data?.run_id === selectedReportRunId ? runMutation.data : null;
+  const selectedRunForReport = selectedRun ?? mutationSelectedRun;
+  const selectedRunStatus = selectedRunForReport?.status ?? null;
+  const selectedRunIsActive = isActiveStrategyTestRun(selectedRunStatus);
+  const mutationRunIsMissingFromList = Boolean(
+    runMutation.data && !runs.some((run) => run.run_id === runMutation.data?.run_id)
+  );
+  const hasActiveRun =
+    runs.some((run) => isActiveStrategyTestRun(run.status)) ||
+    (mutationRunIsMissingFromList && isActiveStrategyTestRun(runMutation.data?.status));
+  const canRun = scenarioEstimate > 0 && !dateError && !numberError && !runMutation.isPending && !hasActiveRun;
+  const reportQuery = useStrategyTestReport(selectedReportRunId, {
+    enabled: Boolean(selectedReportRunId),
+    refetchInterval: selectedRunIsActive ? STRATEGY_TEST_RUN_POLL_MS : false
+  });
   const apiError = errorMessage(runMutation.error);
 
   async function handleRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
     if (!canRun) {
-      setFormError(dateError ?? numberError ?? "Select at least one strategy, pair, and timeframe.");
+      setFormError(
+        dateError ??
+        numberError ??
+        (hasActiveRun ? "A strategy test run is already in progress." : "Select at least one strategy, pair, and timeframe.")
+      );
       return;
     }
 
@@ -117,6 +137,7 @@ export function StrategyTestingPanel({
         <Badge tone="blue">{scenarioEstimate} scenarios</Badge>
         <Badge tone="purple">{runs.length} recent runs</Badge>
         {runsQuery.isLoading ? <Badge tone="yellow">Loading runs</Badge> : null}
+        {hasActiveRun ? <Badge tone="yellow">Run in progress</Badge> : null}
       </div>
 
       <div className="strategy-test-grid">
@@ -239,12 +260,12 @@ export function StrategyTestingPanel({
       />
 
       {selectedReportRunId ? (
-        <StrategyTestReportPreview
+        <StrategyTestReport
           error={reportQuery.error instanceof Error ? reportQuery.error : null}
           loading={reportQuery.isLoading}
           onClose={() => setSelectedReportRunId(null)}
           report={reportQuery.data ?? null}
-          run={selectedRun}
+          run={selectedRunForReport}
         />
       ) : null}
     </form>
@@ -296,6 +317,10 @@ function pairKey(pair: Pick<MarketPairOption, "exchange" | "symbol">): string {
 
 function toggleValue(values: string[], value: string): string[] {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+function isActiveStrategyTestRun(status: StrategyTestRunStatus | null | undefined): boolean {
+  return status != null && ACTIVE_RUN_STATUSES.has(status);
 }
 
 function validateDateRange(startAt: string, endAt: string): string | null {

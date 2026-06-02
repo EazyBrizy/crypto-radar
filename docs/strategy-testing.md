@@ -85,9 +85,66 @@ GET  /api/v1/strategy-tests/reports/{run_id}
 ```
 
 `POST /api/v1/strategy-tests/runs` creates a Strategy Test Lab run from mode,
-pairs, strategy codes, date range, parameters, and assumptions. List and detail
-endpoints return run state, trades, and reports without exposing simulated
-trades as live orders or positions.
+pairs, strategy codes, date range, parameters, and assumptions, then returns the
+queued run immediately. Matrix execution runs in the background and advances the
+run through `queued -> running -> completed` or `failed`; clients should poll
+list/detail/report endpoints for status and results.
+
+Strategy test execution must not block the FastAPI event loop used by the radar
+scanner, realtime broker, or scanner control endpoints. Long-running matrix and
+historical simulation work belongs outside the request/response path.
+
+List and detail endpoints return run state, trades, and reports without exposing
+simulated trades as live orders or positions.
+
+## Report Builder
+
+`StrategyTestReportBuilder` is the backend service read model for
+`GET /api/v1/strategy-tests/reports/{run_id}` and
+`GET /api/v1/strategy-tests/reports`. API routes stay thin and call
+`StrategyTestingService`, which delegates report assembly to the builder.
+
+Report responses include:
+
+- `run_id`, `status`, `mode`, `requested_matrix`, `assumptions`;
+- `summary`, `sections`, `metrics`, `candidate_adjustments`, `generated_at`;
+- backward-compatible `summary_metrics`, `grouped_metrics`, `trades_count`,
+  `warnings`, and `rejections`.
+
+The report sections are:
+
+- Summary;
+- Strategy comparison;
+- Pair/timeframe breakdown;
+- Regime breakdown;
+- Score bucket breakdown;
+- Entry quality;
+- Exit quality;
+- MFE/MAE distribution;
+- Rejection analysis;
+- Trade list;
+- Recommended strategy adjustments.
+
+Metric values must come from `MetricRegistry.compute(...)` wherever the
+registry can provide them. Missing values remain `None` and carry warnings such
+as `insufficient_sample`, `costs_r_not_available`, or `funding_not_modeled`.
+Report code must not synthesize unavailable metrics.
+
+Candidate strategy adjustments are deterministic, evidence-based suggestions
+derived from grouped metrics and trade rows. Supported v1 heuristics include:
+
+- negative expectancy for a strategy/score-bucket/timeframe group with at
+  least five samples;
+- positive high-score buckets versus negative `70-79` score buckets;
+- short signals under bullish regimes with high stop rate;
+- high MAE together with high MFE;
+- high time-stop rate;
+- production-like execution rejection rate above 25%.
+
+Each candidate adjustment records `strategy_code`, `scope`, `reason`,
+`evidence`, `suggested_change`, and sample-size-based `confidence`. These
+recommendations are research output only and must not mutate live/virtual
+orders, positions, portfolio balances, or risk state.
 
 ## Frontend Entry
 

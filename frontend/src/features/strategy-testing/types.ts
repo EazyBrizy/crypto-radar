@@ -1,5 +1,5 @@
 export type StrategyTestMode = "discovery" | "research_virtual" | "production_like";
-export type StrategyTestRunStatus = "queued" | "running" | "completed" | "failed";
+export type StrategyTestRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type StrategyTestSameCandlePolicy = "stop_first" | "target_first" | "ignore_ambiguous";
 
 export const STRATEGY_TEST_MODES: StrategyTestMode[] = ["discovery", "research_virtual", "production_like"];
@@ -124,14 +124,44 @@ export interface StrategyTestMetric {
   code?: string;
   label?: string;
   value: StrategyTestMetricValue;
+  sample_size?: number;
   unit?: string | null;
   group?: Record<string, unknown>;
   confidence?: StrategyTestMetricConfidence;
+  warnings?: string[];
   metadata?: Record<string, unknown>;
+}
+
+export interface StrategyTestReportSection {
+  code: string;
+  name: string;
+  summary: Record<string, unknown>;
+  metrics: StrategyTestMetric[];
+  rows: Array<Record<string, unknown>>;
+  warnings: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface StrategyTestCandidateAdjustment {
+  strategy_code: string;
+  scope: string;
+  reason: string;
+  evidence: Record<string, unknown>;
+  suggested_change: string;
+  confidence: "low" | "medium" | "high";
 }
 
 export interface StrategyTestReport {
   run_id: string;
+  status: StrategyTestRunStatus;
+  mode: StrategyTestMode;
+  requested_matrix: StrategyTestRequestedMatrix;
+  assumptions: Record<string, unknown>;
+  summary: StrategyTestRunSummary;
+  sections: StrategyTestReportSection[];
+  metrics: StrategyTestMetric[];
+  candidate_adjustments: StrategyTestCandidateAdjustment[];
+  generated_at: string;
   summary_metrics: StrategyTestMetric[];
   grouped_metrics: StrategyTestMetric[];
   trades_count: number;

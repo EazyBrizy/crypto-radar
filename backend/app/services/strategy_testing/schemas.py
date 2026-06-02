@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
-StrategyTestRunStatus = Literal["queued", "running", "completed", "failed"]
+StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 StrategyTestSameCandlePolicy = Literal["stop_first", "target_first", "ignore_ambiguous"]
 StrategyTestSignalSelectionPolicy = Literal[
     "first_actionable",
@@ -187,6 +187,43 @@ class StrategyTestMetric(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class StrategyTestReportSection(BaseModel):
+    code: str
+    name: str
+    summary: dict[str, Any] = Field(default_factory=dict)
+    metrics: list[dict[str, Any]] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyTestCandidateAdjustment(BaseModel):
+    strategy_code: str
+    scope: str
+    reason: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    suggested_change: str
+    confidence: Literal["low", "medium", "high"] = "low"
+
+
+class StrategyTestReport(BaseModel):
+    run_id: UUID
+    status: StrategyTestRunStatus
+    mode: StrategyTestMode
+    requested_matrix: dict[str, Any] = Field(default_factory=dict)
+    assumptions: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    sections: list[StrategyTestReportSection] = Field(default_factory=list)
+    metrics: list[dict[str, Any]] = Field(default_factory=list)
+    candidate_adjustments: list[StrategyTestCandidateAdjustment] = Field(default_factory=list)
+    generated_at: datetime
+    summary_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    grouped_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    trades_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    rejections: list[str] = Field(default_factory=list)
+
+
 class StrategyTestTradeResponse(BaseModel):
     run_id: UUID
     trade_id: UUID
@@ -199,6 +236,15 @@ class StrategyTestTradeResponse(BaseModel):
 
 class StrategyTestReportResponse(BaseModel):
     run_id: UUID
+    status: StrategyTestRunStatus | None = None
+    mode: StrategyTestMode | None = None
+    requested_matrix: dict[str, Any] = Field(default_factory=dict)
+    assumptions: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    sections: list[StrategyTestReportSection] = Field(default_factory=list)
+    metrics: list[dict[str, Any]] = Field(default_factory=list)
+    candidate_adjustments: list[StrategyTestCandidateAdjustment] = Field(default_factory=list)
+    generated_at: datetime | None = None
     summary_metrics: list[dict[str, Any]] = Field(default_factory=list)
     grouped_metrics: list[dict[str, Any]] = Field(default_factory=list)
     trades_count: int = 0

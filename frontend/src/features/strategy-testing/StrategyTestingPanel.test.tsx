@@ -60,6 +60,24 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
   });
 
+  it("disables Run while another strategy test is active", () => {
+    mocks.runs = [{
+      created_at: "2026-06-02T00:00:00.000Z",
+      error: null,
+      finished_at: null,
+      requested_matrix: { scenario_count: 3 },
+      run_id: "22222222-2222-4222-8222-222222222222",
+      started_at: null,
+      status: "queued",
+      summary: {}
+    }];
+
+    renderPanel();
+
+    expect(screen.getByText("Run in progress")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
+  });
+
   it("runs with selected strategies, pairs, and timeframes", async () => {
     const user = userEvent.setup();
     mocks.runStrategyTest.mockResolvedValue({

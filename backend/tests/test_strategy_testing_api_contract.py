@@ -85,10 +85,10 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         finally:
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         self.assertEqual(list_response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["status"], "completed")
+        self.assertEqual(data["status"], "queued")
         self.assertIn("run_id", data)
         self.assertEqual(
             data["requested_matrix"]["strategies"],
@@ -107,9 +107,9 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         )
         self.assertEqual(data["requested_matrix"]["timeframes"], ["1h", "4h"])
         self.assertEqual(data["requested_matrix"]["scenario_count"], 12)
-        self.assertEqual(data["summary"]["scenario_count"], 12)
         self.assertEqual(list_response.json()[0]["run_id"], data["run_id"])
         self.assertEqual(list_response.json()[0]["status"], "completed")
+        self.assertEqual(list_response.json()[0]["summary"]["scenario_count"], 12)
 
     def test_existing_backtests_route_remains_registered(self) -> None:
         route_paths = {route.path for route in api_router.routes}

@@ -4,10 +4,15 @@ from typing import Protocol, Sequence
 from uuid import UUID
 
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
-from app.services.strategy_testing.report_builder import build_matrix_metric_results, metric_results_to_rows
+from app.services.strategy_testing.report_builder import (
+    StrategyTestReportBuilder,
+    build_matrix_metric_results,
+    metric_results_to_rows,
+)
 from app.services.strategy_testing.runner import strategy_test_user_uuid
 from app.services.strategy_testing.schemas import (
     StrategyTestMetricRow,
+    StrategyTestReport,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
     StrategyTestRunResponse,
@@ -28,6 +33,9 @@ class StrategyTestTradeStore(Protocol):
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         ...
 
+    def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
+        ...
+
 
 class StrategyTestingService:
     def __init__(
@@ -42,7 +50,12 @@ class StrategyTestingService:
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
         created = self._run_store.create_run(request)
-        run_id = created.run.run_id
+        return self.execute_run(created.run.run_id, request)
+
+    def enqueue_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        return self._run_store.create_run(request).run
+
+    def execute_run(self, run_id: UUID, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
         self._run_store.mark_running(run_id)
         try:
             user_uuid = strategy_test_user_uuid(request.user_id)
@@ -83,6 +96,23 @@ class StrategyTestingService:
 
     def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
         return self._run_store.get_run(run_id)
+
+    def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
+        if self._run_store.get_run(run_id) is None:
+            raise ValueError(f"Strategy test run is not found: {run_id}")
+        return self._trade_store.list_trades(run_id, limit=limit, offset=offset)
+
+    def build_report(self, run_id: UUID) -> StrategyTestReport:
+        return self._report_builder().build_report(run_id)
+
+    def list_reports(self, user_id: str = "demo_user", limit: int = 50) -> list[StrategyTestReport]:
+        return self._report_builder().list_reports(user_id=user_id, limit=limit)
+
+    def _report_builder(self) -> StrategyTestReportBuilder:
+        return StrategyTestReportBuilder(
+            run_store=self._run_store,
+            analytics_store=self._trade_store,
+        )
 
 
 def _failure_message(matrix_result: StrategyTestMatrixResult) -> str:

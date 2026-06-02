@@ -68,6 +68,22 @@ class DeterministicStrategyEngine:
         return [signal.model_copy(update={"status": "actionable"})]
 
 
+class RepeatingStrategyEngine:
+    async def generate_signals(self, features: Features, **_: object):
+        signal = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            reasons=["synthetic repeating setup"],
+            score=90,
+            entry=features.close,
+            stop_loss=features.close - 10.0,
+            take_profit_1=features.close + 10.0,
+            take_profit_2=features.close + 20.0,
+        )
+        return [signal.model_copy(update={"status": "actionable"})]
+
+
 class BacktestRunnerTest(unittest.TestCase):
     def test_runner_creates_trade_and_computes_cost_aware_metrics(self) -> None:
         candles = _candles()
@@ -124,6 +140,34 @@ class BacktestRunnerTest(unittest.TestCase):
                 )
             )
 
+    def test_legacy_run_without_params_keeps_single_open_position_default(self) -> None:
+        candles = _legacy_default_candles()
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=RepeatingStrategyEngine(),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run(
+            BacktestRunRequest(
+                user_id="demo_user",
+                strategy_code="breakout",
+                exchange="bybit",
+                symbol="BTCUSDT",
+                timeframe="1m",
+                start_at=datetime.fromtimestamp(candles[0].open_time / 1000, tz=timezone.utc),
+                end_at=datetime.fromtimestamp(candles[-1].close_time / 1000, tz=timezone.utc),
+                initial_capital=Decimal("1000"),
+                fee_rate=Decimal("0"),
+                slippage_bps=Decimal("0"),
+                params={},
+            )
+        )
+
+        self.assertEqual(result.status, "completed")
+        assert result.result is not None
+        self.assertEqual(result.result.trades_count, 1)
+
 
 def _request(candles: list[OHLCVCandle]) -> BacktestRunRequest:
     return BacktestRunRequest(
@@ -170,6 +214,30 @@ def _candles() -> list[OHLCVCandle]:
                 high=high,
                 low=low,
                 close=close,
+                volume=100 + index,
+                trades=10,
+                is_closed=True,
+            )
+        )
+    return candles
+
+
+def _legacy_default_candles() -> list[OHLCVCandle]:
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    candles: list[OHLCVCandle] = []
+    for index in range(205):
+        open_time = int((start + timedelta(minutes=index)).timestamp() * 1000)
+        candles.append(
+            OHLCVCandle(
+                exchange="bybit",
+                symbol="BTCUSDT",
+                timeframe="1m",
+                open_time=open_time,
+                close_time=open_time + 59_999,
+                open=100.0,
+                high=100.2,
+                low=99.8,
+                close=100.0,
                 volume=100 + index,
                 trades=10,
                 is_closed=True,

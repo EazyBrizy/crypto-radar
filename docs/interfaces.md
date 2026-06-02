@@ -87,9 +87,29 @@ Providers must return only closed candles ordered by `open_time` and must not
 include candles outside `[start_at, end_at]`.
 
 `BacktestRunRequest.params` may carry optional backtest configuration such as
-`warmup_candles`, `rolling_window_candles`, `leverage`, `risk_settings`, and
-strategy params. Existing top-level `fee_rate` and `slippage_bps` remain the
-execution cost inputs.
+`warmup_candles`, `rolling_window_candles`, `leverage`, `risk_settings`, signal
+selection settings, position limits, and strategy params. Existing top-level
+`fee_rate` and `slippage_bps` remain the execution cost inputs.
+
+Signal selection settings:
+
+- `signal_selection_policy`: `first_actionable`, `highest_score`,
+  `all_non_overlapping`, or `all_signals`;
+- `max_concurrent_positions`: maximum simultaneous simulated positions;
+- `max_positions_per_symbol`: maximum simultaneous simulated positions for one
+  `exchange + symbol`;
+- `cooldown_bars_after_close`: number of bars that block re-entry after a
+  same `exchange + symbol + timeframe + direction` position closes;
+- `allow_opposite_signal_flip`: when false, an opposite direction signal for
+  the same `exchange + symbol + timeframe` cannot open while a position is
+  open.
+
+Legacy `/api/v1/backtests` defaults remain `signal_selection_policy =
+"first_actionable"` and `max_concurrent_positions = 1`. Strategy Test Lab
+`discovery` and `research_virtual` scenarios default to
+`all_non_overlapping` with conservative multi-position capacity unless request
+params override them. Strategy Test Lab `production_like` defaults remain
+`first_actionable` and one concurrent position unless overridden.
 
 `BacktestResultResponse` keeps the existing top-level fields and adds v1
 analytics in `metrics`:

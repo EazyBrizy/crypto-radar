@@ -96,6 +96,32 @@ Backtests should be conservative:
 If orderbook depth is unavailable, the run must record that liquidity impact is
 not fully modeled.
 
+## Signal Selection And Position Limits
+
+Legacy `/api/v1/backtests` runs preserve the old default behavior:
+`signal_selection_policy = "first_actionable"` and
+`max_concurrent_positions = 1`.
+
+Backtest params may override signal selection and simulated position limits:
+
+- `signal_selection_policy`: `first_actionable`, `highest_score`,
+  `all_non_overlapping`, or `all_signals`;
+- `max_concurrent_positions`: maximum simultaneous simulated positions;
+- `max_positions_per_symbol`: maximum simultaneous positions for one
+  `exchange + symbol`, default `1`;
+- `cooldown_bars_after_close`: bars that block same
+  `exchange + symbol + timeframe + direction` re-entry after close;
+- `allow_opposite_signal_flip`: default `false`; when false, opposite
+  direction entries for the same `exchange + symbol + timeframe` are blocked
+  while a position is open.
+
+`all_non_overlapping` evaluates the signal series while avoiding overlapping
+same `exchange + symbol + timeframe + direction` positions. `all_signals`
+tries every actionable signal until configured capacity or risk/execution
+checks reject further entries. Backtest trades remain simulated research
+observations only and must not create orders, positions, portfolio balances, or
+live/virtual risk-state mutations.
+
 ## Metrics
 
 Backtest reports keep the existing response shape and should include:

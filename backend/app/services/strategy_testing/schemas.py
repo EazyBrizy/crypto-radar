@@ -11,6 +11,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
 StrategyTestRunStatus = Literal["queued", "running", "completed", "failed"]
 StrategyTestSameCandlePolicy = Literal["stop_first", "target_first", "ignore_ambiguous"]
+StrategyTestSignalSelectionPolicy = Literal[
+    "first_actionable",
+    "highest_score",
+    "all_non_overlapping",
+    "all_signals",
+]
 
 
 class StrategyTestPair(BaseModel):

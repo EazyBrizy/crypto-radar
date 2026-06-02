@@ -99,7 +99,7 @@ def _backtest_request_from_scenario(
     pair: StrategyTestPair,
     timeframe: str,
 ) -> BacktestRunRequest:
-    params = dict(request.params)
+    params = _backtest_params_from_strategy_test_request(request)
     params["same_candle_policy"] = request.same_candle_policy
     return BacktestRunRequest(
         user_id=request.user_id,
@@ -115,6 +115,20 @@ def _backtest_request_from_scenario(
         slippage_bps=request.slippage_bps,
         params=params,
     )
+
+
+def _backtest_params_from_strategy_test_request(request: StrategyTestRunRequest) -> dict[str, Any]:
+    params = dict(request.params)
+    if request.mode in {"discovery", "research_virtual"}:
+        params.setdefault("signal_selection_policy", "all_non_overlapping")
+        params.setdefault("max_concurrent_positions", 10)
+    else:
+        params.setdefault("signal_selection_policy", "first_actionable")
+        params.setdefault("max_concurrent_positions", 1)
+    params.setdefault("max_positions_per_symbol", 1)
+    params.setdefault("cooldown_bars_after_close", 0)
+    params.setdefault("allow_opposite_signal_flip", False)
+    return params
 
 
 def _strategy_version(params: dict[str, Any], strategy: str) -> str | None:

@@ -24,6 +24,23 @@ Supported modes:
 Research modes are alpha/research evidence only. They do not grant real
 execution permission.
 
+## Signal Selection Defaults
+
+Strategy Test Lab scenarios can override backtest signal selection through
+`params`, but the lab sets mode-aware defaults:
+
+- `discovery` and `research_virtual`: `signal_selection_policy =
+  "all_non_overlapping"`, `max_concurrent_positions = 10`, and
+  `max_positions_per_symbol = 1`;
+- `production_like`: `signal_selection_policy = "first_actionable"` and
+  `max_concurrent_positions = 1`.
+
+Supported policies are `first_actionable`, `highest_score`,
+`all_non_overlapping`, and `all_signals`. Position constraints also include
+`cooldown_bars_after_close` and `allow_opposite_signal_flip`. These controls
+affect only simulated Strategy Test Lab/backtest positions; they must not write
+to live orders, live positions, portfolio balances, or risk state.
+
 ## Backend Module Layout
 
 ```text

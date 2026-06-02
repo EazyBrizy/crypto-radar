@@ -56,6 +56,18 @@ _RESERVED_PARAM_KEYS = {
     "risk_gate_enabled",
     "virtual_execution_enabled",
     "lifecycle_enabled",
+    "signal_selection_policy",
+    "max_concurrent_positions",
+    "max_positions_per_symbol",
+    "cooldown_bars_after_close",
+    "allow_opposite_signal_flip",
+}
+
+_SIGNAL_SELECTION_POLICIES = {
+    "first_actionable",
+    "highest_score",
+    "all_non_overlapping",
+    "all_signals",
 }
 
 _STRATEGY_ALIASES = {
@@ -85,6 +97,7 @@ class _SimulatedPosition:
     signal: RadarSignal
     entry_index: int
     reference_entry_price: float
+    exit_index: int | None = None
     funding_buffer_per_unit: float = 0.0
     bars_in_trade: int = 0
     strategy: str = "unknown"
@@ -96,12 +109,29 @@ class _SimulatedPosition:
 @dataclass
 class _BacktestState:
     cash_equity: float
-    open_position: _SimulatedPosition | None = None
+    open_positions: list[_SimulatedPosition] = field(default_factory=list)
     closed_positions: list[_SimulatedPosition] = field(default_factory=list)
     equity_curve: list[dict[str, Any]] = field(default_factory=list)
     signals_seen: int = 0
     risk_rejections: int = 0
     execution_rejections: int = 0
+
+    @property
+    def open_position(self) -> _SimulatedPosition | None:
+        return self.open_positions[0] if self.open_positions else None
+
+    @open_position.setter
+    def open_position(self, position: _SimulatedPosition | None) -> None:
+        self.open_positions = [] if position is None else [position]
+
+
+@dataclass(frozen=True)
+class _PositionConstraints:
+    signal_selection_policy: str
+    max_concurrent_positions: int = 1
+    max_positions_per_symbol: int = 1
+    cooldown_bars_after_close: int = 0
+    allow_opposite_signal_flip: bool = False
 
 
 @dataclass(frozen=True)
@@ -301,6 +331,7 @@ class ProductionBacktestRunner:
             )
 
         risk_settings = _risk_settings_from_request(request)
+        constraints = _position_constraints_from_request(request)
         state = _BacktestState(cash_equity=float(request.initial_capital))
         state.equity_curve.append(
             _equity_point(candles[warmup - 1], float(request.initial_capital), float(request.initial_capital))
@@ -308,40 +339,72 @@ class ProductionBacktestRunner:
 
         for index in range(warmup, len(candles)):
             candle = candles[index]
-            if state.open_position is not None:
-                state.open_position = self._execution_simulator.apply_candle(state.open_position, candle)
-                if state.open_position.trade.status == "closed":
-                    state.cash_equity += _net_pnl(state.open_position)
-                    state.closed_positions.append(state.open_position)
-                    state.open_position = None
+            next_open_positions: list[_SimulatedPosition] = []
+            for position in state.open_positions:
+                updated_position = self._execution_simulator.apply_candle(position, candle)
+                if updated_position.trade.status == "closed":
+                    closed_position = _replace_position(updated_position, exit_index=index)
+                    state.cash_equity += _net_pnl(closed_position)
+                    state.closed_positions.append(closed_position)
+                else:
+                    next_open_positions.append(updated_position)
+            state.open_positions = next_open_positions
 
             features = self._feature_engine.process_candles(
                 candles[max(0, index - rolling_window + 1) : index + 1]
             )
-            if features is not None:
+            if features is not None and len(state.open_positions) < constraints.max_concurrent_positions:
                 signals = await self._generate_signals(request, features)
                 state.signals_seen += len(signals)
-                if state.open_position is None:
+                selected_signals = _select_signals(
+                    signals,
+                    policy=constraints.signal_selection_policy,
+                    open_positions=state.open_positions,
+                    recently_closed=state.closed_positions,
+                    max_positions_per_symbol=constraints.max_positions_per_symbol,
+                    allow_opposite_signal_flip=constraints.allow_opposite_signal_flip,
+                    cooldown_bars_after_close=constraints.cooldown_bars_after_close,
+                    current_index=index,
+                )
+                for signal in selected_signals:
+                    if len(state.open_positions) >= constraints.max_concurrent_positions:
+                        break
+                    if not _can_open_position_for_signal(
+                        signal,
+                        policy=constraints.signal_selection_policy,
+                        open_positions=state.open_positions,
+                        recently_closed=state.closed_positions,
+                        max_positions_per_symbol=constraints.max_positions_per_symbol,
+                        allow_opposite_signal_flip=constraints.allow_opposite_signal_flip,
+                        cooldown_bars_after_close=constraints.cooldown_bars_after_close,
+                        current_index=index,
+                    ):
+                        state.risk_rejections += 1
+                        continue
                     position = self._try_open_position(
                         request=request,
                         risk_settings=risk_settings,
                         features=features,
-                        signal=_first_actionable_signal(signals),
+                        signal=signal,
                         candle=candle,
                         index=index,
                         state=state,
                         mode=normalized_mode,
                     )
                     if position is not None:
-                        state.open_position = position
+                        state.open_positions.append(position)
 
             state.equity_curve.append(_equity_point(candle, _current_equity(state), float(request.initial_capital)))
 
-        if state.open_position is not None:
-            state.open_position = self._execution_simulator.close_at_end(state.open_position, candles[-1])
-            state.cash_equity += _net_pnl(state.open_position)
-            state.closed_positions.append(state.open_position)
-            state.open_position = None
+        if state.open_positions:
+            closed_at_end: list[_SimulatedPosition] = []
+            for position in state.open_positions:
+                closed_position = self._execution_simulator.close_at_end(position, candles[-1])
+                closed_position = _replace_position(closed_position, exit_index=len(candles) - 1)
+                state.cash_equity += _net_pnl(closed_position)
+                closed_at_end.append(closed_position)
+            state.closed_positions.extend(closed_at_end)
+            state.open_positions = []
             state.equity_curve.append(
                 _equity_point(candles[-1], state.cash_equity, float(request.initial_capital))
             )
@@ -431,15 +494,19 @@ class ProductionBacktestRunner:
             )
             or risk_settings.max_slippage_bps,
         )
+        current_equity = _current_equity(state)
+        open_virtual_trades = _open_virtual_trades(state.open_positions)
         account = VirtualAccount(
             user_id=request.user_id,
             starting_balance=float(request.initial_capital),
             balance=state.cash_equity,
-            equity=state.cash_equity,
+            equity=current_equity,
             realized_pnl=state.cash_equity - float(request.initial_capital),
-            unrealized_pnl=0.0,
-            risk_per_trade=state.cash_equity * risk_settings.risk_per_trade_percent / 100,
+            unrealized_pnl=sum(position.trade.unrealized_pnl for position in state.open_positions),
+            risk_per_trade=current_equity * risk_settings.risk_per_trade_percent / 100,
             risk_reward=risk_settings.min_rr_ratio,
+            open_positions=len(state.open_positions),
+            closed_trades=len(state.closed_positions),
             updated_at=_datetime_from_ms(candle.close_time),
         )
         try:
@@ -449,7 +516,7 @@ class ProductionBacktestRunner:
                     request=confirm_request,
                     account=account,
                     entry_price=entry_price,
-                    open_positions=[],
+                    open_positions=open_virtual_trades,
                     requested_notional=confirm_request.size_usd,
                     stage="pre_execution",
                     signal_stop_loss_price=signal.stop_loss,
@@ -493,7 +560,7 @@ class ProductionBacktestRunner:
                     request=confirm_request,
                     account=account,
                     entry_price=filled_entry,
-                    open_positions=[],
+                    open_positions=open_virtual_trades,
                     requested_notional=filled_size_usd,
                     stage="post_execution",
                     signal_stop_loss_price=signal.stop_loss,
@@ -559,6 +626,20 @@ def _assumptions_for_backtest(
     values.setdefault("slippage_bps", str(request.slippage_bps))
     values.setdefault("initial_capital", str(request.initial_capital))
     values.setdefault("same_candle_policy", request.params.get("same_candle_policy") or "stop_first")
+    values.setdefault(
+        "signal_selection_policy",
+        _normalize_signal_selection_policy(
+            request.params.get("signal_selection_policy"),
+            default=_default_signal_selection_policy(mode, values),
+        ),
+    )
+    values.setdefault("max_concurrent_positions", _int_param(request.params, "max_concurrent_positions", 1))
+    values.setdefault("max_positions_per_symbol", _int_param(request.params, "max_positions_per_symbol", 1))
+    values.setdefault("cooldown_bars_after_close", _int_param(request.params, "cooldown_bars_after_close", 0))
+    values.setdefault(
+        "allow_opposite_signal_flip",
+        _bool_param(request.params, "allow_opposite_signal_flip", False),
+    )
     if mode == "discovery":
         values.setdefault("risk_gate_enabled", False)
         values.setdefault("rr_hard_gate_enabled", False)
@@ -584,6 +665,13 @@ def _request_with_mode_options(
     assumptions: Mapping[str, Any],
 ) -> BacktestRunRequest:
     params = dict(request.params)
+    params["signal_selection_policy"] = _normalize_signal_selection_policy(
+        params.get("signal_selection_policy"),
+        default=_normalize_signal_selection_policy(
+            assumptions.get("signal_selection_policy"),
+            default=_default_signal_selection_policy(mode, assumptions),
+        ),
+    )
     params["strategy_test_mode"] = mode
     params["strategy_test_assumptions"] = dict(assumptions)
     params["risk_settings"] = _risk_settings_with_mode(
@@ -816,11 +904,201 @@ def _run_awaitable_sync(awaitable: Awaitable[_T]) -> _T:
     return result["value"]
 
 
-def _first_actionable_signal(signals: Sequence[StrategySignal]) -> StrategySignal | None:
-    for signal in signals:
-        if signal.status == "actionable":
-            return signal
-    return None
+def _position_constraints_from_request(request: BacktestRunRequest) -> _PositionConstraints:
+    return _PositionConstraints(
+        signal_selection_policy=_normalize_signal_selection_policy(
+            request.params.get("signal_selection_policy"),
+            default="first_actionable",
+        ),
+        max_concurrent_positions=max(1, _int_param(request.params, "max_concurrent_positions", 1)),
+        max_positions_per_symbol=max(1, _int_param(request.params, "max_positions_per_symbol", 1)),
+        cooldown_bars_after_close=max(0, _int_param(request.params, "cooldown_bars_after_close", 0)),
+        allow_opposite_signal_flip=_bool_param(request.params, "allow_opposite_signal_flip", False),
+    )
+
+
+def _default_signal_selection_policy(mode: str, assumptions: Mapping[str, Any] | None = None) -> str:
+    if assumptions is not None and bool(assumptions.get("preserve_legacy_backtest")):
+        return "first_actionable"
+    if mode in {"discovery", "research_virtual"}:
+        return "all_non_overlapping"
+    return "first_actionable"
+
+
+def _normalize_signal_selection_policy(value: Any, *, default: str) -> str:
+    normalized = str(value or default).strip().lower().replace("-", "_")
+    if normalized in _SIGNAL_SELECTION_POLICIES:
+        return normalized
+    return default
+
+
+def _select_signals(
+    signals: Sequence[StrategySignal],
+    *,
+    policy: str,
+    open_positions: Sequence[_SimulatedPosition],
+    recently_closed: Sequence[_SimulatedPosition],
+    max_positions_per_symbol: int,
+    allow_opposite_signal_flip: bool,
+    cooldown_bars_after_close: int = 0,
+    current_index: int | None = None,
+) -> list[StrategySignal]:
+    normalized_policy = _normalize_signal_selection_policy(policy, default="first_actionable")
+    eligible = [
+        signal
+        for signal in signals
+        if _is_signal_eligible_for_selection(
+            signal,
+            policy=normalized_policy,
+            open_positions=open_positions,
+            recently_closed=recently_closed,
+            max_positions_per_symbol=max_positions_per_symbol,
+            allow_opposite_signal_flip=allow_opposite_signal_flip,
+            cooldown_bars_after_close=cooldown_bars_after_close,
+            current_index=current_index,
+        )
+    ]
+    if normalized_policy == "first_actionable":
+        return eligible[:1]
+    if normalized_policy == "highest_score":
+        return [max(eligible, key=_signal_selection_score)] if eligible else []
+    return eligible
+
+
+def _is_signal_eligible_for_selection(
+    signal: StrategySignal,
+    *,
+    policy: str,
+    open_positions: Sequence[_SimulatedPosition],
+    recently_closed: Sequence[_SimulatedPosition],
+    max_positions_per_symbol: int,
+    allow_opposite_signal_flip: bool,
+    cooldown_bars_after_close: int,
+    current_index: int | None,
+) -> bool:
+    if signal.status != "actionable":
+        return False
+    if _open_positions_for_symbol(signal, open_positions) >= max_positions_per_symbol:
+        return False
+    if policy == "all_non_overlapping" and _has_same_direction_open_position(signal, open_positions):
+        return False
+    if not allow_opposite_signal_flip and _has_opposite_open_position(signal, open_positions):
+        return False
+    return not _cooldown_blocks_signal(
+        signal,
+        recently_closed,
+        cooldown_bars_after_close=cooldown_bars_after_close,
+        current_index=current_index,
+    )
+
+
+def _can_open_position_for_signal(
+    signal: StrategySignal,
+    *,
+    policy: str,
+    open_positions: Sequence[_SimulatedPosition],
+    recently_closed: Sequence[_SimulatedPosition],
+    max_positions_per_symbol: int,
+    allow_opposite_signal_flip: bool,
+    cooldown_bars_after_close: int,
+    current_index: int,
+) -> bool:
+    return _is_signal_eligible_for_selection(
+        signal,
+        policy=policy,
+        open_positions=open_positions,
+        recently_closed=recently_closed,
+        max_positions_per_symbol=max_positions_per_symbol,
+        allow_opposite_signal_flip=allow_opposite_signal_flip,
+        cooldown_bars_after_close=cooldown_bars_after_close,
+        current_index=current_index,
+    )
+
+
+def _signal_selection_score(signal: StrategySignal) -> tuple[float, float]:
+    score = float(signal.score) if signal.score is not None else float(signal.confidence or 0.0) * 100.0
+    confidence = float(signal.confidence or 0.0)
+    return (score, confidence)
+
+
+def _open_positions_for_symbol(
+    signal: StrategySignal,
+    open_positions: Sequence[_SimulatedPosition],
+) -> int:
+    signal_key = _symbol_position_key(signal)
+    return sum(1 for position in open_positions if _symbol_position_key(position) == signal_key)
+
+
+def _has_same_direction_open_position(
+    signal: StrategySignal,
+    open_positions: Sequence[_SimulatedPosition],
+) -> bool:
+    signal_key = _directional_position_key(signal)
+    return any(_directional_position_key(position) == signal_key for position in open_positions)
+
+
+def _has_opposite_open_position(
+    signal: StrategySignal,
+    open_positions: Sequence[_SimulatedPosition],
+) -> bool:
+    signal_market = _timeframe_position_key(signal)
+    signal_direction = _normalized_direction(signal.direction)
+    return any(
+        _timeframe_position_key(position) == signal_market
+        and _normalized_direction(position.trade.side) != signal_direction
+        for position in open_positions
+    )
+
+
+def _cooldown_blocks_signal(
+    signal: StrategySignal,
+    recently_closed: Sequence[_SimulatedPosition],
+    *,
+    cooldown_bars_after_close: int,
+    current_index: int | None,
+) -> bool:
+    if cooldown_bars_after_close <= 0 or current_index is None:
+        return False
+    signal_key = _directional_position_key(signal)
+    for position in recently_closed:
+        if position.exit_index is None:
+            continue
+        if _directional_position_key(position) != signal_key:
+            continue
+        if current_index - position.exit_index <= cooldown_bars_after_close:
+            return True
+    return False
+
+
+def _symbol_position_key(value: StrategySignal | _SimulatedPosition) -> tuple[str, str]:
+    if isinstance(value, _SimulatedPosition):
+        return (value.trade.exchange.lower(), value.trade.symbol.upper())
+    return (value.exchange.lower(), value.symbol.upper())
+
+
+def _timeframe_position_key(value: StrategySignal | _SimulatedPosition) -> tuple[str, str, str]:
+    if isinstance(value, _SimulatedPosition):
+        return (value.trade.exchange.lower(), value.trade.symbol.upper(), value.trade.timeframe)
+    return (value.exchange.lower(), value.symbol.upper(), value.timeframe)
+
+
+def _directional_position_key(value: StrategySignal | _SimulatedPosition) -> tuple[str, str, str, str]:
+    if isinstance(value, _SimulatedPosition):
+        return (*_timeframe_position_key(value), _normalized_direction(value.trade.side))
+    return (*_timeframe_position_key(value), _normalized_direction(value.direction))
+
+
+def _normalized_direction(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "long":
+        return "long"
+    if normalized == "short":
+        return "short"
+    if normalized == "buy":
+        return "long"
+    if normalized == "sell":
+        return "short"
+    return normalized
 
 
 def _virtual_trade_from_execution(
@@ -999,10 +1277,15 @@ def _slippage_cost(position: _SimulatedPosition) -> float:
 
 
 def _current_equity(state: _BacktestState) -> float:
-    if state.open_position is None:
-        return state.cash_equity
-    trade = state.open_position.trade
-    return state.cash_equity + trade.realized_pnl + trade.unrealized_pnl - _funding_cost(state.open_position)
+    open_equity = sum(
+        position.trade.realized_pnl + position.trade.unrealized_pnl - _funding_cost(position)
+        for position in state.open_positions
+    )
+    return state.cash_equity + open_equity
+
+
+def _open_virtual_trades(open_positions: Sequence[_SimulatedPosition]) -> list[VirtualTrade]:
+    return [position.trade for position in open_positions if position.trade.status == "open"]
 
 
 def _equity_point(candle: OHLCVCandle, equity: float, initial_capital: float) -> dict[str, Any]:
@@ -1099,12 +1382,14 @@ def _replace_position(
     *,
     trade: VirtualTrade | None = None,
     bars_in_trade: int | None = None,
+    exit_index: int | None = None,
 ) -> _SimulatedPosition:
     return _SimulatedPosition(
         trade=trade or position.trade,
         signal=position.signal,
         entry_index=position.entry_index,
         reference_entry_price=position.reference_entry_price,
+        exit_index=position.exit_index if exit_index is None else exit_index,
         funding_buffer_per_unit=position.funding_buffer_per_unit,
         bars_in_trade=position.bars_in_trade if bars_in_trade is None else bars_in_trade,
         strategy=position.strategy,
@@ -1154,6 +1439,23 @@ def _int_param(params: Mapping[str, Any], key: str, default: int) -> int:
         return int(value) if value is not None else default
     except (TypeError, ValueError):
         return default
+
+
+def _bool_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = params.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
 
 
 def _float_param(params: Mapping[str, Any], key: str, default: float | None) -> float | None:

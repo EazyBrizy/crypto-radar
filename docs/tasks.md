@@ -40,6 +40,29 @@
 - [x] Document heuristic score vs EV calibration.
 - [x] Document operating rules for the three MVP strategies.
 
+## Global Update 3 / Audit Roadmap
+
+AUD work must be handled as small PR-sized patches. Do not mix neighboring
+AUD tasks unless an explicit dependency requires it.
+
+1. [x] AUD-01: contract cleanup after RR and Strategy Test Lab.
+2. [ ] AUD-02: Strategy Test Lab.
+3. [ ] AUD-03: baseline.
+4. [ ] AUD-04: fallback cleanup.
+5. [ ] AUD-05: open/closed candle separation.
+6. [ ] AUD-06: pipeline cleanup.
+7. [ ] AUD-07: unified decision snapshot.
+8. [ ] AUD-08: alpha market context.
+9. [ ] AUD-09: strategy upgrades.
+10. [ ] AUD-10: market-based exits.
+11. [ ] AUD-11: real execution readiness. Blocked by AUD-01, AUD-02, AUD-03,
+    AUD-04, AUD-05, AUD-06, AUD-07, AUD-08, AUD-09, and AUD-10.
+
+AUD-11 must not add real execution paths until research/backtest evidence,
+strategy calibration, fallback cleanup, candle-state separation, pipeline
+cleanup, decision snapshots, market context, strategy upgrades, and
+market-based exits are complete.
+
 ## Remaining Follow-Ups
 
 - [ ] Keep `docs/interfaces.md` in sync before any schema/model/interface

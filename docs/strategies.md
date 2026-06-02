@@ -31,9 +31,21 @@ Trend Score
 
 Правила:
 
-- `70+` - actionable signal.
+- `70+` - high-confidence discovery candidate.
 - `60-69` - watchlist setup.
 - `<60` - ignore.
+
+Discovery score is not the same as production actionability. A strategy may
+return a setup without a complete production trade plan. Such a signal must
+remain visible for research/watchlist purposes, but it must not become
+production-actionable until TradePlan completeness, Risk/RR Eligibility, and
+Execution Eligibility pass for that scope.
+
+Strategies should return market-based stop, invalidation, and target theses
+whenever structure is available. If a strategy cannot produce a structural stop
+or structural targets, it may still return the setup for `research_mode`, but
+fallback ATR stops or fallback R-multiple targets must be marked in TradePlan
+metadata and must not be silently treated as production-complete.
 
 Каждый сигнал должен объяснять:
 
@@ -136,7 +148,8 @@ Regime filters:
 - borderline EMA200 chop downgrades Trend Pullback to watchlist and applies a
   score penalty;
 - funding is checked again on lifecycle confirmation, so an armed auto-entry
-  will not become actionable if funding turns extreme before the trigger candle.
+  will not become production-actionable if funding turns extreme before the
+  trigger candle.
 
 Risk:
 
@@ -200,7 +213,7 @@ Runtime implementation notes:
   close in the upper part of the candle, short in the lower part.
 - False-breakout filters include wick-only break, rejection wick ratio, weak
   close, overlarge body, nearby higher-timeframe S/R from the shared regime
-  layer, and RR guard from strategy risk settings.
+  layer, and RR quality annotation from the shared eligibility layer.
 - Signal metadata exposes both entries:
   aggressive entry at breakout close, and conservative retest zone around the
   Donchian breakout/breakdown level.
@@ -250,8 +263,9 @@ Runtime implementation notes:
 - Equal high/low fallback is allowed only when the level has at least two
   recent touches; random one-off highs/lows are not promoted into sweep levels.
 - The strategy emits staged ideas: `watchlist` near visible liquidity, `ready`
-  after an unreclaimed or weak reclaim, and `actionable` after an aggressive
-  sweep or conservative confirmation candle.
+  after an unreclaimed or weak reclaim, and `confirmed_candidate` after an
+  aggressive sweep or conservative confirmation candle. Production actionability
+  still belongs to the shared eligibility layers.
 - Aggressive sweep requires reclaim/rejection, wick ratio, volume and close
   strength. Conservative sweep requires the next candle to break micro
   structure in the reversal direction with at least `1.1x` volume.
@@ -319,6 +333,16 @@ All strategies remain pure trading logic. They read `Features`, return
 `StrategySignal` plus optional `TradePlan` metadata, and do not call DB, API,
 execution adapters, or risk services.
 
+Strategies should emit market-based stop, invalidation, and target theses when
+the setup structure supports them. They may emit a discovery setup without a
+complete production trade plan, but that signal is research/watchlist-only until
+the shared TradePlan Completeness, Risk/RR Eligibility, and Execution
+Eligibility layers mark it actionable for the requested scope.
+
+RR is measured outside the strategy as a shared quality/eligibility layer. A
+weak RR annotation can block virtual or real execution in hard guard mode, but
+it must not make the strategy hide the setup by itself.
+
 Shared lifecycle:
 
 ```text
@@ -374,7 +398,8 @@ Required confirmations:
 - Pullback zone touched or reclaimed.
 - Directional candle confirmation.
 - Volume confirmation.
-- RR guard passed.
+- RR measured and annotated; failed RR affects execution eligibility only in
+  the active guard mode.
 - HTF alignment when configured.
 
 No-trade filters:
@@ -397,7 +422,8 @@ Expected holding period:
 Idea:
 
 - Trade expansion after volatility compression, only when the breakout has
-  enough close quality, volume, and RR to avoid random wick breaks.
+  enough close quality, volume, and measurable RR context to evaluate random
+  wick-break risk.
 
 Entry model:
 
@@ -439,7 +465,8 @@ Required confirmations:
 - Volume spike.
 - Close in directional candle area.
 - ATR expansion or configured volatility confirmation.
-- RR guard passed.
+- RR measured and annotated; failed RR affects execution eligibility only in
+  the active guard mode.
 
 No-trade filters:
 
@@ -501,7 +528,8 @@ Required confirmations:
 - Reclaim or configured absorption confirmation.
 - Directional wick and close quality.
 - Volume confirmation.
-- RR guard passed.
+- RR measured and annotated; failed RR affects execution eligibility only in
+  the active guard mode.
 
 No-trade filters:
 

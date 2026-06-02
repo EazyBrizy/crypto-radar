@@ -19,6 +19,95 @@ MarketData
 -> EV Gate
 ```
 
+## Contract Layer Separation v1
+
+AUD-01 fixes the contract boundary between setup discovery, research
+measurement, and execution permission. A strategy setup can be real market
+information even when it is not executable.
+
+Canonical layers:
+
+1. Signal Discovery Layer
+
+   - Strategies may find and return a setup from market structure, momentum,
+     volatility, liquidity, derivatives context, or other strategy evidence.
+   - A setup must not disappear only because its RR is weak, unknown, or below
+     the current execution threshold.
+   - In discovery, RR is a measurement/annotation. It may lower confidence,
+     add warnings, or mark the candidate as non-executable for a scope, but it
+     must not hide the research/watchlist candidate by itself.
+
+2. TradePlan Completeness Layer
+
+   - This layer checks whether the setup has a structural stop, invalidation
+     thesis, and structural target thesis.
+   - A structural plan is market-based and strategy-explained.
+   - A fallback plan is synthetic, such as an ATR stop or R-multiple targets,
+     and must be explicit through metadata flags instead of silently replacing
+     missing structure.
+
+3. Risk/RR Eligibility Layer
+
+   - This layer evaluates RR, account risk, user settings, edge, no-trade
+     filters, and market quality for a specific decision scope.
+   - Failed RR may make a signal non-executable for virtual execution and/or
+     real execution when the active guard mode is hard.
+   - Failed RR does not have to delete, reject, or hide the discovery signal.
+     The signal should remain visible as a research, watchlist, or blocked
+     candidate with reason metadata.
+
+4. Execution Eligibility Layer
+
+   - This layer decides whether a virtual or real execution path is allowed.
+   - `execution_allowed_virtual` and `execution_allowed_real` are separate
+     decisions and may differ for the same signal.
+   - Real execution eligibility is always stricter than discovery, research,
+     backtest, and virtual simulation eligibility.
+
+Contract terms:
+
+- `research_mode`: discovery, backtest, Strategy Test Lab `discovery`, and
+  Strategy Test Lab `research_virtual` scopes. These scopes measure evidence
+  and outcomes; they do not grant production exchange permission.
+- `production_mode`: live or production-like decision scopes where a signal may
+  become executable only after the configured completeness, risk, RR, market,
+  edge, and execution checks pass.
+- `signal_actionable`: the signal is eligible for user/execution action in the
+  current scope. It is not synonymous with "strategy found a setup".
+- `execution_allowed_virtual`: the decision snapshot permits virtual execution
+  or lifecycle simulation for the current signal and scope.
+- `execution_allowed_real`: the decision snapshot permits real execution after
+  real-entry gates pass. This must remain false until all real execution
+  readiness conditions are satisfied.
+- `decision snapshot`: an immutable decision record attached to the signal,
+  trade plan, journal row, or execution result. It should include scope, mode,
+  guard modes, RR result, trade-plan completeness, fallback flags, eligibility
+  booleans, blockers, warnings, and source metadata used by the decision.
+
+Future decision snapshot schema changes must be additive and backward
+compatible. The canonical shape is:
+
+```python
+DecisionSnapshot = {
+    "decision_scope": (
+        "discovery" | "backtest" | "strategy_test" | "virtual" | "real"
+    ),
+    "research_mode": bool,
+    "production_mode": bool,
+    "signal_actionable": bool,
+    "execution_allowed_virtual": bool,
+    "execution_allowed_real": bool,
+    "trade_plan_complete": bool,
+    "fallback_used": bool,
+    "fallback_stop_used": bool,
+    "fallback_targets_used": bool,
+    "rr": dict,
+    "blockers": list[str],
+    "warnings": list[str],
+    "metadata": dict,
+}
+```
+
 Boundary rules:
 
 - `MarketData` is raw exchange/watchlist data and must not contain strategy or
@@ -26,17 +115,21 @@ Boundary rules:
 - `Features` are deterministic derived values calculated from market data only.
 - `StrategySignal` is pure strategy output: setup, direction, score,
   explanation, entry/stop/target candidates, confirmations, and no-trade
-  context. Strategies must not read/write DB, call APIs, or execute trades.
+  context. A strategy may return a setup that is not production-actionable.
+  Strategies must not read/write DB, call APIs, or execute trades.
 - `TradePlan` normalizes executable entry, stop, target, invalidation, and risk
   metadata from a strategy signal while keeping legacy signal fields available.
+  It also records whether structural levels or fallback levels were used.
 - Pipeline checks calculate shared quality signals such as RR quality, regime,
   confirmation, freshness, no-trade filters, market quality, and actionability.
-  RR is soft by default for discovery, research, virtual confirmation, and
-  backtests; it affects execution eligibility only when the active RR guard mode
-  is `hard`.
+  These checks annotate the signal and feed eligibility decisions; they must not
+  hide a discovery signal only because RR failed. RR is soft by default for
+  discovery, research, virtual confirmation, and backtests; it affects
+  execution eligibility only when the active RR guard mode is `hard`.
 - `RiskGate` is the single business boundary for virtual and real entry
   eligibility decisions. It consumes `RiskContext`, `TradePlan`, market quality,
-  edge, and configured user risk settings.
+  edge, and configured user risk settings. It does not decide whether a market
+  setup exists.
 - Virtual execution may be used for research and simulation after the risk gate
   decision. Real execution requires all real-entry gates to pass before any
   adapter can submit an order.
@@ -61,11 +154,16 @@ with production permission to send exchange orders.
 
 ## Backtest Runner v1
 
-Production backtests replay closed historical candles through the same service
-pipeline used by live signal generation:
+`ProductionBacktestRunner` is connected and is the production backtest service
+runner for the legacy `/api/v1/backtests` surface. Production backtests replay
+closed historical candles through the same service pipeline used by live signal
+generation:
 
 Historical candles -> FeatureEngine -> StrategyEngine/StrategySignalPipeline ->
 RiskGate -> virtual execution/lifecycle simulation -> metrics.
+
+Backtests must use closed candles only. They must not consume open candle
+preview data, live scanner preview state, or any future candle information.
 
 `HistoricalCandleProvider` is the service boundary for loading candles:
 
@@ -114,17 +212,20 @@ params override them. Strategy Test Lab `production_like` defaults remain
 `BacktestResultResponse` keeps the existing top-level fields and adds v1
 analytics in `metrics`:
 
+- `selected_rr`, `rr_bucket`, `rr_pass_rate`
 - `trades_count`, `wins`, `losses`, `winrate`
 - `avg_win_r`, `avg_loss_r`, `expectancy_r`, `profit_factor`
 - `max_drawdown_pct`
 - `fees_total`, `slippage_total`, `funding_total`
 - `avg_bars_in_trade`, `mfe_r_avg`, `mae_r_avg`
-- `tp1_rate`, `stop_rate`
+- `tp1_rate`, `tp2_rate`, `stop_rate`, `invalidation_rate`, `expiry_rate`
 - `by_strategy`, `by_regime`
 
 No-data failures must surface explicit `no_historical_data` or
 `not_enough_data` errors instead of `not_implemented` when a runner is
-configured.
+configured. Research/report layers that cannot produce a valid metric sample
+must return explicit `no_data` or `insufficient_data` status metadata rather
+than fabricated baseline/backtest values.
 
 `ProductionBacktestRunner.run(request)` remains backward-compatible and returns
 only `BacktestRunResult`. `ProductionBacktestRunner.run_detailed(...)` is the
@@ -226,10 +327,11 @@ StrategyTestAssumptions = {
 
 Mode assumptions:
 
-- `discovery`: risk-gate and RR hard rejection are disabled for research; any
-  evaluated hard blockers are surfaced as warnings.
+- `discovery`: risk-gate and RR hard execution blocking are disabled for
+  research; any evaluated hard blockers are surfaced as warnings.
 - `research_virtual`: virtual execution/lifecycle simulation is enabled, but
-  risk-gate and RR hard blockers are surfaced as warnings.
+  risk-gate and RR hard blockers are surfaced as warnings or blocked
+  eligibility reasons instead of deleting discovery observations.
 - `production_like`: risk gate is enabled; RR hard gate is enabled unless the
   request params explicitly disable it.
 
@@ -444,6 +546,18 @@ legacy signal entry/stop/target fields. Existing signal fields remain available:
 
 `TradePlan` is persisted in `features_snapshot.trade_plan` and restored to
 `StrategySignal.trade_plan` / `RadarSignal.trade_plan` when present.
+
+Trade plan completeness is explicit:
+
+- A complete structural trade plan has a market-based entry model, structural
+  stop, invalidation thesis, and structural target thesis.
+- A fallback trade plan may use a fallback ATR stop, fallback R-multiple
+  targets, or both. Fallback is allowed for `research_mode`, but it must set
+  `metadata.fallback_used = true` and the more specific flags
+  `metadata.fallback_stop_used` and/or `metadata.fallback_targets_used`.
+- A production actionable signal requires a complete structural trade plan.
+  Fallback plans may remain visible for research/backtest/watchlist purposes,
+  but they must not be silently treated as complete production plans.
 
 Strategy trade plans are level-aware when strategy context exposes structure:
 
@@ -977,10 +1091,13 @@ thresholds such as `funding_block_threshold`.
 - RR is calculated for discovery, research, virtual confirmation, backtests,
   and real execution. By default, low RR is an execution quality/risk warning
   and metadata signal, not proof that the market setup is invalid.
-- Signal validity and execution eligibility are separate. A failed RR check may
-  leave `signal_valid = true` and the signal status `actionable` in `soft` or
-  `off` mode. `execution_allowed` may be false only in the execution
-  layer/risk gate when the active guard mode blocks eligibility.
+- Signal discovery, `signal_actionable`, and execution eligibility are
+  separate. A failed RR check may leave `signal_valid = true` and the setup
+  visible as a research/watchlist/blocked candidate. In `soft` or `off` mode,
+  `signal_actionable` may remain true for the current non-real scope when other
+  checks allow it. `execution_allowed_virtual` and `execution_allowed_real` may
+  be false only in the eligibility/execution layer when the active guard mode
+  or other hard gate blocks that scope.
 - `min_rr_ratio` remains part of API/settings/storage for backward
   compatibility. Its contract meaning is "minimum R:R for execution/reporting",
   not a universal signal discovery filter.
@@ -1026,6 +1143,9 @@ RR metadata snapshots expose:
 - `selected_rr`
 - `min_rr_ratio`
 - `risk_reward_guard_mode`
+- `signal_actionable`
+- `execution_allowed_virtual`
+- `execution_allowed_real`
 - `risk_reward_warning`
 - `risk_reward_warning_reason`
 - `risk_reward_blocked`

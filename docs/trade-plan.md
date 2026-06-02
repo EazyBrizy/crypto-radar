@@ -28,6 +28,42 @@ Legacy signal fields remain available for older clients and analytics:
 `risk_reward`, `first_target_rr`, `final_target_rr`, `selected_rr`,
 `selected_rr_target`, and `min_rr_ratio`.
 
+## Structural vs Fallback Plan
+
+A production-quality trade plan should explain the market idea, not only fill
+price fields.
+
+Terms:
+
+- `structural stop`: a protective stop derived from market structure, such as a
+  swing low/high, sweep extreme, breakout range boundary, EMA reclaim/loss
+  level, or another strategy-specific invalidation level.
+- `invalidation thesis`: the condition that proves the setup idea is no longer
+  valid before or after entry. It may reference closes, reclaim/acceptance,
+  time stops, funding/liquidity filters, or strategy-specific structure.
+- `structural target thesis`: the reason for expected profit-taking levels,
+  such as range midpoint, opposite range boundary, measured move, liquidity
+  pool, higher-timeframe level, or continuation structure.
+- `fallback ATR stop`: a synthetic stop created from ATR distance when the
+  strategy cannot produce a market-based structural stop.
+- `fallback R-multiple targets`: synthetic targets created from the chosen stop
+  distance, such as 1R/2R/3R, when the strategy cannot produce structural
+  targets.
+
+Fallback is allowed in `research_mode` so discovery, backtests, and Strategy
+Test Lab can measure incomplete ideas. Any fallback must be explicit:
+
+- `metadata.fallback_used = true` when any fallback is used;
+- `metadata.fallback_stop_used = true` when the stop is ATR/synthetic fallback;
+- `metadata.fallback_targets_used = true` when targets are R-multiple fallback;
+- `metadata.target_source` should identify `structural`, `r_multiple`,
+  `atr_fallback`, `mixed`, or a more specific strategy source.
+
+`production_mode` actionability requires a complete structural trade plan:
+entry model, structural stop, invalidation thesis, and structural target thesis.
+A fallback plan may remain visible as a research/watchlist/blocked candidate,
+but it must not be silently promoted to a production-actionable candidate.
+
 ## Entry Types
 
 Supported entry models:
@@ -99,6 +135,13 @@ The plan may carry:
 The risk gate is still the authority. It combines the plan with user settings,
 account/protection state, exchange rules, market context, no-trade filters, and
 edge calibration.
+
+RR in a trade plan is measurement input. Weak RR can mark the plan as
+non-executable for a decision scope when the active guard mode is hard, but it
+does not delete the underlying discovery signal. The decision snapshot should
+record whether the signal remained research-visible, whether
+`signal_actionable` was true for the scope, and whether virtual or real
+execution was allowed.
 
 ## Backward Compatibility
 

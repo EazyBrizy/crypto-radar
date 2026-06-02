@@ -17,22 +17,76 @@ Historical candles
 Backtests are research tools. They do not grant real execution permission unless
 the resulting edge later passes live risk and EV gates with enough sample size.
 
+`ProductionBacktestRunner` is connected as the production service runner for
+the legacy backtest surface. It replays closed candles through the service
+pipeline and must not use open candle preview data, live scanner preview state,
+or any future candle information.
+
 ## Backtest Runner vs Strategy Test Lab
 
 `/api/v1/backtests` remains the legacy/single-scenario production-like runner.
 It uses `BacktestRunRequest`, `/api/v1/backtests/run`,
 `ProductionBacktestRunner`, and `analytics.backtest_results`.
 
-`/api/v1/strategy-tests` is the new matrix/lab API for Strategy Testing v1. It
-supports discovery, `research_virtual`, and `production_like` modes across
-expanded strategy, market, parameter, and assumption matrices. The existing
-`/backtests` API is not the full Strategy Test Lab.
+`/api/v1/strategy-tests` is the Strategy Test Lab API for Strategy Testing v1.
+It is a separate measurement and research contour from the legacy backtest
+runner. It supports matrix runs by strategy, symbol, timeframe, date range,
+parameter set, entry policy, exit policy, fee model, slippage model, and
+assumption set. The existing `/backtests` API is not the full Strategy Test Lab.
 
-`research_virtual` disables hard RR/risk rejection for research simulation and
-reports rejections and warnings separately. `production_like` keeps hard gates
-when configured, including RiskGate behavior and execution realism checks.
+Strategy Test Lab supports:
 
-backtest trades must not pollute live/virtual portfolio risk state.
+- matrix runs by `strategy_code`, `symbol`, `timeframe`, and date range;
+- baseline mode, where a locked `baseline_id` records the reference strategy,
+  parameters, entry policy, exit policy, costs, and assumptions;
+- experiment mode, where candidate strategy params, entry policies, or exit
+  policies are compared against a baseline;
+- comparison of entry policies such as aggressive breakout, conservative
+  retest, breakout close, limit zone, market entry, and confirmation entry;
+- comparison of exit policies such as structural targets, R-multiple targets,
+  partial TP, time stop, breakeven, trailing stop, and invalidation exit;
+- explicit `no_data` or `insufficient_data` statuses when a scenario cannot
+  produce a valid sample.
+
+`research_virtual` disables hard RR/risk execution blocking for research
+simulation and reports blocked eligibility reasons and warnings separately.
+`production_like` keeps hard gates when configured, including RiskGate behavior
+and execution realism checks.
+In all modes, failed RR must remain visible as a measured warning or blocked
+eligibility reason. It must not silently remove the discovery signal from
+research metrics, signal counts, or blocked-candidate reporting.
+
+Backtest and Strategy Test Lab trades are simulated research observations only.
+They must not create real execution side effects, submit exchange orders, create
+orders or positions, update portfolio balances, or mutate live/virtual
+`risk_state`.
+
+## Backtest Journal Tags
+
+Every backtest or Strategy Test Lab trade projected into the journal must carry
+auditable tags or equivalent structured metadata. Required keys:
+
+- `source=backtest`
+- `lab_run_id`
+- `baseline_id`
+- `strategy_code`
+- `symbol`
+- `timeframe`
+- `entry_model`
+- `exit_policy`
+- `candle_state=closed`
+- `fallback_used`
+- `fallback_stop_used`
+- `fallback_targets_used`
+- `target_source`
+- `rr_bucket`
+- `decision_scope=backtest`
+- `sample_batch`
+- `fees_model`
+- `slippage_model`
+
+Tags must reflect the decision snapshot used for the simulated trade. Baseline
+and experiment comparisons must not reuse tags from a different run or scenario.
 
 ## No Lookahead
 
@@ -40,6 +94,9 @@ Backtests must use only data known at the decision time.
 
 Rules:
 
+- backtests must evaluate closed candles only;
+- open candle previews are live UI/scanner context and must not be used by the
+  backtest runner or Strategy Test Lab;
 - indicators for candle `N` may use candle `N` only after it is closed;
 - an entry generated from candle `N` cannot depend on candle `N + 1`;
 - higher-timeframe context must be aligned to the latest closed higher-timeframe
@@ -126,18 +183,26 @@ live/virtual risk-state mutations.
 
 Backtest reports keep the existing response shape and should include:
 
+- `selected_rr`, `rr_bucket`, `rr_pass_count`, `rr_warning_count`,
+  `rr_block_count`;
 - `trades_count`, `wins`, `losses`, `winrate`;
 - `avg_win_r`, `avg_loss_r`, `expectancy_r`, `profit_factor`;
 - `max_drawdown_pct`;
 - `fees_total`, `slippage_total`, `funding_total`;
 - `avg_bars_in_trade`, `mfe_r_avg`, `mae_r_avg`;
-- `tp1_rate`, `stop_rate`;
+- `tp1_rate`, `tp2_rate`, `stop_rate`, `invalidation_rate`, `expiry_rate`;
+- TP/SL outcomes, same-candle policy counts, and close-reason distribution;
 - grouped metrics by strategy, market regime, score bucket, direction, symbol,
   exchange, and timeframe where sample size allows.
 
 Metrics with small samples must be labeled as low confidence. They may inform
 research, but they do not satisfy the real EV gate by themselves unless the
 configured sample-size threshold is met.
+
+Missing data must not be faked. If candles, costs, funding, or a baseline sample
+are unavailable, reports must return `no_data` or `insufficient_data` status
+metadata for the affected scenario/metric instead of fabricated backtest or
+baseline values.
 
 ## Limitations
 

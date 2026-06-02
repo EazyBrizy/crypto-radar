@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Sequence
 from uuid import UUID, uuid4
 import unittest
 
@@ -18,7 +18,9 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestTrade,
 )
+from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult
 from app.services.strategy_testing.service import StrategyTestingService
 
 
@@ -69,7 +71,11 @@ class StrategyTestingApiContractTest(unittest.TestCase):
 
     def test_post_runs_accepts_matrix_request(self) -> None:
         store = _EphemeralStrategyTestRunStore()
-        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(run_store=store)
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
         client = TestClient(app)
 
         try:
@@ -81,7 +87,7 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(list_response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["status"], "queued")
+        self.assertEqual(data["status"], "completed")
         self.assertIn("run_id", data)
         self.assertEqual(
             data["requested_matrix"]["strategies"],
@@ -100,7 +106,9 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         )
         self.assertEqual(data["requested_matrix"]["timeframes"], ["1h", "4h"])
         self.assertEqual(data["requested_matrix"]["scenario_count"], 12)
+        self.assertEqual(data["summary"]["scenario_count"], 12)
         self.assertEqual(list_response.json()[0]["run_id"], data["run_id"])
+        self.assertEqual(list_response.json()[0]["status"], "completed")
 
     def test_existing_backtests_route_remains_registered(self) -> None:
         route_paths = {route.path for route in api_router.routes}
@@ -214,6 +222,33 @@ class _EphemeralStrategyTestRunStore:
         detail = StrategyTestRunDetailResponse(run=updated)
         self._runs[run_id] = detail
         return detail
+
+
+class _EphemeralStrategyTestTradeStore:
+    def __init__(self) -> None:
+        self.trades: list[StrategyTestTrade] = []
+
+    def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
+        self.trades.extend(trades)
+
+
+class _NoopStrategyTestMatrixRunner:
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+    ) -> StrategyTestMatrixResult:
+        _ = user_uuid
+        return StrategyTestMatrixResult(
+            run_id=run_id,
+            scenario_count=len(request.strategies) * len(request.pairs) * len(request.timeframes),
+            completed_scenarios=len(request.strategies) * len(request.pairs) * len(request.timeframes),
+            failed_scenarios=0,
+            scenario_summaries=[],
+            trades=[],
+        )
 
 
 def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:

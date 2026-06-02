@@ -49,6 +49,13 @@ _RESERVED_PARAM_KEYS = {
     "spread_percent",
     "orderbook_depth_usd",
     "max_virtual_slippage_bps",
+    "same_candle_policy",
+    "strategy_test_mode",
+    "strategy_test_assumptions",
+    "rr_hard_gate_enabled",
+    "risk_gate_enabled",
+    "virtual_execution_enabled",
+    "lifecycle_enabled",
 }
 
 _STRATEGY_ALIASES = {
@@ -82,6 +89,8 @@ class _SimulatedPosition:
     bars_in_trade: int = 0
     strategy: str = "unknown"
     regime: str = "unknown"
+    features_snapshot: dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -93,6 +102,55 @@ class _BacktestState:
     signals_seen: int = 0
     risk_rejections: int = 0
     execution_rejections: int = 0
+
+
+@dataclass(frozen=True)
+class BacktestSimulatedTrade:
+    trade_id: str
+    strategy_code: str
+    strategy_version: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    direction: str
+    signal_score: float | None
+    market_regime: str
+    score_bucket: str
+    entry_time: datetime
+    exit_time: datetime | None
+    entry_price: Decimal
+    exit_price: Decimal | None
+    stop_loss: Decimal | None
+    targets: list[dict[str, Any]]
+    selected_rr: float | None
+    realized_r: float | None
+    pnl: Decimal
+    pnl_pct: float
+    fees: Decimal
+    slippage: Decimal
+    mfe_r: float | None
+    mae_r: float | None
+    bars_to_entry: int | None
+    bars_in_trade: int | None
+    close_reason: str
+    outcome: str
+    risk_rejected: bool
+    execution_rejected: bool
+    warnings: list[str]
+    features_snapshot: dict[str, Any]
+    trade_plan: dict[str, Any]
+    tags: list[str]
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class BacktestDetailedRunResult:
+    run_result: BacktestRunResult
+    trades: list[BacktestSimulatedTrade]
+    signals_seen: int
+    risk_rejections: int
+    execution_rejections: int
+    assumptions: dict[str, Any]
 
 
 class BacktestExecutionSimulator:
@@ -183,9 +241,40 @@ class ProductionBacktestRunner:
         self._rolling_window_candles = rolling_window_candles
 
     def run(self, request: BacktestRunRequest) -> BacktestRunResult:
-        return _run_awaitable_sync(self._run_async(request))
+        return self.run_detailed(
+            request,
+            mode="production_like",
+            options={"preserve_legacy_backtest": True},
+        ).run_result
+
+    def run_detailed(
+        self,
+        request: BacktestRunRequest,
+        *,
+        mode: str = "production_like",
+        options: dict[str, Any] | None = None,
+    ) -> BacktestDetailedRunResult:
+        return _run_awaitable_sync(self._run_detailed_async(request, mode=mode, options=options))
 
     async def _run_async(self, request: BacktestRunRequest) -> BacktestRunResult:
+        return (
+            await self._run_detailed_async(
+                request,
+                mode="production_like",
+                options={"preserve_legacy_backtest": True},
+            )
+        ).run_result
+
+    async def _run_detailed_async(
+        self,
+        request: BacktestRunRequest,
+        *,
+        mode: str,
+        options: dict[str, Any] | None,
+    ) -> BacktestDetailedRunResult:
+        normalized_mode = _normalize_backtest_mode(mode)
+        assumptions = _assumptions_for_backtest(request, normalized_mode, options)
+        request = _request_with_mode_options(request, normalized_mode, assumptions)
         candles = await self._historical_candle_provider.load_candles(
             exchange=request.exchange,
             symbol=request.symbol,
@@ -241,6 +330,7 @@ class ProductionBacktestRunner:
                         candle=candle,
                         index=index,
                         state=state,
+                        mode=normalized_mode,
                     )
                     if position is not None:
                         state.open_position = position
@@ -281,7 +371,15 @@ class ProductionBacktestRunner:
             equity_curve=state.equity_curve,
             created_at=datetime.now(timezone.utc),
         )
-        return BacktestRunResult(status="completed", result=result)
+        run_result = BacktestRunResult(status="completed", result=result)
+        return BacktestDetailedRunResult(
+            run_result=run_result,
+            trades=_simulated_trades_from_state(state, request=request),
+            signals_seen=state.signals_seen,
+            risk_rejections=state.risk_rejections,
+            execution_rejections=state.execution_rejections,
+            assumptions=assumptions,
+        )
 
     async def _generate_signals(
         self,
@@ -309,6 +407,7 @@ class ProductionBacktestRunner:
         candle: OHLCVCandle,
         index: int,
         state: _BacktestState,
+        mode: str,
     ) -> _SimulatedPosition | None:
         if signal is None:
             return None
@@ -367,6 +466,7 @@ class ProductionBacktestRunner:
         except ValueError:
             state.risk_rejections += 1
             return None
+        pre_execution_decision = _decision_for_mode(pre_execution_decision, mode)
         if not pre_execution_decision.can_enter:
             state.risk_rejections += 1
             return None
@@ -410,6 +510,7 @@ class ProductionBacktestRunner:
         except ValueError:
             state.risk_rejections += 1
             return None
+        post_execution_decision = _decision_for_mode(post_execution_decision, mode)
         if not post_execution_decision.can_enter:
             state.risk_rejections += 1
             return None
@@ -435,7 +536,261 @@ class ProductionBacktestRunner:
             funding_buffer_per_unit=_float_param(request.params, "funding_buffer_per_unit", 0.0) or 0.0,
             strategy=radar_signal.strategy,
             regime=_regime_key(radar_signal),
+            features_snapshot=_features_snapshot(features, radar_signal),
+            warnings=_dedupe_strings([*pre_execution_decision.warnings, *post_execution_decision.warnings]),
         )
+
+
+def _normalize_backtest_mode(mode: str) -> str:
+    normalized = mode.strip().lower().replace("-", "_")
+    if normalized in {"discovery", "research_virtual", "production_like"}:
+        return normalized
+    return "production_like"
+
+
+def _assumptions_for_backtest(
+    request: BacktestRunRequest,
+    mode: str,
+    options: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    values = dict(options or {})
+    values.setdefault("mode", mode)
+    values.setdefault("fee_rate", str(request.fee_rate))
+    values.setdefault("slippage_bps", str(request.slippage_bps))
+    values.setdefault("initial_capital", str(request.initial_capital))
+    values.setdefault("same_candle_policy", request.params.get("same_candle_policy") or "stop_first")
+    if mode == "discovery":
+        values.setdefault("risk_gate_enabled", False)
+        values.setdefault("rr_hard_gate_enabled", False)
+        values.setdefault("virtual_execution_enabled", False)
+        values.setdefault("lifecycle_enabled", False)
+    elif mode == "research_virtual":
+        values.setdefault("risk_gate_enabled", False)
+        values.setdefault("rr_hard_gate_enabled", False)
+        values.setdefault("virtual_execution_enabled", True)
+        values.setdefault("lifecycle_enabled", True)
+    else:
+        preserve_legacy = bool(values.get("preserve_legacy_backtest"))
+        values.setdefault("risk_gate_enabled", True)
+        values.setdefault("rr_hard_gate_enabled", False if preserve_legacy else True)
+        values.setdefault("virtual_execution_enabled", True)
+        values.setdefault("lifecycle_enabled", True)
+    return values
+
+
+def _request_with_mode_options(
+    request: BacktestRunRequest,
+    mode: str,
+    assumptions: Mapping[str, Any],
+) -> BacktestRunRequest:
+    params = dict(request.params)
+    params["strategy_test_mode"] = mode
+    params["strategy_test_assumptions"] = dict(assumptions)
+    params["risk_settings"] = _risk_settings_with_mode(
+        request=request,
+        mode=mode,
+        assumptions=assumptions,
+    )
+    return request.model_copy(update={"params": params})
+
+
+def _risk_settings_with_mode(
+    *,
+    request: BacktestRunRequest,
+    mode: str,
+    assumptions: Mapping[str, Any],
+) -> dict[str, Any]:
+    risk_settings = dict(_mapping_param(request.params.get("risk_settings")))
+    if bool(assumptions.get("preserve_legacy_backtest")):
+        return risk_settings
+
+    strategy_modes = dict(_mapping_param(risk_settings.get("strategy_rr_guard_modes")))
+    strategy_keys = {request.strategy_code, _resolve_strategy_code(request.strategy_code)}
+    if mode in {"discovery", "research_virtual"}:
+        risk_settings["rr_guard_mode"] = "soft"
+        risk_settings["backtest_rr_guard_mode"] = "soft"
+        for strategy_key in strategy_keys:
+            strategy_modes[strategy_key] = "soft"
+    elif bool(assumptions.get("rr_hard_gate_enabled", True)):
+        risk_settings["backtest_rr_guard_mode"] = "hard"
+        for strategy_key in strategy_keys:
+            strategy_modes[strategy_key] = "hard"
+    if strategy_modes:
+        risk_settings["strategy_rr_guard_modes"] = strategy_modes
+    return risk_settings
+
+
+def _decision_for_mode(decision: RiskDecision, mode: str) -> RiskDecision:
+    if mode == "production_like" or decision.can_enter:
+        return decision
+
+    warning_reason = decision.risk_check.risk_reward_warning_reason
+    if warning_reason is None and decision.risk_check.risk_reward_block_reason is not None:
+        warning_reason = decision.risk_check.risk_reward_block_reason
+    warnings = _dedupe_strings([*decision.warnings, *decision.blockers])
+    risk_check = decision.risk_check.model_copy(
+        update={
+            "status": "warning",
+            "blockers": [],
+            "warnings": _dedupe_strings([*decision.risk_check.warnings, *decision.risk_check.blockers]),
+            "risk_reward_warning": decision.risk_check.risk_reward_warning
+            or decision.risk_check.risk_reward_blocked,
+            "risk_reward_warning_reason": warning_reason,
+            "risk_reward_blocked": False,
+            "risk_reward_block_reason": None,
+        }
+    )
+    return decision.model_copy(
+        update={
+            "status": "warning",
+            "can_enter": True,
+            "blockers": [],
+            "warnings": warnings,
+            "risk_check": risk_check,
+            "notes": _dedupe_strings([*decision.notes, *warnings]),
+        }
+    )
+
+
+def _simulated_trades_from_state(
+    state: _BacktestState,
+    *,
+    request: BacktestRunRequest,
+) -> list[BacktestSimulatedTrade]:
+    return [_simulated_trade_from_position(position, request=request) for position in state.closed_positions]
+
+
+def _simulated_trade_from_position(
+    position: _SimulatedPosition,
+    *,
+    request: BacktestRunRequest,
+) -> BacktestSimulatedTrade:
+    trade = position.trade
+    pnl = _net_pnl(position)
+    fees = trade.fees + trade.exit_fees
+    return BacktestSimulatedTrade(
+        trade_id=trade.id,
+        strategy_code=position.strategy,
+        strategy_version=request.strategy_version or "v1",
+        exchange=trade.exchange,
+        symbol=trade.symbol,
+        timeframe=trade.timeframe,
+        direction=trade.side,
+        signal_score=float(position.signal.score) if position.signal.score is not None else None,
+        market_regime=position.regime,
+        score_bucket=_score_bucket(position.signal.score),
+        entry_time=trade.opened_at,
+        exit_time=trade.closed_at,
+        entry_price=_decimal(trade.entry_price),
+        exit_price=_optional_decimal(trade.exit_price),
+        stop_loss=_optional_decimal(trade.stop_loss),
+        targets=_trade_targets(trade),
+        selected_rr=_selected_rr(position),
+        realized_r=_realized_r(position),
+        pnl=_decimal(pnl),
+        pnl_pct=_pnl_pct(trade, pnl),
+        fees=_decimal(fees),
+        slippage=_decimal(_slippage_cost(position)),
+        mfe_r=_mfe_r(position),
+        mae_r=_mae_r(position),
+        bars_to_entry=0,
+        bars_in_trade=position.bars_in_trade,
+        close_reason=trade.close_reason or "open",
+        outcome=_trade_outcome(trade, pnl),
+        risk_rejected=False,
+        execution_rejected=False,
+        warnings=_position_warnings(position),
+        features_snapshot=dict(position.features_snapshot),
+        trade_plan=_trade_plan_snapshot(position.signal),
+        tags=["backtest"],
+        created_at=trade.closed_at or trade.opened_at,
+    )
+
+
+def _optional_decimal(value: float | None) -> Decimal | None:
+    if value is None:
+        return None
+    return _decimal(value)
+
+
+def _trade_targets(trade: VirtualTrade) -> list[dict[str, Any]]:
+    if trade.target_states:
+        return [
+            {
+                "label": target.label,
+                "price": target.price,
+                "close_percent": target.close_percent,
+                "action": target.action,
+                "hit": target.hit,
+            }
+            for target in trade.target_states
+        ]
+    return [{"label": f"TP{index + 1}", "price": price} for index, price in enumerate(trade.take_profit)]
+
+
+def _selected_rr(position: _SimulatedPosition) -> float | None:
+    execution = position.trade.execution
+    if execution is not None and execution.take_profit_plan is not None:
+        return execution.take_profit_plan.selected_rr
+    return position.signal.selected_rr or position.signal.risk_reward
+
+
+def _pnl_pct(trade: VirtualTrade, pnl: float) -> float:
+    if trade.pnl_percent is not None:
+        return trade.pnl_percent
+    if trade.size_usd <= 0:
+        return 0.0
+    return pnl / trade.size_usd * 100
+
+
+def _trade_outcome(trade: VirtualTrade, pnl: float) -> str:
+    if trade.result is not None:
+        return trade.result
+    if trade.status == "open":
+        return "open"
+    if pnl > 0:
+        return "win"
+    if pnl < 0:
+        return "loss"
+    return "breakeven"
+
+
+def _position_warnings(position: _SimulatedPosition) -> list[str]:
+    execution = position.trade.execution
+    execution_warnings: list[str] = []
+    if execution is not None:
+        execution_warnings.extend(execution.notes)
+        execution_warnings.extend(execution.quality_gate.warnings)
+        execution_warnings.extend(execution.quality_gate.high_impact_reasons)
+        execution_warnings.extend(execution.quality_gate.blockers)
+    return _dedupe_strings([*position.warnings, *execution_warnings])
+
+
+def _features_snapshot(features: Features, signal: RadarSignal) -> dict[str, Any]:
+    snapshot = features.model_dump(mode="json")
+    if signal.trade_plan is not None:
+        snapshot["trade_plan"] = signal.trade_plan.model_dump(mode="json")
+    if signal.no_trade_filter is not None:
+        snapshot["no_trade_filter"] = signal.no_trade_filter.model_dump(mode="json")
+    return snapshot
+
+
+def _trade_plan_snapshot(signal: RadarSignal) -> dict[str, Any]:
+    if signal.trade_plan is None:
+        return {}
+    return signal.trade_plan.model_dump(mode="json")
+
+
+def _score_bucket(score: int | float | None) -> str:
+    if score is None:
+        return "unknown"
+    value = max(0, min(100, int(score)))
+    if value < 50:
+        return "0-49"
+    if value >= 90:
+        return "90-100"
+    lower = value // 10 * 10
+    return f"{lower}-{lower + 9}"
 
 
 def _run_awaitable_sync(awaitable: Awaitable[_T]) -> _T:
@@ -754,6 +1109,8 @@ def _replace_position(
         bars_in_trade=position.bars_in_trade if bars_in_trade is None else bars_in_trade,
         strategy=position.strategy,
         regime=position.regime,
+        features_snapshot=dict(position.features_snapshot),
+        warnings=list(position.warnings),
     )
 
 

@@ -106,6 +106,25 @@ No-data failures must surface explicit `no_historical_data` or
 `not_enough_data` errors instead of `not_implemented` when a runner is
 configured.
 
+`ProductionBacktestRunner.run(request)` remains backward-compatible and returns
+only `BacktestRunResult`. `ProductionBacktestRunner.run_detailed(...)` is the
+service-only Strategy Test Lab extension:
+
+```python
+BacktestDetailedRunResult = {
+    "run_result": BacktestRunResult,
+    "trades": list[BacktestSimulatedTrade],
+    "signals_seen": int,
+    "risk_rejections": int,
+    "execution_rejections": int,
+    "assumptions": dict,
+}
+```
+
+`BacktestSimulatedTrade` rows are research observations only. They may be
+converted to `StrategyTestTrade`, but must never be inserted into orders,
+positions, portfolio balances, or live/virtual risk state.
+
 ## Strategy Testing v1
 
 Strategy Test Lab is a separate research and simulation surface from the
@@ -167,6 +186,33 @@ Boundary rules:
 StrategyTestMode = "discovery" | "research_virtual" | "production_like"
 ```
 
+`StrategyTestAssumptions` records deterministic execution assumptions for one
+lab run or scenario:
+
+```python
+StrategyTestAssumptions = {
+    "mode": StrategyTestMode,
+    "fee_rate": Decimal,
+    "slippage_bps": Decimal,
+    "same_candle_policy": "stop_first" | "target_first" | "ignore_ambiguous",
+    "initial_capital": Decimal,
+    "rr_hard_gate_enabled": bool,
+    "risk_gate_enabled": bool,
+    "virtual_execution_enabled": bool,
+    "lifecycle_enabled": bool,
+    "notes": list[str],
+}
+```
+
+Mode assumptions:
+
+- `discovery`: risk-gate and RR hard rejection are disabled for research; any
+  evaluated hard blockers are surfaced as warnings.
+- `research_virtual`: virtual execution/lifecycle simulation is enabled, but
+  risk-gate and RR hard blockers are surfaced as warnings.
+- `production_like`: risk gate is enabled; RR hard gate is enabled unless the
+  request params explicitly disable it.
+
 `StrategyTestPair` identifies one market/timeframe input in a matrix:
 
 ```python
@@ -206,6 +252,21 @@ StrategyTestMatrix = {
     "parameter_sets": list[dict],
     "assumption_sets": list[dict],
     "scenario_count": int,
+}
+```
+
+`StrategyTestMatrixResult` is the synchronous service result produced by the
+matrix runner before run status finalization:
+
+```python
+StrategyTestMatrixResult = {
+    "run_id": UUID,
+    "scenario_count": int,
+    "completed_scenarios": int,
+    "failed_scenarios": int,
+    "scenario_summaries": list[dict],
+    "errors": list[dict],
+    "trades": list[StrategyTestTrade],
 }
 ```
 

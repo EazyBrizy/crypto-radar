@@ -305,7 +305,7 @@ class ProductionBacktestRunner:
         normalized_mode = _normalize_backtest_mode(mode)
         assumptions = _assumptions_for_backtest(request, normalized_mode, options)
         request = _request_with_mode_options(request, normalized_mode, assumptions)
-        candles = await self._historical_candle_provider.load_candles(
+        loaded_candles = await self._historical_candle_provider.load_candles(
             exchange=request.exchange,
             symbol=request.symbol,
             timeframe=request.timeframe,
@@ -313,7 +313,7 @@ class ProductionBacktestRunner:
             end_at=request.end_at,
         )
         candles = sorted(
-            [candle.model_copy(update={"is_closed": True}) for candle in candles],
+            [candle.model_copy(update={"is_closed": True}) for candle in loaded_candles if candle.is_closed],
             key=lambda candle: candle.open_time,
         )
         if not candles:
@@ -353,6 +353,8 @@ class ProductionBacktestRunner:
             features = self._feature_engine.process_candles(
                 candles[max(0, index - rolling_window + 1) : index + 1]
             )
+            if features is not None and features.candle_state != "closed":
+                raise AssertionError("backtest_open_candle_detected: feature window produced an open candle")
             if features is not None and len(state.open_positions) < constraints.max_concurrent_positions:
                 signals = await self._generate_signals(request, features)
                 state.signals_seen += len(signals)
@@ -454,11 +456,14 @@ class ProductionBacktestRunner:
             params=_strategy_params_from_request(request),
             risk_settings=_risk_settings_params_from_request(request),
         )
-        return await self._strategy_engine.generate_signals(
+        signals = await self._strategy_engine.generate_signals(
             features,
             strategy_configs={strategy_code: runtime_config},
             rr_guard_context="backtest",
         )
+        if any(signal.candle_state != "closed" for signal in signals):
+            raise AssertionError("backtest_open_candle_detected: strategy signal used an open candle")
+        return signals
 
     def _try_open_position(
         self,
@@ -626,6 +631,7 @@ def _assumptions_for_backtest(
     values.setdefault("slippage_bps", str(request.slippage_bps))
     values.setdefault("initial_capital", str(request.initial_capital))
     values.setdefault("same_candle_policy", request.params.get("same_candle_policy") or "stop_first")
+    values.setdefault("candle_state", "closed")
     values.setdefault(
         "signal_selection_policy",
         _normalize_signal_selection_policy(
@@ -790,7 +796,7 @@ def _simulated_trade_from_position(
         warnings=_position_warnings(position),
         features_snapshot=dict(position.features_snapshot),
         trade_plan=_trade_plan_snapshot(position.signal),
-        tags=["backtest"],
+        tags=["backtest", "candle_state=closed"],
         created_at=trade.closed_at or trade.opened_at,
     )
 
@@ -1340,6 +1346,7 @@ def _radar_signal_from_strategy_signal(signal: StrategySignal, candle: OHLCVCand
         status=signal.status,
         score=signal.score,
         timeframe=signal.timeframe,
+        candle_state=signal.candle_state,
         entry_min=signal.entry_min,
         entry_max=signal.entry_max,
         stop_loss=signal.stop_loss,

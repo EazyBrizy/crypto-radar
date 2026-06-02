@@ -15,6 +15,7 @@ from app.models.market import MarketExchange, MarketPair
 from app.models.outbox import OutboxEvent
 from app.models.signal import TradingSignal, TradingSignalEvent
 from app.models.strategy import StrategyTemplate, StrategyVersion
+from app.schemas.market import CandleState
 from app.schemas.signal import RadarSignal, SignalScoreBreakdown, StrategySignal
 from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
 from app.services.signal_outcome_service import SignalOutcomeService
@@ -739,6 +740,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         status=status,
         score=int(round(float(record.score))),
         timeframe=record.timeframe,
+        candle_state=_snapshot_candle_state(snapshot),
         entry_min=_float(snapshot.get("entry_min")),
         entry_max=_float(snapshot.get("entry_max")),
         stop_loss=_float(record.stop_loss),
@@ -790,6 +792,23 @@ def _trade_plan_from_snapshot_or_record(
         selected_rr_target=_string_or_none(snapshot.get("selected_rr_target")),
         min_rr_ratio=_float(snapshot.get("min_rr_ratio")),
     )
+
+
+def _snapshot_candle_state(snapshot: dict[str, Any]) -> CandleState:
+    value = snapshot.get("candle_state")
+    if value == "open" or value == "closed":
+        return value
+    trade_plan = snapshot.get("trade_plan")
+    if isinstance(trade_plan, dict):
+        risk_rules = trade_plan.get("risk_rules")
+        risk_metadata = risk_rules.get("metadata") if isinstance(risk_rules, dict) else None
+        for source in (trade_plan.get("metadata"), risk_metadata):
+            if not isinstance(source, dict):
+                continue
+            metadata_value = source.get("candle_state")
+            if metadata_value == "open" or metadata_value == "closed":
+                return metadata_value
+    return "closed"
 
 
 def _analytics_event(record: TradingSignal, event_type: str, now: datetime) -> dict[str, Any]:
@@ -864,6 +883,8 @@ def _apply_signal_updates(
         record.risk_reward = _decimal(updates["risk_reward"])
     if "trade_plan" in updates:
         snapshot["trade_plan"] = _model_dump_optional(updates["trade_plan"])
+    if "candle_state" in updates:
+        snapshot["candle_state"] = updates["candle_state"]
     for key in (
         "confirmation",
         "first_target_rr",
@@ -890,6 +911,7 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
     return {
         "entry_min": signal.entry_min,
         "entry_max": signal.entry_max,
+        "candle_state": signal.candle_state,
         "urgency": signal.urgency,
         "explanation": signal.explanation,
         "risks": signal.risks,
@@ -926,6 +948,7 @@ def _snapshot_from_strategy_signal(
     return {
         "entry_min": signal.entry_min,
         "entry_max": signal.entry_max,
+        "candle_state": signal.candle_state,
         "urgency": signal.urgency,
         "explanation": explanation or signal.explanation,
         "risks": signal.risks,

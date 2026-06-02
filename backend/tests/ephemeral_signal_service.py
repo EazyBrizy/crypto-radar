@@ -68,6 +68,7 @@ class EphemeralSignalRepository:
             status=signal.status,
             score=score,
             timeframe=signal.timeframe,
+            candle_state=signal.candle_state,
             urgency=signal.urgency,
             entry_min=signal.entry_min,
             entry_max=signal.entry_max,

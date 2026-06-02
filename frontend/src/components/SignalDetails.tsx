@@ -8,8 +8,12 @@ import { Badge } from "./Badge";
 import type { ExecutionGateStatus, ImpactRisk, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
 import {
   entryZone,
+  formingCandleReason,
   formatPrice,
+  isFormingCandleSignal,
+  isOpenCandleActionableAllowed,
   isRiskRewardBlocked,
+  isSignalActionableForUi,
   riskLabel,
   riskRewardBlockReason,
   riskRewardWarningReason,
@@ -61,16 +65,22 @@ export function SignalDetails({
   const riskFailed = executionPreview?.risk_check?.status === "failed";
   const strategyRiskBlocked = isRiskRewardBlocked(signal);
   const strategyRiskWarning = riskRewardWarningReason(signal);
-  const statusAllowsTrade = signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
+  const formingCandle = isFormingCandleSignal(signal);
+  const openCandleAllowed = isOpenCandleActionableAllowed(signal);
+  const formingReason = formingCandleReason(signal);
+  const statusAllowsTrade = isSignalActionableForUi(signal);
   const autoEntryPending = signal.auto_entry?.status === "pending";
-  const canArmAutoEntry = signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback";
+  const canArmAutoEntry = !formingReason && (signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback");
   const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || strategyRiskBlocked || (!statusAllowsTrade && !canArmAutoEntry) || (statusAllowsTrade && riskFailed);
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const breakdown = signal.score_breakdown;
   const tradePlan = signalTradePlanSummary(signal);
   const tradePlanComplete = tradePlan.entryPrice != null && tradePlan.stopLoss != null && tradePlan.targets.length > 0;
   const riskRewardOk = tradePlan.selectedRr != null || signal.risk_reward != null;
-  const reasons = signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."];
+  const reasons = [
+    ...(formingReason ? [formingReason] : []),
+    ...(signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."])
+  ];
 
   return (
     <section className="details-panel">
@@ -81,8 +91,9 @@ export function SignalDetails({
         </div>
         <div className="details-badges">
           <Badge tone={isLong ? "green" : "red"}>{signal.direction.toUpperCase()}</Badge>
+          {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
           <Badge tone="yellow">Risk {riskLabel(signal)}</Badge>
-          <Badge tone="blue">{signal.status}</Badge>
+          <Badge tone={formingReason ? "yellow" : "blue"}>{formingReason ? "preview" : signal.status}</Badge>
         </div>
       </div>
 
@@ -188,14 +199,18 @@ export function SignalDetails({
       {!strategyRiskBlocked && strategyRiskWarning ? (
         <p className="form-description">{strategyRiskWarning}</p>
       ) : null}
+      {formingReason ? (
+        <p className="form-description">{formingReason}</p>
+      ) : null}
       {!statusAllowsTrade && !autoEntryPending && !strategyRiskBlocked ? (
-        <p className="form-description">Use Auto Paper to wait for confirmation and enter automatically after the trigger candle.</p>
+        <p className="form-description">{formingReason ? "Wait for candle close before arming entry." : "Use Auto Paper to wait for confirmation and enter automatically after the trigger candle."}</p>
       ) : null}
     </section>
   );
 }
 
 function recommendedAction(signal: RadarSignal): string {
+  if (formingCandleReason(signal)) return "Forming candle preview, wait for close";
   if (signal.status === "watchlist") return "Watch setup formation, no entry yet";
   if (signal.status === "ready") return "Setup exists, wait for confirmation";
   if (signal.status === "wait_for_pullback") return "Wait for pullback or retest";
@@ -282,7 +297,9 @@ function breakoutEntryPlan(signal: RadarSignal): {
     aggressiveEntry,
     conservativeZone,
     measuredMoveTarget,
-    actionableMode: signal.status === "wait_for_pullback"
+    actionableMode: !isSignalActionableForUi(signal)
+      ? "Entry is preview-only until the signal is fully actionable."
+      : signal.status === "wait_for_pullback"
       ? "Actionable entry is the retest zone while the breakout candle cools off."
       : "Actionable entry follows the current strategy status; retest is the conservative alternative."
   };
@@ -335,7 +352,7 @@ function liquiditySweepPlan(signal: RadarSignal): {
     confirmationZone: conservativeMin == null && conservativeMax == null
       ? formatPrice(conservativeTrigger)
       : `${formatPrice(conservativeMin)} - ${formatPrice(conservativeMax)}`,
-    mode: signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched"
+    mode: isSignalActionableForUi(signal)
       ? "Sweep is actionable only after reclaim, wick, volume and RR checks stay valid."
       : "Sweep is staged; wait for reclaim or a confirmation candle through micro structure."
   };

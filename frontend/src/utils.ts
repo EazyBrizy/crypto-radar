@@ -122,6 +122,40 @@ export function riskRewardWarningReason(signal: RadarSignal): string | null {
   return null;
 }
 
+export function isFormingCandleSignal(signal: RadarSignal): boolean {
+  return signal.candle_state === "open";
+}
+
+export function isOpenCandleActionableAllowed(signal: RadarSignal): boolean {
+  if (!isFormingCandleSignal(signal)) return true;
+  const candleStateCheck = signal.confirmation?.checks.find((item) => item.name === "candle_state_gate");
+  const metadataSources = [
+    signal.trade_plan?.metadata,
+    signal.trade_plan?.risk_rules.metadata,
+    candleStateCheck?.metadata
+  ].filter((source): source is Record<string, unknown> => Boolean(source));
+  return metadataSources.some((metadata) => {
+    if (booleanMetadata(metadata, "actionable_from_open_candle") === true) return true;
+    return booleanMetadata(metadata, "allow_open_candle_actionable") === true
+      && booleanMetadata(metadata, "signal_actionable") === true;
+  });
+}
+
+export function isSignalActionableForUi(signal: RadarSignal): boolean {
+  const actionableStatus = signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
+  if (!actionableStatus) return false;
+  return !isFormingCandleSignal(signal) || isOpenCandleActionableAllowed(signal);
+}
+
+export function formingCandleReason(signal: RadarSignal): string | null {
+  if (!isFormingCandleSignal(signal) || isOpenCandleActionableAllowed(signal)) return null;
+  const check = signal.confirmation?.checks.find((item) => item.name === "candle_state_gate");
+  return check?.reason
+    ?? signal.status_reason
+    ?? signal.risks.find((risk) => risk.includes("forming_candle"))
+    ?? "forming candle preview: open candle is watchlist-only until it closes.";
+}
+
 export function tradeTargetStates(trade: TradeJournalEntry): VirtualTradeTargetState[] {
   if (trade.target_states?.length) return trade.target_states;
   const finalTarget = trade.take_profit.length ? trade.take_profit[trade.take_profit.length - 1] : null;

@@ -126,11 +126,12 @@ class InMemoryHistoricalCandleProvider:
         start_ms = _datetime_to_ms(start_at)
         end_ms = _datetime_to_ms(end_at)
         candles = [
-            candle.model_copy(update={"is_closed": True})
+            candle
             for candle in self._candles
             if candle.exchange == exchange
             and candle.symbol == symbol
             and candle.timeframe == timeframe
+            and candle.is_closed
             and start_ms <= candle.open_time <= end_ms
         ]
         return sorted(candles, key=lambda candle: candle.open_time)

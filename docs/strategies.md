@@ -351,6 +351,14 @@ RR is measured outside the strategy as a shared quality/eligibility layer. A
 weak RR annotation can block virtual or real execution in hard guard mode, but
 it must not make the strategy hide the setup by itself.
 
+Strategies receive `Features.candle_state` and copy it to
+`StrategySignal.candle_state`. An open candle setup is a forming preview by
+default: it remains visible for watchlist/research UI, but the shared pipeline
+must not mark it actionable or arm auto-entry unless
+`allow_open_candle_actionable=true` explicitly allows that source. Lower
+timeframe trigger actionability is likewise disabled unless
+`allow_lower_timeframe_trigger_actionable=true`.
+
 Shared lifecycle:
 
 ```text

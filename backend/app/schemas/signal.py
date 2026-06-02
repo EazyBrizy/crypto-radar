@@ -4,6 +4,7 @@ from typing import Any, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from app.schemas.trade_plan import TradePlan
+from app.schemas.market import CandleState
 
 
 class SignalScoreBreakdown(BaseModel):
@@ -141,6 +142,7 @@ class StrategySignal(BaseModel):
     timestamp: int
     score: int = Field(default=0, ge=0, le=100)
     timeframe: str = "stream"
+    candle_state: CandleState = "closed"
 
     entry_min: Optional[float] = None
     entry_max: Optional[float] = None
@@ -190,6 +192,7 @@ class RadarSignal(BaseModel):
     status: SignalStatus = "active"
     score: int = Field(default=0, ge=0, le=100)
     timeframe: str = "stream"
+    candle_state: CandleState = "closed"
 
     entry_min: Optional[float] = None
     entry_max: Optional[float] = None

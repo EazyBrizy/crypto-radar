@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from app.schemas.market import Features
 from app.schemas.signal import (
@@ -154,6 +154,18 @@ class RiskRewardAssessment:
     reason: str
 
 
+@dataclass(frozen=True)
+class ActionabilitySourceDecision:
+    status: str
+    status_reason: str
+    confirmation: SignalConfirmationSnapshot
+    setup: StrategySetupSnapshot
+    trade_plan: TradePlan
+    auto_entry: SignalAutoEntrySnapshot | None = None
+    risks: tuple[str, ...] = ()
+    explanation: tuple[str, ...] = ()
+
+
 def context_timeframe_for(timeframe: str, strategy_params: Mapping[str, Any] | None = None) -> str | None:
     override = _context_timeframe_override(timeframe, strategy_params or {})
     if override is not None:
@@ -179,6 +191,9 @@ class StrategySignalPipeline:
         context: StrategyEvaluationContext,
     ) -> StrategySignal | None:
         signal = _ensure_trade_plan(signal)
+        candle_state = _effective_candle_state(signal, context.signal_features)
+        if signal.candle_state != candle_state:
+            signal = signal.model_copy(update={"candle_state": candle_state})
         quality = MarketQualityFilter().evaluate(signal, context)
         no_trade_enabled = _bool_param(context.strategy_params, "no_trade_filters_enabled", False)
         if not quality.passed and not no_trade_enabled:
@@ -241,14 +256,32 @@ class StrategySignalPipeline:
         if production_mode and not completeness.complete:
             status = "watchlist"
             status_reason = _trade_plan_incomplete_status_reason(completeness)
+        source_decision = _apply_actionability_source_rules(
+            signal=signal,
+            context=context,
+            status=status,
+            status_reason=status_reason,
+            confirmation=confirmation,
+            setup=setup,
+            trade_plan=trade_plan,
+        )
+        status = source_decision.status
+        status_reason = source_decision.status_reason
+        confirmation = source_decision.confirmation
+        setup = source_decision.setup
+        trade_plan = source_decision.trade_plan
         if _show_only_active_setups(context.strategy_params) and not _is_active_setup_status(status):
             return None
 
         explanation = [
             f"Status: {status_reason}",
+            *source_decision.explanation,
             *signal.explanation,
         ]
         risks = list(signal.risks)
+        for reason in source_decision.risks:
+            if reason not in risks:
+                risks.append(reason)
         for warning in quality.warnings:
             if warning not in risks:
                 risks.append(warning)
@@ -286,6 +319,7 @@ class StrategySignalPipeline:
             "min_rr_ratio": risk_reward.min_rr,
             "explanation": explanation,
             "risks": risks,
+            "candle_state": candle_state,
         }
         if status == "wait_for_pullback":
             overextension = _overextension_check(confirmation)
@@ -316,6 +350,8 @@ class StrategySignalPipeline:
                 status="cancelled",
                 message=status_reason,
             )
+        if source_decision.auto_entry is not None:
+            updates["auto_entry"] = source_decision.auto_entry
         updates["trade_plan"] = trade_plan
 
         return signal.model_copy(update=updates)
@@ -1099,6 +1135,286 @@ class ExitManagementLayer:
             },
             deep=True,
         )
+
+
+def _effective_candle_state(signal: StrategySignal, features: Features) -> str:
+    if signal.candle_state == "open" or features.candle_state == "open":
+        return "open"
+    return "closed"
+
+
+def _apply_actionability_source_rules(
+    *,
+    signal: StrategySignal,
+    context: StrategyEvaluationContext,
+    status: str,
+    status_reason: str,
+    confirmation: SignalConfirmationSnapshot,
+    setup: StrategySetupSnapshot,
+    trade_plan: TradePlan,
+) -> ActionabilitySourceDecision:
+    candle_state = _effective_candle_state(signal, context.signal_features)
+    allow_open = _bool_param(context.strategy_params, "allow_open_candle_actionable", False)
+    lower_timeframe_trigger = _has_lower_timeframe_trigger(signal, trade_plan)
+    allow_lower_timeframe = _bool_param(
+        context.strategy_params,
+        "allow_lower_timeframe_trigger_actionable",
+        False,
+    )
+    blocked_by_open = candle_state == "open" and not allow_open
+    blocked_by_lower_timeframe = (
+        lower_timeframe_trigger
+        and not blocked_by_open
+        and _is_actionable_status(status)
+        and not allow_lower_timeframe
+    )
+    final_status = status
+    final_reason = status_reason
+    auto_entry: SignalAutoEntrySnapshot | None = None
+    risks: list[str] = []
+    explanation: list[str] = []
+    final_setup = setup
+
+    if blocked_by_open:
+        final_status = "watchlist"
+        final_reason = "forming_candle: forming candle preview is not actionable until the candle closes"
+        auto_entry = SignalAutoEntrySnapshot(
+            enabled=False,
+            status="cancelled",
+            message=final_reason,
+        )
+        risks.append("forming_candle: forming candle preview is not actionable until the candle closes")
+        explanation.append("forming candle preview: open candle is watchlist-only until it closes.")
+        final_setup = _setup_with_actionability_source_check(
+            setup,
+            stage="forming",
+            check=SignalLayerCheck(
+                name="candle_state_gate",
+                status="warning",
+                reason=final_reason,
+                metadata={
+                    "reason_code": "forming_candle",
+                    "candle_state": candle_state,
+                    "allow_open_candle_actionable": allow_open,
+                },
+            ),
+        )
+    elif candle_state == "open" and allow_open and _is_actionable_status(status):
+        explanation.append("forming candle preview is explicitly allowed to remain actionable by configuration.")
+
+    if blocked_by_lower_timeframe:
+        final_status = "ready"
+        final_reason = (
+            "lower_timeframe_trigger: actionable classification requires "
+            "allow_lower_timeframe_trigger_actionable=true"
+        )
+        auto_entry = SignalAutoEntrySnapshot(
+            enabled=False,
+            status="cancelled",
+            message=final_reason,
+        )
+        risks.append(final_reason)
+
+    confirmation = _confirmation_with_actionability_source_checks(
+        confirmation=confirmation,
+        candle_state=candle_state,
+        allow_open=allow_open,
+        blocked_by_open=blocked_by_open,
+        lower_timeframe_trigger=lower_timeframe_trigger,
+        allow_lower_timeframe=allow_lower_timeframe,
+        blocked_by_lower_timeframe=blocked_by_lower_timeframe,
+        final_status=final_status,
+    )
+    trade_plan = _trade_plan_with_actionability_source_metadata(
+        trade_plan=trade_plan,
+        candle_state=candle_state,
+        allow_open=allow_open,
+        blocked_by_open=blocked_by_open,
+        lower_timeframe_trigger=lower_timeframe_trigger,
+        allow_lower_timeframe=allow_lower_timeframe,
+        blocked_by_lower_timeframe=blocked_by_lower_timeframe,
+        final_status=final_status,
+    )
+    return ActionabilitySourceDecision(
+        status=final_status,
+        status_reason=final_reason,
+        confirmation=confirmation,
+        setup=final_setup,
+        trade_plan=trade_plan,
+        auto_entry=auto_entry,
+        risks=tuple(risks),
+        explanation=tuple(explanation),
+    )
+
+
+def _setup_with_actionability_source_check(
+    setup: StrategySetupSnapshot,
+    *,
+    stage: Literal["forming", "ready", "confirmed"],
+    check: SignalLayerCheck,
+) -> StrategySetupSnapshot:
+    return setup.model_copy(
+        update={
+            "stage": stage,
+            "checks": [*setup.checks, check],
+        }
+    )
+
+
+def _confirmation_with_actionability_source_checks(
+    *,
+    confirmation: SignalConfirmationSnapshot,
+    candle_state: str,
+    allow_open: bool,
+    blocked_by_open: bool,
+    lower_timeframe_trigger: bool,
+    allow_lower_timeframe: bool,
+    blocked_by_lower_timeframe: bool,
+    final_status: str,
+) -> SignalConfirmationSnapshot:
+    checks = [
+        *confirmation.checks,
+        SignalLayerCheck(
+            name="candle_state_gate",
+            status="warning" if blocked_by_open else "passed",
+            reason=(
+                "forming_candle: forming candle preview is not actionable until the candle closes"
+                if blocked_by_open
+                else "Open candle actionability is explicitly allowed by configuration"
+                if candle_state == "open" and allow_open and _is_actionable_status(final_status)
+                else f"Signal evaluated on a {candle_state} candle"
+            ),
+            metadata={
+                "reason_code": "forming_candle" if blocked_by_open else None,
+                "candle_state": candle_state,
+                "allow_open_candle_actionable": allow_open,
+                "open_candle_preview": candle_state == "open",
+                "actionable_from_open_candle": candle_state == "open" and allow_open and _is_actionable_status(final_status),
+                "signal_actionable": _is_actionable_status(final_status),
+            },
+        ),
+    ]
+    if lower_timeframe_trigger:
+        checks.append(
+            SignalLayerCheck(
+                name="lower_timeframe_trigger_gate",
+                status="warning" if blocked_by_lower_timeframe else "passed",
+                reason=(
+                    "lower_timeframe_trigger: actionable classification requires "
+                    "allow_lower_timeframe_trigger_actionable=true"
+                    if blocked_by_lower_timeframe
+                    else "Lower-timeframe trigger actionability is explicitly allowed by configuration"
+                ),
+                metadata={
+                    "reason_code": "lower_timeframe_trigger" if blocked_by_lower_timeframe else None,
+                    "lower_timeframe_trigger": True,
+                    "allow_lower_timeframe_trigger_actionable": allow_lower_timeframe,
+                    "actionable_from_lower_timeframe_trigger": (
+                        allow_lower_timeframe and _is_actionable_status(final_status)
+                    ),
+                    "signal_actionable": _is_actionable_status(final_status),
+                },
+            )
+        )
+    return confirmation.model_copy(
+        update={
+            "passed": confirmation.passed and not blocked_by_open and not blocked_by_lower_timeframe,
+            "checks": checks,
+        }
+    )
+
+
+def _trade_plan_with_actionability_source_metadata(
+    *,
+    trade_plan: TradePlan,
+    candle_state: str,
+    allow_open: bool,
+    blocked_by_open: bool,
+    lower_timeframe_trigger: bool,
+    allow_lower_timeframe: bool,
+    blocked_by_lower_timeframe: bool,
+    final_status: str,
+) -> TradePlan:
+    signal_actionable = _is_actionable_status(final_status)
+    source_metadata: dict[str, Any] = {
+        "candle_state": candle_state,
+        "open_candle_preview": candle_state == "open",
+        "allow_open_candle_actionable": allow_open,
+        "actionable_from_open_candle": candle_state == "open" and allow_open and signal_actionable,
+        "lower_timeframe_trigger": lower_timeframe_trigger,
+        "allow_lower_timeframe_trigger_actionable": allow_lower_timeframe,
+        "actionable_from_lower_timeframe_trigger": lower_timeframe_trigger and allow_lower_timeframe and signal_actionable,
+    }
+    if blocked_by_open:
+        source_metadata.update(
+            {
+                "signal_actionable": False,
+                "execution_allowed_virtual": False,
+                "execution_allowed_real": False,
+                "auto_entry_enabled": False,
+                "actionability_block_reason": "forming_candle",
+            }
+        )
+    elif blocked_by_lower_timeframe:
+        source_metadata.update(
+            {
+                "signal_actionable": False,
+                "execution_allowed_virtual": False,
+                "execution_allowed_real": False,
+                "auto_entry_enabled": False,
+                "actionability_block_reason": "lower_timeframe_trigger",
+            }
+        )
+    elif candle_state == "open" and allow_open and signal_actionable:
+        source_metadata["actionability_source"] = "open_candle_explicitly_allowed"
+    elif lower_timeframe_trigger and allow_lower_timeframe and signal_actionable:
+        source_metadata["actionability_source"] = "lower_timeframe_trigger_explicitly_allowed"
+
+    metadata = dict(trade_plan.metadata)
+    metadata.update(source_metadata)
+    risk_metadata = dict(trade_plan.risk_rules.metadata)
+    risk_metadata.update(source_metadata)
+    risk_rules = trade_plan.risk_rules.model_copy(update={"metadata": risk_metadata})
+    return trade_plan.model_copy(
+        update={
+            "metadata": metadata,
+            "risk_rules": risk_rules,
+        },
+        deep=True,
+    )
+
+
+def _has_lower_timeframe_trigger(signal: StrategySignal, trade_plan: TradePlan) -> bool:
+    metadata_sources = [
+        trade_plan.metadata,
+        trade_plan.entry.metadata,
+        trade_plan.risk_rules.metadata,
+    ]
+    if trade_plan.invalidation is not None:
+        metadata_sources.append(trade_plan.invalidation.metadata)
+    if signal.invalidation is not None:
+        metadata_sources.append(signal.invalidation.metadata)
+    for metadata in metadata_sources:
+        if _bool_param(metadata, "lower_timeframe_trigger", False):
+            return True
+        trigger_source = str(metadata.get("trigger_source") or "").strip().lower()
+        if trigger_source in {"lower_timeframe", "lower_timeframe_trigger", "ltf"}:
+            return True
+        trigger_timeframe = metadata.get("trigger_timeframe") or metadata.get("lower_timeframe")
+        if isinstance(trigger_timeframe, str) and _is_lower_timeframe(trigger_timeframe, signal.timeframe):
+            return True
+    return False
+
+
+def _is_lower_timeframe(candidate: str, reference: str) -> bool:
+    order = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+    candidate_value = order.get(candidate.strip().lower())
+    reference_value = order.get(reference.strip().lower())
+    return candidate_value is not None and reference_value is not None and candidate_value < reference_value
+
+
+def _is_actionable_status(status: str) -> bool:
+    return status in {"actionable", "active", "entry_touched"}
 
 
 def _ensure_trade_plan(signal: StrategySignal) -> StrategySignal:

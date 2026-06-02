@@ -2,10 +2,14 @@ import unittest
 from datetime import datetime, timezone
 
 from app.schemas.candle import OHLCVCandle
-from app.schemas.market import Features
+from app.schemas.market import Features, MarketData
+from app.schemas.signal import StrategySignal
 from app.services.derivative_market import DerivativeMarketSnapshot
 from app.services.feature_engine import FeatureEngine
+from app.services.candle_service import CandleService
 from app.services.market_scanner import MarketScanner
+from app.strategies.common import build_signal
+from app.strategies.pipeline import StrategyEvaluationContext, StrategySignalPipeline
 
 
 class FeatureEngineTest(unittest.TestCase):
@@ -37,6 +41,33 @@ class FeatureEngineTest(unittest.TestCase):
 
         self.assertIsNotNone(features)
         self.assertIsNone(features.vwap)
+
+    def test_feature_engine_sets_open_candle_state(self) -> None:
+        engine = FeatureEngine()
+        start = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp() * 1000)
+        candles = [
+            _candle(start, high=102, low=98, close=100, volume=10),
+            _candle(start + 60_000, high=103, low=99, close=102, volume=12).model_copy(
+                update={"is_closed": False}
+            ),
+        ]
+
+        features = engine.process_candles(candles)
+
+        self.assertIsNotNone(features)
+        self.assertEqual(features.candle_state if features else None, "open")
+
+    def test_feature_engine_sets_closed_candle_state(self) -> None:
+        engine = FeatureEngine()
+        start = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp() * 1000)
+
+        features = engine.process_candles([
+            _candle(start, high=102, low=98, close=100, volume=10),
+            _candle(start + 60_000, high=103, low=99, close=102, volume=12),
+        ])
+
+        self.assertIsNotNone(features)
+        self.assertEqual(features.candle_state if features else None, "closed")
 
     def test_candle_features_use_wilder_adx_stats(self) -> None:
         engine = FeatureEngine()
@@ -176,6 +207,53 @@ class FeatureDerivativeEnrichmentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(enriched.funding_rate, 0.0003)
         self.assertEqual(enriched.oi_change, -0.04)
 
+    async def test_market_scanner_open_candle_signal_is_preview(self) -> None:
+        candle_store = CandleService(timeframes=["1m"])
+        start = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp() * 1000)
+        candle_store.seed_history(
+            [
+                _candle(
+                    start + index * 60_000,
+                    high=101.0,
+                    low=99.0,
+                    close=100.0,
+                    volume=100.0,
+                )
+                for index in range(70)
+            ]
+        )
+        scanner = MarketScanner(
+            symbols=["BTCUSDT"],
+            exchanges=["bybit"],
+            candle_store=candle_store,
+            market_persistence=None,
+            market_quality=None,
+            support_resistance=None,
+            signal_lifecycle=None,
+            signal_outcomes=None,
+            trade_invalidation=None,
+            strategy_configs=None,
+            virtual_trading=None,
+            derivative_market=None,
+        )
+        scanner._strategy_engine = _PreviewStrategyEngine()  # noqa: SLF001
+
+        signals = await scanner.process_tick(
+            MarketData(
+                exchange="bybit",
+                symbol="BTCUSDT",
+                timestamp=start + 70 * 60_000,
+                price=100.5,
+                volume=5.0,
+            )
+        )
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].candle_state, "open")
+        self.assertEqual(signals[0].status, "watchlist")
+        self.assertIn("forming_candle", signals[0].status_reason or "")
+        self.assertFalse(signals[0].auto_entry.enabled if signals[0].auto_entry else True)
+
 
 class _FakeDerivativeMarket:
     def hot_snapshot(self, *, exchange: str, symbol: str) -> DerivativeMarketSnapshot:
@@ -186,6 +264,33 @@ class _FakeDerivativeMarket:
             oi_change=-0.04,
             fetched_at=datetime.now(timezone.utc),
         )
+
+
+class _PreviewStrategyEngine:
+    strategy_count = 1
+    strategy_names = ["volatility_squeeze_breakout"]
+
+    async def generate_signals(self, features: Features, **_: object) -> list[StrategySignal]:
+        candidate = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            reasons=["synthetic scanner setup"],
+            score=90,
+            entry=features.close,
+            stop_loss=features.close - 1.0,
+            take_profit_1=features.close + 2.0,
+            take_profit_2=features.close + 3.0,
+        ).model_copy(update={"status": "actionable"})
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                pair_scope_configured=True,
+                strategy_params={"min_rr_ratio": 1.5, "rr_target": "final"},
+            ),
+        )
+        return [signal] if signal is not None else []
 
 
 def _candle(

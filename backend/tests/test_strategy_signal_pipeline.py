@@ -187,6 +187,100 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(check.status, "passed")
 
+    def test_pipeline_blocks_open_candle_actionable_by_default(self) -> None:
+        features = _breakout_features().model_copy(update={"candle_state": "open"})
+        candidate = _quality_candidate(features).model_copy(update={"status": "actionable"})
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"min_rr_ratio": 1.5, "rr_target": "final"},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.candle_state if signal else None, "open")
+        self.assertEqual(signal.status if signal else None, "watchlist")
+        self.assertIn("forming_candle", signal.status_reason if signal else "")
+        self.assertFalse(signal.auto_entry.enabled if signal and signal.auto_entry else True)
+        self.assertIn("forming candle preview", " ".join(signal.explanation if signal else []))
+        self.assertFalse(signal.trade_plan.metadata.get("signal_actionable") if signal and signal.trade_plan else True)
+        self.assertEqual(signal.trade_plan.metadata.get("candle_state") if signal and signal.trade_plan else None, "open")
+        check = next(
+            item
+            for item in (signal.confirmation.checks if signal and signal.confirmation else [])
+            if item.name == "candle_state_gate"
+        )
+        self.assertEqual(check.status, "warning")
+        self.assertEqual(check.metadata.get("reason_code"), "forming_candle")
+
+    def test_pipeline_allows_open_candle_actionable_only_with_flag(self) -> None:
+        features = _breakout_features().model_copy(update={"candle_state": "open"})
+        candidate = _quality_candidate(features).model_copy(update={"status": "actionable"})
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={
+                    "allow_open_candle_actionable": True,
+                    "min_rr_ratio": 1.5,
+                    "rr_target": "final",
+                },
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status if signal else None, "actionable")
+        self.assertIsNone(signal.auto_entry if signal else None)
+        self.assertTrue(
+            signal.trade_plan.metadata.get("actionable_from_open_candle")
+            if signal and signal.trade_plan
+            else False
+        )
+        check = next(
+            item
+            for item in (signal.confirmation.checks if signal and signal.confirmation else [])
+            if item.name == "candle_state_gate"
+        )
+        self.assertEqual(check.status, "passed")
+        self.assertTrue(check.metadata.get("actionable_from_open_candle"))
+
+    def test_pipeline_blocks_lower_timeframe_trigger_actionable_by_default(self) -> None:
+        features = _breakout_features()
+        candidate = _quality_candidate(features).model_copy(update={"status": "actionable"})
+        self.assertIsNotNone(candidate.trade_plan)
+        assert candidate.trade_plan is not None
+        trade_plan = candidate.trade_plan.model_copy(
+            update={
+                "metadata": {
+                    **candidate.trade_plan.metadata,
+                    "lower_timeframe_trigger": True,
+                    "trigger_timeframe": "5m",
+                }
+            },
+            deep=True,
+        )
+        candidate = candidate.model_copy(update={"trade_plan": trade_plan})
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"min_rr_ratio": 1.5, "rr_target": "final"},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.status if signal else None, "ready")
+        self.assertIn("lower_timeframe_trigger", signal.status_reason if signal else "")
+        self.assertFalse(signal.auto_entry.enabled if signal and signal.auto_entry else True)
+        self.assertFalse(signal.trade_plan.metadata.get("signal_actionable") if signal and signal.trade_plan else True)
+
     async def test_breakout_signal_is_enriched_with_six_layers(self) -> None:
         signals = await StrategyEngine().generate_signals(
             _breakout_features(),

@@ -21,6 +21,9 @@ the resulting edge later passes live risk and EV gates with enough sample size.
 the legacy backtest surface. It replays closed candles through the service
 pipeline and must not use open candle preview data, live scanner preview state,
 or any future candle information.
+Every feature window and generated signal in the runner is tagged
+`candle_state=closed`; an open candle in provider output is excluded from the
+replay instead of being promoted to closed data.
 
 ## Backtest Runner vs Strategy Test Lab
 
@@ -250,6 +253,8 @@ Rules:
 - backtests must evaluate closed candles only;
 - open candle previews are live UI/scanner context and must not be used by the
   backtest runner or Strategy Test Lab;
+- backtest features/signals/trades must expose `candle_state=closed`, and
+  simulated trade tags must include `candle_state=closed`;
 - indicators for candle `N` may use candle `N` only after it is closed;
 - an entry generated from candle `N` cannot depend on candle `N + 1`;
 - higher-timeframe context must be aligned to the latest closed higher-timeframe

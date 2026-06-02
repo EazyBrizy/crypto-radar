@@ -165,4 +165,35 @@ describe("SignalCard", () => {
     expect(screen.getByText("RR warning")).toBeInTheDocument();
     expect(screen.queryByText("RR blocked")).not.toBeInTheDocument();
   });
+
+  it("shows forming candle badge and preview status for open candle signals", () => {
+    const signal: RadarSignal = {
+      ...baseSignal,
+      status: "actionable",
+      candle_state: "open",
+      confirmation: {
+        passed: false,
+        checks: [
+          {
+            name: "candle_state_gate",
+            status: "warning",
+            score: null,
+            reason: "forming_candle: forming candle preview is not actionable until the candle closes",
+            metadata: {
+              candle_state: "open",
+              open_candle_preview: true,
+              allow_open_candle_actionable: false,
+              signal_actionable: false
+            }
+          }
+        ]
+      }
+    };
+
+    render(<SignalCard signal={signal} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("forming candle")).toBeInTheDocument();
+    expect(screen.getByText("preview")).toBeInTheDocument();
+    expect(screen.queryByText("actionable")).not.toBeInTheDocument();
+  });
 });

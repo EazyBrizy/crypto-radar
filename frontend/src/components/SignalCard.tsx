@@ -8,6 +8,8 @@ import type { RadarSignal, SignalEdgeStatus } from "../types";
 import {
   formatPrice,
   isRiskRewardBlocked,
+  isFormingCandleSignal,
+  isOpenCandleActionableAllowed,
   riskRewardWarningReason,
   isSignalExpired,
   riskLabel,
@@ -34,6 +36,8 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
   const rrWarning = riskRewardWarningReason(signal);
   const noTrade = signal.no_trade_filter ?? null;
   const edge = edgeBadge(signal.edge?.status ?? "unknown", signal.edge?.sample_size, signal.edge?.min_sample_size);
+  const formingCandle = isFormingCandleSignal(signal);
+  const openCandleAllowed = isOpenCandleActionableAllowed(signal);
 
   return (
     <button className={`signal-card ${selected ? "selected" : ""}`} onClick={() => onSelect(signal)} type="button">
@@ -42,8 +46,8 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
           <div className="pair-row">
             <strong>{signal.symbol}</strong>
             <Badge>{signal.exchange}</Badge>
-            <Badge tone={statusBadgeTone(signal.status)}>
-              {signal.status.replaceAll("_", " ")}
+            <Badge tone={statusBadgeTone(signal.status, formingCandle && !openCandleAllowed)}>
+              {statusBadgeLabel(signal, formingCandle && !openCandleAllowed)}
             </Badge>
           </div>
           <span className="muted">{signal.strategy.replaceAll("_", " ")}</span>
@@ -69,6 +73,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
       </div>
 
       <div className="signal-badge-row">
+        {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
         <Badge tone={edge.tone}>{edge.label}</Badge>
         {rrBlocked ? <Badge tone="red">RR blocked</Badge> : null}
         {!rrBlocked && rrWarning ? <Badge tone="yellow">RR warning</Badge> : null}
@@ -100,12 +105,18 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
 
 SignalCard.displayName = "SignalCard";
 
-function statusBadgeTone(status: RadarSignal["status"]): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+function statusBadgeTone(status: RadarSignal["status"], previewOnly = false): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (previewOnly) return "yellow";
   if (status === "actionable" || status === "active" || status === "entry_touched") return "green";
   if (status === "watchlist") return "yellow";
   if (status === "ready" || status === "wait_for_pullback") return "blue";
   if (status === "invalidated" || status === "expired" || status === "rejected") return "red";
   return "neutral";
+}
+
+function statusBadgeLabel(signal: RadarSignal, previewOnly = false): string {
+  if (previewOnly) return "preview";
+  return signal.status.replaceAll("_", " ");
 }
 
 function planTargets(targets: ReturnType<typeof signalTradePlanSummary>["targets"]) {

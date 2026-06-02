@@ -1,4 +1,5 @@
 export type SignalDirection = "long" | "short";
+export type CandleState = "open" | "closed";
 export type SignalStatus =
   | "new"
   | "active"
@@ -250,6 +251,7 @@ export interface RadarSignal {
   status: SignalStatus;
   score: number;
   timeframe: string;
+  candle_state?: CandleState;
   entry_min: number | null;
   entry_max: number | null;
   stop_loss: number | null;

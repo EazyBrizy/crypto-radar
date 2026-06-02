@@ -26,7 +26,7 @@ from app.schemas.candle import (
     RadarConfigUpdate,
     Timeframe,
 )
-from app.schemas.market import Features, MarketData
+from app.schemas.market import CandleState, Features, MarketData
 from app.schemas.external_exchange import (
     ExternalExchangeOrderResponse,
     ExternalExchangeTradeResponse,
@@ -160,6 +160,7 @@ __all__ = [
     "BillingSubscriptionResponse",
     "BillingWebhookRequest",
     "CandleResponse",
+    "CandleState",
     "CloseMarketTradeRequest",
     "CloseMarketTradeResponse",
     "CloseVirtualTradeRequest",

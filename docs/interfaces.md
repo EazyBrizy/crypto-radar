@@ -113,10 +113,14 @@ Boundary rules:
 - `MarketData` is raw exchange/watchlist data and must not contain strategy or
   risk decisions.
 - `Features` are deterministic derived values calculated from market data only.
+  `Features.candle_state` is `"closed"` for closed OHLCV evaluation and
+  `"open"` for live/open candle or tick-derived previews.
 - `StrategySignal` is pure strategy output: setup, direction, score,
   explanation, entry/stop/target candidates, confirmations, and no-trade
-  context. A strategy may return a setup that is not production-actionable.
-  Strategies must not read/write DB, call APIs, or execute trades.
+  context. `StrategySignal.candle_state` mirrors the evaluated
+  `Features.candle_state`. A strategy may return a setup that is not
+  production-actionable. Strategies must not read/write DB, call APIs, or
+  execute trades.
 - `TradePlan` normalizes executable entry, stop, target, invalidation, and risk
   metadata from a strategy signal while keeping legacy signal fields available.
   It also records whether structural levels or fallback levels were used.
@@ -152,6 +156,53 @@ Virtual execution may continue to surface research warnings for weak RR,
 unknown or weak edge, or incomplete context, but warnings must not be confused
 with production permission to send exchange orders.
 
+## Candle State Separation v1
+
+Open candle evaluation is a live preview path. It may surface forming setups
+for watchlist/research UI, but it must not silently create an actionable
+signal.
+
+Contracts:
+
+- `CandleState = "open" | "closed"`.
+- `Features.candle_state: CandleState = "closed"`.
+- `StrategySignal.candle_state: CandleState = "closed"`.
+- `RadarSignal.candle_state: CandleState = "closed"`.
+
+`FeatureEngine.process_candles(candles)` sets `Features.candle_state` from the
+latest candle: `"closed"` when `latest.is_closed` is true and `"open"` when it
+is false. Tick/realtime fallback features are always `"open"` because they are
+derived from live tick state rather than a closed OHLCV candle.
+
+`StrategySignalPipeline.finalize()` applies the shared actionability gate:
+
+- if `signal/features.candle_state == "open"` and
+  `allow_open_candle_actionable != true`, the signal must be preview-only:
+  status is kept non-actionable (`watchlist`), `auto_entry` is disabled, the
+  confirmation layer records reason code `forming_candle`, and the explanation
+  includes `forming candle preview`;
+- if `allow_open_candle_actionable == true`, existing actionability behavior is
+  allowed, but `trade_plan.metadata` and the `candle_state_gate` check must
+  explicitly show `actionable_from_open_candle=true`;
+- lower-timeframe trigger actionability is blocked unless
+  `allow_lower_timeframe_trigger_actionable == true`. This flag defaults to
+  false and must be visible in metadata when used.
+
+`RadarSignal` responses expose the direct `candle_state` field. Persistence
+keeps it in `features_snapshot.candle_state`; older rows without the field are
+restored as `"closed"` for backward compatibility. The trade-plan metadata and
+confirmation checks mirror candle-state/source flags for UI/debug.
+
+Market scanner preview rules:
+
+- signal timeframe evaluation may include the current open candle and therefore
+  produces `"open"` preview features/signals;
+- higher-timeframe context and support/resistance calculations must use closed
+  context candles only, so an open HTF candle is never treated as confirmed
+  context;
+- closed-candle lifecycle/outcome/invalidation paths continue to use
+  `include_open=False`.
+
 ## Backtest Runner v1
 
 `ProductionBacktestRunner` is connected and is the production backtest service
@@ -164,6 +215,9 @@ RiskGate -> virtual execution/lifecycle simulation -> metrics.
 
 Backtests must use closed candles only. They must not consume open candle
 preview data, live scanner preview state, or any future candle information.
+Generated backtest features, strategy signals, simulated trades, and journal
+tags must carry `candle_state=closed`. If a provider returns open preview
+candles, the runner must exclude them rather than marking them actionable.
 
 `HistoricalCandleProvider` is the service boundary for loading candles:
 

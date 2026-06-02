@@ -17,7 +17,7 @@ import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
 import type { RadarSignal, SignalStatus } from "@/types";
-import { isOpenFeedSignal } from "@/utils";
+import { isOpenCandleActionableAllowed, isOpenFeedSignal, isSignalActionableForUi } from "@/utils";
 
 export function RadarRoute() {
   const router = useRouter();
@@ -154,7 +154,7 @@ export function RadarRoute() {
 }
 
 function isActionableSignal(signal: RadarSignal): boolean {
-  return signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
+  return isSignalActionableForUi(signal);
 }
 
 export function shouldRequestExecutionPreview(
@@ -184,6 +184,7 @@ export function canSendPaperTrade(signal: RadarSignal | null): boolean {
 export function canArmAutoEntry(signal: RadarSignal | null): boolean {
   if (!signal) return false;
   if (signal.auto_entry?.status === "pending") return false;
+  if (signal.candle_state === "open" && !isOpenCandleActionableAllowed(signal)) return false;
   return signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback";
 }
 

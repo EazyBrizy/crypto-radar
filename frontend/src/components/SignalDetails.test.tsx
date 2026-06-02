@@ -142,4 +142,103 @@ describe("SignalDetails", () => {
     expect(screen.getByText("Risk blockers / warnings")).toBeInTheDocument();
     expect(screen.getAllByText("high_spread").length).toBeGreaterThan(0);
   });
+
+  it("shows forming candle reason and disables actionable UI by default", () => {
+    const formingSignal: RadarSignal = {
+      ...signal,
+      candle_state: "open",
+      no_trade_filter: null,
+      confirmation: {
+        passed: false,
+        checks: [
+          {
+            name: "candle_state_gate",
+            status: "warning",
+            score: null,
+            reason: "forming_candle: forming candle preview is not actionable until the candle closes",
+            metadata: {
+              candle_state: "open",
+              open_candle_preview: true,
+              allow_open_candle_actionable: false,
+              signal_actionable: false
+            }
+          }
+        ]
+      }
+    };
+
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={formingSignal}
+      />
+    );
+
+    expect(screen.getByText("forming candle")).toBeInTheDocument();
+    expect(screen.getByText("preview")).toBeInTheDocument();
+    expect(screen.getAllByText(/forming candle preview/u).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Auto Paper/u })).toBeDisabled();
+  });
+
+  it("keeps actionable UI for open candles only when metadata explicitly allows it", () => {
+    const allowedSignal: RadarSignal = {
+      ...signal,
+      candle_state: "open",
+      no_trade_filter: null,
+      confirmation: {
+        passed: true,
+        checks: [
+          {
+            name: "candle_state_gate",
+            status: "passed",
+            score: null,
+            reason: "Open candle actionability is explicitly allowed by configuration",
+            metadata: {
+              candle_state: "open",
+              open_candle_preview: true,
+              allow_open_candle_actionable: true,
+              actionable_from_open_candle: true,
+              signal_actionable: true
+            }
+          }
+        ]
+      },
+      trade_plan: signal.trade_plan
+        ? {
+            ...signal.trade_plan,
+            metadata: {
+              ...signal.trade_plan.metadata,
+              allow_open_candle_actionable: true,
+              actionable_from_open_candle: true,
+              signal_actionable: true
+            },
+            risk_rules: {
+              ...signal.trade_plan.risk_rules,
+              metadata: {
+                ...signal.trade_plan.risk_rules.metadata,
+                allow_open_candle_actionable: true,
+                actionable_from_open_candle: true,
+                signal_actionable: true
+              }
+            }
+          }
+        : signal.trade_plan
+    };
+
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={allowedSignal}
+      />
+    );
+
+    expect(screen.getByText("forming allowed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Paper Trade/u })).toBeEnabled();
+  });
 });

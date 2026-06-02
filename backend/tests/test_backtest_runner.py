@@ -123,6 +123,33 @@ class BacktestRunnerTest(unittest.TestCase):
             self.assertTrue(all(candle.open_time <= latest_open_time for candle in window))
             self.assertEqual(window, sorted(window, key=lambda candle: candle.open_time))
 
+    def test_backtest_uses_closed_candles_only(self) -> None:
+        candles = _candles()
+        open_preview = candles[-1].model_copy(
+            update={
+                "open_time": candles[-1].open_time + 60_000,
+                "close_time": candles[-1].close_time + 60_000,
+                "is_closed": False,
+            }
+        )
+        feature_engine = RecordingFeatureEngine()
+        runner = ProductionBacktestRunner(
+            feature_engine=feature_engine,  # type: ignore[arg-type]
+            strategy_engine=DeterministicStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider([*candles, open_preview]),
+        )
+
+        result = runner.run_detailed(_request([*candles, open_preview]))
+
+        self.assertEqual(result.assumptions["candle_state"], "closed")
+        self.assertTrue(feature_engine.windows)
+        for window in feature_engine.windows:
+            self.assertTrue(all(candle.is_closed for candle in window))
+            self.assertNotIn(open_preview.open_time, [candle.open_time for candle in window])
+        for trade in result.trades:
+            self.assertEqual(trade.features_snapshot.get("candle_state"), "closed")
+            self.assertIn("candle_state=closed", trade.tags)
+
     def test_no_data_returns_explicit_error(self) -> None:
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         runner = ProductionBacktestRunner(

@@ -189,6 +189,7 @@ def build_signal(
         timestamp=features.timestamp,
         score=score,
         timeframe=timeframe or features.timeframe,
+        candle_state=features.candle_state,
         entry_min=rounded_entry_min,
         entry_max=rounded_entry_max,
         stop_loss=rounded_stop_loss,

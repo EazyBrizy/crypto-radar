@@ -263,7 +263,7 @@ class MarketScanner:
                 exchange=candle.exchange,
                 symbol=candle.symbol,
                 timeframe=context_timeframe,
-                include_open=True,
+                include_open=False,
                 limit=250,
             )
             if len(candle_series) < 2:
@@ -286,7 +286,7 @@ class MarketScanner:
                 exchange=candle.exchange,
                 symbol=candle.symbol,
                 timeframe=context_timeframe,
-                include_open=True,
+                include_open=False,
                 limit=250,
             )
             if len(candle_series) < 5:

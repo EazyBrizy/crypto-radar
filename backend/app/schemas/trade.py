@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,7 @@ from app.schemas.risk import (
 from app.schemas.signal import RadarSignal
 
 ExecutionMode = Literal["virtual", "real"]
+TradeSource = Literal["virtual", "real", "backtest"]
 TradeSide = Literal["long", "short"]
 TradeStatus = Literal["open", "closed", "cancelled"]
 TradeResult = Literal["win", "loss", "breakeven"]
@@ -410,6 +412,9 @@ class TradeJournalEntry(BaseModel):
     user_id: str
     signal_id: Optional[str] = None
     mode: ExecutionMode
+    source: TradeSource = "virtual"
+    tags: list[str] = Field(default_factory=list)
+    run_id: UUID | None = None
 
     exchange: str
     symbol: str
@@ -469,6 +474,7 @@ class TradeJournalEntry(BaseModel):
 
 class RealTrade(TradeJournalEntry):
     mode: Literal["real"] = "real"
+    source: Literal["real"] = "real"
     exchange_order_id: Optional[str] = None
 
 

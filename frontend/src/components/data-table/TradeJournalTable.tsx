@@ -47,13 +47,21 @@ export function TradeJournalTable({
           <div className="table-pair-cell">
             <strong>{row.original.symbol}</strong>
             <span>{row.original.strategy.replaceAll("_", " ")} · {row.original.timeframe}</span>
+            {row.original.source === "backtest" && row.original.run_id ? (
+              <Badge tone="yellow">run {shortRunId(row.original.run_id)}</Badge>
+            ) : null}
           </div>
         )
       },
       {
-        accessorKey: "mode",
+        accessorKey: "source",
         header: "Mode",
-        cell: ({ row }) => <Badge tone={row.original.mode === "virtual" ? "purple" : "blue"}>{row.original.mode}</Badge>
+        cell: ({ row }) => (
+          <div className="table-target-state-cell">
+            <Badge tone={sourceTone(row.original)}>{row.original.source}</Badge>
+            {row.original.source === "backtest" ? <Badge tone="purple">{row.original.mode}</Badge> : null}
+          </div>
+        )
       },
       {
         id: "execution",
@@ -136,7 +144,7 @@ export function TradeJournalTable({
           cell: ({ row }) => {
             const trade = row.original;
             const closing = closingTradeId === trade.id;
-            const disabled = trade.status !== "open" || closing;
+            const disabled = trade.status !== "open" || trade.source === "backtest" || closing;
             return (
               <div className="table-action-cell">
                 <button
@@ -148,7 +156,7 @@ export function TradeJournalTable({
                     if (!disabled) onCloseMarket(trade);
                   }}
                   onKeyDown={(event) => event.stopPropagation()}
-                  title={trade.mode === "real" ? "Real close stub" : "Close at market"}
+                  title={closeMarketTitle(trade)}
                   type="button"
                 >
                   <CircleStop size={16} />
@@ -222,6 +230,20 @@ function formatQuantity(value: number): string {
 function formatExecutionMode(trade: TradeJournalEntry): string {
   if (trade.execution_status === "partially_filled") return "Partial";
   return trade.simulation_mode === "impact_aware" ? "Impact" : "Passive";
+}
+
+function sourceTone(trade: TradeJournalEntry): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (trade.source === "backtest") return "yellow";
+  return trade.mode === "virtual" ? "purple" : "blue";
+}
+
+function shortRunId(runId: string): string {
+  return runId.slice(0, 8);
+}
+
+function closeMarketTitle(trade: TradeJournalEntry): string {
+  if (trade.source === "backtest") return "Backtest trades cannot be closed from the journal";
+  return trade.mode === "real" ? "Real close stub" : "Close at market";
 }
 
 function formatExecutionDetail(trade: TradeJournalEntry): string {

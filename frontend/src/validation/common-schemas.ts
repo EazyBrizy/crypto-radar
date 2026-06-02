@@ -18,6 +18,7 @@ export const SignalStatusSchema = z.enum([
   "entry_touched"
 ]);
 export const TradeModeSchema = z.enum(["virtual", "real"]);
+export const TradeSourceSchema = z.enum(["virtual", "real", "backtest"]);
 export const TradeStatusSchema = z.enum(["open", "closed", "cancelled"]);
 export const TradeCloseReasonSchema = z.enum([
   "take_profit",
@@ -305,6 +306,9 @@ export const TradeJournalEntrySchema = z.object({
   user_id: z.string(),
   signal_id: z.string().nullable().optional(),
   mode: TradeModeSchema,
+  source: TradeSourceSchema.default("virtual"),
+  tags: z.array(z.string()).default([]),
+  run_id: z.string().nullable().optional(),
   exchange: z.string(),
   symbol: z.string(),
   strategy: z.string(),

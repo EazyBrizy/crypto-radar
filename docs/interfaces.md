@@ -256,6 +256,26 @@ StrategyTestTrade = {
 }
 ```
 
+`TradeJournalEntry` is the unified journal projection returned by
+`GET /api/v1/trades`. It keeps execution `mode` backward-compatible as
+`"virtual" | "real"` and uses separate source metadata to expose research
+trades without inserting them into execution-state tables:
+
+```python
+TradeJournalEntry = {
+    # existing virtual/real journal fields remain unchanged
+    "mode": "virtual" | "real",
+    "source": "virtual" | "real" | "backtest",
+    "tags": list[str],
+    "run_id": UUID | None,
+}
+```
+
+Virtual journal entries default to `source="virtual"`, `tags=[]`, and
+`run_id=None`. Real journal entries use `source="real"`. Strategy Test Lab
+journal projections use `mode="virtual"`, `source="backtest"`, include the
+`backtest` tag, and carry the Strategy Test Lab `run_id`.
+
 `StrategyTestMetric` is a named deterministic metric emitted by the metrics
 registry:
 

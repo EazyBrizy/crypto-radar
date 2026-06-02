@@ -303,6 +303,66 @@ class ClickHouseStrategyTestStore:
         finally:
             self._close_client(client)
 
+    def list_journal_trades(
+        self,
+        *,
+        run_id: UUID | None = None,
+        tag: str | None = None,
+        status: str | None = None,
+        limit: int = 500,
+    ) -> list[StrategyTestTrade]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        if status is not None and status not in {"open", "closed"}:
+            return []
+
+        conditions: list[str] = []
+        parameters: dict[str, Any] = {"limit": limit}
+        if run_id is not None:
+            conditions.append("run_id = {run_id:UUID}")
+            parameters["run_id"] = run_id
+        if tag is not None:
+            conditions.append("has(tags, {tag:String})")
+            parameters["tag"] = tag
+        if status == "open":
+            conditions.append("exit_time IS NULL")
+        elif status == "closed":
+            conditions.append("exit_time IS NOT NULL")
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        query = f"""
+            SELECT
+                {_trade_select_columns_sql()}
+            FROM analytics.strategy_test_trades
+            {where_clause}
+            ORDER BY entry_time DESC, created_at DESC, trade_id ASC
+            LIMIT {{limit:UInt32}}
+        """
+        client = self._client()
+        try:
+            result = client.query(query, parameters=parameters)
+            rows = result.named_results() if hasattr(result, "named_results") else []
+            return [_row_to_trade(row) for row in rows]
+        finally:
+            self._close_client(client)
+
+    def get_trade(self, trade_id: str) -> StrategyTestTrade | None:
+        query = f"""
+            SELECT
+                {_trade_select_columns_sql()}
+            FROM analytics.strategy_test_trades
+            WHERE trade_id = {{trade_id:String}}
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        client = self._client()
+        try:
+            result = client.query(query, parameters={"trade_id": trade_id})
+            rows = result.named_results() if hasattr(result, "named_results") else []
+            return _row_to_trade(rows[0]) if rows else None
+        finally:
+            self._close_client(client)
+
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         if not rows:
             return
@@ -553,6 +613,10 @@ def _parse_uuid(value: str | UUID | None) -> UUID | None:
         return UUID(value)
     except ValueError:
         return None
+
+
+def _trade_select_columns_sql() -> str:
+    return ",\n                ".join(ClickHouseStrategyTestStore._trade_columns)
 
 
 def _trade_to_clickhouse(trade: StrategyTestTrade) -> list[Any]:

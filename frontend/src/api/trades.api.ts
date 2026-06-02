@@ -11,20 +11,15 @@ import type {
 import { API_BASE, API_TIMEOUT_MS, openApiClient, request } from "./client";
 import { normalizeTrade, normalizeTradeResponse } from "./mappers";
 
+type RawTradeJournalResponse = {
+  trades: Parameters<typeof normalizeTradeResponse>[0];
+  account?: unknown;
+};
+
 export const tradesApi = {
   async list(filters?: TradeJournalFilters): Promise<TradeJournalResponse> {
-    const response = await request(() =>
-      openApiClient.GET("/api/v1/trades", {
-        params: {
-          query: {
-            mode: filters?.mode ?? undefined,
-            status: filters?.status ?? undefined,
-            signal_id: filters?.signalId ?? undefined
-          }
-        }
-      })
-    );
-    return normalizeTradeResponse(response.trades, (response as { account?: unknown }).account);
+    const response = await rawJson<RawTradeJournalResponse>(tradeJournalPath(filters));
+    return normalizeTradeResponse(response.trades, response.account);
   },
   async closed(): Promise<TradeJournalResponse> {
     return tradesApi.list({ status: "closed" });
@@ -92,6 +87,22 @@ export const tradesApi = {
     });
   }
 };
+
+function tradeJournalPath(filters?: TradeJournalFilters): string {
+  const query = new URLSearchParams();
+  appendQuery(query, "mode", filters?.mode);
+  appendQuery(query, "source", filters?.source);
+  appendQuery(query, "tag", filters?.tag);
+  appendQuery(query, "run_id", filters?.runId);
+  appendQuery(query, "status", filters?.status);
+  appendQuery(query, "signal_id", filters?.signalId);
+  const queryString = query.toString();
+  return queryString ? `/api/v1/trades?${queryString}` : "/api/v1/trades";
+}
+
+function appendQuery(query: URLSearchParams, key: string, value: string | undefined): void {
+  if (value) query.set(key, value);
+}
 
 async function rawJson<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();

@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-import { SignalDirectionSchema, SignalStatusSchema, TimeframeSchema, TradeModeSchema, TradeStatusSchema } from "./common-schemas";
+import {
+  SignalDirectionSchema,
+  SignalStatusSchema,
+  TimeframeSchema,
+  TradeModeSchema,
+  TradeSourceSchema,
+  TradeStatusSchema
+} from "./common-schemas";
 
 export const RadarFilterSchema = z.object({
   direction: z.union([SignalDirectionSchema, z.literal("all")]).default("all"),
@@ -15,6 +22,9 @@ export const SignalHistoryFilterSchema = z.object({
 
 export const TradeJournalFilterSchema = z.object({
   mode: TradeModeSchema.optional(),
+  source: TradeSourceSchema.optional(),
+  tag: z.string().trim().optional(),
+  runId: z.string().trim().optional(),
   signalId: z.string().trim().optional(),
   status: TradeStatusSchema.optional()
 });

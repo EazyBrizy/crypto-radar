@@ -49,6 +49,7 @@ import type {
   TakeProfitPlan,
   TradeCloseReason,
   TradePlan,
+  TradeSource,
   TrailingStopPlan,
   VirtualTradeLifecycleEvent,
   VirtualTradeTargetState,
@@ -70,6 +71,9 @@ type TradeJournalEntryExtra = TradeJournalEntryDto & Partial<Pick<
   | "filled_size_usd"
   | "unfilled_size_usd"
   | "execution"
+  | "source"
+  | "tags"
+  | "run_id"
   | "initial_quantity"
   | "remaining_quantity"
   | "closed_quantity"
@@ -157,6 +161,9 @@ export function normalizeTrade(trade: TradeJournalEntryDto): TradeJournalEntry {
     user_id: trade.user_id,
     signal_id: trade.signal_id ?? null,
     mode: trade.mode,
+    source: normalizeTradeSource(enriched.source, trade.mode),
+    tags: normalizeStringList(enriched.tags),
+    run_id: enriched.run_id ?? null,
     exchange: trade.exchange,
     symbol: trade.symbol,
     strategy: trade.strategy,
@@ -828,6 +835,15 @@ function normalizeSimulationTier(value: unknown): VirtualSimulationTier {
 function normalizeExecutionStatus(value: unknown): VirtualExecutionStatus {
   if (value === "partially_filled" || value === "rejected_virtual_execution") return value;
   return "filled";
+}
+
+function normalizeTradeSource(value: unknown, mode: TradeJournalEntry["mode"]): TradeSource {
+  if (value === "virtual" || value === "real" || value === "backtest") return value;
+  return mode === "real" ? "real" : "virtual";
+}
+
+function normalizeStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 function normalizeSignalStatus(value: unknown): SignalStatus {

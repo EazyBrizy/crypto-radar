@@ -21,6 +21,9 @@ const baseTrade: TradeJournalEntry = {
   user_id: "demo_user",
   signal_id: "sig_1",
   mode: "virtual",
+  source: "virtual",
+  tags: [],
+  run_id: null,
   exchange: "bybit",
   symbol: "ETHUSDT",
   strategy: "EMA_PULLBACK",
@@ -98,6 +101,30 @@ describe("TradeJournalTable", () => {
 
     expect(onCloseMarket).toHaveBeenCalledWith(baseTrade);
     expect(onSelectTrade).not.toHaveBeenCalled();
+  });
+
+  it("shows backtest source and disables market close", async () => {
+    const user = userEvent.setup();
+    const onCloseMarket = vi.fn();
+    const backtestTrade: TradeJournalEntry = {
+      ...baseTrade,
+      id: "backtest_trade_1",
+      source: "backtest",
+      tags: ["backtest", "research"],
+      run_id: "11111111-1111-4111-8111-111111111111"
+    };
+
+    render(<TradeJournalTable onCloseMarket={onCloseMarket} trades={[backtestTrade]} />);
+
+    expect(screen.getByText("backtest")).toBeInTheDocument();
+    expect(screen.getByText("run 11111111")).toBeInTheDocument();
+
+    const closeButton = screen.getByLabelText("Close ETHUSDT at market");
+    expect(closeButton).toBeDisabled();
+
+    await user.click(closeButton);
+
+    expect(onCloseMarket).not.toHaveBeenCalled();
   });
 
   it("shows virtual lifecycle target and PnL state", () => {

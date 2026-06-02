@@ -1,5 +1,11 @@
 # Trade Journal
 
+Backtest note: `GET /api/v1/trades` also surfaces Strategy Test Lab trades as
+journal projections with `source="backtest"`, `tags` including `backtest`, and
+`run_id`. These projections read `analytics.strategy_test_trades` through
+`StrategyTestJournalAdapter` and must not write to `orders`, `positions`,
+portfolio balances, or `risk_state`.
+
 Для MVP журнал сделок делится на:
 
 - `Virtual Trades` - виртуальные сделки, открытые через Manual Confirm.

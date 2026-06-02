@@ -13,6 +13,7 @@ export type SignalStatus =
   | "closed"
   | "entry_touched";
 export type TradeMode = "virtual" | "real";
+export type TradeSource = "virtual" | "real" | "backtest";
 export type TradeStatus = "open" | "closed" | "cancelled";
 export type TradeCloseReason =
   | "take_profit"
@@ -626,6 +627,9 @@ export interface TradeJournalEntry {
   user_id: string;
   signal_id: string | null;
   mode: TradeMode;
+  source: TradeSource;
+  tags: string[];
+  run_id: string | null;
   exchange: string;
   symbol: string;
   strategy: string;

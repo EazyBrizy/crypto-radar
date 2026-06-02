@@ -1,4 +1,5 @@
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import JSONResponse
@@ -35,6 +36,7 @@ from app.services.realtime_events import (
 )
 from app.services.real_trade_import_service import RealTradeImportNotReadyError, real_trade_import_service
 from app.services.signal_service import signal_service
+from app.services.trade_journal_service import trade_journal_service
 from app.services.trade_invalidation import trade_invalidation_service
 from app.services.virtual_trading import (
     get_virtual_simulation_model_info,
@@ -47,16 +49,27 @@ router = APIRouter(prefix="/trades", tags=["trades"])
 @router.get("", response_model=TradeJournalResponse)
 async def list_trade_journal(
     mode: Optional[str] = Query(default=None, pattern="^(virtual|real)$"),
+    source: Optional[str] = Query(default=None, pattern="^(virtual|real|backtest)$"),
+    tag: Optional[str] = None,
+    run_id: Optional[UUID] = None,
     status_filter: Optional[str] = Query(default=None, alias="status"),
     signal_id: Optional[str] = None,
 ) -> TradeJournalResponse:
+    account = (
+        virtual_trading_service.get_virtual_account()
+        if source in {None, "virtual"}
+        else None
+    )
     return TradeJournalResponse(
-        trades=virtual_trading_service.list_trade_journal(
+        trades=trade_journal_service.list_journal(
             mode=mode,
             status=status_filter,
             signal_id=signal_id,
+            source=source,
+            tag=tag,
+            run_id=run_id,
         ),
-        account=virtual_trading_service.get_virtual_account(),
+        account=account,
     )
 
 
@@ -216,12 +229,9 @@ async def get_virtual_trade(trade_id: str) -> VirtualTrade:
 
 @router.get("/{trade_id}", response_model=TradeJournalEntry)
 async def get_trade_journal_entry(trade_id: str) -> TradeJournalEntry:
-    trade = virtual_trading_service.get_virtual_trade(trade_id)
+    trade = trade_journal_service.get_entry(trade_id)
     if trade is not None:
-        return TradeJournalEntry.model_validate(trade.model_dump())
-    real_trade = virtual_trading_service.get_real_trade(trade_id)
-    if real_trade is not None:
-        return real_trade
+        return trade
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,

@@ -1,8 +1,11 @@
-import type { SignalStatus, Timeframe, TradeMode, TradeStatus } from "@/types";
+import type { SignalStatus, Timeframe, TradeMode, TradeSource, TradeStatus } from "@/types";
 import { CandleFilterSchema, SignalHistoryFilterSchema, TradeJournalFilterSchema } from "@/validation/filter-schemas";
 
 export type TradeJournalFilters = {
   mode?: TradeMode;
+  source?: TradeSource;
+  tag?: string;
+  runId?: string;
   signalId?: string;
   status?: TradeStatus;
 };
@@ -25,6 +28,9 @@ const normalizeTradeFilters = (filters: TradeJournalFilters = {}) => ({
     const parsed = TradeJournalFilterSchema.parse(filters);
     return {
       mode: parsed.mode ?? "all",
+      source: parsed.source ?? "all",
+      tag: parsed.tag ?? "all",
+      runId: parsed.runId ?? "all",
       signalId: parsed.signalId ?? "all",
       status: parsed.status ?? "all"
     };

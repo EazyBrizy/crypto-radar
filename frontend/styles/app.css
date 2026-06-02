@@ -2232,6 +2232,200 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   font-size: 12px;
 }
 
+.strategy-testing-section {
+  grid-column: 1 / -1;
+}
+
+.strategy-testing-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.strategy-test-status-strip,
+.strategy-test-actions,
+.strategy-test-report-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.strategy-test-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.strategy-test-selection-group,
+.strategy-test-report-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #0b1220;
+}
+
+.strategy-test-selection-group h4,
+.strategy-test-report-panel h4 {
+  color: #e5e7eb;
+  font-size: 13px;
+}
+
+.strategy-test-selection-list {
+  display: grid;
+  gap: 7px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.strategy-test-check-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.strategy-test-check-option.compact {
+  min-height: 34px;
+}
+
+.strategy-test-check-option input {
+  width: 15px;
+  height: 15px;
+  accent-color: #22c55e;
+}
+
+.strategy-test-check-option span,
+.strategy-test-run-cell {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.strategy-test-check-option strong,
+.strategy-test-run-cell strong {
+  overflow: hidden;
+  color: #e5e7eb;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy-test-check-option small,
+.strategy-test-run-cell span,
+.strategy-test-panel-head span {
+  overflow: hidden;
+  color: #9ca3af;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy-test-timeframe-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.strategy-test-controls {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.strategy-test-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.strategy-test-field span {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.strategy-test-field input,
+.strategy-test-field select {
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+  color: #e5e7eb;
+  padding: 0 10px;
+}
+
+.strategy-test-mode-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.strategy-test-mode-row button {
+  min-height: 34px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+  color: #cbd5e1;
+}
+
+.strategy-test-mode-row .active {
+  border-color: #2563eb;
+  background: #172554;
+  color: #eff6ff;
+}
+
+.strategy-test-runs-table .data-table-scroll {
+  max-height: 360px;
+}
+
+.strategy-test-panel-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.strategy-test-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.strategy-test-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.strategy-test-metric span {
+  overflow: hidden;
+  color: #9ca3af;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy-test-metric strong {
+  overflow: hidden;
+  color: #e5e7eb;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .strategy-chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -2480,6 +2674,9 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .risk-settings-grid,
   .risk-mode-grid,
   .compact-risk-grid,
+  .strategy-test-grid,
+  .strategy-test-controls,
+  .strategy-test-metric-grid,
   .strategy-quality-grid,
   .strategy-scope-grid,
   .strategy-pair-grid,
@@ -2525,6 +2722,9 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .risk-guide-item-list,
   .watchlist-strategy-grid,
   .watch-pair-grid,
+  .strategy-test-grid,
+  .strategy-test-controls,
+  .strategy-test-metric-grid,
   .strategy-pair-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2550,6 +2750,10 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .strategy-scope-grid,
   .strategy-pair-toolbar,
   .strategy-pair-grid,
+  .strategy-test-grid,
+  .strategy-test-controls,
+  .strategy-test-mode-row,
+  .strategy-test-metric-grid,
   .watchlist-strategy-grid,
   .watch-pair-grid,
   .risk-guide-intro,

@@ -2,6 +2,12 @@ import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tansta
 
 import { api } from "@/api";
 import type {
+  StrategyTestReport,
+  StrategyTestRunRequest,
+  StrategyTestRunResponse,
+  StrategyTestTrade
+} from "@/features/strategy-testing/types";
+import type {
   AlertRuleDraft,
   ExchangeConnectionDraft,
   NotificationDraft,
@@ -11,7 +17,15 @@ import type {
 } from "@/features/server-state/types";
 import type { HealthStatus, RadarResponse, RadarSignal, RadarStatus, RiskStateResponse, TradeJournalResponse } from "@/types";
 import { isOpenFeedSignal } from "@/utils";
-import { queryKeys, serverStateKeys, type CandleFilters, type SignalHistoryFilters, type TradeJournalFilters } from "./query-keys";
+import {
+  queryKeys,
+  serverStateKeys,
+  type CandleFilters,
+  type SignalHistoryFilters,
+  type StrategyTestReportFilters,
+  type StrategyTestRunFilters,
+  type TradeJournalFilters
+} from "./query-keys";
 import { serverStatePolicy } from "./query-policy";
 
 type PlannedQueryOptions = {
@@ -113,6 +127,62 @@ export function useClosedTradesQuery() {
   return useQuery({
     queryKey: serverStateKeys.trades.closed(),
     queryFn: api.closedTrades,
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useStrategyTestRuns(filters?: StrategyTestRunFilters, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestRunResponse[]>({
+    queryKey: serverStateKeys.strategyTests.runs(filters),
+    queryFn: () => api.strategyTests.listRuns(filters),
+    enabled: options.enabled ?? true,
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useRunStrategyTest() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request: StrategyTestRunRequest) => api.strategyTests.run(request),
+    onSuccess: async (response) => {
+      queryClient.setQueryData(serverStateKeys.strategyTests.run(response.run_id), response);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.strategyTests.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.journal.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.all() })
+      ]);
+    }
+  });
+}
+
+export function useStrategyTestReport(runId: string | null, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestReport>({
+    queryKey: serverStateKeys.strategyTests.report(runId ?? "none"),
+    queryFn: () => api.strategyTests.getReport(runId as string),
+    enabled: options.enabled ?? Boolean(runId),
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useStrategyTestReports(filters?: StrategyTestReportFilters, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestReport[]>({
+    queryKey: serverStateKeys.strategyTests.reports(filters),
+    queryFn: () => api.strategyTests.listReports(filters),
+    enabled: options.enabled ?? true,
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useStrategyTestTrades(runId: string | null, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestTrade[]>({
+    queryKey: serverStateKeys.strategyTests.trades(runId ?? "none"),
+    queryFn: () => api.strategyTests.getTrades(runId as string),
+    enabled: options.enabled ?? Boolean(runId),
+    refetchInterval: options.refetchInterval,
     staleTime: serverStatePolicy.defaultStaleTimeMs
   });
 }

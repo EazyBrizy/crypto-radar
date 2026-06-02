@@ -162,6 +162,9 @@ try {
     await page.locator("button.settings-accordion-trigger").filter({ hasText: "Simulation" }).click();
   }
   await page.getByText("Advanced", { exact: true }).waitFor({ timeout: 15000 });
+  await page.locator("button.settings-accordion-trigger").filter({ hasText: "Strategy Testing" }).click();
+  await page.getByText("Research virtual", { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByRole("button", { name: "Run strategy test" }).waitFor({ timeout: 15000 });
 
   const result = {
     ok: true,
@@ -173,7 +176,7 @@ try {
     simulationModel: `${simulationModel.current_tier}:${simulationModel.active_capabilities.length} active`,
     preview: previewSummary,
     ui: uiText.split(/\r?\n/).slice(0, 12).join(" | "),
-    settings: "risk-and-simulation-options-visible",
+    settings: "risk-simulation-and-strategy-testing-options-visible",
     screenshot: screenshotPath,
   };
   console.log(JSON.stringify(result, null, 2));

@@ -6,6 +6,7 @@ import { journalApi } from "./journal.api";
 import { notificationsApi } from "./notifications.api";
 import { settingsApi } from "./settings.api";
 import { signalsApi } from "./signals.api";
+import { strategyTestsApi } from "./strategy-tests.api";
 import { tradesApi } from "./trades.api";
 
 export { API_BASE, API_ORIGIN_LABEL, openApiClient } from "./client";
@@ -17,6 +18,7 @@ export { journalApi } from "./journal.api";
 export { notificationsApi } from "./notifications.api";
 export { settingsApi } from "./settings.api";
 export { signalsApi } from "./signals.api";
+export { strategyTestsApi } from "./strategy-tests.api";
 export { tradesApi } from "./trades.api";
 
 export const api = {
@@ -33,6 +35,7 @@ export const api = {
   confirmVirtual: signalsApi.confirmVirtual,
   executionPreview: signalsApi.executionPreview,
   rejectSignal: signalsApi.reject,
+  strategyTests: strategyTestsApi,
   trades: tradesApi.list,
   closedTrades: tradesApi.closed,
   closeMarketTrade: tradesApi.closeMarket,

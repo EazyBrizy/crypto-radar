@@ -1,7 +1,8 @@
-import { Bell, BookOpen, ChevronDown, Gauge, KeyRound, Radio, RefreshCw, Save, Send, Shield, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Bell, BookOpen, ChevronDown, FlaskConical, Gauge, KeyRound, Radio, RefreshCw, Save, Send, Shield, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import { Badge } from "@/components/Badge";
+import { StrategyTestingPanel } from "@/features/strategy-testing/StrategyTestingPanel";
 import type {
   AlertRule,
   AlertRuleDraft,
@@ -352,7 +353,7 @@ const VIRTUAL_FEE_MODELS: Array<{ value: VirtualFeeModel; label: string }> = [
 ];
 
 type RiskSettingsTab = "profile" | "rules" | "futures" | "virtual" | "guide";
-type SettingsSectionId = "exchanges" | "strategies" | "risk" | "simulation" | "alerts" | "timeframes";
+type SettingsSectionId = "exchanges" | "strategies" | "risk" | "simulation" | "strategyTesting" | "alerts" | "timeframes";
 
 const RISK_SETTINGS_TABS: Array<{ value: RiskSettingsTab; label: string }> = [
   { value: "profile", label: "Risk Profile" },
@@ -1946,6 +1947,18 @@ export function SettingsPage({
               </button>
             ))}
           </div>
+        </SettingsAccordionSection>
+
+        <SettingsAccordionSection
+          className="strategy-testing-section"
+          id="strategyTesting"
+          icon={<FlaskConical size={18} />}
+          onToggle={() => toggleSettingsSection("strategyTesting")}
+          open={openSettingsSections.has("strategyTesting")}
+          summary="Backtest Lab"
+          title="Strategy Testing"
+        >
+          <StrategyTestingPanel availablePairs={availablePairs} strategyConfigs={strategyConfigs} />
         </SettingsAccordionSection>
 
         <SettingsAccordionSection

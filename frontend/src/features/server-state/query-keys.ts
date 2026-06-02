@@ -1,4 +1,5 @@
 import type { SignalStatus, Timeframe, TradeMode, TradeSource, TradeStatus } from "@/types";
+import type { StrategyTestRunStatus } from "@/features/strategy-testing/types";
 import { CandleFilterSchema, SignalHistoryFilterSchema, TradeJournalFilterSchema } from "@/validation/filter-schemas";
 
 export type TradeJournalFilters = {
@@ -21,6 +22,17 @@ export type CandleFilters = {
   limit?: number;
   symbol: string;
   timeframe: Timeframe;
+};
+
+export type StrategyTestRunFilters = {
+  userId?: string;
+  limit?: number;
+  status?: StrategyTestRunStatus;
+};
+
+export type StrategyTestReportFilters = {
+  userId?: string;
+  limit?: number;
 };
 
 const normalizeTradeFilters = (filters: TradeJournalFilters = {}) => ({
@@ -57,6 +69,17 @@ const normalizeCandleFilters = (filters: CandleFilters) => {
     timeframe: parsed.timeframe
   };
 };
+
+const normalizeStrategyTestRunFilters = (filters: StrategyTestRunFilters = {}) => ({
+  limit: filters.limit ?? 25,
+  status: filters.status ?? "all",
+  userId: filters.userId ?? "demo_user"
+});
+
+const normalizeStrategyTestReportFilters = (filters: StrategyTestReportFilters = {}) => ({
+  limit: filters.limit ?? 25,
+  userId: filters.userId ?? "all"
+});
 
 export const serverStateKeys = {
   all: ["fastapi"] as const,
@@ -128,6 +151,14 @@ export const serverStateKeys = {
     list: (filters?: TradeJournalFilters) => [...serverStateKeys.trades.all(), "list", normalizeTradeFilters(filters)] as const,
     closed: () => [...serverStateKeys.trades.all(), "closed"] as const,
     invalidation: (tradeId: string) => [...serverStateKeys.trades.all(), "invalidation", tradeId] as const
+  },
+  strategyTests: {
+    all: () => [...serverStateKeys.all, "strategy-tests"] as const,
+    runs: (filters?: StrategyTestRunFilters) => [...serverStateKeys.strategyTests.all(), "runs", normalizeStrategyTestRunFilters(filters)] as const,
+    run: (runId: string) => [...serverStateKeys.strategyTests.all(), "run", runId] as const,
+    trades: (runId: string) => [...serverStateKeys.strategyTests.all(), "trades", runId] as const,
+    reports: (filters?: StrategyTestReportFilters) => [...serverStateKeys.strategyTests.all(), "reports", normalizeStrategyTestReportFilters(filters)] as const,
+    report: (runId: string) => [...serverStateKeys.strategyTests.all(), "report", runId] as const
   },
   candles: {
     all: () => [...serverStateKeys.all, "candles"] as const,

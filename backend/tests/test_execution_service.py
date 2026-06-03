@@ -166,6 +166,11 @@ class _DryReadinessAdapter:
     is_dry_run = True
 
 
+class _NotImplementedLiveAdapter(_FakeExecutionAdapter):
+    name = "not_implemented_live"
+    live_order_placement_implemented = False
+
+
 def _order_key(order: ExecutionPlannedOrder) -> tuple[str, str, str]:
     return (
         order.exchange.strip().lower(),
@@ -292,6 +297,24 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(order.status == "planned" for order in result.planned_orders))
 
+    async def test_unimplemented_live_adapter_returns_not_implemented_before_adapter_call(self) -> None:
+        adapter = _NotImplementedLiveAdapter()
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "not_implemented")
+        self.assertTrue(result.signal_valid)
+        self.assertTrue(result.execution_allowed)
+        self.assertIn("not implemented", result.message)
+        self.assertEqual(adapter.calls, [])
+
     async def test_protective_stop_is_included_and_reduce_only(self) -> None:
         service = _service(_decision())
 
@@ -345,7 +368,7 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             _request(),
         )
 
-        self.assertEqual(result.status, "risk_failed")
+        self.assertEqual(result.status, "readiness_failed")
         self.assertFalse(result.execution_allowed)
         self.assertIn("structural stop", result.message)
 
@@ -354,7 +377,7 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
 
         result = await service.place_order(_signal(trade_plan=_fallback_stop_trade_plan()), _request())
 
-        self.assertEqual(result.status, "risk_failed")
+        self.assertEqual(result.status, "readiness_failed")
         self.assertFalse(result.execution_allowed)
         self.assertIn("fallback stop", result.message)
 
@@ -474,7 +497,7 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
 
         result = await service.place_order(_signal(), _request())
 
-        self.assertEqual(result.status, "submitted")
+        self.assertEqual(result.status, "partially_filled")
         self.assertEqual(result.planned_orders[0].status, "partially_filled")
         self.assertIsNotNone(result.execution_plan)
         assert result.execution_plan is not None
@@ -492,7 +515,7 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
 
         result = await service.place_order(_signal(), _request())
 
-        self.assertEqual(result.status, "risk_failed")
+        self.assertEqual(result.status, "readiness_failed")
         self.assertFalse(result.execution_allowed)
         self.assertIn("real_execution_enabled=false", result.message)
         self.assertEqual(adapter.calls, [])
@@ -690,7 +713,7 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
 
         result = await service.place_order(_signal(), _request())
 
-        self.assertEqual(result.status, "risk_failed")
+        self.assertEqual(result.status, "readiness_failed")
         self.assertIn("Fee-rate snapshot is stale", result.message)
         self.assertEqual(adapter.calls, [])
 
@@ -706,7 +729,7 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
 
         result = await service.place_order(_signal(), _request(leverage=2))
 
-        self.assertEqual(result.status, "risk_failed")
+        self.assertEqual(result.status, "readiness_failed")
         self.assertIn("liquidation projection", result.message)
         self.assertEqual(adapter.calls, [])
 

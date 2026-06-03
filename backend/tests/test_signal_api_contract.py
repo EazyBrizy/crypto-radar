@@ -2,12 +2,15 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
+from app.api.v1 import signals as signals_api
 from app.api.v1.signals import confirm_signal, list_active_signals, list_open_signals
 from app.api.v1.trades import confirm_real_trade
 from app.schemas.signal import RadarSignal
-from app.schemas.trade import ManualConfirmRequest, RealConfirmRequest
+from app.schemas.trade import ManualConfirmRequest, RealConfirmRequest, RealExecutionResult
 from app.schemas.user import RiskManagementSettings
 from app.services.execution_service import RealExecutionService
 from app.services.risk_market_data import RiskMarketDataSnapshot
@@ -20,6 +23,16 @@ class _FakeRealtimeBroker:
 
     async def publish(self, event: dict) -> None:
         self.events.append(event)
+
+
+class _FakeRealExecutionService:
+    def __init__(self, result: RealExecutionResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    async def place_order(self, signal: RadarSignal, request: ManualConfirmRequest) -> RealExecutionResult:
+        self.calls += 1
+        return self.result
 
 
 class _FakeMarketDataService:
@@ -240,6 +253,73 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.signal.auto_entry.status if response.signal.auto_entry else None, "pending")
         self.assertIn("Auto-entry armed", response.message)
 
+    async def test_real_confirm_signal_returns_dry_run_structured_response(self) -> None:
+        signal = _real_ready_signal("sig_real_dry_run")
+        self.signal_service.add_signal(signal)
+        service = _FakeRealExecutionService(
+            _real_execution_result(signal, status="dry_run", message="Dry-run real execution plan built.")
+        )
+
+        response = _post_real_confirm(signal.id, self.signal_service, service)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["real_execution"]["status"], "dry_run")
+        self.assertEqual(payload["real_execution_result"]["status"], "dry_run")
+        self.assertIn("Dry-run", payload["message"])
+        self.assertEqual(service.calls, 1)
+
+    async def test_real_confirm_signal_returns_risk_failed_structured_response(self) -> None:
+        signal = _real_ready_signal("sig_real_risk_failed")
+        self.signal_service.add_signal(signal)
+        service = _FakeRealExecutionService(
+            _real_execution_result(
+                signal,
+                status="risk_failed",
+                execution_allowed=False,
+                message="Real execution rejected by risk policy.",
+            )
+        )
+
+        response = _post_real_confirm(signal.id, self.signal_service, service)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["real_execution"]["status"], "risk_failed")
+        self.assertFalse(payload["real_execution"]["execution_allowed"])
+        self.assertEqual(payload["real_execution_result"]["status"], "risk_failed")
+
+    async def test_real_confirm_signal_returns_not_implemented_structured_response(self) -> None:
+        signal = _real_ready_signal("sig_real_not_implemented")
+        self.signal_service.add_signal(signal)
+        service = _FakeRealExecutionService(
+            _real_execution_result(
+                signal,
+                status="not_implemented",
+                message="Live real execution adapter is not implemented.",
+            )
+        )
+
+        response = _post_real_confirm(signal.id, self.signal_service, service)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["real_execution"]["status"], "not_implemented")
+        self.assertIn("not implemented", payload["message"])
+
+    async def test_real_confirm_signal_does_not_throw_501_after_place_order(self) -> None:
+        signal = _real_ready_signal("sig_real_submitted")
+        self.signal_service.add_signal(signal)
+        service = _FakeRealExecutionService(
+            _real_execution_result(signal, status="submitted", message="Real execution adapter submitted.")
+        )
+
+        response = _post_real_confirm(signal.id, self.signal_service, service)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["real_execution"]["status"], "submitted")
+        self.assertEqual(service.calls, 1)
+
     async def test_real_execution_service_blocks_low_rr_as_execution_policy(self) -> None:
         now = datetime.now(timezone.utc)
         service = RealExecutionService(
@@ -290,6 +370,58 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(exc.exception.detail["execution_allowed"])
         self.assertIn("Real execution RR policy rejected", exc.exception.detail["message"])
         self.assertNotIn("signal rejected", exc.exception.detail["message"].lower())
+
+
+def _post_real_confirm(signal_id: str, signal_service, real_execution_service) -> object:
+    app = FastAPI()
+    app.include_router(signals_api.router)
+    with (
+        patch("app.api.v1.signals.signal_service", signal_service),
+        patch("app.api.v1.signals.real_execution_service", real_execution_service),
+    ):
+        client = TestClient(app)
+        return client.post(
+            f"/signals/{signal_id}/confirm",
+            json={"mode": "real", "user_id": "demo_user", "account_balance": 1_000},
+        )
+
+
+def _real_execution_result(
+    signal: RadarSignal,
+    *,
+    status: str,
+    execution_allowed: bool = True,
+    message: str,
+) -> RealExecutionResult:
+    return RealExecutionResult(
+        status=status,
+        signal_valid=True,
+        execution_allowed=execution_allowed,
+        exchange=signal.exchange,
+        symbol=signal.symbol,
+        message=message,
+    )
+
+
+def _real_ready_signal(signal_id: str) -> RadarSignal:
+    now = datetime.now(timezone.utc)
+    return RadarSignal(
+        id=signal_id,
+        symbol="BTCUSDT",
+        exchange="bybit",
+        strategy="trend_pullback_continuation",
+        direction="long",
+        confidence=0.82,
+        status="actionable",
+        score=82,
+        entry_min=100.0,
+        entry_max=100.0,
+        stop_loss=95.0,
+        take_profit_1=105.0,
+        take_profit_2=110.0,
+        created_at=now,
+        updated_at=now,
+    )
 
 
 def _low_rr_real_settings() -> RiskManagementSettings:

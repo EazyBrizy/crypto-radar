@@ -227,6 +227,14 @@ ManualConfirmRequest = {
     "risk_percent": float | None,       # deprecated legacy field
     "risk_override": RiskOverride | None,
 }
+
+ManualDecisionResponse = {
+    "signal": RadarSignal,
+    "virtual_trade": VirtualTrade | None,
+    "real_execution": RealExecutionResult | None,
+    "real_execution_result": RealExecutionResult | None,
+    "message": str,
+}
 ```
 
 Field meanings:
@@ -1939,9 +1947,22 @@ stable `client_order_id` values and idempotency keys.
 `RealExecutionResult.status` keeps the existing `not_implemented` and
 `risk_failed` values and adds:
 
+- `readiness_failed`: RiskGate passed, but final real-order readiness failed
+  before any adapter placement;
 - `dry_run`: the risk gate passed, a complete order plan was built, and the
   dry-run adapter returned planned orders;
-- `submitted`: reserved for a future real adapter after explicit implementation.
+- `submitted`: a live adapter accepted the complete order plan;
+- `partially_filled`: a live adapter returned an explicit partial fill or
+  nonzero remaining quantity;
+- `failed`: a live adapter returned a failed/rejected/unknown placement result.
+
+Real confirm responses must return `RealExecutionResult` as structured response
+data. API handlers must not raise HTTP 501 after calling
+`RealExecutionService.place_order`, because the service may already have built a
+dry-run plan or submitted orders through an adapter. If no live adapter is
+configured or the configured adapter explicitly declares that live placement is
+not implemented, the service returns `not_implemented` before any adapter
+placement method is called.
 
 `RealExecutionResult` remains backward compatible and may include:
 

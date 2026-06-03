@@ -91,14 +91,11 @@ async def confirm_signal(
 
     if request.mode == "real":
         real_execution = await real_execution_service.place_order(signal, request)
-        if real_execution.status == "risk_failed":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=real_execution.model_dump(mode="json"),
-            )
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=real_execution.message,
+        return ManualDecisionResponse(
+            signal=signal,
+            real_execution=real_execution,
+            real_execution_result=real_execution,
+            message=real_execution.message,
         )
 
     try:

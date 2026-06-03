@@ -11,6 +11,7 @@ from app.schemas.trade import (
     ManualConfirmRequest,
     RealExecutionPlan,
     RealExecutionResult,
+    RealExecutionStatus,
 )
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_audit import RiskAuditService, risk_audit_service
@@ -162,9 +163,11 @@ class RealExecutionService:
             if self._risk_state is not None
             else None
         )
+        not_implemented_reason = _adapter_not_implemented_reason(self._execution_adapter)
         live_adapter = (
             self._execution_adapter is not None
             and not bool(getattr(self._execution_adapter, "is_dry_run", False))
+            and not_implemented_reason is None
         )
         account_snapshot = self._get_real_account_snapshot(
             user_id=request.user_id,
@@ -292,21 +295,20 @@ class RealExecutionService:
                 idempotency_key=execution_plan.idempotency_key,
                 validation_errors=validation_errors,
             )
-        if self._execution_adapter is None:
+        if not_implemented_reason is not None:
             return RealExecutionResult(
+                status="not_implemented",
                 signal_valid=True,
                 execution_allowed=True,
                 exchange=signal.exchange,
                 symbol=signal.symbol,
-                message=(
-                    "Real trade execution adapter is not configured. "
-                    "No exchange order was sent."
-                ),
+                message=not_implemented_reason,
                 risk_decision=risk_decision,
                 risk_decision_id=risk_decision_id,
                 execution_plan=execution_plan,
                 planned_orders=execution_plan.planned_orders,
                 idempotency_key=execution_plan.idempotency_key,
+                adapter=getattr(self._execution_adapter, "name", None),
             )
 
         readiness = self._readiness_service.evaluate(
@@ -323,7 +325,7 @@ class RealExecutionService:
         execution_plan = _execution_plan_with_readiness(execution_plan, readiness)
         if not readiness.ready:
             return RealExecutionResult(
-                status="risk_failed",
+                status="readiness_failed",
                 signal_valid=True,
                 execution_allowed=False,
                 exchange=signal.exchange,
@@ -342,23 +344,22 @@ class RealExecutionService:
             self._execution_adapter,
         )
         adapter_name = getattr(self._execution_adapter, "name", "unknown")
-        status = "dry_run" if getattr(self._execution_adapter, "is_dry_run", False) else "submitted"
+        result_status = _real_execution_status_from_orders(
+            adapter_is_dry_run=getattr(self._execution_adapter, "is_dry_run", False),
+            planned_orders=planned_orders,
+        )
         execution_plan = _execution_plan_with_placed_orders(
             execution_plan,
             planned_orders=planned_orders,
             adapter_is_dry_run=getattr(self._execution_adapter, "is_dry_run", False),
         )
         return RealExecutionResult(
-            status=status,
+            status=result_status,
             signal_valid=True,
             execution_allowed=True,
             exchange=signal.exchange,
             symbol=signal.symbol,
-            message=(
-                "Dry-run real execution plan built. No exchange order was sent."
-                if status == "dry_run"
-                else "Real execution adapter submitted the order plan."
-            ),
+            message=_real_execution_message(result_status),
             risk_decision=risk_decision,
             risk_decision_id=risk_decision_id,
             execution_plan=execution_plan,
@@ -497,6 +498,61 @@ def _readiness_rejection_message(blockers: list[str]) -> str:
     if blockers:
         return "Real execution readiness failed: " + "; ".join(blockers)
     return "Real execution readiness failed."
+
+
+def _adapter_not_implemented_reason(adapter: Any | None) -> str | None:
+    if adapter is None:
+        return "Real trade execution adapter is not configured. No exchange order was sent."
+    if bool(getattr(adapter, "is_dry_run", False)):
+        return None
+    implemented = getattr(adapter, "live_order_placement_implemented", None)
+    if implemented is False:
+        adapter_name = getattr(adapter, "name", "unknown")
+        return (
+            f"Live real execution adapter {adapter_name!r} is not implemented. "
+            "No exchange order was sent."
+        )
+    return None
+
+
+def _real_execution_status_from_orders(
+    *,
+    adapter_is_dry_run: bool,
+    planned_orders: list[ExecutionPlannedOrder],
+) -> RealExecutionStatus:
+    if adapter_is_dry_run:
+        return "dry_run"
+    if any(_order_is_failed(order) for order in planned_orders):
+        return "failed"
+    if any(_order_is_partially_filled(order) for order in planned_orders):
+        return "partially_filled"
+    return "submitted"
+
+
+def _real_execution_message(result_status: RealExecutionStatus) -> str:
+    if result_status == "dry_run":
+        return "Dry-run real execution plan built. No exchange order was sent."
+    if result_status == "partially_filled":
+        return "Real execution adapter returned a partial fill; reconciliation is required."
+    if result_status == "failed":
+        return "Real execution adapter returned a failed order placement result."
+    return "Real execution adapter submitted the order plan."
+
+
+def _order_is_partially_filled(order: ExecutionPlannedOrder) -> bool:
+    return (
+        order.status == "partially_filled"
+        or (
+            order.filled_qty is not None
+            and order.filled_qty > 0
+            and order.remaining_qty is not None
+            and order.remaining_qty > 0
+        )
+    )
+
+
+def _order_is_failed(order: ExecutionPlannedOrder) -> bool:
+    return order.status in {"cancelled", "canceled", "rejected", "expired", "unknown"}
 
 
 def _build_execution_plan(

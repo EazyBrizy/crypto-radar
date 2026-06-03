@@ -54,6 +54,14 @@ real gate fails, the adapter must not submit an exchange order. Virtual can help
 generate evidence for strategy calibration, but positive EV with enough sample
 size is required before a signal is eligible for real entry.
 
+Real confirm API boundaries return the service decision as structured
+`RealExecutionResult` data. `risk_failed`, `readiness_failed`,
+`not_implemented`, `dry_run`, `submitted`, `partially_filled`, and `failed` are
+response statuses, not reasons for an API handler to throw HTTP 501 after
+calling the execution service. A live adapter that is absent or explicitly not
+implemented must produce `not_implemented` before any adapter placement method
+is called.
+
 Completeness assessment is separate from display visibility. Radar
 `all_market_opportunities` keeps incomplete market setups visible with reasons.
 Radar `execution_ready` returns only opportunities whose fresh read-only
@@ -333,10 +341,11 @@ while the module is being built step by step.
 
 ### Real Trading
 
-- Connect actual real exchange order placement after the real risk gate passes.
-  `/api/v1/trades/real/confirm` audits and blocks/permits through the backend
-  gate, but still returns `not_implemented` instead of sending an exchange
-  order.
+- Connect production real exchange order placement after the real risk gate and
+  readiness checks pass. The current default real path uses
+  `DryRunExecutionAdapter` and returns a structured `dry_run` result; absent or
+  explicitly unimplemented live adapters return structured `not_implemented`
+  before placement.
 - Wire close-only behavior into the future real order adapter. The backend risk
   state and risk decisions now expose close-only/reduce-only/protective-order
   flags, but there is still no production adapter endpoint that places
@@ -538,8 +547,9 @@ Current behavior:
   and protective-order actions are marked as allowed for the future adapter;
 - failed decisions block virtual trade creation;
 - blocked virtual attempts and real attempts are recorded in `risk_decisions`;
-- `POST /api/v1/trades/real/confirm` calls the same gate before returning the
-  current `not_implemented` response;
+- real confirm paths call the same gate and return a structured
+  `RealExecutionResult`, such as `risk_failed`, `readiness_failed`,
+  `not_implemented`, `dry_run`, or future live adapter statuses;
 - frontend receives backend `risk_decision` / `risk_check` and displays the
   backend status instead of calculating entry permission locally.
 

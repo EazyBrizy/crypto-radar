@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.risk import (
     BreakevenPlan,
@@ -61,6 +61,15 @@ ExecutionOrderStatus = Literal[
     "rejected",
     "expired",
     "unknown",
+]
+RealExecutionStatus = Literal[
+    "risk_failed",
+    "readiness_failed",
+    "not_implemented",
+    "dry_run",
+    "submitted",
+    "partially_filled",
+    "failed",
 ]
 
 
@@ -395,7 +404,7 @@ class VirtualTrade(BaseModel):
 
 class RealExecutionResult(BaseModel):
     mode: Literal["real"] = "real"
-    status: Literal["not_implemented", "risk_failed", "dry_run", "submitted"] = "not_implemented"
+    status: RealExecutionStatus = "not_implemented"
     signal_valid: bool = True
     execution_allowed: bool = False
     exchange: str
@@ -414,7 +423,16 @@ class ManualDecisionResponse(BaseModel):
     signal: RadarSignal
     virtual_trade: Optional[VirtualTrade] = None
     real_execution: Optional[RealExecutionResult] = None
+    real_execution_result: Optional[RealExecutionResult] = None
     message: str
+
+    @model_validator(mode="after")
+    def mirror_real_execution_result(self) -> "ManualDecisionResponse":
+        if self.real_execution_result is None and self.real_execution is not None:
+            self.real_execution_result = self.real_execution
+        elif self.real_execution is None and self.real_execution_result is not None:
+            self.real_execution = self.real_execution_result
+        return self
 
 
 class VirtualTradeResponse(BaseModel):

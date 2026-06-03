@@ -11,14 +11,22 @@ from app.repositories.signal_repository import (
     SignalRepository,
     SignalWriteResult,
 )
-from app.schemas.risk import RadarDisplayMode
-from app.schemas.decision import DecisionReason
+from app.schemas.risk import RadarDisplayMode, RiskDecision, RiskPreviewRequest
 from app.schemas.signal import RadarSignal, StrategySignal
 from app.services.risk_management import default_rr_guard_mode_for_context
 from app.services.signal_risk_reward import ensure_signal_execution_eligible
-from app.services.trade_plan_completeness import trade_plan_completeness_service
 
 logger = logging.getLogger(__name__)
+
+
+class RiskPreviewEvaluator(Protocol):
+    def evaluate(
+        self,
+        request: RiskPreviewRequest,
+        *,
+        record_audit: bool = True,
+    ) -> RiskDecision:
+        ...
 
 
 class SignalAnalyticsWriter(Protocol):
@@ -106,10 +114,12 @@ class SignalService:
         repository: SignalRepository | None = None,
         analytics_writer: SignalAnalyticsWriter | None = None,
         hot_store: SignalHotStore | None = None,
+        risk_preview_evaluator: RiskPreviewEvaluator | None = None,
     ) -> None:
         self._repository = repository or PostgresSignalRepository()
         self._analytics_writer = analytics_writer or ClickHouseSignalAnalyticsWriter()
         self._hot_store = hot_store or RedisSignalHotStore()
+        self._risk_preview_evaluator = risk_preview_evaluator
 
     def list_signals(self) -> list[RadarSignal]:
         return self._repository.list_signals()
@@ -136,7 +146,11 @@ class SignalService:
         signals = self.list_open_signals()
         if radar_display_mode != "execution_ready":
             return signals
-        return [signal for signal in signals if _is_execution_ready_for_radar(signal)]
+        return [
+            signal
+            for signal in signals
+            if self._is_execution_ready_for_radar(signal, user_id=user_id)
+        ]
 
     def list_open_signals_for_series(
         self,
@@ -301,29 +315,37 @@ class SignalService:
         except Exception as exc:
             logger.warning("Redis signal hot write failed: %s", exc)
 
+    def _is_execution_ready_for_radar(
+        self,
+        signal: RadarSignal,
+        *,
+        user_id: str,
+    ) -> bool:
+        if signal.status not in ACTIONABLE_SIGNAL_STATUSES:
+            return False
+        try:
+            decision = self._risk_preview().evaluate(
+                RiskPreviewRequest(
+                    signal_id=signal.id,
+                    user_id=user_id,
+                ),
+                record_audit=False,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Radar read-only risk preview failed for signal %s: %s",
+                signal.id,
+                exc,
+            )
+            return False
+        return decision.can_enter
+
+    def _risk_preview(self) -> RiskPreviewEvaluator:
+        if self._risk_preview_evaluator is not None:
+            return self._risk_preview_evaluator
+        from app.services.risk_preview import risk_preview_service
+
+        return risk_preview_service
+
 
 signal_service = SignalService()
-
-
-def _is_execution_ready_for_radar(signal: RadarSignal) -> bool:
-    if signal.status not in ACTIONABLE_SIGNAL_STATUSES:
-        return False
-    decision = signal.decision
-    if decision is not None:
-        return (
-            decision.signal_actionable
-            and decision.execution_allowed_virtual is True
-            and not _has_execution_blocker(decision.blockers)
-        )
-    completeness = trade_plan_completeness_service.from_trade_plan_metadata(signal.trade_plan)
-    if completeness is not None:
-        return completeness.execution_allowed_virtual
-    if signal.trade_plan is not None:
-        metadata = signal.trade_plan.metadata
-        value = metadata.get("execution_allowed_virtual")
-        return value is True
-    return True
-
-
-def _has_execution_blocker(blockers: list[DecisionReason]) -> bool:
-    return any(reason.scope in {"discovery", "virtual"} for reason in blockers)

@@ -276,6 +276,11 @@ The Radar API may accept `radar_display_mode` as an explicit request override.
 This override is a display contract only; it must not be passed into strategy
 setup logic.
 
+Radar `execution_ready` filtering uses a read-only RiskGate preview. `GET /radar`
+must not persist `risk_decisions`, change signal status, or create
+virtual trades while resolving display visibility. Manual/API risk preview
+flows remain auditable.
+
 Legacy keys such as `risk_per_trade_percent`,
 `futures_risk_per_trade_percent`, `spot_risk_per_trade_percent`, and
 `virtual_risk_per_trade_percent` remain accepted and map to percent mode when

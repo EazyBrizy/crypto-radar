@@ -84,6 +84,29 @@ class ListSignalRepository:
         return self.signals[:limit]
 
 
+class FakeRiskPreviewDecision:
+    def __init__(self, *, can_enter: bool) -> None:
+        self.can_enter = can_enter
+
+
+class FakeRiskPreviewEvaluator:
+    def __init__(self, decisions: dict[str, bool]) -> None:
+        self.decisions = decisions
+        self.calls: list[dict[str, object]] = []
+
+    def evaluate(self, request, *, record_audit: bool = True) -> FakeRiskPreviewDecision:
+        self.calls.append(
+            {
+                "signal_id": request.signal_id,
+                "user_id": request.user_id,
+                "record_audit": record_audit,
+            }
+        )
+        return FakeRiskPreviewDecision(
+            can_enter=self.decisions.get(request.signal_id, False),
+        )
+
+
 class SignalServiceContractTest(unittest.TestCase):
     def test_no_trade_signal_is_not_research_eligible(self) -> None:
         signal = _risk_signal(
@@ -256,10 +279,17 @@ class SignalServiceContractTest(unittest.TestCase):
                 score=82,
             ),
         ).model_copy(update={"id": str(uuid4())})
+        evaluator = FakeRiskPreviewEvaluator(
+            {
+                ready_signal.id: True,
+                incomplete_signal.id: False,
+            }
+        )
         service = SignalService(
             repository=ListSignalRepository([ready_signal, incomplete_signal]),
             analytics_writer=SpyAnalyticsWriter(),
             hot_store=SpyHotStore(),
+            risk_preview_evaluator=evaluator,
         )
 
         all_mode = service.list_open_signals_for_radar(radar_display_mode="all_market_opportunities")
@@ -267,6 +297,21 @@ class SignalServiceContractTest(unittest.TestCase):
 
         self.assertEqual([signal.id for signal in all_mode], [ready_signal.id, incomplete_signal.id])
         self.assertEqual([signal.id for signal in execution_ready], [ready_signal.id])
+        self.assertEqual(
+            evaluator.calls,
+            [
+                {
+                    "signal_id": ready_signal.id,
+                    "user_id": "demo_user",
+                    "record_audit": False,
+                },
+                {
+                    "signal_id": incomplete_signal.id,
+                    "user_id": "demo_user",
+                    "record_audit": False,
+                },
+            ],
+        )
 
     def test_lifecycle_transition_fans_out_to_analytics_and_hot_store(self) -> None:
         signal = RadarSignal(

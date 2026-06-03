@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any
+from uuid import UUID
 
-from app.schemas.risk import InstrumentType, RiskPreviewRequest, RiskPreviewResponse, normalize_instrument_type
+from app.schemas.risk import (
+    InstrumentType,
+    RiskDecision,
+    RiskPreviewRequest,
+    RiskPreviewResponse,
+    RiskStateResponse,
+    normalize_instrument_type,
+)
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualTrade
 from app.services.risk_audit import RiskAuditService, risk_audit_service
@@ -20,6 +28,15 @@ from app.services.risk_state import RiskStateService, risk_state_service
 from app.services.signal_service import SignalService, signal_service
 from app.services.strategy_config_service import strategy_config_service
 from app.services.virtual_trading import virtual_trading_service
+
+
+@dataclass(frozen=True)
+class _RiskPreviewEvaluation:
+    decision: RiskDecision
+    state: RiskStateResponse
+    user_id: str
+    signal_id: str
+    input_snapshot: dict[str, Any]
 
 
 class RiskPreviewService:
@@ -42,7 +59,41 @@ class RiskPreviewService:
         self._market_data_service = market_data_service
         self._fee_rate_service = fee_rate_service
 
-    def preview(self, request: RiskPreviewRequest) -> RiskPreviewResponse:
+    def preview(
+        self,
+        request: RiskPreviewRequest,
+        *,
+        record_audit: bool = True,
+    ) -> RiskPreviewResponse:
+        evaluation = self._evaluate(request, read_only=not record_audit)
+        risk_decision_id = (
+            str(self._record_audit(evaluation))
+            if record_audit
+            else None
+        )
+        return RiskPreviewResponse(
+            decision=evaluation.decision,
+            state=evaluation.state,
+            risk_decision_id=risk_decision_id,
+        )
+
+    def evaluate(
+        self,
+        request: RiskPreviewRequest,
+        *,
+        record_audit: bool = True,
+    ) -> RiskDecision:
+        evaluation = self._evaluate(request, read_only=not record_audit)
+        if record_audit:
+            self._record_audit(evaluation)
+        return evaluation.decision
+
+    def _evaluate(
+        self,
+        request: RiskPreviewRequest,
+        *,
+        read_only: bool,
+    ) -> _RiskPreviewEvaluation:
         signal = self._signal_provider.get_signal(request.signal_id)
         if signal is None:
             raise LookupError("Signal is not found")
@@ -105,6 +156,7 @@ class RiskPreviewService:
             symbol=signal.symbol,
             side=signal.direction,
             instrument_type=instrument_type,
+            read_only=read_only,
         )
         if request.mode == "virtual":
             account = virtual_trading_service.get_virtual_account(request.user_id)
@@ -211,8 +263,9 @@ class RiskPreviewService:
             context=context,
             risk_settings=risk_settings,
         )
-        risk_decision_id = self._audit_service.record_decision(
+        return _RiskPreviewEvaluation(
             decision=decision,
+            state=reference.state,
             user_id=request.user_id,
             signal_id=signal.id,
             input_snapshot={
@@ -227,10 +280,13 @@ class RiskPreviewService:
                 "strategy_risk_settings_source": strategy_risk_settings_source,
             },
         )
-        return RiskPreviewResponse(
-            decision=decision,
-            state=reference.state,
-            risk_decision_id=str(risk_decision_id),
+
+    def _record_audit(self, evaluation: _RiskPreviewEvaluation) -> UUID:
+        return self._audit_service.record_decision(
+            decision=evaluation.decision,
+            user_id=evaluation.user_id,
+            signal_id=evaluation.signal_id,
+            input_snapshot=evaluation.input_snapshot,
         )
 
 

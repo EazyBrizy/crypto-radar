@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -88,27 +89,38 @@ class RiskStateService:
         symbol: str,
         side: str,
         instrument_type: str | None = None,
+        read_only: bool = False,
     ) -> RiskReferenceSnapshot:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
-            settings = _risk_settings(session, user)
-            equity = _portfolio_equity(session, user)
-            state = _get_or_create_state(session, user, equity)
-            _reset_protection_windows(state, user)
-            _apply_protection_policy(state, settings)
-            reference = _reference_from_session(
-                session=session,
-                user=user,
-                settings=settings,
-                state=state,
-                equity=equity,
-                mode=mode,
-                exchange=exchange,
-                symbol=symbol,
-                side=side,
-                instrument_type=instrument_type,
-            )
-            session.commit()
+            flush_context = session.no_autoflush if read_only else nullcontext()
+            with flush_context:
+                user = _resolve_user(session, user_id)
+                settings = _risk_settings(session, user)
+                equity = _portfolio_equity(session, user)
+                state = _get_or_create_state(
+                    session,
+                    user,
+                    equity,
+                    persist=not read_only,
+                )
+                _reset_protection_windows(state, user)
+                _apply_protection_policy(state, settings)
+                reference = _reference_from_session(
+                    session=session,
+                    user=user,
+                    settings=settings,
+                    state=state,
+                    equity=equity,
+                    mode=mode,
+                    exchange=exchange,
+                    symbol=symbol,
+                    side=side,
+                    instrument_type=instrument_type,
+                )
+            if read_only:
+                session.rollback()
+            else:
+                session.commit()
             return reference
 
     def update_after_trade_close(
@@ -232,6 +244,8 @@ def _get_or_create_state(
     session: Session,
     user: AppUser,
     equity: Decimal,
+    *,
+    persist: bool = True,
 ) -> RiskProtectionState:
     state = session.get(RiskProtectionState, user.id)
     now = datetime.now(timezone.utc)
@@ -251,8 +265,9 @@ def _get_or_create_state(
             created_at=now,
             updated_at=now,
         )
-        session.add(state)
-        session.flush()
+        if persist:
+            session.add(state)
+            session.flush()
         return state
     state.current_equity = max(equity, Decimal("0"))
     state.peak_equity = max(state.peak_equity, state.current_equity)

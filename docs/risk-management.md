@@ -54,9 +54,10 @@ size is required before a signal is eligible for real entry.
 
 Completeness assessment is separate from display visibility. Radar
 `all_market_opportunities` keeps incomplete market setups visible with reasons.
-Radar `execution_ready` returns only opportunities whose normalized decision
-and trade-plan completeness metadata currently allow execution for the display
-scope.
+Radar `execution_ready` returns only opportunities whose fresh read-only
+RiskGate preview currently allows execution for the display scope. This Radar
+GET path must not write risk audit rows, change signal status, or create
+virtual trades.
 
 ## Storage
 
@@ -195,10 +196,10 @@ requires `fixed_risk_amount`. An override source is surfaced in RiskGate
 decisions/audit as `risk_profile_source = "request_override"`.
 
 For Radar display, the explicit request field is
-`radar_display_mode`. The current contract accepts and resolves the field but
-does not implement the final Radar filtering step yet; filtering
-`all_market_opportunities` vs `execution_ready` belongs to the Radar
-API/service layer, not strategy setup or persistence.
+`radar_display_mode`. Filtering `all_market_opportunities` vs
+`execution_ready` belongs to the Radar service layer, not strategy setup or
+persistence. `execution_ready` uses a read-only RiskGate preview so refreshes
+do not create audit spam.
 
 Legacy percent keys remain readable for backward compatibility:
 `risk_per_trade_percent`, `spot_risk_per_trade_percent`,
@@ -495,6 +496,8 @@ Current behavior:
   `VirtualExecutionReport`;
 - `POST /api/v1/risk/preview` builds the same context, writes a preview audit,
   and returns `RiskPreviewResponse`;
+- Radar `execution_ready` builds a read-only preview for display filtering and
+  does not persist a `risk_decisions` audit row;
 - `GET /api/v1/risk/state` exposes daily/weekly/open/correlated risk and
   protection mode, close-only flags, reset windows, and exchange-rule
   freshness;
@@ -560,7 +563,8 @@ Current write coverage:
 
 - successful virtual opens persist `risk_decisions` and
   `position_risk_snapshots` from the backend `RiskDecision`;
-- preview checks persist `risk_decisions` with `stage=preview`;
+- manual/API preview checks persist `risk_decisions` with `stage=preview`;
+- Radar read-only execution-ready previews do not persist `risk_decisions`;
 - blocked virtual attempts persist failed `risk_decisions` without order/position
   ids;
 - real confirm attempts persist `risk_decisions` before any future exchange
@@ -674,10 +678,9 @@ Implemented for the current backend:
   `liqPrice` is passed into the futures guard;
 - frontend risk cards render market-data status, bid/ask, mark price, spread,
   depth, and funding buffer from backend response only.
-- Radar preview now requests the MVP futures context explicitly
-  (`instrument_type=futures`, `leverage=3`) so Bybit linear ticker, funding, mark
-  price, and cached linear instrument rules are used instead of an accidental
-  spot preview.
+- Radar read-only `execution_ready` previews resolve `instrument_type` and
+  leverage through the execution profile resolver instead of hardcoding an MVP
+  futures context.
 - Virtual spot previews use `mode=virtual`, `instrument_type=spot`; they must
   not query linear futures context or create liquidation blockers unless the
   effective profile resolves futures or leverage above 1.

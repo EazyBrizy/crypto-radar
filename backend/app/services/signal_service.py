@@ -5,7 +5,6 @@ from typing import Any, Protocol
 from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
 from app.repositories.signal_repository import (
-    ACTIONABLE_SIGNAL_STATUSES,
     MAX_STORED_SIGNALS,
     PostgresSignalRepository,
     SignalRepository,
@@ -143,14 +142,7 @@ class SignalService:
         user_id: str = "demo_user",
         radar_display_mode: RadarDisplayMode | None = None,
     ) -> list[RadarSignal]:
-        signals = self.list_open_signals()
-        if radar_display_mode != "execution_ready":
-            return signals
-        return [
-            signal
-            for signal in signals
-            if self._is_execution_ready_for_radar(signal, user_id=user_id)
-        ]
+        return self.list_open_signals()
 
     def list_open_signals_for_series(
         self,
@@ -314,38 +306,6 @@ class SignalService:
             self._hot_store.write_signal(result)
         except Exception as exc:
             logger.warning("Redis signal hot write failed: %s", exc)
-
-    def _is_execution_ready_for_radar(
-        self,
-        signal: RadarSignal,
-        *,
-        user_id: str,
-    ) -> bool:
-        if signal.status not in ACTIONABLE_SIGNAL_STATUSES:
-            return False
-        try:
-            decision = self._risk_preview().evaluate(
-                RiskPreviewRequest(
-                    signal_id=signal.id,
-                    user_id=user_id,
-                ),
-                record_audit=False,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Radar read-only risk preview failed for signal %s: %s",
-                signal.id,
-                exc,
-            )
-            return False
-        return decision.can_enter
-
-    def _risk_preview(self) -> RiskPreviewEvaluator:
-        if self._risk_preview_evaluator is not None:
-            return self._risk_preview_evaluator
-        from app.services.risk_preview import risk_preview_service
-
-        return risk_preview_service
 
 
 signal_service = SignalService()

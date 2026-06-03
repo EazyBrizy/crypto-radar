@@ -281,6 +281,59 @@ must not persist `risk_decisions`, change signal status, or create
 virtual trades while resolving display visibility. Manual/API risk preview
 flows remain auditable.
 
+Radar list contract:
+
+```python
+RadarFilters = {
+    "exchange": str | None,
+    "symbol": str | None,
+    "timeframe": str | None,
+}
+
+GET /api/v1/radar(
+    user_id: str,
+    radar_display_mode: RadarDisplayMode | None,
+    exchange: str | None,
+    symbol: str | None,
+    timeframe: str | None,
+) -> RadarResponse
+
+RadarResponse = {
+    "signals": list[RadarSignal],
+}
+```
+
+`RadarService.list_signals(user_id, mode, filters)` owns Radar display
+filtering. API handlers must only parse request parameters and return the
+service response. `SignalService` and the strategy pipeline must not filter
+market opportunities by `radar_display_mode`.
+
+Radar annotations on each returned `RadarSignal` are additive and may be
+`null` for legacy rows or when a calculation was not needed:
+
+```python
+RadarSignal = {
+    # existing fields remain unchanged
+    "rr_status": "passed" | "warning" | "failed" | "skipped" | "unknown" | None,
+    "risk_gate_status": "passed" | "warning" | "failed" | None,
+    "can_enter": bool | None,
+    "display_reason": str | None,
+}
+```
+
+`rr_status` is copied from the centralized RR metadata when present, otherwise
+derived as `unknown`. `risk_gate_status` and `can_enter` are set only when
+Radar runs the read-only RiskGate preview. `display_reason` records why the
+returned signal is visible for the resolved mode, for example all-market
+visibility, non-actionable status, RiskGate allowed, or profile-resolution
+warnings.
+
+`all_market_opportunities` returns every open market setup matching filters,
+including `watchlist`, `ready`, `wait_for_pullback`, RR-blocked, warning, and
+actionable opportunities. `execution_ready` first applies the centralized
+actionable status helper and then includes only signals whose read-only
+RiskGate preview returns `can_enter = true`.
+
 Legacy keys such as `risk_per_trade_percent`,
 `futures_risk_per_trade_percent`, `spot_risk_per_trade_percent`, and
 `virtual_risk_per_trade_percent` remain accepted and map to percent mode when

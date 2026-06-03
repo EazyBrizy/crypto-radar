@@ -1,48 +1,73 @@
+import inspect
 import unittest
 
 from app.api.v1.radar import get_radar
+from app.schemas.signal import RadarResponse
 
 
-class _FakeSignalService:
+class _FakeRadarService:
     def __init__(self) -> None:
-        self.calls: list[dict[str, str | None]] = []
+        self.calls: list[dict[str, object]] = []
 
-    def list_open_signals_for_radar(
+    def list_signals(
         self,
         *,
         user_id: str = "demo_user",
-        radar_display_mode: str | None = None,
-    ) -> list:
+        mode: str | None = None,
+        filters=None,
+    ) -> RadarResponse:
         self.calls.append(
             {
                 "user_id": user_id,
-                "radar_display_mode": radar_display_mode,
+                "mode": mode,
+                "exchange": filters.exchange,
+                "symbol": filters.symbol,
+                "timeframe": filters.timeframe,
             }
         )
-        return []
+        return RadarResponse(signals=[])
 
 
 class RadarApiContractTest(unittest.IsolatedAsyncioTestCase):
-    async def test_radar_endpoint_passes_display_mode_override_to_service(self) -> None:
-        fake_service = _FakeSignalService()
+    async def test_radar_endpoint_passes_query_contract_to_service(self) -> None:
+        fake_service = _FakeRadarService()
 
         import app.api.v1.radar as radar_api
 
-        original_service = radar_api.signal_service
-        radar_api.signal_service = fake_service
+        original_service = radar_api.radar_service
+        radar_api.radar_service = fake_service
         try:
             response = await get_radar(
                 user_id="demo_user",
                 radar_display_mode="execution_ready",
+                exchange="bybit",
+                symbol="BTCUSDT",
+                timeframe="15m",
             )
         finally:
-            radar_api.signal_service = original_service
+            radar_api.radar_service = original_service
 
         self.assertEqual(response.signals, [])
         self.assertEqual(
             fake_service.calls,
-            [{"user_id": "demo_user", "radar_display_mode": "execution_ready"}],
+            [
+                {
+                    "user_id": "demo_user",
+                    "mode": "execution_ready",
+                    "exchange": "bybit",
+                    "symbol": "BTCUSDT",
+                    "timeframe": "15m",
+                }
+            ],
         )
+
+    async def test_radar_endpoint_has_no_business_filtering(self) -> None:
+        source = inspect.getsource(get_radar)
+
+        self.assertNotIn("list_open_signals", source)
+        self.assertNotIn("RiskGate", source)
+        self.assertNotIn("if ", source)
+        self.assertNotIn("for ", source)
 
 
 if __name__ == "__main__":

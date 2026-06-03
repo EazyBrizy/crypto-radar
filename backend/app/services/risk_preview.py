@@ -101,7 +101,7 @@ class RiskPreviewService:
         fallback_entry_price = _entry_price(signal)
         risk_settings = get_user_risk_management_settings(request.user_id)
         instrument_type = _instrument_type(request, manual_request)
-        strategy_risk_settings, strategy_risk_settings_source = _strategy_risk_settings(
+        strategy_risk_settings, strategy_risk_settings_source = strategy_risk_settings_for_signal(
             signal,
             user_id=request.user_id,
         )
@@ -330,7 +330,7 @@ def _profile_instrument_type(instrument_type: InstrumentType | str) -> Instrumen
     return normalize_instrument_type(instrument_type)[0]
 
 
-def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:
+def strategy_risk_settings_for_signal(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:
     try:
         configs = strategy_config_service.list_configs(user_id=user_id)
     except Exception as exc:
@@ -353,6 +353,9 @@ def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[
             continue
         return config.risk_settings.to_legacy_dict(), "strategy_config"
     return {}, "not_configured"
+
+
+_strategy_risk_settings = strategy_risk_settings_for_signal
 
 
 def _entry_price(signal: RadarSignal) -> float:

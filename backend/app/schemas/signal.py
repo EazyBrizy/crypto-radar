@@ -37,6 +37,8 @@ class SignalEdgeSnapshot(BaseModel):
 
 
 LayerCheckStatus = Literal["passed", "warning", "failed", "skipped"]
+RadarRRStatus = Literal["passed", "warning", "failed", "skipped", "unknown"]
+RadarRiskGateStatus = Literal["passed", "warning", "failed"]
 
 
 class SignalLayerCheck(BaseModel):
@@ -225,6 +227,10 @@ class RadarSignal(BaseModel):
     decision_mode: Optional[Literal["virtual", "real"]] = None
     decision_note: Optional[str] = None
     confirmed_trade_id: Optional[str] = None
+    rr_status: Optional[RadarRRStatus] = None
+    risk_gate_status: Optional[RadarRiskGateStatus] = None
+    can_enter: Optional[bool] = None
+    display_reason: Optional[str] = None
 
 
 class RadarResponse(BaseModel):

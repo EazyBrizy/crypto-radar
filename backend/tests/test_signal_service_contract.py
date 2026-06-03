@@ -269,7 +269,7 @@ class SignalServiceContractTest(unittest.TestCase):
         self.assertEqual(analytics.events, [result.analytics_event])
         self.assertEqual(hot_store.results, [result])
 
-    def test_radar_execution_ready_filters_incomplete_trade_plan_without_hiding_all_mode(self) -> None:
+    def test_signal_service_radar_facade_does_not_filter_display_mode(self) -> None:
         ready_signal = _risk_signal(
             trade_plan=_plan_with_assessment(_structural_plan(), score=82),
         )
@@ -296,22 +296,8 @@ class SignalServiceContractTest(unittest.TestCase):
         execution_ready = service.list_open_signals_for_radar(radar_display_mode="execution_ready")
 
         self.assertEqual([signal.id for signal in all_mode], [ready_signal.id, incomplete_signal.id])
-        self.assertEqual([signal.id for signal in execution_ready], [ready_signal.id])
-        self.assertEqual(
-            evaluator.calls,
-            [
-                {
-                    "signal_id": ready_signal.id,
-                    "user_id": "demo_user",
-                    "record_audit": False,
-                },
-                {
-                    "signal_id": incomplete_signal.id,
-                    "user_id": "demo_user",
-                    "record_audit": False,
-                },
-            ],
-        )
+        self.assertEqual([signal.id for signal in execution_ready], [ready_signal.id, incomplete_signal.id])
+        self.assertEqual(evaluator.calls, [])
 
     def test_lifecycle_transition_fans_out_to_analytics_and_hot_store(self) -> None:
         signal = RadarSignal(

@@ -6,8 +6,8 @@ from app.schemas.signal import RadarResponse
 from app.services.candle_service import candle_service
 from app.services.message_broker import realtime_event_broker
 from app.services.radar_config_service import radar_config_service
+from app.services.radar_service import RadarFilters, radar_service
 from app.services.realtime_events import radar_status_event
-from app.services.signal_service import signal_service
 
 router = APIRouter(prefix="/radar", tags=["radar"])
 
@@ -16,12 +16,14 @@ router = APIRouter(prefix="/radar", tags=["radar"])
 async def get_radar(
     user_id: str = Query(default="demo_user"),
     radar_display_mode: RadarDisplayMode | None = Query(default=None),
+    exchange: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+    timeframe: str | None = Query(default=None),
 ) -> RadarResponse:
-    return RadarResponse(
-        signals=signal_service.list_open_signals_for_radar(
-            user_id=user_id,
-            radar_display_mode=radar_display_mode,
-        )
+    return radar_service.list_signals(
+        user_id=user_id,
+        mode=radar_display_mode,
+        filters=RadarFilters(exchange=exchange, symbol=symbol, timeframe=timeframe),
     )
 
 

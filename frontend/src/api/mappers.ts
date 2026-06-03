@@ -48,7 +48,9 @@ import type {
   PositionSizingResult,
   RiskAdjustmentPlan,
   RiskCheckResult,
+  RiskCheckStatus,
   RiskDecision,
+  RadarRiskRewardStatus,
   RiskPreviewResponse,
   RiskStateResponse,
   SignalStatus,
@@ -150,6 +152,10 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     edge: normalizeSignalEdge(enriched.edge),
     no_trade_filter: normalizeNoTradeFilter(enriched.no_trade_filter),
     decision: normalizeDecisionSnapshot(enriched.decision),
+    rr_status: normalizeRadarRiskRewardStatus(enriched.rr_status),
+    risk_gate_status: normalizeOptionalRiskCheckStatus(enriched.risk_gate_status),
+    can_enter: optionalBoolean(enriched.can_enter),
+    display_reason: optionalString(enriched.display_reason),
     confirmed_trade_id: signal.confirmed_trade_id ?? null
   };
 }
@@ -1278,6 +1284,24 @@ function normalizeFuturesRiskStatus(value: unknown) {
 function normalizeRiskCheckStatus(value: unknown) {
   if (value === "passed" || value === "failed") return value;
   return "warning";
+}
+
+function normalizeOptionalRiskCheckStatus(value: unknown): RiskCheckStatus | null {
+  if (value === "passed" || value === "warning" || value === "failed") return value;
+  return null;
+}
+
+function normalizeRadarRiskRewardStatus(value: unknown): RadarRiskRewardStatus | null {
+  if (
+    value === "passed" ||
+    value === "warning" ||
+    value === "failed" ||
+    value === "skipped" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return null;
 }
 
 function normalizeRiskProtectionMode(value: unknown) {

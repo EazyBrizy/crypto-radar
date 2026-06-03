@@ -3,17 +3,21 @@ import { Filter, RadioTower, RefreshCw } from "lucide-react";
 import { Metric } from "@/components/Metric";
 import { SignalDetails } from "@/components/SignalDetails";
 import { SignalFeed } from "@/components/SignalFeed";
+import { canShowEnterButton } from "@/domain/signal-status";
+import type { RadarDisplayMode } from "@/features/server-state/types";
 import type { HealthStatus, RadarSignal, RadarStatus, SignalStatus, VirtualExecutionReport } from "@/types";
 import { isRiskRewardBlocked } from "@/utils";
 
 interface RadarPageProps {
   busy: boolean;
   filter: "all" | "long" | "short";
+  radarDisplayMode: RadarDisplayMode;
   signalView: "open" | "history";
   statusFilter: "all" | SignalStatus;
   health: HealthStatus | null;
   loading: boolean;
   onFilterChange: (filter: "all" | "long" | "short") => void;
+  onRadarDisplayModeChange: (mode: RadarDisplayMode) => void;
   onSignalViewChange: (view: "open" | "history") => void;
   onStatusFilterChange: (filter: "all" | SignalStatus) => void;
   onPaperTrade: (signal: RadarSignal) => void;
@@ -33,10 +37,10 @@ interface RadarPageProps {
 }
 
 export function RadarPage(props: RadarPageProps) {
-  const activeSignals = props.signals.filter((signal) => signal.status === "actionable" || signal.status === "active").length;
+  const executionReadySignals = props.signals.filter(canShowEnterButton).length;
   const highConfidence = props.signals.filter((signal) => signal.score >= 80).length;
   const positiveEdge = props.signals.filter((signal) => signal.edge?.status === "positive").length;
-  const blockedIdeas = props.signals.filter((signal) => isRiskRewardBlocked(signal) || signal.no_trade_filter?.blocked).length;
+  const blockedIdeas = props.signals.filter((signal) => isRiskRewardBlocked(signal) || signal.no_trade_filter?.blocked || signal.risk_gate_status === "failed" || signal.can_enter === false).length;
   const latestSeries = Object.entries(props.radarStatus?.candle_history ?? {})
     .sort(([, left], [, right]) => right - left)
     .slice(0, 6);
@@ -57,7 +61,7 @@ export function RadarPage(props: RadarPageProps) {
 
         <div className="metrics-grid">
           <Metric label="Market Status" value={props.health?.scanner_running ? "Online" : "Offline"} hint="scanner" />
-          <Metric label="Active Signals" value={String(activeSignals)} hint="actionable" />
+          <Metric label="Execution Ready" value={String(executionReadySignals)} hint="RiskGate" />
           <Metric label="High Confidence" value={String(highConfidence)} hint="score 80+" />
           <Metric label="Positive Edge" value={String(positiveEdge)} hint="EV gate" />
           <Metric label="Blocked Ideas" value={String(blockedIdeas)} hint="RR/no-trade" />
@@ -102,6 +106,21 @@ export function RadarPage(props: RadarPageProps) {
           ))}
         </div>
         <div className="filter-row">
+          {([
+            { label: "all market opportunities", value: "all_market_opportunities" },
+            { label: "execution ready", value: "execution_ready" }
+          ] as const).map((item) => (
+            <button
+              className={props.radarDisplayMode === item.value ? "filter-chip active" : "filter-chip"}
+              key={item.value}
+              onClick={() => props.onRadarDisplayModeChange(item.value)}
+              type="button"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="filter-row">
           {(["all", "long", "short"] as const).map((item) => (
             <button
               className={props.filter === item ? "filter-chip active" : "filter-chip"}
@@ -130,7 +149,7 @@ export function RadarPage(props: RadarPageProps) {
           emptyState={
             <div className="empty-state">
               <RadioTower size={26} />
-              <strong>{props.signalView === "history" ? "No historical signals yet" : "No active signals yet"}</strong>
+              <strong>{props.signalView === "history" ? "No historical signals yet" : "No market opportunities yet"}</strong>
               <span>
                 {props.signalView === "history"
                   ? "Invalidated and expired ideas will appear here after lifecycle transitions."

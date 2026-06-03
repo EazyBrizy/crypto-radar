@@ -2,6 +2,7 @@ import { Plus, Save, SlidersHorizontal, Star, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/Badge";
+import { canShowEnterButton } from "@/domain/signal-status";
 import type { MarketPairOption, StrategyConfig, StrategyConfigPatch, StrategyPairScope } from "@/features/server-state/types";
 import type { RadarSignal } from "@/types";
 
@@ -122,9 +123,7 @@ export function WatchlistPage({
         {!loading && enabledStrategies.length === 0 ? <div className="empty-state compact-empty">No enabled strategies</div> : null}
         {enabledStrategies.map((strategyConfig) => {
           const strategySignals = signals.filter((signal) => signal.strategy === strategyConfig.strategy_code);
-          const actionableSignals = strategySignals.filter((signal) =>
-            signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched"
-          );
+          const actionableSignals = strategySignals.filter(canShowEnterButton);
           return (
             <button
               className={`watch-strategy-card ${selectedStrategy?.id === strategyConfig.id ? "selected" : ""}`}

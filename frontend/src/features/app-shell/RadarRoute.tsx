@@ -4,19 +4,22 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { RadarPage } from "@/features/app-shell/RadarPage";
+import { useAuthSessionQuery } from "@/auth/use-auth";
 import {
   useConfirmVirtualMutation,
   useHealthQuery,
   useHistoricalSignalsQuery,
-  useOpenSignalsQuery,
+  useRadarQuery,
   useRadarStatusQuery,
   useRejectSignalMutation,
   useSignalExecutionPreviewQuery
 } from "@/hooks/use-radar-queries";
+import { canShowEnterButton, isMarketOpportunity } from "@/domain/signal-status";
 import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
 import type { RadarSignal, SignalStatus } from "@/types";
+import type { RadarDisplayMode } from "@/features/server-state/types";
 import { isOpenCandleActionableAllowed, isOpenFeedSignal, isSignalActionableForUi } from "@/utils";
 
 export function RadarRoute() {
@@ -28,22 +31,25 @@ export function RadarRoute() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | SignalStatus>("all");
   const [signalView, setSignalView] = useState<"open" | "history">("open");
+  const [radarDisplayMode, setRadarDisplayMode] = useState<RadarDisplayMode>("all_market_opportunities");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const tradingActionsDisabled = useTradingActionsDisabled();
   const signalIds = useSignalStore((state) => state.signalIds);
   const signalsById = useSignalStore((state) => state.signalsById);
   const replaceSignals = useSignalStore((state) => state.replaceSignals);
 
+  const sessionQuery = useAuthSessionQuery();
+  const userId = sessionQuery.data?.user.id ?? "demo_user";
   const healthQuery = useHealthQuery();
   const radarStatusQuery = useRadarStatusQuery();
-  const openSignalsQuery = useOpenSignalsQuery();
+  const radarQuery = useRadarQuery(radarDisplayMode, userId);
   const historicalSignalsQuery = useHistoricalSignalsQuery();
   const confirmVirtualMutation = useConfirmVirtualMutation();
   const rejectSignalMutation = useRejectSignalMutation();
 
   useEffect(() => {
-    if (openSignalsQuery.data) replaceSignals(openSignalsQuery.data.filter((signal) => isOpenFeedSignal(signal, nowMs)));
-  }, [nowMs, openSignalsQuery.data, replaceSignals]);
+    if (radarQuery.data) replaceSignals(radarQuery.data.signals.filter((signal) => isOpenFeedSignal(signal, nowMs)));
+  }, [nowMs, radarQuery.data, replaceSignals]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -74,7 +80,7 @@ export function RadarRoute() {
   const executionPreviewQuery = useSignalExecutionPreviewQuery(selectedSignal?.id ?? null, {
     enabled: shouldRequestExecutionPreview(selectedSignal, signalView, tradingActionsDisabled)
   });
-  const loading = [healthQuery, radarStatusQuery, openSignalsQuery].some((query) => query.isLoading)
+  const loading = [healthQuery, radarStatusQuery, radarQuery].some((query) => query.isLoading)
     || (signalView === "history" && historicalSignalsQuery.isLoading);
   const busy = confirmVirtualMutation.isPending || rejectSignalMutation.isPending || tradingActionsDisabled;
 
@@ -82,10 +88,10 @@ export function RadarRoute() {
     await Promise.all([
       healthQuery.refetch(),
       radarStatusQuery.refetch(),
-      openSignalsQuery.refetch(),
+      radarQuery.refetch(),
       historicalSignalsQuery.refetch()
     ]);
-  }, [healthQuery, historicalSignalsQuery, openSignalsQuery, radarStatusQuery]);
+  }, [healthQuery, historicalSignalsQuery, radarQuery, radarStatusQuery]);
 
   const handleSelectSignal = useCallback((signal: RadarSignal) => {
     setActionError(null);
@@ -139,8 +145,10 @@ export function RadarRoute() {
       executionPreviewLoading={executionPreviewQuery.isFetching}
       tradingActionsDisabled={tradingActionsDisabled}
       filter={filter}
+      radarDisplayMode={radarDisplayMode}
       statusFilter={statusFilter}
       onFilterChange={setFilter}
+      onRadarDisplayModeChange={setRadarDisplayMode}
       onSignalViewChange={setSignalView}
       onStatusFilterChange={setStatusFilter}
       onRefresh={() => void refreshData()}
@@ -166,23 +174,16 @@ export function shouldRequestExecutionPreview(
 }
 
 function isPreviewableSignal(signal: RadarSignal): boolean {
-  return (
-    signal.status === "new"
-    || signal.status === "actionable"
-    || signal.status === "active"
-    || signal.status === "entry_touched"
-    || signal.status === "watchlist"
-    || signal.status === "ready"
-    || signal.status === "wait_for_pullback"
-  );
+  return isMarketOpportunity(signal.status);
 }
 
 export function canSendPaperTrade(signal: RadarSignal | null): boolean {
-  return signal != null && (isActionableSignal(signal) || canArmAutoEntry(signal));
+  return signal != null && isActionableSignal(signal);
 }
 
 export function canArmAutoEntry(signal: RadarSignal | null): boolean {
   if (!signal) return false;
+  if (canShowEnterButton(signal)) return false;
   if (signal.auto_entry?.status === "pending") return false;
   if (signal.candle_state === "open" && !isOpenCandleActionableAllowed(signal)) return false;
   return signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback";

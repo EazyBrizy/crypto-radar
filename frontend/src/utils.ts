@@ -1,4 +1,5 @@
 import type { RadarSignal, TradeJournalEntry, VirtualTradeTargetState } from "./types";
+import { canShowEnterButton, isMarketOpportunity } from "./domain/signal-status";
 
 export function formatPrice(value: number | null | undefined): string {
   if (value == null) return "-";
@@ -81,6 +82,7 @@ export function signalTradePlanSummary(signal: RadarSignal): SignalTradePlanSumm
 }
 
 export function isRiskRewardBlocked(signal: RadarSignal): boolean {
+  if (signal.rr_status === "failed") return true;
   const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
   if (!check) return false;
   const guardMode = stringMetadata(check.metadata, "risk_reward_guard_mode");
@@ -90,10 +92,13 @@ export function isRiskRewardBlocked(signal: RadarSignal): boolean {
 
 export function riskRewardBlockReason(signal: RadarSignal): string | null {
   if (!isRiskRewardBlocked(signal)) return null;
+  const rrDecisionReason = signal.decision?.blockers.find((reason) => reason.source === "rr")?.message;
+  if (rrDecisionReason) return rrDecisionReason;
   const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
   const metadataReason = check ? stringMetadata(check.metadata, "risk_reward_block_reason") : null;
   if (metadataReason) return metadataReason;
   if (check?.status === "failed" && check.reason) return check.reason;
+  if (signal.display_reason && signal.rr_status === "failed") return signal.display_reason;
   const selectedRr = signal.trade_plan?.risk_rules.selected_rr ?? signal.selected_rr;
   const minRr = signal.trade_plan?.risk_rules.min_rr_ratio ?? signal.min_rr_ratio;
   return selectedRr != null && minRr != null
@@ -103,6 +108,11 @@ export function riskRewardBlockReason(signal: RadarSignal): string | null {
 
 export function riskRewardWarningReason(signal: RadarSignal): string | null {
   if (isRiskRewardBlocked(signal)) return null;
+  const rrDecisionReason = signal.decision?.warnings.find((reason) => reason.source === "rr")?.message;
+  if (rrDecisionReason) return asRiskRewardWarning(rrDecisionReason);
+  if (signal.rr_status === "warning") {
+    return asRiskRewardWarning(signal.display_reason) ?? "Risk/reward warning: selected R:R is below configured reporting threshold.";
+  }
   const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
   const metadata = check?.metadata ?? {};
   const guardMode = stringMetadata(metadata, "risk_reward_guard_mode");
@@ -146,8 +156,7 @@ export function isOpenCandleActionableAllowed(signal: RadarSignal): boolean {
 }
 
 export function isSignalActionableForUi(signal: RadarSignal): boolean {
-  const actionableStatus = signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched";
-  if (!actionableStatus) return false;
+  if (!canShowEnterButton(signal)) return false;
   return !isFormingCandleSignal(signal) || isOpenCandleActionableAllowed(signal);
 }
 
@@ -225,18 +234,7 @@ export function isSignalExpired(signal: RadarSignal, nowMs = Date.now()): boolea
 }
 
 export function isOpenFeedSignal(signal: RadarSignal, nowMs = Date.now()): boolean {
-  return (
-    (
-      signal.status === "new" ||
-      signal.status === "active" ||
-      signal.status === "watchlist" ||
-      signal.status === "ready" ||
-      signal.status === "actionable" ||
-      signal.status === "wait_for_pullback" ||
-      signal.status === "entry_touched"
-    ) &&
-    !isSignalExpired(signal, nowMs)
-  );
+  return isMarketOpportunity(signal.status) && !isSignalExpired(signal, nowMs);
 }
 
 export function signalTtlLabel(signal: RadarSignal, nowMs = Date.now()): string {

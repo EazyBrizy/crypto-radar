@@ -5,6 +5,15 @@ import { useState } from "react";
 import { BarChart3, CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert, XCircle } from "lucide-react";
 
 import { Badge } from "./Badge";
+import {
+  canShowEnterButton,
+  isEntryTouched,
+  isExecutionReady,
+  isWaitingEntry,
+  marketOpportunityLabel,
+  marketOpportunityTone,
+  riskGateTone
+} from "@/domain/signal-status";
 import type { DecisionReason, ExecutionGateStatus, ImpactRisk, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
 import {
   entryZone,
@@ -68,10 +77,9 @@ export function SignalDetails({
   const formingCandle = isFormingCandleSignal(signal);
   const openCandleAllowed = isOpenCandleActionableAllowed(signal);
   const formingReason = formingCandleReason(signal);
-  const statusAllowsTrade = isSignalActionableForUi(signal);
+  const statusAllowsTrade = canShowEnterButton(signal) && (!formingCandle || openCandleAllowed);
   const autoEntryPending = signal.auto_entry?.status === "pending";
-  const canArmAutoEntry = !formingReason && (signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback");
-  const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || strategyRiskBlocked || (!statusAllowsTrade && !canArmAutoEntry) || (statusAllowsTrade && riskFailed);
+  const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || strategyRiskBlocked || !statusAllowsTrade || riskFailed;
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const breakdown = signal.score_breakdown;
   const tradePlan = signalTradePlanSummary(signal);
@@ -93,7 +101,8 @@ export function SignalDetails({
           <Badge tone={isLong ? "green" : "red"}>{signal.direction.toUpperCase()}</Badge>
           {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
           <Badge tone="yellow">Risk {riskLabel(signal)}</Badge>
-          <Badge tone={formingReason ? "yellow" : "blue"}>{formingReason ? "preview" : signal.status}</Badge>
+          <Badge tone={marketOpportunityTone(signal)}>{formingReason ? "preview" : marketOpportunityLabel(signal)}</Badge>
+          {signal.risk_gate_status ? <Badge tone={riskGateTone(signal.risk_gate_status)}>RiskGate {signal.risk_gate_status}</Badge> : null}
         </div>
       </div>
 
@@ -103,6 +112,7 @@ export function SignalDetails({
         <p>{signal.status_reason ?? "Decision must use setup status, invalidation and risk context, not direction alone."}</p>
       </div>
 
+      <RadarAnnotationBlock signal={signal} />
       <PullbackGuidanceBlock signal={signal} />
       <BreakoutEntryPlanBlock signal={signal} />
       <LiquiditySweepPlanBlock signal={signal} />
@@ -179,7 +189,7 @@ export function SignalDetails({
 
       <div className="detail-actions">
         <button className="primary-action" onClick={() => onPaperTrade(signal)} disabled={entryActionDisabled} type="button">
-          <FileCheck2 size={17} /> {statusAllowsTrade ? "Paper Trade" : autoEntryPending ? "Auto Paper Armed" : "Auto Paper"}
+          <FileCheck2 size={17} /> {statusAllowsTrade ? "Paper Trade" : autoEntryPending ? "Auto Paper Armed" : "Waiting Entry"}
         </button>
         <button className="secondary-action" type="button" disabled>
           <ExternalLink size={17} /> Open Exchange
@@ -204,7 +214,7 @@ export function SignalDetails({
         <p className="form-description">{formingReason}</p>
       ) : null}
       {!statusAllowsTrade && !autoEntryPending && !strategyRiskBlocked ? (
-        <p className="form-description">{formingReason ? "Wait for candle close before arming entry." : "Use Auto Paper to wait for confirmation and enter automatically after the trigger candle."}</p>
+        <p className="form-description">{formingReason ? "Wait for candle close before entry." : "Wait for backend RiskGate preview to mark this opportunity execution-ready."}</p>
       ) : null}
     </section>
   );
@@ -212,14 +222,37 @@ export function SignalDetails({
 
 function recommendedAction(signal: RadarSignal): string {
   if (formingCandleReason(signal)) return "Forming candle preview, wait for close";
+  if (isExecutionReady(signal.status, signal.decision, signal.can_enter)) return `Execution-ready inside ${entryZone(signal)}`;
+  if (signal.risk_gate_status === "failed" || signal.can_enter === false) return "RiskGate blocks entry right now";
+  if (isEntryTouched(signal.status)) return "Entry touched, waiting for RiskGate permission";
+  if (isWaitingEntry(signal.status)) return "Market setup exists, wait for entry trigger";
   if (signal.status === "watchlist") return "Watch setup formation, no entry yet";
   if (signal.status === "ready") return "Setup exists, wait for confirmation";
   if (signal.status === "wait_for_pullback") return "Wait for pullback or retest";
   if (signal.status === "invalidated") return "Idea is invalidated";
-  if (signal.status === "actionable" || signal.status === "active" || signal.status === "entry_touched") {
-    return `Entry candidate inside ${entryZone(signal)}`;
-  }
   return `Monitor status ${signal.status.replaceAll("_", " ")}`;
+}
+
+function RadarAnnotationBlock({ signal }: { signal: RadarSignal }) {
+  const rrReason = riskRewardBlockReason(signal) ?? riskRewardWarningReason(signal);
+  if (!signal.rr_status && !signal.risk_gate_status && signal.can_enter == null && !signal.display_reason && !rrReason) return null;
+  return (
+    <div className="risk-reward-detail-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Radar Display</h3>
+        <Badge tone={marketOpportunityTone(signal)}>{marketOpportunityLabel(signal)}</Badge>
+      </div>
+      {signal.display_reason ? <p>{signal.display_reason}</p> : null}
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="RR status" value={signal.rr_status ? signal.rr_status.replaceAll("_", " ") : "-"} />
+        <MetricLine label="RiskGate" value={signal.risk_gate_status ? signal.risk_gate_status.replaceAll("_", " ") : "not previewed"} />
+        <MetricLine label="Can enter" value={signal.can_enter == null ? "not evaluated" : signal.can_enter ? "yes" : "no"} />
+        <MetricLine label="Entry state" value={marketOpportunityLabel(signal)} />
+      </div>
+      {rrReason ? <p>{rrReason}</p> : null}
+    </div>
+  );
 }
 
 function AutoEntryBlock({ signal }: { signal: RadarSignal }) {
@@ -603,14 +636,19 @@ function RiskBlockersDetailBlock({
   const noTrade = signal.no_trade_filter ?? null;
   const riskDecision = execution?.risk_decision ?? null;
   const riskCheck = execution?.risk_check ?? null;
+  const decision = signal.decision ?? null;
   const blockers = dedupe([
     ...(rrBlockReason ? [rrBlockReason] : []),
+    ...(signal.risk_gate_status === "failed" && signal.display_reason ? [signal.display_reason] : []),
     ...(noTrade?.blockers ?? []),
+    ...(decision?.blockers.map((reason) => reason.message) ?? []),
     ...(riskDecision?.blockers ?? riskCheck?.blockers ?? [])
   ]);
   const warnings = dedupe([
     ...(!rrBlockReason && rrWarningReason ? [rrWarningReason] : []),
+    ...(signal.risk_gate_status === "warning" && signal.display_reason ? [signal.display_reason] : []),
     ...(noTrade?.warnings ?? []),
+    ...(decision?.warnings.map((reason) => reason.message) ?? []),
     ...(riskDecision?.warnings ?? riskCheck?.warnings ?? [])
   ]);
   if (!blockers.length && !warnings.length) return null;
@@ -633,7 +671,7 @@ function RiskBlockersDetailBlock({
 
 function StrategyLayersBlock({ signal, execution }: { signal: RadarSignal; execution: VirtualExecutionReport | null }) {
   const plan = signalTradePlanSummary(signal);
-  const riskGate = execution?.risk_decision?.status ?? execution?.risk_check?.status ?? "-";
+  const riskGate = signal.risk_gate_status ?? execution?.risk_decision?.status ?? execution?.risk_check?.status ?? "-";
   const regimeChecks = signal.regime?.checks.filter((check) => check.status !== "passed").slice(0, 4) ?? [];
   const layers = [
     {

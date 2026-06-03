@@ -87,10 +87,10 @@ export const serverStateKeys = {
   health: () => [...serverStateKeys.all, "health"] as const,
   radar: {
     all: () => [...serverStateKeys.all, "radar"] as const,
-    dashboard: (radarDisplayMode?: RadarDisplayMode) =>
+    dashboard: (radarDisplayMode?: RadarDisplayMode, userId = "demo_user") =>
       radarDisplayMode
-        ? [...serverStateKeys.radar.all(), "dashboard", radarDisplayMode] as const
-        : [...serverStateKeys.radar.all(), "dashboard"] as const,
+        ? [...serverStateKeys.radar.all(), "dashboard", userId, radarDisplayMode] as const
+        : [...serverStateKeys.radar.all(), "dashboard", userId] as const,
     status: () => [...serverStateKeys.radar.all(), "status"] as const
   },
   user: {

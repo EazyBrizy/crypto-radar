@@ -43,10 +43,10 @@ export function useHealthQuery() {
   });
 }
 
-export function useRadarQuery(radarDisplayMode?: RadarDisplayMode | null) {
+export function useRadarQuery(radarDisplayMode?: RadarDisplayMode | null, userId = "demo_user") {
   return useQuery({
-    queryKey: serverStateKeys.radar.dashboard(radarDisplayMode ?? undefined),
-    queryFn: () => api.radar({ radarDisplayMode }),
+    queryKey: serverStateKeys.radar.dashboard(radarDisplayMode ?? undefined, userId),
+    queryFn: () => api.radar({ radarDisplayMode, userId }),
     refetchInterval: serverStatePolicy.reconciliationIntervalMs,
     staleTime: serverStatePolicy.realtimeStaleTimeMs
   });

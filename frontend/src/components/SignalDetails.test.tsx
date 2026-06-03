@@ -143,6 +143,22 @@ describe("SignalDetails", () => {
     expect(screen.getAllByText("high_spread").length).toBeGreaterThan(0);
   });
 
+  it("does not render active as an enter-ready action", () => {
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={{ ...signal, status: "active", no_trade_filter: null }}
+      />
+    );
+
+    expect(screen.getByText("Market setup exists, wait for entry trigger")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Waiting Entry/u })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Paper Trade/u })).not.toBeInTheDocument();
+  });
+
   it("shows forming candle reason and disables actionable UI by default", () => {
     const formingSignal: RadarSignal = {
       ...signal,
@@ -180,12 +196,13 @@ describe("SignalDetails", () => {
     expect(screen.getByText("forming candle")).toBeInTheDocument();
     expect(screen.getByText("preview")).toBeInTheDocument();
     expect(screen.getAllByText(/forming candle preview/u).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /Auto Paper/u })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Waiting Entry/u })).toBeDisabled();
   });
 
   it("keeps actionable UI for open candles only when metadata explicitly allows it", () => {
     const allowedSignal: RadarSignal = {
       ...signal,
+      can_enter: true,
       candle_state: "open",
       no_trade_filter: null,
       confirmation: {

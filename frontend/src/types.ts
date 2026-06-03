@@ -44,6 +44,7 @@ export type FuturesRiskStatus = "passed" | "blocked" | "unknown";
 export type TradeInstrumentType = "spot" | "futures" | "virtual";
 export type RiskAmountMode = "percent" | "fixed";
 export type RiskCheckStatus = "passed" | "warning" | "failed";
+export type RadarRiskRewardStatus = "passed" | "warning" | "failed" | "skipped" | "unknown";
 export type RRGuardMode = "off" | "soft" | "hard";
 export type RiskProtectionMode = "normal" | "reduced" | "virtual_only" | "blocked";
 export type ExchangeRuleStatus = "fresh" | "missing" | "stale" | "unknown";
@@ -304,6 +305,10 @@ export interface RadarSignal {
   edge?: SignalEdgeSnapshot | null;
   no_trade_filter?: NoTradeFilterResult | null;
   decision?: SignalDecisionSnapshot | null;
+  rr_status?: RadarRiskRewardStatus | null;
+  risk_gate_status?: RiskCheckStatus | null;
+  can_enter?: boolean | null;
+  display_reason?: string | null;
   created_at: string;
   updated_at: string;
   expires_at: string | null;

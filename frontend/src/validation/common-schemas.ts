@@ -36,6 +36,8 @@ export const VirtualSimulationTierSchema = z.enum(["mvp", "advanced", "pro"]);
 export const VirtualExecutionStatusSchema = z.enum(["filled", "partially_filled", "rejected_virtual_execution"]);
 export const ImpactRiskSchema = z.enum(["low", "medium", "high"]);
 export const ExecutionGateStatusSchema = z.enum(["passed", "warning", "blocked"]);
+export const RadarRiskRewardStatusSchema = z.enum(["passed", "warning", "failed", "skipped", "unknown"]);
+export const RiskCheckStatusSchema = z.enum(["passed", "warning", "failed"]);
 
 const DEFAULT_LIQUIDITY_METRICS = {
   spread_percent: 0,
@@ -246,6 +248,10 @@ export const RadarSignalSchema = z.object({
   edge: SignalEdgeSnapshotSchema.nullable().optional(),
   no_trade_filter: NoTradeFilterResultSchema.nullable().optional(),
   decision: SignalDecisionSnapshotSchema.nullable().optional(),
+  rr_status: RadarRiskRewardStatusSchema.nullable().optional(),
+  risk_gate_status: RiskCheckStatusSchema.nullable().optional(),
+  can_enter: z.boolean().nullable().optional(),
+  display_reason: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   expires_at: z.string().nullable().optional(),

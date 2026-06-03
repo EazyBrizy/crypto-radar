@@ -2,6 +2,14 @@ import { memo, type CSSProperties } from "react";
 import { Activity, ArrowDownRight, ArrowUpRight, Clock3 } from "lucide-react";
 
 import { Badge } from "./Badge";
+import {
+  isMarketOpportunity,
+  marketOpportunityLabel,
+  marketOpportunityTone,
+  riskGateTone,
+  statusBadgeLabel,
+  statusBadgeTone
+} from "@/domain/signal-status";
 import { useSignalPrice } from "@/stores/price-store";
 import { useSignalStore } from "@/stores/signal-store";
 import type { DecisionReason, RadarSignal, SignalEdgeStatus } from "../types";
@@ -47,7 +55,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
           <div className="pair-row">
             <strong>{signal.symbol}</strong>
             <Badge>{signal.exchange}</Badge>
-            <Badge tone={statusBadgeTone(signal.status, formingCandle && !openCandleAllowed)}>
+            <Badge tone={statusBadgeTone(signal, formingCandle && !openCandleAllowed)}>
               {statusBadgeLabel(signal, formingCandle && !openCandleAllowed)}
             </Badge>
           </div>
@@ -74,6 +82,10 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
       </div>
 
       <div className="signal-badge-row">
+        {isMarketOpportunity(signal.status) ? <Badge tone="blue">Market opportunity</Badge> : null}
+        <Badge tone={marketOpportunityTone(signal)}>{marketOpportunityLabel(signal)}</Badge>
+        {signal.risk_gate_status ? <Badge tone={riskGateTone(signal.risk_gate_status)}>RiskGate {signal.risk_gate_status}</Badge> : null}
+        {signal.risk_gate_status === "failed" || signal.can_enter === false ? <Badge tone="red">Risk blocked</Badge> : null}
         {decisionBadge ? <Badge tone={decisionBadge.tone}>{decisionBadge.label}</Badge> : null}
         {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
         <Badge tone={edge.tone}>{edge.label}</Badge>
@@ -99,27 +111,13 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
 
       <div className="card-reason">
         <Activity size={15} />
-        <span>{signal.explanation[0] ?? "Waiting for context confirmation"}</span>
+        <span>{signal.display_reason ?? signal.explanation[0] ?? "Waiting for context confirmation"}</span>
       </div>
     </button>
   );
 });
 
 SignalCard.displayName = "SignalCard";
-
-function statusBadgeTone(status: RadarSignal["status"], previewOnly = false): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
-  if (previewOnly) return "yellow";
-  if (status === "actionable" || status === "active" || status === "entry_touched") return "green";
-  if (status === "watchlist") return "yellow";
-  if (status === "ready" || status === "wait_for_pullback") return "blue";
-  if (status === "invalidated" || status === "expired" || status === "rejected") return "red";
-  return "neutral";
-}
-
-function statusBadgeLabel(signal: RadarSignal, previewOnly = false): string {
-  if (previewOnly) return "preview";
-  return signal.status.replaceAll("_", " ");
-}
 
 function planTargets(targets: ReturnType<typeof signalTradePlanSummary>["targets"]) {
   const byLabel = new Map(targets.map((target) => [target.label.toUpperCase(), target]));

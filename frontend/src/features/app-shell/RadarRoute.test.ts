@@ -76,7 +76,19 @@ describe("shouldRequestExecutionPreview", () => {
 });
 
 describe("paper trade eligibility", () => {
-  it("allows auto paper for soft or legacy RR warnings and leaves execution to backend risk gate", () => {
+  it("does not allow active market opportunities to enter", () => {
+    expect(canSendPaperTrade(signalWithStatus("active"))).toBe(false);
+  });
+
+  it("allows paper trade only after backend execution permission", () => {
+    expect(canSendPaperTrade(signalWithStatus("actionable"))).toBe(false);
+    expect(canSendPaperTrade(signalWithStatus("entry_touched"))).toBe(false);
+    expect(canSendPaperTrade({ ...signalWithStatus("actionable"), can_enter: true })).toBe(true);
+    expect(canSendPaperTrade({ ...signalWithStatus("entry_touched"), can_enter: true })).toBe(true);
+    expect(canSendPaperTrade({ ...signalWithStatus("entry_touched"), can_enter: false })).toBe(false);
+  });
+
+  it("does not turn soft or legacy RR warnings into enter permission", () => {
     const lowRrSignal: RadarSignal = {
       ...baseSignal,
       selected_rr: 0.8,
@@ -95,6 +107,6 @@ describe("paper trade eligibility", () => {
     };
 
     expect(canArmAutoEntry(lowRrSignal)).toBe(true);
-    expect(canSendPaperTrade(lowRrSignal)).toBe(true);
+    expect(canSendPaperTrade(lowRrSignal)).toBe(false);
   });
 });

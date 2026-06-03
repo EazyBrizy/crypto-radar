@@ -66,6 +66,7 @@ import type {
   VirtualSimulationTier,
   VirtualSimulatedPositionPath
 } from "@/types";
+import { SIGNAL_STATUSES } from "@/domain/signal-status";
 import type { OhlcvCandleDto, RadarConfigDto, RadarSignalDto, TradeJournalEntryDto } from "./generated/schemas";
 
 type TradeJournalEntryExtra = TradeJournalEntryDto & Partial<Pick<
@@ -902,20 +903,7 @@ function normalizeStringList(value: unknown): string[] {
 }
 
 function normalizeSignalStatus(value: unknown): SignalStatus {
-  if (
-    value === "new" ||
-    value === "active" ||
-    value === "watchlist" ||
-    value === "ready" ||
-    value === "actionable" ||
-    value === "wait_for_pullback" ||
-    value === "confirmed" ||
-    value === "rejected" ||
-    value === "expired" ||
-    value === "invalidated" ||
-    value === "closed" ||
-    value === "entry_touched"
-  ) return value;
+  if (typeof value === "string" && (SIGNAL_STATUSES as readonly string[]).includes(value)) return value as SignalStatus;
   return "active";
 }
 

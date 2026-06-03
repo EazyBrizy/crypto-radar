@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from app.domain.signal_status import is_execution_candidate_status
 from app.schemas.risk import RadarDisplayMode, RiskDecision, RiskPreviewRequest
 from app.schemas.signal import RadarResponse, RadarRRStatus, RadarSignal
 from app.schemas.user import RiskManagementSettings
@@ -14,7 +15,6 @@ from app.services.risk_management import (
     get_user_risk_management_settings,
 )
 from app.services.signal_service import signal_service
-from app.services.signal_status import is_execution_actionable_status
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class RadarService:
                 )
                 continue
 
-            if not is_execution_actionable_status(signal.status):
+            if not is_execution_candidate_status(signal.status):
                 continue
 
             decision = self._evaluate_risk_gate(signal, user_id=user_id)

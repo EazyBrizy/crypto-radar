@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
+from app.domain.signal_status import is_execution_candidate_status
 from app.schemas.signal import (
     MarketQualitySnapshot,
     MarketRegimeSnapshot,
@@ -425,7 +426,7 @@ def _is_lower_timeframe(candidate: str, reference: str) -> bool:
 
 
 def _is_actionable_status(status: str) -> bool:
-    return status in {"actionable", "active", "entry_touched"}
+    return is_execution_candidate_status(status)
 
 
 def _has_strong_regime_conflict(regime: MarketRegimeSnapshot) -> bool:

@@ -4,6 +4,7 @@ from typing import Any, Protocol
 
 from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
+from app.domain.signal_status import is_market_opportunity_status
 from app.repositories.signal_repository import (
     MAX_STORED_SIGNALS,
     PostgresSignalRepository,
@@ -133,7 +134,7 @@ class SignalService:
         return [
             signal
             for signal in self._repository.list_signals()
-            if signal.status in {"new", "active"}
+            if is_market_opportunity_status(signal.status)
         ]
 
     def list_open_signals_for_radar(

@@ -121,8 +121,10 @@ market data -> features -> quality -> regime -> strategy setup
   select strategy exchanges, explicit pairs and timeframes, return to all-pairs
   mode, edit context-timeframe mapping, and edit basic market-quality/regime
   thresholds.
-- Типы frontend уже знают `watchlist`, но текущая лента считает открытыми
-  только `new`, `active`, `entry_touched`.
+- Frontend status helpers now treat `new`, `active`, `watchlist`, `ready`,
+  `wait_for_pullback`, `entry_touched`, and `actionable` as open market
+  opportunities. Entry UI uses the centralized execution-candidate helper plus
+  backend permission; `active` is not entry-ready.
 
 ## Стыки Backend + DB + Frontend
 
@@ -217,25 +219,16 @@ Frontend:
 - `confirmed`: пользователь подтвердил/открыл сделку.
 - `closed`: сделка/идея закрыта.
 
-Текущий разрыв:
+Current contract:
 
-- DB check constraint сейчас разрешает только
-  `new`, `active`, `confirmed`, `expired`, `invalidated`, `closed`.
-- API/frontend частично знают `watchlist`, но repository мапит `watchlist` в
-  `new`, а actionable сейчас фактически выражается через `active`.
-- Frontend feed скрывает `watchlist`, потому что открытыми считает только
-  `new`, `active`, `entry_touched`.
-
-Рекомендация:
-
-- миграцией расширить DB statuses;
-- временно поддержать старые `new`/`active` как aliases;
-- в UI показывать человекочитаемые статусы:
-  `WATCHLIST`, `READY`, `ACTIONABLE`, `WAIT FOR PULLBACK`, `INVALIDATED`;
-- добавить фильтр Radar по статусу, стратегии, паре, бирже и таймфрейму.
-
-Note: the legacy gap/recommendation notes immediately above are superseded by
-the implementation status below.
+- DB/API/frontend schemas support the staged signal statuses.
+- Repository stores staged statuses directly instead of collapsing them to
+  `new` or `active`.
+- `active` is a market opportunity only. It is not actionable, not can-enter,
+  and not auto-entry-ready.
+- Execution-candidate statuses are centralized as `entry_touched`,
+  `actionable`, and `confirmed`; RiskGate/decision data still decides whether
+  entry is permitted now.
 
 Implementation status for point 1.3:
 
@@ -252,9 +245,10 @@ Implementation status for point 1.3:
   Squeeze pre-breakout watchlist, Trend Pullback approaching EMA zone watchlist,
   Liquidity Sweep level test watchlist, and ready states while confirmation is
   incomplete.
-- Frontend disables entry actions unless signal status is
-  `actionable`/`active`/`entry_touched`; Paper Trade is blocked for
-  `watchlist`, `ready`, `wait_for_pullback`, and `invalidated`.
+- Frontend disables entry actions unless the centralized execution-candidate
+  helper accepts the status (`entry_touched`, `actionable`, or `confirmed`) and
+  backend RiskGate/decision data permits entry. `active` remains a market
+  opportunity only and does not enable Paper Trade.
 - `SignalLifecycleWorker` advances stored open ideas on closed candles:
   `watchlist -> ready`, `ready -> actionable`, `wait_for_pullback -> ready/actionable`,
   and open ideas -> `invalidated` when their logical invalidation plan breaks.
@@ -849,8 +843,9 @@ Implementation status for point 1.5:
   use `final`; Liquidity Sweep uses `nearest`.
 - Signal Details shows nearest/final/selected RR and the target used by the
   strategy guard.
-- Paper Trade remains blocked because frontend entry actions require
-  `actionable`/`active`/`entry_touched` and no hard execution blockers.
+- Paper Trade remains blocked because frontend entry actions require the
+  centralized execution-candidate status helper, backend permission, and no
+  hard execution blockers. `active` is not an entry status.
 
 Remaining for point 1.5:
 

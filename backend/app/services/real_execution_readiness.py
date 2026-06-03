@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from app.domain.signal_status import is_execution_candidate_status, is_terminal_signal_status
 from app.schemas.risk import RiskDecision
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, RealExecutionPlan
@@ -15,9 +16,6 @@ from app.services.trade_plan_completeness import (
     trade_plan_completeness_service,
 )
 
-
-ACTIONABLE_SIGNAL_STATUSES = {"actionable", "confirmed"}
-TERMINAL_SIGNAL_STATUSES = {"rejected", "expired", "invalidated", "closed"}
 FALLBACK_STOP_SOURCES = {"atr", "synthetic_atr", "fixed_percent", "risk_settings"}
 TERMINAL_ORDER_STATUSES = {"cancelled", "canceled", "rejected", "expired"}
 
@@ -107,10 +105,10 @@ class RealExecutionReadinessService:
 
 
 def _signal_readiness_blockers(signal: RadarSignal) -> list[str]:
-    if signal.status in TERMINAL_SIGNAL_STATUSES:
+    if is_terminal_signal_status(signal.status):
         return [f"Signal status {signal.status!r} is not eligible for real execution."]
-    if signal.status not in ACTIONABLE_SIGNAL_STATUSES:
-        return ["Signal status must be actionable before real execution."]
+    if not is_execution_candidate_status(signal.status):
+        return ["Signal status must be entry_touched, actionable, or confirmed before real execution."]
     return []
 
 

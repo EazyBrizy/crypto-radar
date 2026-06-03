@@ -49,8 +49,22 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         self.signal_service = None
 
-    async def test_active_signals_endpoint_returns_only_active_snapshot(self) -> None:
+    async def test_active_signals_endpoint_returns_only_open_execution_candidates(self) -> None:
         now = datetime.now(timezone.utc)
+        self.signal_service.add_signal(
+            RadarSignal(
+                id="sig_active_market_opportunity",
+                symbol="SOL/USDT:PERP",
+                exchange="bybit",
+                strategy="test",
+                direction="long",
+                confidence=0.8,
+                status="active",
+                score=80,
+                created_at=now,
+                updated_at=now,
+            )
+        )
         self.signal_service.add_signal(
             RadarSignal(
                 id="sig_actionable",
@@ -95,7 +109,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
                 strategy="test",
                 direction="long",
                 confidence=0.8,
-                status="active",
+                status="actionable",
                 score=80,
                 created_at=now - timedelta(hours=2),
                 updated_at=now - timedelta(hours=2),
@@ -110,7 +124,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
                 strategy="test",
                 direction="short",
                 confidence=0.8,
-                status="active",
+                status="actionable",
                 score=80,
                 created_at=now,
                 updated_at=now,

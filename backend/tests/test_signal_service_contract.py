@@ -2,7 +2,8 @@ import unittest
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.repositories.signal_repository import OPEN_SIGNAL_STATUSES, SignalWriteResult
+from app.domain.signal_status import OPEN_SIGNAL_STATUSES
+from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import NoTradeFilterResult, RadarSignal, SignalConfirmationSnapshot, SignalLayerCheck
 from app.schemas.trade_plan import (
     TradePlan,

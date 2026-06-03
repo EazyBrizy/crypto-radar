@@ -59,6 +59,12 @@ RiskGate preview currently allows execution for the display scope. This Radar
 GET path must not write risk audit rows, change signal status, or create
 virtual trades.
 
+Signal status alone never grants entry permission. `active` means an open
+market opportunity and must remain visible in all-market Radar mode, but it is
+not an execution candidate. RiskGate preview/confirm is evaluated only after
+the centralized execution-candidate status helper accepts the signal status:
+`entry_touched`, `actionable`, or `confirmed`.
+
 ## Storage
 
 PostgreSQL remains the source of truth:

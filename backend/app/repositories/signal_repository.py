@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.domain.signal_status import EXECUTION_CANDIDATE_STATUSES, OPEN_SIGNAL_STATUSES
 from app.models.market import MarketExchange, MarketPair
 from app.models.outbox import OutboxEvent
 from app.models.signal import TradingSignal, TradingSignalEvent
@@ -21,16 +22,6 @@ from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_field
 from app.services.signal_outcome_service import SignalOutcomeService
 
 MAX_STORED_SIGNALS = 200
-OPEN_SIGNAL_STATUSES = (
-    "new",
-    "active",
-    "watchlist",
-    "ready",
-    "actionable",
-    "wait_for_pullback",
-    "entry_touched",
-)
-ACTIONABLE_SIGNAL_STATUSES = ("active", "actionable", "entry_touched")
 SIGNAL_CREATED_EVENT = "signal.created"
 SIGNAL_UPDATED_EVENT = "signal.updated"
 SIGNAL_CONFIRMED_EVENT = "signal.confirmed"
@@ -164,7 +155,7 @@ class PostgresSignalRepository:
             records = session.scalars(
                 _signal_select()
                 .where(
-                    TradingSignal.status.in_(ACTIONABLE_SIGNAL_STATUSES),
+                    TradingSignal.status.in_(_open_execution_candidate_statuses()),
                     _expires_after(now),
                 )
                 .order_by(TradingSignal.detected_at.desc())
@@ -1008,6 +999,10 @@ def _strategy_signal_status_to_db(status: str, score: int) -> str:
     if status == "rejected":
         return "invalidated"
     return "actionable" if score >= 70 else "watchlist"
+
+
+def _open_execution_candidate_statuses() -> tuple[str, ...]:
+    return tuple(status for status in EXECUTION_CANDIDATE_STATUSES if status in OPEN_SIGNAL_STATUSES)
 
 
 def _signal_key(signal: StrategySignal, exchange: str, detected_at: datetime) -> str:

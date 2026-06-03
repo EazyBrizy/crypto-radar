@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { RadarSignal } from "@/types";
-import { canShowEnterButton, isExecutionReady, isMarketOpportunity, isWaitingEntry } from "./signal-status";
+import {
+  canShowEnterButton,
+  isExecutionCandidateStatus,
+  isExecutionReady,
+  isMarketOpportunity,
+  isTerminalSignalStatus,
+  isWaitingEntry
+} from "./signal-status";
 
 const baseSignal: RadarSignal = {
   id: "sig_1",
@@ -55,9 +62,18 @@ describe("signal status domain helper", () => {
   it("treats active as market opportunity and waiting entry, not execution-ready", () => {
     expect(isMarketOpportunity("active")).toBe(true);
     expect(isWaitingEntry("active")).toBe(true);
+    expect(isExecutionCandidateStatus("active")).toBe(false);
     expect(isExecutionReady("active")).toBe(false);
     expect(canShowEnterButton(baseSignal)).toBe(false);
     expect(canShowEnterButton({ ...baseSignal, can_enter: true })).toBe(false);
+  });
+
+  it("marks entry-touched/actionable as execution candidates and invalidated/expired as terminal", () => {
+    expect(isExecutionCandidateStatus("entry_touched")).toBe(true);
+    expect(isExecutionCandidateStatus("actionable")).toBe(true);
+    expect(isExecutionCandidateStatus("confirmed")).toBe(true);
+    expect(isTerminalSignalStatus("invalidated")).toBe(true);
+    expect(isTerminalSignalStatus("expired")).toBe(true);
   });
 
   it("requires backend permission for actionable and entry-touched signals", () => {

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, status
 
+from app.domain.signal_status import is_execution_candidate_status, is_terminal_signal_status
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
     ManualConfirmRequest,
@@ -59,12 +60,12 @@ async def confirm_signal(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Signal is not found",
         )
-    if signal.status in {"rejected", "expired", "invalidated"}:
+    if is_terminal_signal_status(signal.status):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Signal cannot be confirmed in current status",
         )
-    if request.auto_enter_on_confirmation and not _signal_can_enter_now(signal):
+    if request.auto_enter_on_confirmation and not _signal_can_enter_now(signal, mode=request.mode):
         try:
             armed_signal = signal_service.arm_auto_entry(signal.id, request.model_dump(mode="json"))
         except StrategyRiskRewardBlocked as exc:
@@ -82,7 +83,7 @@ async def confirm_signal(
             signal=armed_signal,
             message="Auto-entry armed; the strategy will enter after confirmation",
         )
-    if not _signal_can_enter_now(signal):
+    if not _signal_can_enter_now(signal, mode=request.mode):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Signal is not actionable yet. Arm auto-entry to wait for confirmation.",
@@ -189,5 +190,27 @@ async def reject_signal(
     )
 
 
-def _signal_can_enter_now(signal: RadarSignal) -> bool:
-    return signal.status in {"actionable", "active", "entry_touched"}
+def _signal_can_enter_now(signal: RadarSignal, *, mode: str = "virtual") -> bool:
+    if not is_execution_candidate_status(signal.status):
+        return False
+    normalized_mode = mode.strip().lower()
+    if normalized_mode != "real":
+        if signal.can_enter is False:
+            return False
+        if signal.can_enter is True:
+            return True
+
+    decision = signal.decision
+    if decision is None:
+        return True
+    if not decision.signal_actionable:
+        return False
+    execution_allowed = (
+        decision.execution_allowed_real
+        if normalized_mode == "real"
+        else decision.execution_allowed_virtual
+    )
+    if execution_allowed is False:
+        return False
+    blocked_scopes = {"discovery", "real"} if normalized_mode == "real" else {"discovery", "virtual"}
+    return not any(reason.scope in blocked_scopes for reason in decision.blockers)

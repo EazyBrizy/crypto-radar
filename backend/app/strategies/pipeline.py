@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from app.domain.signal_status import is_execution_candidate_status
 from app.schemas.market import AlphaMarketContext, Features
 from app.schemas.signal import (
     MarketQualitySnapshot,
@@ -34,7 +35,7 @@ from app.services.support_resistance import SupportResistanceSnapshot
 from app.services.target_resolver import TargetResolverService
 from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.services.trade_plan_completeness import trade_plan_completeness_service
-from app.services.signal_decision import ACTIONABLE_STATUSES, signal_decision_service
+from app.services.signal_decision import signal_decision_service
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
 MAJOR_BASE_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP"}
@@ -2761,7 +2762,7 @@ def _legacy_display_filter_note(
         "rr_filter_would_have_hidden": bool(rr_flags and risk_reward.blocked),
         "active_only_filter_requested": bool(active_only_flags),
         "active_only_filter_would_have_hidden": bool(
-            active_only_flags and status not in ACTIONABLE_STATUSES
+            active_only_flags and not is_execution_candidate_status(status)
         ),
         "signal_status": status,
         "risk_reward_blocked": risk_reward.blocked,

@@ -1,6 +1,7 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api";
+import { isExecutionCandidateStatus } from "@/domain/signal-status";
 import type {
   StrategyTestReport,
   StrategyTestRunRequest,
@@ -598,7 +599,10 @@ export function applySignalSnapshot(queryClient: QueryClient, signals: RadarSign
   const openSignals = signals.filter(isOpenFeedSignal);
   queryClient.setQueryData(queryKeys.signals, openSignals);
   queryClient.setQueryData(serverStateKeys.signals.open(), openSignals);
-  queryClient.setQueryData(serverStateKeys.signals.active(), openSignals.filter((signal) => signal.status === "active"));
+  queryClient.setQueryData(
+    serverStateKeys.signals.active(),
+    openSignals.filter((signal) => isExecutionCandidateStatus(signal.status))
+  );
   queryClient.setQueryData(serverStateKeys.signals.history(), signals);
   queryClient.setQueryData<RadarResponse>(queryKeys.radar, { signals: openSignals });
 }

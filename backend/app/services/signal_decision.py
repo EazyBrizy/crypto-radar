@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable, Mapping, cast
 
+from app.domain.signal_status import is_execution_candidate_status, is_terminal_signal_status
 from app.schemas.decision import (
     DecisionReason,
     DecisionReasonScope,
@@ -20,9 +21,6 @@ from app.schemas.signal import (
 )
 from app.schemas.trade_plan import TradePlan, TradePlanCompletenessResult
 from app.services.risk_reward_assessment import RiskRewardAssessment, risk_reward_metadata
-
-ACTIONABLE_STATUSES = {"actionable", "active", "entry_touched"}
-TERMINAL_INVALID_STATUSES = {"rejected", "expired", "invalidated", "closed"}
 
 
 class SignalDecisionService:
@@ -44,10 +42,10 @@ class SignalDecisionService:
         rr_guard_context: str = "discovery",
     ) -> SignalDecisionSnapshot:
         snapshot = SignalDecisionSnapshot(
-            setup_valid=status not in TERMINAL_INVALID_STATUSES,
+            setup_valid=not is_terminal_signal_status(status),
             trade_plan_valid=completeness.complete,
             market_context_score=float(quality.score),
-            signal_actionable=status in ACTIONABLE_STATUSES,
+            signal_actionable=is_execution_candidate_status(status),
             execution_allowed_virtual=_metadata_bool(
                 trade_plan.metadata,
                 "execution_allowed_virtual",

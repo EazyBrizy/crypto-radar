@@ -1,22 +1,10 @@
 import { z } from "zod";
+import { SIGNAL_STATUSES } from "@/domain/signal-status";
 
 export const TimeframeSchema = z.enum(["1m", "5m", "15m", "1h", "4h", "1d"]);
 export const SignalDirectionSchema = z.enum(["long", "short"]);
 export const SignalSideSchema = z.enum(["LONG", "SHORT"]);
-export const SignalStatusSchema = z.enum([
-  "new",
-  "active",
-  "watchlist",
-  "ready",
-  "actionable",
-  "wait_for_pullback",
-  "confirmed",
-  "rejected",
-  "expired",
-  "invalidated",
-  "closed",
-  "entry_touched"
-]);
+export const SignalStatusSchema = z.enum(SIGNAL_STATUSES);
 export const TradeModeSchema = z.enum(["virtual", "real"]);
 export const TradeSourceSchema = z.enum(["virtual", "real", "backtest"]);
 export const TradeStatusSchema = z.enum(["open", "closed", "cancelled"]);

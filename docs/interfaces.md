@@ -281,6 +281,64 @@ must not persist `risk_decisions`, change signal status, or create
 virtual trades while resolving display visibility. Manual/API risk preview
 flows remain auditable.
 
+## Signal Status Lifecycle v1
+
+`SignalStatus` is the market setup lifecycle, not exchange-entry permission.
+The canonical status meanings are:
+
+- `new`: newly discovered setup that has not completed the shared pipeline.
+- `active`: a market opportunity exists. It does not mean the user or system
+  may enter now.
+- `watchlist`: the setup is being observed and is not execution-ready.
+- `ready`: the trade plan is structurally present, but entry may not be reached
+  or confirmed yet.
+- `wait_for_pullback`: the setup exists, but the strategy is waiting for
+  pullback/retest/entry-zone conditions.
+- `entry_touched`: price reached the entry zone; execution still needs the
+  decision snapshot and RiskGate.
+- `actionable`: the setup is an execution candidate for the current scope.
+- `confirmed`: the user confirmed execution or intent.
+- `invalidated`: the setup is no longer valid.
+- `expired`: the setup exceeded its lifecycle TTL.
+- `closed`: legacy signal-lifecycle close state. Filled/open/closed position
+  states belong to trade lifecycle, not setup discovery.
+
+Canonical helper groups:
+
+```python
+OPEN_SIGNAL_STATUSES = {
+    "new",
+    "active",
+    "watchlist",
+    "ready",
+    "wait_for_pullback",
+    "entry_touched",
+    "actionable",
+}
+
+MARKET_OPPORTUNITY_STATUSES = OPEN_SIGNAL_STATUSES
+WAITING_ENTRY_STATUSES = {"new", "active", "watchlist", "ready", "wait_for_pullback"}
+EXECUTION_CANDIDATE_STATUSES = {"entry_touched", "actionable", "confirmed"}
+TERMINAL_SIGNAL_STATUSES = {"invalidated", "expired", "closed", "rejected"}
+```
+
+`active` is an open market opportunity only. It must not be treated as
+`can_enter`, execution-ready, auto-entry-ready, or real-order-ready.
+
+Execution permission is:
+
+```text
+is_execution_candidate_status(signal.status)
+AND decision snapshot allows the requested scope when present
+AND RiskGate preview/confirm returns can_enter=true
+AND real execution readiness passes for real orders
+```
+
+Radar `execution_ready` first applies `is_execution_candidate_status`, then
+uses a read-only RiskGate preview. Manual virtual/real confirmation must run
+RiskGate again on the current request. Real execution must run
+`RealExecutionReadinessService` after RiskGate and before any adapter order.
+
 Radar list contract:
 
 ```python
@@ -329,10 +387,11 @@ visibility, non-actionable status, RiskGate allowed, or profile-resolution
 warnings.
 
 `all_market_opportunities` returns every open market setup matching filters,
-including `watchlist`, `ready`, `wait_for_pullback`, RR-blocked, warning, and
-actionable opportunities. `execution_ready` first applies the centralized
-actionable status helper and then includes only signals whose read-only
-RiskGate preview returns `can_enter = true`.
+including `new`, `active`, `watchlist`, `ready`, `wait_for_pullback`,
+`entry_touched`, RR-blocked, warning, and actionable opportunities.
+`execution_ready` first applies the centralized execution-candidate status
+helper and then includes only signals whose read-only RiskGate preview returns
+`can_enter = true`.
 
 Legacy keys such as `risk_per_trade_percent`,
 `futures_risk_per_trade_percent`, `spot_risk_per_trade_percent`, and
@@ -1784,7 +1843,8 @@ execution-plan validation, and before any adapter call. It does not submit
 orders and does not replace RiskGate. It blocks live adapter placement unless
 all live-readiness requirements pass:
 
-- signal status is actionable/confirmed and not terminal;
+- signal status is `entry_touched`, `actionable`, or `confirmed`, and not
+  terminal;
 - `SignalDecisionSnapshot.signal_actionable == true` and
   `execution_allowed_real == true`;
 - `TradePlanCompletenessService` confirms structural stop, invalidation thesis,

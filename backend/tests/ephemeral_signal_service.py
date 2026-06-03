@@ -1,6 +1,11 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from app.domain.signal_status import (
+    OPEN_SIGNAL_STATUSES,
+    is_execution_candidate_status,
+    is_market_opportunity_status,
+)
 from app.repositories.signal_repository import (
     MAX_STORED_SIGNALS,
     SIGNAL_AUTO_ENTRY_ARMED_EVENT,
@@ -13,9 +18,6 @@ from app.repositories.signal_repository import (
 )
 from app.schemas.signal import RadarSignal, SignalAutoEntrySnapshot, StrategySignal
 from app.services.signal_service import NullSignalAnalyticsWriter, NullSignalHotStore, SignalService
-
-OPEN_SIGNAL_STATUSES = {"new", "active", "watchlist", "ready", "actionable", "wait_for_pullback", "entry_touched"}
-ACTIONABLE_SIGNAL_STATUSES = {"active", "actionable", "entry_touched"}
 
 
 class EphemeralSignalRepository:
@@ -30,14 +32,16 @@ class EphemeralSignalRepository:
         return [
             signal
             for signal in self.list_signals(limit)
-            if signal.status in ACTIONABLE_SIGNAL_STATUSES and _is_signal_actionable(signal)
+            if is_execution_candidate_status(signal.status)
+            and is_market_opportunity_status(signal.status)
+            and _is_signal_actionable(signal)
         ]
 
     def list_open_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
         return [
             signal
             for signal in self.list_signals(limit)
-            if signal.status in OPEN_SIGNAL_STATUSES and _is_signal_actionable(signal)
+            if is_market_opportunity_status(signal.status) and _is_signal_actionable(signal)
         ]
 
     def get_signal(self, signal_id: str) -> RadarSignal | None:

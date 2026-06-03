@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from app.domain.signal_status import is_execution_candidate_status
 from app.repositories.signal_repository import SIGNAL_AUTO_ENTRY_FAILED_EVENT
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest
@@ -22,7 +23,7 @@ class SignalAutoEntryService:
         auto_entry = signal.auto_entry
         if auto_entry is None or not auto_entry.enabled or auto_entry.status != "pending":
             return None
-        if signal.status not in {"actionable", "active", "entry_touched"}:
+        if not is_execution_candidate_status(signal.status):
             return None
 
         request = ManualConfirmRequest.model_validate(auto_entry.request or {})

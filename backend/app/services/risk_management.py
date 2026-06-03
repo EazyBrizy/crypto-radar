@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Mapping, cast
 
@@ -11,6 +12,7 @@ from app.schemas.risk import (
     PositionSizingResult,
     ResolvedExecutionProfile,
     RiskAdjustmentPlan,
+    RiskAmountMode,
     RiskCheckResult,
     RiskOverride,
     StopLossPlan,
@@ -262,6 +264,19 @@ class ExecutionProfileValidationError(ValueError):
     def __init__(self, reason: str) -> None:
         self.reason = reason
         super().__init__(reason)
+
+
+@dataclass(frozen=True)
+class _RiskBudget:
+    risk_mode: RiskAmountMode
+    fixed_risk_amount: float | None
+    requested_risk_amount: float
+    requested_risk_percent: float
+    base_risk_amount: float
+    base_risk_percent: float
+    risk_cap_amount: float | None
+    risk_cap_percent: float | None
+    risk_amount_capped: bool
 
 
 class ExecutionProfileResolver:
@@ -582,6 +597,7 @@ def calculate_trade_risk_adjustment(
     instrument_type: TradeInstrumentType,
     strategy: str,
     signal_score: float,
+    execution_profile: ResolvedExecutionProfile | None = None,
     volatility_multiplier: float = 1.0,
     user_mode_multiplier: float = 1.0,
 ) -> RiskAdjustmentPlan:
@@ -593,31 +609,46 @@ def calculate_trade_risk_adjustment(
     if volatility_multiplier < 0 or user_mode_multiplier < 0:
         raise ValueError("risk multipliers must be greater than or equal to zero")
 
-    base_risk_amount, base_risk_percent = _base_risk_amount_and_percent(
+    risk_budget = _risk_budget_from_settings_or_profile(
         settings,
         instrument_type,
         account_equity,
+        execution_profile=execution_profile,
     )
     normalized_strategy_key = _normalize_strategy_key(strategy)
     strategy_key = _strategy_key(strategy)
     strategy_multiplier = _strategy_risk_multiplier(settings, normalized_strategy_key)
     signal_multiplier, signal_trade_allowed, signal_virtual_only = _signal_score_multiplier(signal_score)
     warnings: list[str] = []
+    if risk_budget.risk_amount_capped:
+        warnings.append(
+            "Fixed risk amount was capped from "
+            f"{risk_budget.requested_risk_amount:.2f} "
+            f"to {risk_budget.base_risk_amount:.2f} "
+            "by the max per-trade risk cap."
+        )
     if not signal_trade_allowed:
         warnings.append("Signal score is below the configured trading threshold.")
     elif signal_virtual_only:
         warnings.append("Signal score is low; trade should be virtual-only.")
 
     multiplier = strategy_multiplier * signal_multiplier * volatility_multiplier * user_mode_multiplier
-    adjusted_risk_amount = base_risk_amount * multiplier
+    adjusted_risk_amount = risk_budget.base_risk_amount * multiplier
     adjusted_risk_percent = adjusted_risk_amount / account_equity * 100
     return RiskAdjustmentPlan(
         instrument_type=instrument_type,
         strategy=strategy_key,
         signal_score=signal_score,
         account_equity=account_equity,
-        base_risk_percent=base_risk_percent,
-        base_risk_amount=base_risk_amount,
+        risk_mode=risk_budget.risk_mode,
+        fixed_risk_amount=risk_budget.fixed_risk_amount,
+        requested_risk_amount=risk_budget.requested_risk_amount,
+        effective_risk_amount=adjusted_risk_amount,
+        risk_amount_capped=risk_budget.risk_amount_capped,
+        risk_cap_amount=risk_budget.risk_cap_amount,
+        risk_cap_percent=risk_budget.risk_cap_percent,
+        base_risk_percent=risk_budget.base_risk_percent,
+        base_risk_amount=risk_budget.base_risk_amount,
         strategy_risk_multiplier=strategy_multiplier,
         signal_score_multiplier=signal_multiplier,
         volatility_multiplier=volatility_multiplier,
@@ -793,8 +824,13 @@ def calculate_risk_check_result(
             blockers.append("Price moved too far from the signal entry.")
 
     effective_risk_amount = position_sizing.position_size_base * position_sizing.effective_risk_per_unit
-    risk_tolerance = max(0.000001, risk_adjustment.adjusted_risk_amount * 0.02)
-    if effective_risk_amount > risk_adjustment.adjusted_risk_amount + risk_tolerance:
+    risk_limit_amount = (
+        risk_adjustment.effective_risk_amount
+        if risk_adjustment.effective_risk_amount > 0
+        else risk_adjustment.adjusted_risk_amount
+    )
+    risk_tolerance = max(0.000001, risk_limit_amount * 0.02)
+    if effective_risk_amount > risk_limit_amount + risk_tolerance:
         blockers.append("Risk per trade exceeds the adjusted risk limit.")
     if (
         risk_adjustment.instrument_type == "spot"
@@ -1449,6 +1485,8 @@ def calculate_position_sizing(
     fee_rate: float = 0.0,
     slippage_bps: float = 0.0,
     funding_buffer_per_unit: float = 0.0,
+    risk_adjustment: RiskAdjustmentPlan | None = None,
+    effective_risk_amount: float | None = None,
     risk_per_trade_percent: float | None = None,
 ) -> PositionSizingResult:
     settings = _settings_model(risk_settings)
@@ -1465,6 +1503,8 @@ def calculate_position_sizing(
         raise ValueError("slippage_bps must be greater than or equal to zero")
     if funding_buffer_per_unit < 0:
         raise ValueError("funding_buffer_per_unit must be greater than or equal to zero")
+    if effective_risk_amount is not None and effective_risk_amount < 0:
+        raise ValueError("effective_risk_amount must be greater than or equal to zero")
     if risk_per_trade_percent is not None and risk_per_trade_percent < 0:
         raise ValueError("risk_per_trade_percent must be greater than or equal to zero")
 
@@ -1474,19 +1514,54 @@ def calculate_position_sizing(
 
     include_fees = settings.include_fees_in_risk
     include_slippage = settings.include_slippage_in_risk
-    if risk_per_trade_percent is None:
+    risk_mode: RiskAmountMode = "percent"
+    fixed_risk_amount = None
+    requested_risk_amount = None
+    risk_amount_capped = False
+    risk_cap_amount = None
+    if risk_adjustment is not None:
+        risk_mode = risk_adjustment.risk_mode
+        fixed_risk_amount = risk_adjustment.fixed_risk_amount
+        risk_amount_capped = risk_adjustment.risk_amount_capped
+        risk_cap_amount = risk_adjustment.risk_cap_amount
+        risk_amount = (
+            risk_adjustment.effective_risk_amount
+            if risk_adjustment.effective_risk_amount > 0
+            or risk_adjustment.adjusted_risk_amount <= 0
+            else risk_adjustment.adjusted_risk_amount
+        )
+        requested_risk_amount = risk_adjustment.requested_risk_amount or risk_amount
+        effective_risk_percent = risk_adjustment.adjusted_risk_percent
+    elif effective_risk_amount is not None:
+        risk_amount = effective_risk_amount
+        effective_risk_percent = risk_amount / account_equity * 100
+        requested_risk_amount = risk_amount
+    elif risk_per_trade_percent is None:
         if settings.risk_mode == "fixed":
-            risk_amount, effective_risk_percent = _base_risk_amount_and_percent(
+            budget = _risk_budget_from_settings_or_profile(
                 settings,
                 "spot",
                 account_equity,
+                execution_profile=None,
             )
+            risk_mode = budget.risk_mode
+            fixed_risk_amount = budget.fixed_risk_amount
+            requested_risk_amount = budget.requested_risk_amount
+            risk_amount_capped = budget.risk_amount_capped
+            risk_cap_amount = budget.risk_cap_amount
+            risk_amount = budget.base_risk_amount
+            effective_risk_percent = budget.base_risk_percent
         else:
             effective_risk_percent = settings.risk_per_trade_percent
             risk_amount = account_equity * effective_risk_percent / 100
+            requested_risk_amount = risk_amount
     else:
         effective_risk_percent = risk_per_trade_percent
         risk_amount = account_equity * effective_risk_percent / 100
+        requested_risk_amount = risk_amount
+
+    if risk_amount < 0:
+        raise ValueError("risk_amount must be greater than or equal to zero")
     estimated_entry_fee_per_unit = entry_price * fee_rate if include_fees else 0.0
     estimated_exit_fee_per_unit = stop_loss_price * fee_rate if include_fees else 0.0
     slippage_buffer_per_unit = (
@@ -1509,6 +1584,12 @@ def calculate_position_sizing(
     return PositionSizingResult(
         side=side,
         account_equity=account_equity,
+        risk_mode=risk_mode,
+        fixed_risk_amount=fixed_risk_amount,
+        requested_risk_amount=requested_risk_amount,
+        effective_risk_amount=risk_amount,
+        risk_amount_capped=risk_amount_capped,
+        risk_cap_amount=risk_cap_amount,
         risk_per_trade_percent=effective_risk_percent,
         risk_amount=risk_amount,
         entry_price=entry_price,
@@ -1551,6 +1632,7 @@ def position_sizing_for_notional(
         update={
             "risk_per_trade_percent": risk_percent,
             "risk_amount": effective_risk_amount,
+            "effective_risk_amount": effective_risk_amount,
             "notional": notional,
             "position_size_base": position_size_base,
             "required_margin": notional / leverage,
@@ -1796,17 +1878,87 @@ def _base_risk_amount_and_percent(
     instrument_type: TradeInstrumentType,
     account_equity: float,
 ) -> tuple[float, float]:
-    if settings.risk_mode == "fixed":
+    budget = _risk_budget_from_settings_or_profile(
+        settings,
+        instrument_type,
+        account_equity,
+        execution_profile=None,
+    )
+    return budget.base_risk_amount, budget.base_risk_percent
+
+
+def _risk_budget_from_settings_or_profile(
+    settings: RiskManagementSettings,
+    instrument_type: TradeInstrumentType,
+    account_equity: float,
+    *,
+    execution_profile: ResolvedExecutionProfile | None,
+) -> _RiskBudget:
+    if execution_profile is not None:
+        risk_mode = execution_profile.risk_mode
+        fixed_risk_amount = (
+            float(execution_profile.fixed_risk_amount)
+            if execution_profile.fixed_risk_amount is not None
+            else None
+        )
+        if risk_mode == "fixed":
+            if fixed_risk_amount is None:
+                raise ExecutionProfileValidationError(
+                    "fixed_risk_amount is required when risk_mode is fixed"
+                )
+            requested_risk_amount = fixed_risk_amount
+            requested_risk_percent = requested_risk_amount / account_equity * 100
+        else:
+            if execution_profile.risk_percent is None:
+                raise ExecutionProfileValidationError(
+                    "risk_percent is required when risk_mode is percent"
+                )
+            requested_risk_percent = float(execution_profile.risk_percent)
+            requested_risk_amount = account_equity * requested_risk_percent / 100
+    elif settings.risk_mode == "fixed":
+        risk_mode = "fixed"
         if settings.fixed_risk_amount is None:
             raise ExecutionProfileValidationError(
                 "fixed_risk_amount is required when risk_mode is fixed"
             )
-        risk_amount = float(settings.fixed_risk_amount)
-        if risk_amount <= 0:
+        fixed_risk_amount = float(settings.fixed_risk_amount)
+        requested_risk_amount = fixed_risk_amount
+        requested_risk_percent = requested_risk_amount / account_equity * 100
+    else:
+        risk_mode = "percent"
+        fixed_risk_amount = None
+        requested_risk_percent = _base_risk_percent(settings, instrument_type)
+        requested_risk_amount = account_equity * requested_risk_percent / 100
+
+    if requested_risk_amount <= 0:
+        if risk_mode == "fixed":
             raise ExecutionProfileValidationError("fixed_risk_amount must be greater than zero")
-        return risk_amount, risk_amount / account_equity * 100
-    risk_percent = _base_risk_percent(settings, instrument_type)
-    return account_equity * risk_percent / 100, risk_percent
+        raise ExecutionProfileValidationError("risk amount must be greater than zero")
+
+    risk_cap_percent = None
+    risk_cap_amount = None
+    base_risk_amount = requested_risk_amount
+    if risk_mode == "fixed":
+        risk_cap_percent = _base_risk_percent(settings, instrument_type)
+        risk_cap_amount = account_equity * risk_cap_percent / 100
+        base_risk_amount = min(requested_risk_amount, risk_cap_amount)
+
+    risk_amount_capped = (
+        risk_cap_amount is not None
+        and requested_risk_amount > risk_cap_amount + 0.000001
+    )
+    base_risk_percent = base_risk_amount / account_equity * 100
+    return _RiskBudget(
+        risk_mode=risk_mode,
+        fixed_risk_amount=fixed_risk_amount,
+        requested_risk_amount=requested_risk_amount,
+        requested_risk_percent=requested_risk_percent,
+        base_risk_amount=base_risk_amount,
+        base_risk_percent=base_risk_percent,
+        risk_cap_amount=risk_cap_amount,
+        risk_cap_percent=risk_cap_percent,
+        risk_amount_capped=risk_amount_capped,
+    )
 
 
 def _base_risk_percent(settings: RiskManagementSettings, instrument_type: TradeInstrumentType) -> float:

@@ -39,6 +39,12 @@ TakeProfitAction = Literal[
 class PositionSizingResult(BaseModel):
     side: Literal["long", "short"]
     account_equity: float = Field(..., gt=0)
+    risk_mode: RiskAmountMode = "percent"
+    fixed_risk_amount: float | None = Field(default=None, ge=0)
+    requested_risk_amount: float | None = Field(default=None, ge=0)
+    effective_risk_amount: float | None = Field(default=None, ge=0)
+    risk_amount_capped: bool = False
+    risk_cap_amount: float | None = Field(default=None, ge=0)
     risk_per_trade_percent: float = Field(..., ge=0)
     risk_amount: float = Field(..., ge=0)
     entry_price: float = Field(..., gt=0)
@@ -145,6 +151,13 @@ class RiskAdjustmentPlan(BaseModel):
     strategy: str
     signal_score: float = Field(..., ge=0, le=100)
     account_equity: float = Field(..., gt=0)
+    risk_mode: RiskAmountMode = "percent"
+    fixed_risk_amount: float | None = Field(default=None, ge=0)
+    requested_risk_amount: float = Field(default=0.0, ge=0)
+    effective_risk_amount: float = Field(default=0.0, ge=0)
+    risk_amount_capped: bool = False
+    risk_cap_amount: float | None = Field(default=None, ge=0)
+    risk_cap_percent: float | None = Field(default=None, ge=0)
     base_risk_percent: float = Field(..., gt=0)
     base_risk_amount: float = Field(..., ge=0)
     strategy_risk_multiplier: float = Field(..., ge=0)
@@ -302,6 +315,7 @@ class RiskContext(BaseModel):
     user_id: str = "demo_user"
     risk_profile_source: str = "unknown"
     execution_profile_sources: dict[str, str] = Field(default_factory=dict)
+    execution_profile: ResolvedExecutionProfile | None = None
     exchange: str
     symbol: str
     instrument_type: TradeInstrumentType

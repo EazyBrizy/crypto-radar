@@ -532,6 +532,7 @@ class VirtualTradingService:
                 user_mode_multiplier=reference.user_mode_multiplier if reference is not None else 1.0,
                 risk_profile_source=risk_profile_source,
                 execution_profile_sources=execution_profile.sources,
+                execution_profile=execution_profile,
             ),
             risk_settings=risk_settings,
         )
@@ -633,6 +634,7 @@ class VirtualTradingService:
                 user_mode_multiplier=reference.user_mode_multiplier if reference is not None else 1.0,
                 risk_profile_source=risk_profile_source,
                 execution_profile_sources=execution_profile.sources,
+                execution_profile=execution_profile,
             ),
             risk_settings=risk_settings,
         )
@@ -803,6 +805,7 @@ class VirtualTradingService:
                 user_mode_multiplier=reference.user_mode_multiplier if reference is not None else 1.0,
                 risk_profile_source=risk_profile_source,
                 execution_profile_sources=execution_profile.sources,
+                execution_profile=execution_profile,
             ),
             risk_settings=risk_settings,
         )

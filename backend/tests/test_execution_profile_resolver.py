@@ -26,7 +26,10 @@ class ExecutionProfileResolverTest(unittest.TestCase):
 
     def test_fixed_profile_resolves_from_strategy_settings(self) -> None:
         profile = execution_profile_resolver.resolve(
-            user_risk_settings=RiskManagementSettings(risk_per_trade_percent=1.0),
+            user_risk_settings=RiskManagementSettings(
+                risk_per_trade_percent=5.0,
+                futures_risk_per_trade_percent=5.0,
+            ),
             strategy_execution_settings={
                 "risk_mode": "fixed",
                 "fixed_risk_amount": 25,
@@ -47,7 +50,10 @@ class ExecutionProfileResolverTest(unittest.TestCase):
         self.assertEqual(profile.sources["fixed_risk_amount"], "strategy")
 
         applied_settings = execution_profile_resolver.apply_to_risk_settings(
-            RiskManagementSettings(risk_per_trade_percent=1.0),
+            RiskManagementSettings(
+                risk_per_trade_percent=5.0,
+                futures_risk_per_trade_percent=5.0,
+            ),
             profile,
         )
         risk_plan = calculate_trade_risk_adjustment(
@@ -75,7 +81,7 @@ class ExecutionProfileResolverTest(unittest.TestCase):
 
     def test_legacy_risk_per_trade_percent_still_works(self) -> None:
         profile = execution_profile_resolver.resolve(
-            user_risk_settings=RiskManagementSettings(risk_per_trade_percent=1.0),
+            user_risk_settings=RiskManagementSettings(risk_per_trade_percent=5.0),
             strategy_execution_settings={"risk_per_trade_percent": 2.5},
             request_override=None,
             mode="real",
@@ -134,7 +140,7 @@ class ExecutionProfileResolverTest(unittest.TestCase):
         self.assertEqual(resolved_risk_profile_source(profile), "request_override")
 
         applied_settings = execution_profile_resolver.apply_to_risk_settings(
-            RiskManagementSettings(risk_per_trade_percent=1.0),
+            RiskManagementSettings(risk_per_trade_percent=5.0),
             profile,
         )
         risk_plan = calculate_trade_risk_adjustment(

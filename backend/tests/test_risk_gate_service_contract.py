@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
+from app.schemas.risk import ResolvedExecutionProfile
 from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanInvalidation, TradePlanRiskRules, TradePlanTarget
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
 from app.schemas.user import RiskManagementSettings
@@ -84,6 +85,52 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertEqual(decision.risk_check.effective_risk_amount, decision.checked_position_sizing.risk_amount)
         self.assertEqual(decision.risk_profile_source, "user_profile")
         self.assertEqual(decision.execution_profile_sources["risk_percent"], "user.risk_per_trade_percent")
+
+    def test_virtual_gate_warns_when_fixed_risk_is_capped(self) -> None:
+        execution_profile = ResolvedExecutionProfile(
+            execution_mode="virtual",
+            instrument_type="spot",
+            risk_mode="fixed",
+            fixed_risk_amount=10,
+            leverage=1,
+            rr_guard_mode="soft",
+            min_rr_ratio=2,
+            rr_target="final",
+        )
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(score=100),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+                execution_profile=execution_profile,
+                execution_profile_sources={"fixed_risk_amount": "request_override"},
+            ),
+            risk_settings=RiskManagementSettings(
+                risk_profile="balanced",
+                risk_mode="fixed",
+                fixed_risk_amount=10,
+                risk_per_trade_percent=1.0,
+                spot_risk_per_trade_percent=1.0,
+                min_rr_ratio=2.0,
+                max_daily_loss_percent=3.0,
+                max_account_drawdown_percent=10.0,
+                max_open_risk_percent=5.0,
+                stop_loss_mode="structure",
+            ),
+        )
+
+        self.assertNotEqual(decision.status, "failed")
+        self.assertEqual(decision.risk_adjustment_plan.risk_mode, "fixed")
+        self.assertAlmostEqual(decision.risk_adjustment_plan.requested_risk_amount, 10)
+        self.assertAlmostEqual(decision.risk_adjustment_plan.effective_risk_amount, 1)
+        self.assertTrue(decision.risk_adjustment_plan.risk_amount_capped)
+        self.assertAlmostEqual(decision.position_sizing.risk_amount, 1)
+        self.assertEqual(decision.position_sizing.risk_mode, "fixed")
+        self.assertTrue(decision.position_sizing.risk_amount_capped)
+        self.assertTrue(any("Fixed risk amount was capped" in warning for warning in decision.warnings))
 
     def test_virtual_gate_blocks_manual_notional_above_adjusted_risk(self) -> None:
         decision = RiskGateService().evaluate(

@@ -42,6 +42,7 @@ export type TakeProfitTargetAction = "move_stop_to_breakeven" | "trailing_stop" 
 export type TrailingMode = "atr" | "percent" | "structure";
 export type FuturesRiskStatus = "passed" | "blocked" | "unknown";
 export type TradeInstrumentType = "spot" | "futures" | "virtual";
+export type RiskAmountMode = "percent" | "fixed";
 export type RiskCheckStatus = "passed" | "warning" | "failed";
 export type RRGuardMode = "off" | "soft" | "hard";
 export type RiskProtectionMode = "normal" | "reduced" | "virtual_only" | "blocked";
@@ -369,6 +370,12 @@ export interface VirtualSimulatedPositionPath {
 export interface PositionSizingResult {
   side: SignalDirection;
   account_equity: number;
+  risk_mode: RiskAmountMode;
+  fixed_risk_amount: number | null;
+  requested_risk_amount: number | null;
+  effective_risk_amount: number | null;
+  risk_amount_capped: boolean;
+  risk_cap_amount: number | null;
   risk_per_trade_percent: number;
   risk_amount: number;
   entry_price: number;
@@ -394,6 +401,13 @@ export interface RiskAdjustmentPlan {
   strategy: string;
   signal_score: number;
   account_equity: number;
+  risk_mode: RiskAmountMode;
+  fixed_risk_amount: number | null;
+  requested_risk_amount: number;
+  effective_risk_amount: number;
+  risk_amount_capped: boolean;
+  risk_cap_amount: number | null;
+  risk_cap_percent: number | null;
   base_risk_percent: number;
   base_risk_amount: number;
   strategy_risk_multiplier: number;

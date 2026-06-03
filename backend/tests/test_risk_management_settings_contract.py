@@ -1,6 +1,6 @@
 import unittest
 
-from app.schemas.user import RiskManagementPatch
+from app.schemas.user import RiskManagementPatch, RiskManagementSettings
 from app.services.risk_management import (
     apply_risk_management_patch,
     calculate_breakeven_plan,
@@ -433,6 +433,166 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
 
         self.assertAlmostEqual(sizing.risk_amount, 37.5)
         self.assertAlmostEqual(sizing.notional, 750.0)
+        self.assertEqual(sizing.risk_mode, "percent")
+        self.assertIsNone(sizing.fixed_risk_amount)
+        self.assertAlmostEqual(sizing.effective_risk_amount or 0, 37.5)
+
+    def test_fixed_risk_position_sizing_long_uses_fixed_amount(self) -> None:
+        settings = RiskManagementSettings(
+            risk_mode="fixed",
+            fixed_risk_amount=100,
+            risk_per_trade_percent=2.0,
+            spot_risk_per_trade_percent=2.0,
+        )
+        risk_plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=settings,
+            instrument_type="spot",
+            strategy="trend_pullback_continuation",
+            signal_score=100,
+        )
+        sizing = calculate_position_sizing(
+            account_equity=10_000,
+            risk_settings=settings,
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            risk_adjustment=risk_plan,
+        )
+
+        self.assertEqual(risk_plan.risk_mode, "fixed")
+        self.assertAlmostEqual(risk_plan.requested_risk_amount, 100)
+        self.assertAlmostEqual(risk_plan.effective_risk_amount, 100)
+        self.assertFalse(risk_plan.risk_amount_capped)
+        self.assertAlmostEqual(sizing.risk_amount, 100)
+        self.assertAlmostEqual(sizing.position_size_base, 10)
+        self.assertAlmostEqual(sizing.notional, 1_000)
+        self.assertEqual(sizing.risk_mode, "fixed")
+        self.assertAlmostEqual(sizing.fixed_risk_amount or 0, 100)
+
+    def test_fixed_risk_position_sizing_short_uses_fixed_amount(self) -> None:
+        settings = RiskManagementSettings(
+            risk_mode="fixed",
+            fixed_risk_amount=100,
+            risk_per_trade_percent=2.0,
+            spot_risk_per_trade_percent=2.0,
+        )
+        risk_plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=settings,
+            instrument_type="spot",
+            strategy="trend_pullback_continuation",
+            signal_score=100,
+        )
+        sizing = calculate_position_sizing(
+            account_equity=10_000,
+            risk_settings=settings,
+            entry_price=100,
+            stop_loss_price=110,
+            side="short",
+            risk_adjustment=risk_plan,
+        )
+
+        self.assertAlmostEqual(sizing.risk_amount, 100)
+        self.assertAlmostEqual(sizing.position_size_base, 10)
+        self.assertAlmostEqual(sizing.notional, 1_000)
+        self.assertEqual(sizing.side, "short")
+
+    def test_fixed_risk_amount_is_capped_by_per_trade_risk_cap(self) -> None:
+        settings = RiskManagementSettings(
+            risk_mode="fixed",
+            fixed_risk_amount=100,
+            risk_per_trade_percent=1.0,
+            spot_risk_per_trade_percent=1.0,
+        )
+        risk_plan = calculate_trade_risk_adjustment(
+            account_equity=5_000,
+            risk_settings=settings,
+            instrument_type="spot",
+            strategy="trend_pullback_continuation",
+            signal_score=100,
+        )
+        sizing = calculate_position_sizing(
+            account_equity=5_000,
+            risk_settings=settings,
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            risk_adjustment=risk_plan,
+        )
+
+        self.assertTrue(risk_plan.risk_amount_capped)
+        self.assertAlmostEqual(risk_plan.requested_risk_amount, 100)
+        self.assertAlmostEqual(risk_plan.risk_cap_amount or 0, 50)
+        self.assertAlmostEqual(risk_plan.effective_risk_amount, 50)
+        self.assertTrue(any("Fixed risk amount was capped" in warning for warning in risk_plan.warnings))
+        self.assertAlmostEqual(sizing.risk_amount, 50)
+        self.assertAlmostEqual(sizing.position_size_base, 5)
+        self.assertTrue(sizing.risk_amount_capped)
+
+    def test_fixed_risk_zero_negative_or_missing_amount_is_invalid(self) -> None:
+        for fixed_amount in (0, -1):
+            with self.subTest(fixed_amount=fixed_amount):
+                with self.assertRaises(Exception):
+                    calculate_trade_risk_adjustment(
+                        account_equity=10_000,
+                        risk_settings={
+                            "risk_mode": "fixed",
+                            "fixed_risk_amount": fixed_amount,
+                        },
+                        instrument_type="spot",
+                        strategy="trend_pullback_continuation",
+                        signal_score=100,
+                    )
+
+        with self.assertRaises(Exception):
+            calculate_trade_risk_adjustment(
+                account_equity=10_000,
+                risk_settings={"risk_mode": "fixed"},
+                instrument_type="spot",
+                strategy="trend_pullback_continuation",
+                signal_score=100,
+            )
+
+    def test_futures_margin_check_runs_after_fixed_risk_sizing(self) -> None:
+        settings = RiskManagementSettings(
+            risk_mode="fixed",
+            fixed_risk_amount=100,
+            risk_per_trade_percent=2.0,
+            futures_risk_per_trade_percent=2.0,
+            take_profit_required=False,
+        )
+        risk_plan = calculate_trade_risk_adjustment(
+            account_equity=10_000,
+            risk_settings=settings,
+            instrument_type="futures",
+            strategy="trend_pullback_continuation",
+            signal_score=100,
+        )
+        sizing = calculate_position_sizing(
+            account_equity=10_000,
+            risk_settings=settings,
+            entry_price=100,
+            stop_loss_price=90,
+            side="long",
+            leverage=5,
+            risk_adjustment=risk_plan,
+        )
+        result = calculate_risk_check_result(
+            risk_settings=settings,
+            risk_adjustment=risk_plan,
+            position_sizing=sizing,
+            available_balance=100,
+            execution_mode="real",
+            best_bid=99.95,
+            best_ask=100.05,
+            orderbook_depth_usd=100_000,
+        )
+
+        self.assertAlmostEqual(sizing.risk_amount, 100)
+        self.assertAlmostEqual(sizing.required_margin, 200)
+        self.assertEqual(result.status, "failed")
+        self.assertIn("Required margin exceeds available balance.", result.blockers)
 
     def test_real_risk_check_fails_on_low_rr_by_default(self) -> None:
         settings = normalize_risk_management_settings({}, "balanced")

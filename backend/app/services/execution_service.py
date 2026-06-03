@@ -207,6 +207,7 @@ class RealExecutionService:
                 fee_rate_warnings=list(fee_rate.warnings) if fee_rate is not None else [],
                 risk_profile_source=risk_profile_source,
                 execution_profile_sources=execution_profile.sources,
+                execution_profile=execution_profile,
                 open_risk_amount=reference.open_risk_amount if reference is not None else 0.0,
                 correlated_open_risk_amount=(
                     reference.correlated_open_risk_amount if reference is not None else 0.0

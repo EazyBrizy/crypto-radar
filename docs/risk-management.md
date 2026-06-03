@@ -370,16 +370,38 @@ required_margin = notional / leverage
 Fixed-risk mode uses the same sizing path after resolving the budget:
 
 ```text
-risk_amount = fixed_risk_amount
-risk_per_trade_percent = fixed_risk_amount / account_equity * 100
-position_size_base = risk_amount / effective_risk_per_unit
+requested_risk_amount = fixed_risk_amount
+risk_cap_amount = account_equity * max_per_trade_risk_cap_percent / 100
+base_risk_amount = min(requested_risk_amount, risk_cap_amount)
+effective_risk_amount =
+base_risk_amount
+* strategy_risk_multiplier
+* signal_score_multiplier
+* volatility_multiplier
+* user_mode_multiplier
+risk_per_trade_percent = effective_risk_amount / account_equity * 100
+position_size_base = effective_risk_amount / effective_risk_per_unit
 notional = position_size_base * entry_price
 required_margin = notional / leverage
 ```
 
+The max per-trade cap for fixed mode comes from the same resolved per-trade
+percent context that percent sizing uses (`risk_per_trade_percent`,
+`spot_risk_per_trade_percent`, `futures_risk_per_trade_percent`, or
+`virtual_risk_per_trade_percent` when virtual custom risk is active). A fixed
+amount must be positive. Missing, zero, or negative fixed amounts are invalid.
+
+When `fixed_risk_amount` is above the cap, the backend must reduce the amount
+before sizing, set `risk_amount_capped = true`, expose
+`requested_risk_amount`, `effective_risk_amount`, `risk_cap_amount`, and add a
+RiskGate warning. This is not a silent fallback. The capped
+`effective_risk_amount` is the source of truth for quantity calculation.
+
 Fixed-risk mode still respects open-risk, correlated-risk, leverage,
 liquidation, exchange-rule, market-quality, no-trade, RR, and real-readiness
 gates. The fixed amount is a maximum loss budget, not a requested notional.
+Futures margin and available-balance checks run after fixed-risk sizing because
+required margin depends on the final quantity, price, and leverage.
 
 `effective_risk_per_unit` currently includes:
 
@@ -413,14 +435,19 @@ trading:
 The backend now calculates `RiskAdjustmentPlan`:
 
 ```text
-base_risk_amount = account_equity * base_risk_percent / 100
-adjusted_risk_amount =
+requested_risk_amount = percent_or_fixed_profile_budget
+base_risk_amount = requested_risk_amount capped by the per-trade risk cap
+effective_risk_amount =
 base_risk_amount
 * strategy_risk_multiplier
 * signal_score_multiplier
 * volatility_multiplier
 * user_mode_multiplier
 ```
+
+The legacy `adjusted_risk_amount` field remains present and equals
+`effective_risk_amount`. Position sizing consumes `effective_risk_amount`
+directly instead of recalculating the budget from `risk_percent`.
 
 Signal score multipliers are currently:
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.schemas.risk import (
+    ResolvedExecutionProfile,
     RiskContext,
     RiskDecision,
     TakeProfitPlan,
@@ -82,6 +83,7 @@ class RiskContextService:
         rr_guard_context: str | None = None,
         risk_profile_source: str = "unknown",
         execution_profile_sources: dict[str, str] | None = None,
+        execution_profile: ResolvedExecutionProfile | None = None,
     ) -> RiskContext:
         account_equity = account.equity if account.equity > 0 else request.account_balance
         return RiskContext(
@@ -91,6 +93,7 @@ class RiskContextService:
             user_id=request.user_id,
             risk_profile_source=risk_profile_source,
             execution_profile_sources=execution_profile_sources or {},
+            execution_profile=execution_profile,
             exchange=signal.exchange,
             symbol=signal.symbol,
             instrument_type="virtual",
@@ -192,6 +195,7 @@ class RiskContextService:
         fee_rate_warnings: list[str] | None = None,
         risk_profile_source: str = "unknown",
         execution_profile_sources: dict[str, str] | None = None,
+        execution_profile: ResolvedExecutionProfile | None = None,
     ) -> RiskContext:
         resolved_instrument_type: TradeInstrumentType = (
             instrument_type
@@ -204,6 +208,7 @@ class RiskContextService:
             user_id=request.user_id,
             risk_profile_source=risk_profile_source,
             execution_profile_sources=execution_profile_sources or {},
+            execution_profile=execution_profile,
             exchange=signal.exchange,
             symbol=signal.symbol,
             instrument_type=resolved_instrument_type,
@@ -314,6 +319,7 @@ class RiskGateService:
             instrument_type=context.instrument_type,
             strategy=context.strategy,
             signal_score=context.signal_score,
+            execution_profile=context.execution_profile,
             volatility_multiplier=context.volatility_multiplier,
             user_mode_multiplier=context.user_mode_multiplier,
         )
@@ -327,7 +333,7 @@ class RiskGateService:
             fee_rate=context.fee_rate,
             slippage_bps=context.slippage_bps,
             funding_buffer_per_unit=context.funding_buffer_per_unit,
-            risk_per_trade_percent=risk_adjustment.adjusted_risk_percent,
+            risk_adjustment=risk_adjustment,
         )
         checked_position_sizing = (
             position_sizing_for_notional(

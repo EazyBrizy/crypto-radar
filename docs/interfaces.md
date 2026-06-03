@@ -283,6 +283,44 @@ RiskGate decisions and risk audit snapshots expose the resolved
 `risk_profile_source` (`request_override`, `strategy`, `user_profile`, or
 `default`) plus field-level `execution_profile_sources` for debugging.
 
+RiskGate risk-budget and sizing snapshots are additive and backward compatible.
+Legacy fields stay present, while the resolved amount source is explicit:
+
+```python
+RiskAdjustmentPlan = {
+    "risk_mode": RiskAmountMode,
+    "fixed_risk_amount": float | None,
+    "requested_risk_amount": float,
+    "effective_risk_amount": float,
+    "risk_amount_capped": bool,
+    "risk_cap_amount": float | None,
+    "risk_cap_percent": float | None,
+    "base_risk_percent": float,      # retained legacy/public field
+    "base_risk_amount": float,       # retained legacy/public field
+    "adjusted_risk_percent": float,  # retained legacy/public field
+    "adjusted_risk_amount": float,   # retained legacy/public field
+}
+
+PositionSizingResult = {
+    "risk_mode": RiskAmountMode,
+    "fixed_risk_amount": float | None,
+    "requested_risk_amount": float | None,
+    "effective_risk_amount": float | None,
+    "risk_amount_capped": bool,
+    "risk_cap_amount": float | None,
+    "risk_per_trade_percent": float, # retained legacy/public field
+    "risk_amount": float,            # retained legacy/public field
+}
+```
+
+`requested_risk_amount` is the amount requested by the resolved execution
+profile before risk caps and multipliers. `effective_risk_amount` on
+`RiskAdjustmentPlan` is the final risk budget consumed by position sizing.
+`PositionSizingResult.risk_amount` remains backward-compatible and equals the
+amount used for quantity calculation. When a fixed risk amount is reduced by a
+configured risk cap, RiskGate must surface an explicit warning and set
+`risk_amount_capped = true`.
+
 ## Pipeline Layer Services v1
 
 `StrategySignalPipeline.finalize(signal, context)` remains the public strategy

@@ -51,8 +51,9 @@ class SignalDecisionService:
             execution_allowed_virtual=_metadata_bool(
                 trade_plan.metadata,
                 "execution_allowed_virtual",
+                fallback=completeness.execution_allowed_virtual,
             ),
-            execution_allowed_real=None,
+            execution_allowed_real=False if not completeness.execution_allowed_real else None,
         )
         snapshot = self.merge_market_quality(snapshot, quality)
         snapshot = self.merge_rr(snapshot, risk_reward, scope=_scope_from_context(rr_guard_context))
@@ -199,43 +200,56 @@ class SignalDecisionService:
         *,
         production_mode: bool,
     ) -> SignalDecisionSnapshot:
-        if completeness.complete:
+        if completeness.complete and not completeness.warnings and not completeness.blockers:
             return snapshot
         message = (
-            f"Trade plan incomplete: {', '.join(completeness.missing)}."
-            if completeness.missing
+            f"Trade plan incomplete: {', '.join(completeness.missing_fields or completeness.missing)}."
+            if completeness.missing_fields or completeness.missing
             else "Trade plan is incomplete."
         )
         metadata = completeness.model_dump(mode="json")
-        if production_mode:
+        blocker_messages = list(completeness.blockers)
+        warning_messages = list(completeness.warnings)
+        if not blocker_messages and not completeness.complete and production_mode:
+            blocker_messages = [message]
+        elif not warning_messages and not completeness.complete:
+            warning_messages = [message]
+
+        blocker_scope: DecisionReasonScope = "discovery" if production_mode else "virtual"
+        blockers = [
+            DecisionReason(
+                code="trade_plan_completeness",
+                message=blocker,
+                source="setup",
+                severity="blocker",
+                scope=blocker_scope,
+                metadata=metadata,
+            )
+            for blocker in blocker_messages
+        ]
+        warnings = [
+            DecisionReason(
+                code="trade_plan_completeness",
+                message=warning,
+                source="setup",
+                severity="warning",
+                scope="discovery",
+                metadata=metadata,
+            )
+            for warning in warning_messages
+        ]
+        if blockers:
             return self._finalize_snapshot(
                 _snapshot_with_reasons(
                     snapshot,
-                    blockers=[
-                        DecisionReason(
-                            code="trade_plan_completeness",
-                            message=message,
-                            source="setup",
-                            severity="blocker",
-                            scope="discovery",
-                            metadata=metadata,
-                        )
-                    ],
+                    blockers=blockers,
+                    warnings=warnings,
                 )
             )
         return self._finalize_snapshot(
             _snapshot_with_reasons(
                 snapshot,
-                warnings=[
-                    DecisionReason(
-                        code="trade_plan_completeness",
-                        message=message,
-                        source="setup",
-                        severity="warning",
-                        scope="discovery",
-                        metadata=metadata,
-                    )
-                ],
+                warnings=warnings,
             )
         )
 
@@ -597,11 +611,11 @@ def _find_check(checks: Iterable[SignalLayerCheck], name: str) -> SignalLayerChe
     return None
 
 
-def _metadata_bool(metadata: Mapping[str, Any], key: str) -> bool | None:
+def _metadata_bool(metadata: Mapping[str, Any], key: str, *, fallback: bool | None = None) -> bool | None:
     value = metadata.get(key)
     if isinstance(value, bool):
         return value
-    return None
+    return fallback
 
 
 def _source_from_metadata(value: Any) -> DecisionReasonSource:

@@ -5,15 +5,18 @@ from typing import Any, Protocol
 from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
 from app.repositories.signal_repository import (
+    ACTIONABLE_SIGNAL_STATUSES,
     MAX_STORED_SIGNALS,
     PostgresSignalRepository,
     SignalRepository,
     SignalWriteResult,
 )
 from app.schemas.risk import RadarDisplayMode
+from app.schemas.decision import DecisionReason
 from app.schemas.signal import RadarSignal, StrategySignal
 from app.services.risk_management import default_rr_guard_mode_for_context
 from app.services.signal_risk_reward import ensure_signal_execution_eligible
+from app.services.trade_plan_completeness import trade_plan_completeness_service
 
 logger = logging.getLogger(__name__)
 
@@ -130,8 +133,10 @@ class SignalService:
         user_id: str = "demo_user",
         radar_display_mode: RadarDisplayMode | None = None,
     ) -> list[RadarSignal]:
-        # Display-mode filtering is intentionally deferred to the Radar filter task.
-        return self.list_open_signals()
+        signals = self.list_open_signals()
+        if radar_display_mode != "execution_ready":
+            return signals
+        return [signal for signal in signals if _is_execution_ready_for_radar(signal)]
 
     def list_open_signals_for_series(
         self,
@@ -298,3 +303,27 @@ class SignalService:
 
 
 signal_service = SignalService()
+
+
+def _is_execution_ready_for_radar(signal: RadarSignal) -> bool:
+    if signal.status not in ACTIONABLE_SIGNAL_STATUSES:
+        return False
+    decision = signal.decision
+    if decision is not None:
+        return (
+            decision.signal_actionable
+            and decision.execution_allowed_virtual is True
+            and not _has_execution_blocker(decision.blockers)
+        )
+    completeness = trade_plan_completeness_service.from_trade_plan_metadata(signal.trade_plan)
+    if completeness is not None:
+        return completeness.execution_allowed_virtual
+    if signal.trade_plan is not None:
+        metadata = signal.trade_plan.metadata
+        value = metadata.get("execution_allowed_virtual")
+        return value is True
+    return True
+
+
+def _has_execution_blocker(blockers: list[DecisionReason]) -> bool:
+    return any(reason.scope in {"discovery", "virtual"} for reason in blockers)

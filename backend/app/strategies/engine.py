@@ -41,6 +41,8 @@ EXECUTION_PROFILE_PARAM_KEYS = {
     "risk_per_trade_percent",
     "size_usd",
     "spot_risk_per_trade_percent",
+    "trade_plan_missing_context_policy",
+    "trade_plan_missing_score_policy",
     "virtual_rr_guard_mode",
     "virtual_risk_per_trade_percent",
 }

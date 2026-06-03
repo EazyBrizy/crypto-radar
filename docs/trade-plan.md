@@ -75,6 +75,34 @@ entry model, structural stop, invalidation thesis, and structural target thesis.
 A fallback plan may remain visible as a research/watchlist/blocked candidate,
 but it must not be silently promoted to a production-actionable candidate.
 
+`TradePlanCompletenessService.assess(signal, trade_plan)` is the canonical
+quality layer. The result is attached to
+`TradePlan.metadata.trade_plan_completeness` and mirrored as summary flags in
+`TradePlan.metadata` and `TradePlan.risk_rules.metadata`.
+
+Assessment fields:
+
+- `complete`
+- `missing_fields`
+- legacy `missing`
+- `warnings`
+- `blockers`
+- `execution_allowed_virtual`
+- `execution_allowed_real`
+
+The assessment must check entry, stop, target, score, and context:
+
+- missing entry, structural stop, or structural target blocks virtual and real
+  execution while keeping the market opportunity visible;
+- missing score and missing context are controlled by
+  `trade_plan_missing_score_policy` and `trade_plan_missing_context_policy`;
+- policy values are `warning`, `block`, and `off`, with `warning` as the
+  default.
+
+RiskGate consumes this normalized result from the trade plan metadata. It may
+perform a final presence check when legacy signals have no assessment snapshot,
+but the blocker or warning must reference the normalized completeness reason.
+
 ## Entry Types
 
 Supported entry models:

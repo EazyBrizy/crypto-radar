@@ -105,7 +105,11 @@ class TradePlanEnrichmentService:
         completeness: TradePlanCompletenessResult,
         production_mode: bool,
     ) -> SignalConfirmationSnapshot:
-        if completeness.complete:
+        if completeness.blockers:
+            status = "failed"
+        elif completeness.warnings:
+            status = "warning"
+        elif completeness.complete:
             status = "passed"
         elif production_mode:
             status = "failed"
@@ -150,15 +154,21 @@ def trade_plan_completeness_metadata(
         "fallback_used": completeness.fallback_used,
         "fallback_stop_used": completeness.fallback_stop_used,
         "fallback_targets_used": completeness.fallback_targets_used,
+        "has_entry": completeness.has_entry,
         "has_structural_stop": completeness.has_structural_stop,
         "has_invalidation_thesis": completeness.has_invalidation_thesis,
         "has_structural_target": completeness.has_structural_target,
+        "has_score": completeness.has_score,
+        "has_context": completeness.has_context,
         "missing": list(completeness.missing),
+        "missing_fields": list(completeness.missing_fields),
+        "warnings": list(completeness.warnings),
+        "blockers": list(completeness.blockers),
         "research_mode": not production_mode,
         "production_mode": production_mode,
-        "signal_actionable": completeness.complete or not production_mode,
-        "execution_allowed_virtual": completeness.complete or not production_mode,
-        "execution_allowed_real": completeness.complete and production_mode,
+        "signal_actionable": not completeness.blockers,
+        "execution_allowed_virtual": completeness.execution_allowed_virtual,
+        "execution_allowed_real": completeness.execution_allowed_real,
         "decision_scope": "production" if production_mode else "research",
     }
 
@@ -167,6 +177,12 @@ def trade_plan_completeness_reason(
     completeness: TradePlanCompletenessResult,
     production_mode: bool,
 ) -> str:
+    if completeness.blockers:
+        if production_mode:
+            return trade_plan_incomplete_status_reason(completeness)
+        return f"Trade plan remains visible for research; execution blocked: {completeness.blockers[0]}"
+    if completeness.warnings:
+        return completeness.warnings[0]
     if completeness.complete:
         return "Trade plan has structural stop, invalidation and target thesis."
     if production_mode:

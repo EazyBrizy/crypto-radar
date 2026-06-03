@@ -24,6 +24,8 @@ Virtual trading:
 - must still respect hard blockers such as invalid trade plans, failed RR guard,
   blocked no-trade filters, impossible stops/targets, and account protection
   states that block virtual entries.
+- consumes `TradePlanCompletenessService` results instead of recalculating
+  entry/stop/target/score/context completeness locally.
 
 Real trading:
 
@@ -41,11 +43,20 @@ Real trading:
 - for futures, requires a valid liquidation price or liquidation-buffer check
   before entry can be treated as production-safe;
 - for spot, enforces the configured `spot_max_position_size_percent` cap.
+- blocks when the normalized trade-plan completeness assessment reports
+  missing entry, structural stop, structural target, or another completeness
+  blocker.
 
 Real execution must never downgrade these failures into research warnings. If a
 real gate fails, the adapter must not submit an exchange order. Virtual can help
 generate evidence for strategy calibration, but positive EV with enough sample
 size is required before a signal is eligible for real entry.
+
+Completeness assessment is separate from display visibility. Radar
+`all_market_opportunities` keeps incomplete market setups visible with reasons.
+Radar `execution_ready` returns only opportunities whose normalized decision
+and trade-plan completeness metadata currently allow execution for the display
+scope.
 
 ## Storage
 

@@ -129,11 +129,18 @@ export interface TradePlanCompletenessResult {
   fallback_used: boolean;
   fallback_stop_used: boolean;
   fallback_targets_used: boolean;
+  has_entry: boolean;
   has_structural_stop: boolean;
   has_invalidation_thesis: boolean;
   has_structural_target: boolean;
+  has_score: boolean;
+  has_context: boolean;
   missing: string[];
+  missing_fields: string[];
   warnings: string[];
+  blockers: string[];
+  execution_allowed_virtual: boolean;
+  execution_allowed_real: boolean;
   metadata: Record<string, unknown>;
 }
 

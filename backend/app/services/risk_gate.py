@@ -25,7 +25,11 @@ from app.services.risk_management import (
     position_sizing_for_notional,
 )
 from app.services.risk_reward_plan import risk_reward_plan_service
-from app.services.trade_plan_completeness import TradePlanCompletenessCheck
+from app.services.trade_plan_completeness import (
+    MISSING_CONTEXT_POLICY_KEY,
+    MISSING_SCORE_POLICY_KEY,
+    trade_plan_completeness_service,
+)
 
 
 class RiskContextService:
@@ -367,8 +371,17 @@ class RiskGateService:
             strategy=context.strategy,
             signal_edge=context.signal_edge,
         )
+        production_context = _is_trade_plan_production_context(context)
         completeness = (
-            TradePlanCompletenessCheck().evaluate(context.trade_plan)
+            trade_plan_completeness_service.assess_or_restore(
+                None,
+                context.trade_plan,
+                settings={
+                    MISSING_SCORE_POLICY_KEY: "off",
+                    MISSING_CONTEXT_POLICY_KEY: "off",
+                },
+                production_mode=production_context,
+            )
             if context.trade_plan is not None
             else None
         )
@@ -482,17 +495,32 @@ def _trade_plan_completeness_policy(
     context: RiskContext,
     completeness: TradePlanCompletenessResult | None,
 ) -> tuple[list[str], list[str]]:
-    if completeness is None or completeness.complete:
+    if completeness is None:
         return [], []
-    message = _trade_plan_completeness_message(completeness)
-    if _is_trade_plan_production_context(context):
-        return [message], []
-    return [], [message]
+    if context.mode == "real":
+        if completeness.execution_allowed_real:
+            return [], list(completeness.warnings)
+        return _completeness_blockers(completeness), []
+    if completeness.execution_allowed_virtual:
+        return [], list(completeness.warnings)
+    return _completeness_blockers(completeness), []
 
 
 def _trade_plan_completeness_message(completeness: TradePlanCompletenessResult) -> str:
-    missing = ", ".join(completeness.missing) if completeness.missing else "structural trade plan"
-    return f"Trade plan incomplete: {missing}; production execution is blocked."
+    missing = (
+        ", ".join(completeness.missing_fields)
+        if completeness.missing_fields
+        else ", ".join(completeness.missing)
+        if completeness.missing
+        else "structural trade plan"
+    )
+    return f"Trade plan incomplete: {missing}; execution is blocked."
+
+
+def _completeness_blockers(completeness: TradePlanCompletenessResult) -> list[str]:
+    if completeness.blockers:
+        return list(completeness.blockers)
+    return [_trade_plan_completeness_message(completeness)]
 
 
 def _is_trade_plan_production_context(context: RiskContext) -> bool:

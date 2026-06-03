@@ -8,7 +8,8 @@ from app.schemas.trade_plan import (
     TradePlanInvalidation,
     TradePlanTarget,
 )
-from app.services.trade_plan_completeness import TradePlanCompletenessCheck
+from app.schemas.signal import StrategySignal
+from app.services.trade_plan_completeness import TradePlanCompletenessCheck, TradePlanCompletenessService
 from app.strategies.common import build_signal
 
 
@@ -44,6 +45,79 @@ class TradePlanCompletenessCheckTest(unittest.TestCase):
         self.assertTrue(result.has_invalidation_thesis)
         self.assertTrue(result.has_structural_target)
         self.assertEqual(result.missing, [])
+
+    def test_service_complete_trade_plan_allows_execution(self) -> None:
+        result = TradePlanCompletenessService().assess(
+            _signal(),
+            _structural_plan(),
+            context={"quality": {"passed": True}},
+        )
+
+        self.assertTrue(result.complete)
+        self.assertEqual(result.missing_fields, [])
+        self.assertEqual(result.blockers, [])
+        self.assertTrue(result.execution_allowed_virtual)
+        self.assertTrue(result.execution_allowed_real)
+
+    def test_service_missing_stop_blocks_execution(self) -> None:
+        plan = _structural_plan().model_copy(update={"stop_loss": None}, deep=True)
+
+        result = TradePlanCompletenessService().assess(
+            _signal(),
+            plan,
+            context={"quality": {"passed": True}},
+        )
+
+        self.assertFalse(result.complete)
+        self.assertIn("stop", result.missing_fields)
+        self.assertTrue(result.blockers)
+        self.assertFalse(result.execution_allowed_virtual)
+        self.assertFalse(result.execution_allowed_real)
+
+    def test_service_missing_target_blocks_execution(self) -> None:
+        plan = _structural_plan().model_copy(update={"targets": []}, deep=True)
+
+        result = TradePlanCompletenessService().assess(
+            _signal(),
+            plan,
+            context={"quality": {"passed": True}},
+        )
+
+        self.assertFalse(result.complete)
+        self.assertIn("target", result.missing_fields)
+        self.assertTrue(result.blockers)
+        self.assertFalse(result.execution_allowed_virtual)
+        self.assertFalse(result.execution_allowed_real)
+
+    def test_service_missing_score_and_context_warns_by_default(self) -> None:
+        signal = _signal(score=0)
+
+        result = TradePlanCompletenessService().assess(signal, _structural_plan())
+
+        self.assertTrue(result.complete)
+        self.assertIn("score", result.missing_fields)
+        self.assertIn("context", result.missing_fields)
+        self.assertEqual(result.blockers, [])
+        self.assertGreaterEqual(len(result.warnings), 2)
+        self.assertTrue(result.execution_allowed_virtual)
+
+    def test_service_missing_score_and_context_can_block_by_config(self) -> None:
+        signal = _signal(score=0)
+
+        result = TradePlanCompletenessService().assess(
+            signal,
+            _structural_plan(),
+            settings={
+                "trade_plan_missing_score_policy": "block",
+                "trade_plan_missing_context_policy": "block",
+            },
+        )
+
+        self.assertFalse(result.complete)
+        self.assertIn("score", result.missing_fields)
+        self.assertIn("context", result.missing_fields)
+        self.assertTrue(result.blockers)
+        self.assertFalse(result.execution_allowed_virtual)
 
     def test_fallback_stop_keeps_production_plan_incomplete(self) -> None:
         plan = _structural_plan().model_copy(
@@ -151,6 +225,19 @@ def _features() -> Features:
         volatility=1.0,
         history_length=120,
         atr_14=1.0,
+    )
+
+
+def _signal(*, score: int = 82) -> StrategySignal:
+    return StrategySignal(
+        exchange="bybit",
+        symbol="BTCUSDT",
+        strategy="trend_pullback_continuation",
+        direction="LONG",
+        confidence=0.82,
+        timestamp=1_779_796_800_000,
+        score=score,
+        timeframe="15m",
     )
 
 

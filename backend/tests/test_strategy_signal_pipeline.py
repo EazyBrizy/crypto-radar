@@ -329,16 +329,17 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(signal)
-        self.assertEqual(signal.status, "actionable")
+        self.assertEqual(signal.status, "watchlist")
         self.assertTrue(signal.trade_plan.metadata.get("fallback_used") if signal and signal.trade_plan else False)
+        self.assertFalse(signal.trade_plan.metadata.get("execution_allowed_virtual") if signal and signal.trade_plan else True)
         check = next(
             item
             for item in (signal.confirmation.checks if signal and signal.confirmation else [])
             if item.name == "trade_plan_completeness"
         )
-        self.assertEqual(check.status, "warning")
+        self.assertEqual(check.status, "failed")
         self.assertTrue(check.metadata.get("research_mode"))
-        self.assertTrue(check.metadata.get("execution_allowed_virtual"))
+        self.assertFalse(check.metadata.get("execution_allowed_virtual"))
 
     def test_production_mode_blocks_fallback_trade_plan_actionability(self) -> None:
         features = _breakout_features()

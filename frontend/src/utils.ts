@@ -72,7 +72,11 @@ export function signalTradePlanSummary(signal: RadarSignal): SignalTradePlanSumm
     fallbackUsed: booleanMetadata(planMetadata, "fallback_used") ?? booleanMetadata(completeness, "fallback_used") ?? false,
     fallbackStopUsed: booleanMetadata(planMetadata, "fallback_stop_used") ?? booleanMetadata(completeness, "fallback_stop_used") ?? false,
     fallbackTargetsUsed: booleanMetadata(planMetadata, "fallback_targets_used") ?? booleanMetadata(completeness, "fallback_targets_used") ?? false,
-    missing: stringArrayMetadata(planMetadata, "missing") ?? stringArrayMetadata(completeness, "missing") ?? []
+    missing: stringArrayMetadata(planMetadata, "missing_fields")
+      ?? stringArrayMetadata(completeness, "missing_fields")
+      ?? stringArrayMetadata(planMetadata, "missing")
+      ?? stringArrayMetadata(completeness, "missing")
+      ?? []
   };
 }
 

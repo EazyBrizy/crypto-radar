@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 TradePlanVersion = Literal["v1"]
@@ -86,12 +86,30 @@ class TradePlanCompletenessResult(BaseModel):
     fallback_used: bool = False
     fallback_stop_used: bool = False
     fallback_targets_used: bool = False
+    has_entry: bool = False
     has_structural_stop: bool = False
     has_invalidation_thesis: bool = False
     has_structural_target: bool = False
+    has_score: bool = False
+    has_context: bool = False
     missing: list[str] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    execution_allowed_virtual: bool = False
+    execution_allowed_real: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def sync_missing_field_aliases(self) -> "TradePlanCompletenessResult":
+        if not self.missing_fields and self.missing:
+            self.missing_fields = [_normalized_missing_field(value) for value in self.missing]
+        if not self.missing and self.missing_fields:
+            self.missing = [_legacy_missing_field(value) for value in self.missing_fields]
+        if self.complete and not self.blockers:
+            self.execution_allowed_virtual = True
+            self.execution_allowed_real = True
+        return self
 
 
 def build_trade_plan_from_legacy_fields(
@@ -144,3 +162,21 @@ def _entry_price(entry_min: float | None, entry_max: float | None) -> float | No
     if entry_min is not None and entry_max is not None:
         return (entry_min + entry_max) / 2
     return entry_min if entry_min is not None else entry_max
+
+
+def _normalized_missing_field(value: str) -> str:
+    mapping = {
+        "structural_stop": "stop",
+        "invalidation_thesis": "invalidation",
+        "structural_target": "target",
+    }
+    return mapping.get(value, value)
+
+
+def _legacy_missing_field(value: str) -> str:
+    mapping = {
+        "stop": "structural_stop",
+        "invalidation": "invalidation_thesis",
+        "target": "structural_target",
+    }
+    return mapping.get(value, value)

@@ -952,28 +952,57 @@ TradePlanCompletenessResult = {
     "fallback_used": bool,
     "fallback_stop_used": bool,
     "fallback_targets_used": bool,
+    "has_entry": bool,
     "has_structural_stop": bool,
     "has_invalidation_thesis": bool,
     "has_structural_target": bool,
-    "missing": list[str],
+    "has_score": bool,
+    "has_context": bool,
+    "missing": list[str],          # legacy structural names
+    "missing_fields": list[str],   # normalized names: entry/stop/target/score/context
     "warnings": list[str],
+    "blockers": list[str],
+    "execution_allowed_virtual": bool,
+    "execution_allowed_real": bool,
     "metadata": dict,
 }
 ```
 
 Summary metadata keys are additive and backward-compatible:
 `trade_plan_complete`, `fallback_used`, `fallback_stop_used`,
-`fallback_targets_used`, `has_structural_stop`,
-`has_invalidation_thesis`, `has_structural_target`, `missing`,
+`fallback_targets_used`, `has_entry`, `has_structural_stop`,
+`has_invalidation_thesis`, `has_structural_target`, `has_score`,
+`has_context`, `missing`, `missing_fields`, `warnings`, `blockers`,
 `research_mode`, `production_mode`, `signal_actionable`,
 `execution_allowed_virtual`, and `execution_allowed_real`.
 
+`TradePlanCompletenessService.assess(signal, trade_plan)` is the normalized
+service boundary for this result. Pipeline, Radar display filtering, and
+RiskGate must consume the same normalized assessment instead of re-implementing
+entry/stop/target/score/context rules locally. The older
+`TradePlanCompletenessCheck.evaluate(trade_plan)` name remains a
+backward-compatible facade over the service.
+
+Completeness field policy:
+
+- Missing `entry`, structural `stop`, or structural `target` is a blocker for
+  virtual and real execution, but it must not delete the market opportunity.
+- Missing score or context is evaluated by config:
+  `trade_plan_missing_score_policy` and `trade_plan_missing_context_policy`
+  support `warning`, `block`, and `off`. Defaults are `warning`.
+- `complete` means blocker-level structural completeness for the active policy.
+  `missing_fields` may still include warning-level `score` or `context` gaps.
+- `execution_allowed_virtual` and `execution_allowed_real` on the assessment
+  are completeness-layer permissions. They are not a substitute for the final
+  RiskGate or real-readiness decision.
+
 In `research_mode`, incomplete or fallback plans remain visible with a
-`trade_plan_completeness` warning check. In `production_mode`, an incomplete or
-fallback plan makes the signal non-actionable, disables auto-entry metadata, and
-sets virtual/real execution eligibility false for the completeness layer. Real
+`trade_plan_completeness` warning/block check according to the normalized
+assessment. In `production_mode`, a blocker-level incomplete or fallback plan
+makes the signal non-actionable, disables auto-entry metadata, and sets
+virtual/real execution eligibility false for the completeness layer. Real
 risk-gate evaluation blocks an explicit incomplete `TradePlan`; research and
-backtest contexts may continue with warnings.
+backtest contexts may keep the market opportunity visible with reasons.
 
 Strategy trade plans are level-aware when strategy context exposes structure:
 
@@ -1618,7 +1647,7 @@ all live-readiness requirements pass:
 - signal status is actionable/confirmed and not terminal;
 - `SignalDecisionSnapshot.signal_actionable == true` and
   `execution_allowed_real == true`;
-- `TradePlanCompletenessCheck` confirms structural stop, invalidation thesis,
+- `TradePlanCompletenessService` confirms structural stop, invalidation thesis,
   and structural target, or an explicitly validated runner exit policy;
 - fallback stop or fallback-only targets are not used;
 - entry, protective stop, and take-profit order specs are built before adapter

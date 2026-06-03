@@ -33,7 +33,7 @@ from app.services.signal_status_resolver import SignalStatusResolver
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.services.target_resolver import TargetResolverService
 from app.services.trade_plan_enrichment import TradePlanEnrichmentService
-from app.services.trade_plan_completeness import TradePlanCompletenessCheck
+from app.services.trade_plan_completeness import trade_plan_completeness_service
 from app.services.signal_decision import ACTIONABLE_STATUSES, signal_decision_service
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
@@ -210,7 +210,23 @@ class StrategySignalPipeline:
             risk_reward=risk_reward,
         )
         production_mode = _is_production_mode(pipeline_settings)
-        completeness = TradePlanCompletenessCheck().evaluate(trade_plan)
+        completeness = trade_plan_completeness_service.assess(
+            signal,
+            trade_plan,
+            settings=pipeline_settings,
+            context={
+                "quality": quality,
+                "regime": regime,
+                "setup": setup,
+                "confirmation": confirmation,
+                "market_quality": context.market_quality,
+                "alpha_context": context.alpha_context,
+                "context_features": context.context_features,
+                "context_features_by_timeframe": context.context_features_by_timeframe,
+                "support_resistance_by_timeframe": context.support_resistance_by_timeframe,
+            },
+            production_mode=production_mode,
+        )
         trade_plan = trade_plan_enrichment.attach_completeness_metadata(
             trade_plan=trade_plan,
             completeness=completeness,

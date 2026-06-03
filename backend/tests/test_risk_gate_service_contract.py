@@ -855,6 +855,43 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertEqual(decision.status, "failed")
         self.assertFalse(decision.can_enter)
         self.assertIn("Take-profit plan is required.", decision.blockers)
+        self.assertTrue(any("Trade plan incomplete" in blocker for blocker in decision.blockers))
+
+    def test_virtual_gate_blocks_missing_trade_plan_stop(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=_trade_plan(stop_loss=None, targets=[
+                    TradePlanTarget(label="TP1", price=120.0, close_percent=100)
+                ])),
+                request=ManualConfirmRequest(liquidation_price=80),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertTrue(any("stop" in blocker and "execution is blocked" in blocker for blocker in decision.blockers))
+
+    def test_virtual_gate_blocks_missing_trade_plan_target(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=_trade_plan(targets=[])),
+                request=ManualConfirmRequest(liquidation_price=80),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+            ),
+            risk_settings=_risk_settings().model_copy(update={"take_profit_required": False}),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertTrue(any("target" in blocker and "execution is blocked" in blocker for blocker in decision.blockers))
 
     def test_strategy_rr_guard_override_uses_original_signal_strategy(self) -> None:
         decision = RiskGateService().evaluate(
@@ -979,7 +1016,7 @@ def _edge(
 def _trade_plan(
     *,
     targets: list[TradePlanTarget],
-    stop_loss: float = 90.0,
+    stop_loss: float | None = 90.0,
     selected_rr_target: str | None = None,
     metadata: dict[str, object] | None = None,
 ) -> TradePlan:

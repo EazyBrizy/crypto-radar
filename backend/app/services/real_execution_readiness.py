@@ -9,7 +9,11 @@ from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, RealExecutionPlan
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_fee_rate import RiskFeeRateSnapshot
-from app.services.trade_plan_completeness import TradePlanCompletenessCheck
+from app.services.trade_plan_completeness import (
+    MISSING_CONTEXT_POLICY_KEY,
+    MISSING_SCORE_POLICY_KEY,
+    trade_plan_completeness_service,
+)
 
 
 ACTIONABLE_SIGNAL_STATUSES = {"actionable", "confirmed"}
@@ -127,8 +131,21 @@ def _decision_snapshot_blockers(signal: RadarSignal) -> list[str]:
 
 
 def _trade_plan_blockers(signal: RadarSignal) -> list[str]:
-    completeness = TradePlanCompletenessCheck().evaluate(signal.trade_plan)
+    completeness = trade_plan_completeness_service.assess_or_restore(
+        signal,
+        signal.trade_plan,
+        settings={
+            MISSING_SCORE_POLICY_KEY: "off",
+            MISSING_CONTEXT_POLICY_KEY: "off",
+        },
+        production_mode=True,
+    )
     blockers: list[str] = []
+    if not completeness.execution_allowed_real:
+        blockers.extend(
+            f"Trade plan completeness blocks real execution: {blocker}"
+            for blocker in (completeness.blockers or ["normalized completeness assessment failed"])
+        )
     if not completeness.has_structural_stop:
         blockers.append("Real execution requires a structural stop.")
     if completeness.fallback_stop_used:

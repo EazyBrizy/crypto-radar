@@ -4,7 +4,13 @@ from uuid import uuid4
 
 from app.repositories.signal_repository import OPEN_SIGNAL_STATUSES, SignalWriteResult
 from app.schemas.signal import NoTradeFilterResult, RadarSignal, SignalConfirmationSnapshot, SignalLayerCheck
-from app.schemas.trade_plan import build_trade_plan_from_legacy_fields
+from app.schemas.trade_plan import (
+    TradePlan,
+    TradePlanEntry,
+    TradePlanInvalidation,
+    TradePlanTarget,
+    build_trade_plan_from_legacy_fields,
+)
 from app.services.signal_risk_reward import (
     StrategyRiskRewardBlocked,
     ensure_signal_execution_eligible,
@@ -13,6 +19,7 @@ from app.services.signal_risk_reward import (
     signal_rr_warning_reason,
 )
 from app.services.signal_service import SignalService
+from app.services.trade_plan_completeness import TradePlanCompletenessService
 
 
 class FakeSignalRepository:
@@ -67,6 +74,14 @@ class SpyHotStore:
 
     def write_signal(self, result: SignalWriteResult) -> None:
         self.results.append(result)
+
+
+class ListSignalRepository:
+    def __init__(self, signals: list[RadarSignal]) -> None:
+        self.signals = signals
+
+    def list_open_signals(self, limit: int = 200) -> list[RadarSignal]:
+        return self.signals[:limit]
 
 
 class SignalServiceContractTest(unittest.TestCase):
@@ -231,6 +246,28 @@ class SignalServiceContractTest(unittest.TestCase):
         self.assertEqual(analytics.events, [result.analytics_event])
         self.assertEqual(hot_store.results, [result])
 
+    def test_radar_execution_ready_filters_incomplete_trade_plan_without_hiding_all_mode(self) -> None:
+        ready_signal = _risk_signal(
+            trade_plan=_plan_with_assessment(_structural_plan(), score=82),
+        )
+        incomplete_signal = _risk_signal(
+            trade_plan=_plan_with_assessment(
+                _structural_plan().model_copy(update={"targets": []}, deep=True),
+                score=82,
+            ),
+        ).model_copy(update={"id": str(uuid4())})
+        service = SignalService(
+            repository=ListSignalRepository([ready_signal, incomplete_signal]),
+            analytics_writer=SpyAnalyticsWriter(),
+            hot_store=SpyHotStore(),
+        )
+
+        all_mode = service.list_open_signals_for_radar(radar_display_mode="all_market_opportunities")
+        execution_ready = service.list_open_signals_for_radar(radar_display_mode="execution_ready")
+
+        self.assertEqual([signal.id for signal in all_mode], [ready_signal.id, incomplete_signal.id])
+        self.assertEqual([signal.id for signal in execution_ready], [ready_signal.id])
+
     def test_lifecycle_transition_fans_out_to_analytics_and_hot_store(self) -> None:
         signal = RadarSignal(
             id=str(uuid4()),
@@ -302,6 +339,49 @@ def _low_rr_signal() -> RadarSignal:
         selected_rr=0.8,
         selected_rr_target="nearest",
         min_rr_ratio=1.5,
+    )
+
+
+def _structural_plan() -> TradePlan:
+    return TradePlan(
+        entry=TradePlanEntry(price=100.0, min_price=100.0, max_price=100.0, source="test_structure"),
+        stop_loss=98.0,
+        targets=[TradePlanTarget(label="TP1", price=104.0, source="test_structure")],
+        invalidation=TradePlanInvalidation(
+            price=98.0,
+            hard_stop=98.0,
+            conditions=["Close below test structure"],
+            metadata={"source": "test_structure"},
+        ),
+    )
+
+
+def _plan_with_assessment(plan: TradePlan, *, score: int) -> TradePlan:
+    assessment = TradePlanCompletenessService().assess(
+        _risk_signal(score=score),
+        plan,
+        context={"quality": {"passed": True}},
+    )
+    metadata = dict(plan.metadata)
+    metadata.update(
+        {
+            "trade_plan_completeness": assessment.model_dump(mode="json"),
+            "execution_allowed_virtual": assessment.execution_allowed_virtual,
+        }
+    )
+    risk_metadata = dict(plan.risk_rules.metadata)
+    risk_metadata.update(
+        {
+            "trade_plan_completeness": assessment.model_dump(mode="json"),
+            "execution_allowed_virtual": assessment.execution_allowed_virtual,
+        }
+    )
+    return plan.model_copy(
+        update={
+            "metadata": metadata,
+            "risk_rules": plan.risk_rules.model_copy(update={"metadata": risk_metadata}),
+        },
+        deep=True,
     )
 
 

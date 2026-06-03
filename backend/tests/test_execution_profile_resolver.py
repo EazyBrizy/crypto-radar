@@ -6,7 +6,7 @@ from app.services.risk_management import (
     request_risk_override_to_execution_settings,
     resolved_risk_profile_source,
 )
-from app.schemas.risk import RiskOverride, RiskPreviewRequest
+from app.schemas.risk import LEGACY_VIRTUAL_INSTRUMENT_WARNING, RiskOverride, RiskPreviewRequest
 from app.schemas.user import RiskManagementSettings
 
 
@@ -146,13 +146,28 @@ class ExecutionProfileResolverTest(unittest.TestCase):
         risk_plan = calculate_trade_risk_adjustment(
             account_equity=1_000,
             risk_settings=applied_settings,
-            instrument_type="virtual",
+            instrument_type="spot",
             strategy="trend_pullback_continuation",
             signal_score=100,
+            execution_mode="virtual",
         )
 
         self.assertAlmostEqual(risk_plan.base_risk_amount, 50.0)
         self.assertAlmostEqual(risk_plan.base_risk_percent, 5.0)
+
+    def test_legacy_virtual_instrument_type_normalizes_with_warning(self) -> None:
+        profile = execution_profile_resolver.resolve(
+            user_risk_settings=RiskManagementSettings(risk_per_trade_percent=1.0),
+            strategy_execution_settings={"instrument_type": "virtual"},
+            request_override=None,
+            mode="virtual",
+            instrument_type="spot",
+        )
+
+        self.assertEqual(profile.execution_mode, "virtual")
+        self.assertEqual(profile.instrument_type, "spot")
+        self.assertIn(LEGACY_VIRTUAL_INSTRUMENT_WARNING, profile.warnings)
+        self.assertEqual(profile.sources["instrument_type_legacy"], "strategy.instrument_type")
 
     def test_invalid_risk_override_fails_validation(self) -> None:
         with self.assertRaises(Exception) as percent_context:

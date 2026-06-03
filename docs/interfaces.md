@@ -216,11 +216,14 @@ RiskOverride = {
 }
 
 RiskPreviewRequest = {
+    "mode": ExecutionMode,
+    "instrument_type": InstrumentType | None,
     "risk_percent": float | None,       # deprecated legacy field
     "risk_override": RiskOverride | None,
 }
 
 ManualConfirmRequest = {
+    "mode": ExecutionMode,
     "risk_percent": float | None,       # deprecated legacy field
     "risk_override": RiskOverride | None,
 }
@@ -228,6 +231,8 @@ ManualConfirmRequest = {
 
 Field meanings:
 
+- `mode`: selected execution mode, `virtual` for simulation/paper execution or
+  `real` for production-like exchange execution. It is not an instrument type.
 - `risk_mode`: chooses whether the trade risk budget is a percent of current
   equity or a fixed currency amount.
 - `risk_percent`: percent risk per trade when `risk_mode = "percent"`.
@@ -236,6 +241,10 @@ Field meanings:
 - `fixed_risk_currency`: currency for the fixed budget, default `USDT`.
 - `leverage`: requested/default execution leverage. It is not strategy input.
 - `instrument_type`: selected execution instrument, `spot` or `futures`.
+  `virtual` is deprecated as an `instrument_type` value and may be accepted
+  only as a backward-compatible input adapter: it resolves `mode = "virtual"`
+  and derives the actual instrument from explicit request/profile settings,
+  exchange instrument rules, leverage, or default `spot`.
 - `rr_guard_mode`: execution RR policy mode. `hard` can block execution;
   `soft` warns; `off` records RR only.
 - `min_rr_ratio`: minimum RR used for reporting/execution policy. It is not a
@@ -278,6 +287,13 @@ legacy default `risk_percent = 10.0`, because older API clients used that value
 as a request default. `risk_override.risk_mode = "percent"` requires
 `risk_override.risk_percent`; `risk_override.risk_mode = "fixed"` requires
 `risk_override.fixed_risk_amount`.
+
+RiskGate contexts and decisions expose `mode` and `instrument_type`
+separately. New code must never write `instrument_type = "virtual"` into
+`RiskContext`, `RiskDecision`, market-data lookup, fee lookup, or risk-state
+lookup. Futures-only checks, including liquidation checks, are selected by
+`instrument_type == "futures"` or effective `leverage > 1`, never by
+`mode == "virtual"`.
 
 RiskGate decisions and risk audit snapshots expose the resolved
 `risk_profile_source` (`request_override`, `strategy`, `user_profile`, or

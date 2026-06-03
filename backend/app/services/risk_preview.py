@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from app.schemas.risk import RiskPreviewRequest, RiskPreviewResponse, TradeInstrumentType
+from app.schemas.risk import InstrumentType, RiskPreviewRequest, RiskPreviewResponse, normalize_instrument_type
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualTrade
 from app.services.risk_audit import RiskAuditService, risk_audit_service
@@ -150,6 +150,7 @@ class RiskPreviewService:
                 risk_profile_source=risk_profile_source,
                 execution_profile_sources=execution_profile.sources,
                 execution_profile=execution_profile,
+                instrument_type=instrument_type,
                 daily_loss_amount=reference.daily_loss_amount,
                 correlated_open_risk_amount=reference.correlated_open_risk_amount,
                 correlation_group=reference.correlation_group,
@@ -252,16 +253,25 @@ def _manual_request(request: RiskPreviewRequest) -> ManualConfirmRequest:
 def _instrument_type(
     request: RiskPreviewRequest,
     manual_request: ManualConfirmRequest,
-) -> TradeInstrumentType:
+) -> InstrumentType:
     if request.instrument_type is not None:
-        return request.instrument_type
+        leverage = (
+            request.risk_override.leverage
+            if request.risk_override is not None and request.risk_override.leverage is not None
+            else request.execution_profile.leverage
+            if request.execution_profile is not None and request.execution_profile.leverage is not None
+            else manual_request.leverage
+        )
+        return normalize_instrument_type(request.instrument_type, leverage=leverage)[0]
+    if request.execution_profile is not None and request.execution_profile.instrument_type is not None:
+        return request.execution_profile.instrument_type
     if request.risk_override is not None and request.risk_override.leverage is not None:
         return "futures" if request.risk_override.leverage > 1 else "spot"
     return "futures" if manual_request.leverage > 1 else "spot"
 
 
-def _profile_instrument_type(instrument_type: TradeInstrumentType) -> str:
-    return "futures" if instrument_type == "futures" else "spot"
+def _profile_instrument_type(instrument_type: InstrumentType | str) -> InstrumentType:
+    return normalize_instrument_type(instrument_type)[0]
 
 
 def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:

@@ -4,6 +4,7 @@ from typing import Optional
 from unittest.mock import patch
 
 from app.api.v1.trades import close_market_trade
+from app.schemas.risk import RiskOverride
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
     CloseMarketTradeRequest,
@@ -375,7 +376,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertIsNotNone(trade.execution.take_profit_plan)
         self.assertIsNotNone(trade.execution.breakeven_plan)
         self.assertIsNotNone(trade.execution.trailing_stop_plan)
-        self.assertIsNotNone(trade.execution.futures_risk_plan)
+        self.assertIsNone(trade.execution.futures_risk_plan)
         self.assertLess(trade.size_usd, 10.0)
         self.assertAlmostEqual(trade.execution.position_sizing.risk_amount, 0.75)
         self.assertAlmostEqual(
@@ -422,7 +423,13 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             service.open_virtual_trade(
                 self._signal(direction="long", stop_loss=90.0),
-                ManualConfirmRequest(leverage=5),
+                ManualConfirmRequest(
+                    risk_override=RiskOverride(
+                        risk_mode="percent",
+                        risk_percent=1.0,
+                        leverage=5,
+                    )
+                ),
             )
 
     def test_virtual_trade_rejects_liquidation_before_stop(self) -> None:

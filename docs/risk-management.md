@@ -155,6 +155,21 @@ explicit `risk_override`, execution mode, and instrument type. The saved
 user/strategy execution profile is the source of truth; request risk changes
 must use `risk_override`.
 
+Execution mode and instrument type are separate contract fields:
+
+- `mode`: `virtual` or `real`; this selects simulated/paper execution versus
+  production-like exchange execution.
+- `instrument_type`: `spot` or `futures`; this selects market-data category,
+  fee category, exchange-rule lookup, leverage policy, and futures/liquidation
+  checks.
+
+Legacy requests that send `instrument_type = "virtual"` are accepted only by a
+backward-compatible adapter. The adapter resolves `mode = "virtual"`, derives
+the actual instrument type from explicit request/profile settings, exchange
+instrument rules, leverage, or default `spot`, and records an explicit
+deprecation warning/source. RiskGate internals and new code must not persist or
+propagate `instrument_type = "virtual"`.
+
 Precedence:
 
 ```text
@@ -194,6 +209,9 @@ historically an API default. `RiskPreviewRequest.risk_percent` and
 `ManualConfirmRequest.risk_percent` are deprecated/backward-compatible fields
 kept for parsing and audit snapshots only. Use `risk_override` for per-ticket
 percent, fixed-risk, or leverage changes.
+
+Futures-only branches are enabled by `instrument_type == "futures"` or effective
+`leverage > 1`. They must not be enabled only because `mode == "virtual"`.
 
 Invalid profile combinations must fail with an auditable validation reason.
 Examples: `risk_mode = "fixed"` without `fixed_risk_amount`, non-positive
@@ -424,13 +442,15 @@ Fee-rate source is resolved before sizing:
 ## Trade-Type Risk And Final Risk Formula
 
 The risk settings now store separate defaults for spot, futures, and virtual
-trading:
+execution:
 
 - spot risk percent, max spot position size percent, and required stop flag;
 - futures risk percent, futures max leverage, futures max open risk, and
   required liquidation buffer flag;
-- virtual risk mode (`same_as_real` or `custom`), virtual starting balance,
-  slippage model, and fee model.
+- virtual execution risk mode (`same_as_real` or `custom`), virtual starting
+  balance, slippage model, and fee model. These settings modify simulated
+  execution behavior and risk-budget selection; they do not make `virtual` an
+  instrument type.
 
 The backend now calculates `RiskAdjustmentPlan`:
 
@@ -658,6 +678,9 @@ Implemented for the current backend:
   (`instrument_type=futures`, `leverage=3`) so Bybit linear ticker, funding, mark
   price, and cached linear instrument rules are used instead of an accidental
   spot preview.
+- Virtual spot previews use `mode=virtual`, `instrument_type=spot`; they must
+  not query linear futures context or create liquidation blockers unless the
+  effective profile resolves futures or leverage above 1.
 
 Still missing for this point:
 

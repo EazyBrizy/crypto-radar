@@ -259,10 +259,14 @@ class VirtualTradingService:
     def _fallback_risk_settings(request: ManualConfirmRequest) -> RiskManagementSettings:
         return RiskManagementSettings(
             risk_profile="custom",
+            risk_per_trade_percent=VIRTUAL_RISK_PER_TRADE,
+            spot_risk_per_trade_percent=VIRTUAL_RISK_PER_TRADE,
+            futures_risk_per_trade_percent=VIRTUAL_RISK_PER_TRADE,
             min_rr_ratio=VIRTUAL_RISK_REWARD,
             max_daily_loss_percent=50.0,
             max_account_drawdown_percent=90.0,
             max_open_risk_percent=100.0,
+            futures_max_open_risk_percent=100.0,
             include_fees_in_risk=True,
             include_slippage_in_risk=True,
             stop_loss_mode="structure",
@@ -445,8 +449,18 @@ class VirtualTradingService:
             if virtual_rr_guard_mode == "off"
             else signal_rr_warning_reason(signal, respect_guard_mode=False)
         )
-        market_data = self._risk_market_snapshot(signal, request, raw_entry)
-        fee_rate = self._risk_fee_snapshot(signal, request, risk_settings)
+        market_data = self._risk_market_snapshot(
+            signal,
+            request,
+            raw_entry,
+            instrument_type=execution_profile.instrument_type,
+        )
+        fee_rate = self._risk_fee_snapshot(
+            signal,
+            request,
+            risk_settings,
+            instrument_type=execution_profile.instrument_type,
+        )
         gate_request = request.model_copy(
             update={
                 "fee_rate": fee_rate.fee_rate,
@@ -462,6 +476,7 @@ class VirtualTradingService:
             exchange=signal.exchange,
             symbol=signal.symbol,
             side=signal.direction,
+            instrument_type=execution_profile.instrument_type,
         )
 
         raw_decision = self._risk_gate_service.evaluate(
@@ -533,6 +548,7 @@ class VirtualTradingService:
                 risk_profile_source=risk_profile_source,
                 execution_profile_sources=execution_profile.sources,
                 execution_profile=execution_profile,
+                instrument_type=execution_profile.instrument_type,
             ),
             risk_settings=risk_settings,
         )
@@ -635,6 +651,7 @@ class VirtualTradingService:
                 risk_profile_source=risk_profile_source,
                 execution_profile_sources=execution_profile.sources,
                 execution_profile=execution_profile,
+                instrument_type=execution_profile.instrument_type,
             ),
             risk_settings=risk_settings,
         )
@@ -716,8 +733,18 @@ class VirtualTradingService:
             if virtual_rr_guard_mode == "off"
             else signal_rr_warning_reason(signal, respect_guard_mode=False)
         )
-        market_data = self._risk_market_snapshot(signal, request, raw_entry)
-        fee_rate = self._risk_fee_snapshot(signal, request, risk_settings)
+        market_data = self._risk_market_snapshot(
+            signal,
+            request,
+            raw_entry,
+            instrument_type=execution_profile.instrument_type,
+        )
+        fee_rate = self._risk_fee_snapshot(
+            signal,
+            request,
+            risk_settings,
+            instrument_type=execution_profile.instrument_type,
+        )
         gate_request = request.model_copy(
             update={
                 "fee_rate": fee_rate.fee_rate,
@@ -736,6 +763,7 @@ class VirtualTradingService:
             exchange=signal.exchange,
             symbol=signal.symbol,
             side=signal.direction,
+            instrument_type=execution_profile.instrument_type,
         )
         decision = self._risk_gate_service.evaluate(
             context=self._risk_context_service.build_virtual_context(
@@ -806,6 +834,7 @@ class VirtualTradingService:
                 risk_profile_source=risk_profile_source,
                 execution_profile_sources=execution_profile.sources,
                 execution_profile=execution_profile,
+                instrument_type=execution_profile.instrument_type,
             ),
             risk_settings=risk_settings,
         )
@@ -870,13 +899,15 @@ class VirtualTradingService:
         signal: RadarSignal,
         request: ManualConfirmRequest,
         fallback_entry_price: float,
+        *,
+        instrument_type: str,
     ) -> RiskMarketDataSnapshot:
         return self._market_data_service.build_snapshot(
             exchange=signal.exchange,
             symbol=signal.symbol,
             side=signal.direction,
             mode="virtual",
-            instrument_type="virtual",
+            instrument_type=instrument_type,
             fallback_entry_price=fallback_entry_price,
             manual_entry_price=_market_snapshot_reference_price(
                 request.market_snapshot,
@@ -891,12 +922,14 @@ class VirtualTradingService:
         signal: RadarSignal,
         request: ManualConfirmRequest,
         risk_settings: RiskManagementSettings,
+        *,
+        instrument_type: str,
     ) -> RiskFeeRateSnapshot:
         return self._fee_rate_service.resolve(
             user_id=request.user_id,
             exchange=signal.exchange,
             mode="virtual",
-            instrument_type=_virtual_fee_instrument_type(request),
+            instrument_type=instrument_type,
             symbol=signal.symbol,
             risk_settings=risk_settings,
             requested_fee_rate=request.fee_rate,
@@ -909,6 +942,7 @@ class VirtualTradingService:
         exchange: str,
         symbol: str,
         side: str,
+        instrument_type: str,
     ):
         if self._risk_state is None:
             return None
@@ -919,7 +953,7 @@ class VirtualTradingService:
                 exchange=exchange,
                 symbol=symbol,
                 side=side,
-                instrument_type="virtual",
+                instrument_type=instrument_type,
             )
         except Exception as exc:
             logger.warning("Risk reference lookup failed: %s", exc)
@@ -1268,10 +1302,6 @@ def _fee_context_kwargs(fee_rate: RiskFeeRateSnapshot) -> dict[str, Any]:
         "taker_fee_rate": fee_rate.taker_fee_rate,
         "fee_rate_warnings": list(fee_rate.warnings),
     }
-
-
-def _virtual_fee_instrument_type(request: ManualConfirmRequest) -> str:
-    return "futures" if request.leverage > 1 else "spot"
 
 
 def _virtual_profile_instrument_type(request: ManualConfirmRequest) -> str:

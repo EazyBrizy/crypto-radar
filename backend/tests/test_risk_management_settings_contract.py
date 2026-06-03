@@ -736,9 +736,10 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         risk_plan = calculate_trade_risk_adjustment(
             account_equity=10_000,
             risk_settings=settings,
-            instrument_type="virtual",
+            instrument_type="spot",
             strategy="trend_following",
             signal_score=90,
+            execution_mode="virtual",
         )
         sizing = calculate_position_sizing(
             account_equity=10_000,
@@ -866,6 +867,7 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
             risk_adjustment=risk_plan,
             position_sizing=sizing,
             take_profit_plan=tp_plan,
+            execution_mode="real",
         )
 
         self.assertEqual(result.status, "failed")

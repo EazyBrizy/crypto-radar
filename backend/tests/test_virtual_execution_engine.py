@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.schemas.signal import RadarSignal
-from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanTarget
+from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanInvalidation, TradePlanTarget
 from app.schemas.trade import (
     CloseVirtualTradeRequest,
     ManualConfirmRequest,
@@ -412,6 +412,12 @@ class VirtualExecutionEngineTest(unittest.TestCase):
                             source="range_measured_move",
                         ),
                     ],
+                    invalidation=TradePlanInvalidation(
+                        price=90.0,
+                        hard_stop=90.0,
+                        conditions=["Close below test structure"],
+                        metadata={"source": "test_structure"},
+                    ),
                 )
             ),
             ManualConfirmRequest(

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from app.schemas.risk import (
+    LEGACY_VIRTUAL_INSTRUMENT_WARNING,
     ResolvedExecutionProfile,
     RiskContext,
     RiskDecision,
     TakeProfitPlan,
     TakeProfitTarget,
     TradeInstrumentType,
+    normalize_instrument_type,
 )
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualTrade
@@ -84,8 +86,14 @@ class RiskContextService:
         risk_profile_source: str = "unknown",
         execution_profile_sources: dict[str, str] | None = None,
         execution_profile: ResolvedExecutionProfile | None = None,
+        instrument_type: TradeInstrumentType | None = None,
     ) -> RiskContext:
         account_equity = account.equity if account.equity > 0 else request.account_balance
+        resolved_instrument_type, normalization_warnings = _resolve_context_instrument_type(
+            explicit_instrument_type=instrument_type,
+            request=request,
+            execution_profile=execution_profile,
+        )
         return RiskContext(
             mode="virtual",
             rr_guard_context=rr_guard_context,
@@ -94,9 +102,10 @@ class RiskContextService:
             risk_profile_source=risk_profile_source,
             execution_profile_sources=execution_profile_sources or {},
             execution_profile=execution_profile,
+            normalization_warnings=normalization_warnings,
             exchange=signal.exchange,
             symbol=signal.symbol,
-            instrument_type="virtual",
+            instrument_type=resolved_instrument_type,
             side=signal.direction,
             strategy=signal.strategy,
             signal_score=float(signal.score),
@@ -197,10 +206,10 @@ class RiskContextService:
         execution_profile_sources: dict[str, str] | None = None,
         execution_profile: ResolvedExecutionProfile | None = None,
     ) -> RiskContext:
-        resolved_instrument_type: TradeInstrumentType = (
-            instrument_type
-            if instrument_type is not None
-            else ("futures" if request.leverage > 1 else "spot")
+        resolved_instrument_type, normalization_warnings = _resolve_context_instrument_type(
+            explicit_instrument_type=instrument_type,
+            request=request,
+            execution_profile=execution_profile,
         )
         return RiskContext(
             mode="real",
@@ -209,6 +218,7 @@ class RiskContextService:
             risk_profile_source=risk_profile_source,
             execution_profile_sources=execution_profile_sources or {},
             execution_profile=execution_profile,
+            normalization_warnings=normalization_warnings,
             exchange=signal.exchange,
             symbol=signal.symbol,
             instrument_type=resolved_instrument_type,
@@ -303,7 +313,7 @@ class RiskGateService:
             atr_value=context.atr_value,
         )
         futures_risk_plan = None
-        if context.instrument_type in {"futures", "virtual"} or context.leverage > 1:
+        if context.instrument_type == "futures" or context.leverage > 1:
             futures_risk_plan = calculate_futures_risk_plan(
                 entry_price=context.entry_price,
                 stop_loss_price=stop_loss_plan.stop_loss_price,
@@ -317,6 +327,7 @@ class RiskGateService:
             account_equity=context.account_equity,
             risk_settings=risk_settings,
             instrument_type=context.instrument_type,
+            execution_mode=context.mode,
             strategy=context.strategy,
             signal_score=context.signal_score,
             execution_profile=context.execution_profile,
@@ -385,6 +396,19 @@ class RiskGateService:
             strategy=context.strategy,
             signal_edge=context.signal_edge,
         )
+        profile_warnings = (
+            list(context.execution_profile.warnings)
+            if context.execution_profile is not None
+            else []
+        )
+        context_warnings = _dedupe([*context.normalization_warnings, *profile_warnings])
+        if context_warnings:
+            risk_check = risk_check.model_copy(
+                update={
+                    "status": "warning" if risk_check.status == "passed" else risk_check.status,
+                    "warnings": _dedupe([*risk_check.warnings, *context_warnings]),
+                }
+            )
         production_context = _is_trade_plan_production_context(context)
         completeness = (
             trade_plan_completeness_service.assess_or_restore(
@@ -660,3 +684,26 @@ def _invalid_trade_plan_take_profit_plan(
 
 risk_context_service = RiskContextService()
 risk_gate_service = RiskGateService()
+
+
+def _resolve_context_instrument_type(
+    *,
+    explicit_instrument_type: TradeInstrumentType | str | None,
+    request: ManualConfirmRequest,
+    execution_profile: ResolvedExecutionProfile | None,
+) -> tuple[TradeInstrumentType, list[str]]:
+    if explicit_instrument_type is not None:
+        return normalize_instrument_type(
+            explicit_instrument_type,
+            leverage=request.leverage,
+        )
+    if execution_profile is not None:
+        return execution_profile.instrument_type, list(execution_profile.warnings)
+    if request.execution_profile is not None and request.execution_profile.instrument_type is not None:
+        warnings = []
+        if request.execution_profile.legacy_instrument_type == "virtual":
+            warnings.append(LEGACY_VIRTUAL_INSTRUMENT_WARNING)
+        return request.execution_profile.instrument_type, warnings
+    if request.risk_override is not None and request.risk_override.leverage is not None:
+        return ("futures" if request.risk_override.leverage > 1 else "spot"), []
+    return ("futures" if request.leverage > 1 else "spot"), []

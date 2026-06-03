@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
-from app.schemas.risk import ResolvedExecutionProfile
+from app.schemas.risk import LEGACY_VIRTUAL_INSTRUMENT_WARNING, ResolvedExecutionProfile
 from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanInvalidation, TradePlanRiskRules, TradePlanTarget
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
 from app.schemas.user import RiskManagementSettings
@@ -372,6 +372,68 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertTrue(decision.can_enter)
         self.assertNotIn("Signal score is virtual-only; real execution is blocked.", decision.blockers)
 
+    def test_virtual_spot_does_not_run_futures_liquidation_checks(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+                instrument_type="spot",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.mode, "virtual")
+        self.assertEqual(decision.instrument_type, "spot")
+        self.assertIsNone(decision.futures_risk_plan)
+        self.assertFalse(any("Liquidation price" in blocker for blocker in decision.blockers))
+        self.assertFalse(any("liquidation" in warning.lower() for warning in decision.warnings))
+
+    def test_virtual_futures_runs_futures_checks(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(),
+                request=ManualConfirmRequest(leverage=3),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+                instrument_type="futures",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.mode, "virtual")
+        self.assertEqual(decision.instrument_type, "futures")
+        self.assertIsNotNone(decision.futures_risk_plan)
+        self.assertEqual(decision.futures_risk_plan.status, "unknown")
+        self.assertIn(
+            "Liquidation price is unavailable; exact futures liquidation risk is not checked.",
+            decision.warnings,
+        )
+
+    def test_legacy_virtual_instrument_type_normalizes_with_warning(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="preview",
+                instrument_type="virtual",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.mode, "virtual")
+        self.assertEqual(decision.instrument_type, "spot")
+        self.assertIsNone(decision.futures_risk_plan)
+        self.assertIn(LEGACY_VIRTUAL_INSTRUMENT_WARNING, decision.warnings)
+
     def test_real_futures_gate_blocks_unknown_liquidation_when_buffer_required(self) -> None:
         decision = RiskGateService().evaluate(
             context=RiskContextService().build_real_context(
@@ -390,6 +452,36 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertEqual(decision.status, "failed")
         self.assertFalse(decision.can_enter)
         self.assertIn("Liquidation price is unavailable; exact futures liquidation risk is not checked.", decision.blockers)
+
+    def test_real_futures_with_liquidation_price_still_runs_futures_guard(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_real_context(
+                signal=_signal(),
+                request=ManualConfirmRequest(leverage=3, liquidation_price=80),
+                entry_price=100,
+                instrument_type="futures",
+                stage="pre_execution",
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=10_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "real_requires_positive_edge": False,
+                    "real_requires_fresh_market_data": False,
+                }
+            ),
+        )
+
+        self.assertEqual(decision.mode, "real")
+        self.assertEqual(decision.instrument_type, "futures")
+        self.assertIsNotNone(decision.futures_risk_plan)
+        self.assertEqual(decision.futures_risk_plan.status, "passed")
+        self.assertNotIn(
+            "Liquidation price is unavailable; exact futures liquidation risk is not checked.",
+            decision.blockers,
+        )
 
     def test_market_spread_and_funding_are_included_in_effective_risk(self) -> None:
         decision = RiskGateService().evaluate(

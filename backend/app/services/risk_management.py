@@ -9,6 +9,7 @@ from app.schemas.risk import (
     ExecutionMode,
     FuturesRiskPlan,
     InstrumentType,
+    LEGACY_VIRTUAL_INSTRUMENT_WARNING,
     PositionSizingResult,
     ResolvedExecutionProfile,
     RiskAdjustmentPlan,
@@ -21,6 +22,7 @@ from app.schemas.risk import (
     TakeProfitTarget,
     TradeInstrumentType,
     TrailingStopPlan,
+    normalize_instrument_type,
 )
 from app.schemas.signal import SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan, TradePlanTarget
@@ -293,10 +295,33 @@ class ExecutionProfileResolver:
     ) -> ResolvedExecutionProfile:
         has_user_risk_settings = user_risk_settings is not None
         settings = _settings_model(user_risk_settings or RiskManagementSettings())
-        execution_mode = _execution_mode(mode)
+        execution_mode = (
+            "virtual"
+            if _is_legacy_virtual_instrument_type(instrument_type)
+            else _execution_mode(mode)
+        )
         default_instrument_type = _execution_instrument_type(instrument_type)
+        warnings: list[str] = []
+        legacy_instrument_sources: list[str] = []
+        if _is_legacy_virtual_instrument_type(instrument_type):
+            warnings.append(LEGACY_VIRTUAL_INSTRUMENT_WARNING)
+            legacy_instrument_sources.append("request.instrument_type")
         request_settings, request_fields = _execution_settings_model_and_fields(request_override)
         strategy_settings, strategy_fields = _execution_settings_model_and_fields(strategy_execution_settings)
+        if (
+            request_settings is not None
+            and "instrument_type" in request_fields
+            and request_settings.legacy_instrument_type == "virtual"
+        ):
+            warnings.append(LEGACY_VIRTUAL_INSTRUMENT_WARNING)
+            legacy_instrument_sources.append("request_override.instrument_type")
+        if (
+            strategy_settings is not None
+            and "instrument_type" in strategy_fields
+            and strategy_settings.legacy_instrument_type == "virtual"
+        ):
+            warnings.append(LEGACY_VIRTUAL_INSTRUMENT_WARNING)
+            legacy_instrument_sources.append("strategy.instrument_type")
         strategy_mapping = _execution_settings_mapping(strategy_settings, strategy_fields)
         resolved_instrument_type_raw, instrument_source = _resolve_profile_field(
             "instrument_type",
@@ -418,6 +443,21 @@ class ExecutionProfileResolver:
             user_value=settings.radar_display_mode if has_user_risk_settings else None,
         )
 
+        sources = {
+            "risk_mode": risk_mode_source,
+            "instrument_type": instrument_source,
+            "risk_percent": risk_percent_source,
+            "fixed_risk_amount": fixed_risk_amount_source,
+            "fixed_risk_currency": fixed_currency_source,
+            "leverage": leverage_source,
+            "rr_guard_mode": rr_guard_source,
+            "min_rr_ratio": min_rr_source,
+            "rr_target": rr_target_source,
+            "radar_display_mode": radar_source,
+        }
+        if legacy_instrument_sources:
+            sources["instrument_type_legacy"] = ",".join(legacy_instrument_sources)
+
         return ResolvedExecutionProfile(
             execution_mode=execution_mode,
             instrument_type=resolved_instrument_type,
@@ -430,18 +470,8 @@ class ExecutionProfileResolver:
             min_rr_ratio=Decimal(str(min_rr_ratio)),
             rr_target=rr_target,
             radar_display_mode=radar_display_mode,
-            sources={
-                "risk_mode": risk_mode_source,
-                "instrument_type": instrument_source,
-                "risk_percent": risk_percent_source,
-                "fixed_risk_amount": fixed_risk_amount_source,
-                "fixed_risk_currency": fixed_currency_source,
-                "leverage": leverage_source,
-                "rr_guard_mode": rr_guard_source,
-                "min_rr_ratio": min_rr_source,
-                "rr_target": rr_target_source,
-                "radar_display_mode": radar_source,
-            },
+            sources=sources,
+            warnings=_dedupe(warnings),
         )
 
     def apply_to_risk_settings(
@@ -468,11 +498,6 @@ class ExecutionProfileResolver:
         context_guard_field = RR_CONTEXT_FIELDS.get(profile.execution_mode)
         if context_guard_field is not None:
             values[context_guard_field] = profile.rr_guard_mode
-        leverage = max(1, int(profile.leverage))
-        if profile.instrument_type == "futures":
-            values["max_leverage"] = leverage
-            values["futures_max_leverage"] = leverage
-
         if profile.risk_mode == "percent" and profile.risk_percent is not None:
             risk_percent = float(profile.risk_percent)
             values["risk_per_trade_percent"] = risk_percent
@@ -597,6 +622,7 @@ def calculate_trade_risk_adjustment(
     instrument_type: TradeInstrumentType,
     strategy: str,
     signal_score: float,
+    execution_mode: ExecutionMode | str | None = None,
     execution_profile: ResolvedExecutionProfile | None = None,
     volatility_multiplier: float = 1.0,
     user_mode_multiplier: float = 1.0,
@@ -613,6 +639,7 @@ def calculate_trade_risk_adjustment(
         settings,
         instrument_type,
         account_equity,
+        execution_mode=execution_mode,
         execution_profile=execution_profile,
     )
     normalized_strategy_key = _normalize_strategy_key(strategy)
@@ -833,7 +860,8 @@ def calculate_risk_check_result(
     if effective_risk_amount > risk_limit_amount + risk_tolerance:
         blockers.append("Risk per trade exceeds the adjusted risk limit.")
     if (
-        risk_adjustment.instrument_type == "spot"
+        execution_mode == "real"
+        and risk_adjustment.instrument_type == "spot"
         and _limit_enabled(settings.spot_max_position_size_percent)
         and position_sizing.notional / risk_adjustment.account_equity * 100
         > settings.spot_max_position_size_percent
@@ -1542,6 +1570,7 @@ def calculate_position_sizing(
                 settings,
                 "spot",
                 account_equity,
+                execution_mode="real",
                 execution_profile=None,
             )
             risk_mode = budget.risk_mode
@@ -1648,10 +1677,11 @@ def _execution_mode(value: ExecutionMode | str) -> ExecutionMode:
 
 
 def _execution_instrument_type(value: InstrumentType | str | None) -> InstrumentType:
-    normalized = str(value or "spot").strip().lower()
-    if normalized == "futures":
-        return "futures"
-    return "spot"
+    return normalize_instrument_type(value)[0]
+
+
+def _is_legacy_virtual_instrument_type(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().lower() == "virtual"
 
 
 def _execution_settings_model_and_fields(
@@ -1877,11 +1907,13 @@ def _base_risk_amount_and_percent(
     settings: RiskManagementSettings,
     instrument_type: TradeInstrumentType,
     account_equity: float,
+    execution_mode: ExecutionMode | str | None = None,
 ) -> tuple[float, float]:
     budget = _risk_budget_from_settings_or_profile(
         settings,
         instrument_type,
         account_equity,
+        execution_mode=execution_mode,
         execution_profile=None,
     )
     return budget.base_risk_amount, budget.base_risk_percent
@@ -1892,8 +1924,10 @@ def _risk_budget_from_settings_or_profile(
     instrument_type: TradeInstrumentType,
     account_equity: float,
     *,
+    execution_mode: ExecutionMode | str | None,
     execution_profile: ResolvedExecutionProfile | None,
 ) -> _RiskBudget:
+    resolved_execution_mode = _execution_mode(execution_mode or (execution_profile.execution_mode if execution_profile else "real"))
     if execution_profile is not None:
         risk_mode = execution_profile.risk_mode
         fixed_risk_amount = (
@@ -1927,7 +1961,11 @@ def _risk_budget_from_settings_or_profile(
     else:
         risk_mode = "percent"
         fixed_risk_amount = None
-        requested_risk_percent = _base_risk_percent(settings, instrument_type)
+        requested_risk_percent = _base_risk_percent(
+            settings,
+            instrument_type,
+            execution_mode=resolved_execution_mode,
+        )
         requested_risk_amount = account_equity * requested_risk_percent / 100
 
     if requested_risk_amount <= 0:
@@ -1939,7 +1977,11 @@ def _risk_budget_from_settings_or_profile(
     risk_cap_amount = None
     base_risk_amount = requested_risk_amount
     if risk_mode == "fixed":
-        risk_cap_percent = _base_risk_percent(settings, instrument_type)
+        risk_cap_percent = _base_risk_percent(
+            settings,
+            instrument_type,
+            execution_mode=resolved_execution_mode,
+        )
         risk_cap_amount = account_equity * risk_cap_percent / 100
         base_risk_amount = min(requested_risk_amount, risk_cap_amount)
 
@@ -1961,13 +2003,20 @@ def _risk_budget_from_settings_or_profile(
     )
 
 
-def _base_risk_percent(settings: RiskManagementSettings, instrument_type: TradeInstrumentType) -> float:
+def _base_risk_percent(
+    settings: RiskManagementSettings,
+    instrument_type: TradeInstrumentType,
+    *,
+    execution_mode: ExecutionMode | str | None = None,
+) -> float:
+    if _execution_mode(execution_mode or "real") == "virtual":
+        if settings.virtual_risk_mode == "custom":
+            return settings.virtual_risk_per_trade_percent
+        return settings.risk_per_trade_percent
     if instrument_type == "spot":
         return settings.spot_risk_per_trade_percent
     if instrument_type == "futures":
         return settings.futures_risk_per_trade_percent
-    if settings.virtual_risk_mode == "custom":
-        return settings.virtual_risk_per_trade_percent
     return settings.risk_per_trade_percent
 
 

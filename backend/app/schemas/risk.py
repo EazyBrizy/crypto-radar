@@ -13,11 +13,12 @@ TrailingMode = Literal["atr", "percent", "structure"]
 VirtualRiskMode = Literal["same_as_real", "custom"]
 VirtualSlippageModel = Literal["none", "fixed_percent", "spread_based", "orderbook_based", "volatility_based"]
 VirtualFeeModel = Literal["manual", "exchange_based"]
-TradeInstrumentType = Literal["spot", "futures", "virtual"]
 RiskCheckStatus = Literal["passed", "warning", "failed"]
 RiskExecutionMode = Literal["virtual", "real"]
 ExecutionMode = Literal["virtual", "real"]
 InstrumentType = Literal["spot", "futures"]
+TradeInstrumentType = InstrumentType
+LegacyTradeInstrumentType = Literal["spot", "futures", "virtual"]
 RiskAmountMode = Literal["percent", "fixed"]
 RadarDisplayMode = Literal["all_market_opportunities", "execution_ready"]
 RRGuardMode = Literal["off", "soft", "hard"]
@@ -34,6 +35,36 @@ TakeProfitAction = Literal[
     "full_close",
     "observe",
 ]
+
+LEGACY_VIRTUAL_INSTRUMENT_WARNING = (
+    "instrument_type=virtual is deprecated; use mode=virtual with "
+    "instrument_type=spot or instrument_type=futures."
+)
+
+
+def normalize_instrument_type(
+    value: LegacyTradeInstrumentType | str | None,
+    *,
+    leverage: int | Decimal | float | str | None = None,
+    default: InstrumentType = "spot",
+) -> tuple[InstrumentType, list[str]]:
+    normalized = str(value or default).strip().lower()
+    if normalized == "futures":
+        return "futures", []
+    if normalized == "virtual":
+        leverage_value = _numeric_leverage(leverage)
+        derived: InstrumentType = "futures" if leverage_value > 1 else default
+        return derived, [LEGACY_VIRTUAL_INSTRUMENT_WARNING]
+    return "spot", []
+
+
+def _numeric_leverage(value: int | Decimal | float | str | None) -> Decimal:
+    if value is None:
+        return Decimal("1")
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return Decimal("1")
 
 
 class PositionSizingResult(BaseModel):
@@ -87,6 +118,24 @@ class StrategyExecutionSettings(BaseModel):
     spot_risk_per_trade_percent: Decimal | None = Field(default=None, gt=0, le=100)
     virtual_risk_per_trade_percent: Decimal | None = Field(default=None, gt=0, le=100)
 
+    legacy_instrument_type: str | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_instrument_type(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        raw_instrument_type = data.get("instrument_type")
+        if isinstance(raw_instrument_type, str) and raw_instrument_type.strip().lower() == "virtual":
+            values = dict(data)
+            values["instrument_type"], _ = normalize_instrument_type(
+                raw_instrument_type,
+                leverage=values.get("leverage"),
+            )
+            values["legacy_instrument_type"] = "virtual"
+            return values
+        return data
+
     @model_validator(mode="after")
     def validate_execution_profile(self) -> "StrategyExecutionSettings":
         self.fixed_risk_currency = self.fixed_risk_currency.strip().upper() or "USDT"
@@ -135,6 +184,7 @@ class ResolvedExecutionProfile(BaseModel):
     rr_target: RRTarget = "final"
     radar_display_mode: RadarDisplayMode = "all_market_opportunities"
     sources: dict[str, str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_resolved_profile(self) -> "ResolvedExecutionProfile":
@@ -316,6 +366,7 @@ class RiskContext(BaseModel):
     risk_profile_source: str = "unknown"
     execution_profile_sources: dict[str, str] = Field(default_factory=dict)
     execution_profile: ResolvedExecutionProfile | None = None
+    normalization_warnings: list[str] = Field(default_factory=list)
     exchange: str
     symbol: str
     instrument_type: TradeInstrumentType
@@ -372,6 +423,26 @@ class RiskContext(BaseModel):
     signal_edge: SignalEdgeSnapshot | None = None
     no_trade_filter: NoTradeFilterResult | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_context_instrument(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        raw_instrument_type = data.get("instrument_type")
+        if not isinstance(raw_instrument_type, str) or raw_instrument_type.strip().lower() != "virtual":
+            return data
+        values = dict(data)
+        values["mode"] = "virtual"
+        values["instrument_type"], warnings = normalize_instrument_type(
+            raw_instrument_type,
+            leverage=values.get("leverage"),
+        )
+        values["normalization_warnings"] = [
+            *values.get("normalization_warnings", []),
+            *warnings,
+        ]
+        return values
+
 
 class RiskDecision(BaseModel):
     mode: RiskExecutionMode
@@ -402,7 +473,7 @@ class RiskPreviewRequest(BaseModel):
     signal_id: str = Field(..., min_length=1)
     mode: RiskExecutionMode = "virtual"
     user_id: str = "demo_user"
-    instrument_type: TradeInstrumentType | None = None
+    instrument_type: LegacyTradeInstrumentType | None = None
     leverage: int = Field(default=1, ge=1, le=125)
     liquidation_price: float | None = Field(default=None, gt=0)
     entry_price: float | None = Field(default=None, gt=0)
@@ -416,6 +487,12 @@ class RiskPreviewRequest(BaseModel):
     fee_rate: float = Field(default=0.0, ge=0, le=0.01)
     slippage_bps: float = Field(default=0.0, ge=0, le=2_000)
     atr_value: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def normalize_legacy_preview_mode(self) -> "RiskPreviewRequest":
+        if self.instrument_type == "virtual":
+            self.mode = "virtual"
+        return self
 
 
 class RiskStateResponse(BaseModel):

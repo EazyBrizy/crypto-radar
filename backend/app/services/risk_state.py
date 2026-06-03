@@ -446,9 +446,9 @@ def _get_rule(
 
 
 def _instrument_category(instrument_type: str | None) -> str | None:
-    if instrument_type == "spot":
+    if instrument_type in {"spot", "virtual"}:
         return "spot"
-    if instrument_type in {"futures", "virtual"}:
+    if instrument_type == "futures":
         return "linear"
     return None
 

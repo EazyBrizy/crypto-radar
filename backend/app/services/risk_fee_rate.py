@@ -153,7 +153,7 @@ class RiskFeeRateService:
 
 
 def _fee_category(instrument_type: str) -> str:
-    return "spot" if instrument_type == "spot" else "linear"
+    return "linear" if instrument_type == "futures" else "spot"
 
 
 def _select_rate(

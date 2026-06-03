@@ -335,7 +335,7 @@ class RiskMarketDataService:
 
 
 def _instrument_category(instrument_type: str) -> str:
-    return "spot" if instrument_type == "spot" else "linear"
+    return "linear" if instrument_type == "futures" else "spot"
 
 
 def _first_not_none(*values: float | None) -> float | None:

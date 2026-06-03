@@ -97,7 +97,7 @@ class RiskMarketDataServiceTest(unittest.TestCase):
             symbol="BTCUSDT",
             side="short",
             mode="virtual",
-            instrument_type="virtual",
+            instrument_type="futures",
             fallback_entry_price=50_000,
         )
 

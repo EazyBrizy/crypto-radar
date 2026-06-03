@@ -28,6 +28,8 @@ RiskProtectionMode = Literal["normal", "reduced", "virtual_only", "blocked"]
 ExchangeRuleStatus = Literal["fresh", "missing", "stale", "unknown"]
 MarketDataStatus = Literal["fresh", "partial", "missing", "stale", "unknown"]
 FuturesRiskStatus = Literal["passed", "blocked", "unknown"]
+AccountRiskSnapshotStatus = Literal["fresh", "stale", "missing"]
+AccountRiskSnapshotSource = Literal["exchange", "request", "virtual", "dry_run", "demo"]
 TakeProfitTargetLabel = Literal["TP1", "TP2", "TP3"]
 TakeProfitAction = Literal[
     "move_stop_to_breakeven",
@@ -65,6 +67,30 @@ def _numeric_leverage(value: int | Decimal | float | str | None) -> Decimal:
         return Decimal(str(value))
     except Exception:
         return Decimal("1")
+
+
+class PositionRiskSummary(BaseModel):
+    symbol: str | None = None
+    side: Literal["long", "short", "unknown"] = "unknown"
+    quantity: Decimal | None = Field(default=None, ge=0)
+    notional: Decimal | None = Field(default=None, ge=0)
+    entry_price: Decimal | None = Field(default=None, gt=0)
+    mark_price: Decimal | None = Field(default=None, gt=0)
+    unrealized_pnl: Decimal | None = None
+    risk_amount: Decimal | None = Field(default=None, ge=0)
+    margin_mode: str | None = None
+
+
+class AccountRiskSnapshot(BaseModel):
+    status: AccountRiskSnapshotStatus
+    fetched_at: datetime | None = None
+    account_equity: Decimal | None = Field(default=None, gt=0)
+    available_balance: Decimal | None = Field(default=None, ge=0)
+    margin_mode: str | None = None
+    positions: list[PositionRiskSummary] = Field(default_factory=list)
+    open_risk_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    source: AccountRiskSnapshotSource
+    warnings: list[str] = Field(default_factory=list)
 
 
 class PositionSizingResult(BaseModel):
@@ -375,6 +401,11 @@ class RiskContext(BaseModel):
     signal_score: float = Field(..., ge=0, le=100)
     account_equity: float = Field(..., gt=0)
     available_balance: float | None = Field(default=None, ge=0)
+    account_snapshot_status: AccountRiskSnapshotStatus | None = None
+    account_snapshot_source: AccountRiskSnapshotSource | None = None
+    account_snapshot_fetched_at: datetime | None = None
+    account_margin_mode: str | None = None
+    account_snapshot_warnings: list[str] = Field(default_factory=list)
     entry_price: float = Field(..., gt=0)
     signal_entry_price: float | None = Field(default=None, gt=0)
     signal_stop_loss_price: float | None = Field(default=None, gt=0)

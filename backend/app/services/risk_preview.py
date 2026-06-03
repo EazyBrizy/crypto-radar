@@ -158,6 +158,7 @@ class RiskPreviewService:
             instrument_type=instrument_type,
             read_only=read_only,
         )
+        account_snapshot = None
         if request.mode == "virtual":
             account = virtual_trading_service.get_virtual_account(request.user_id)
             open_positions = [
@@ -213,10 +214,25 @@ class RiskPreviewService:
                 user_mode_multiplier=reference.user_mode_multiplier,
             )
         else:
+            account_snapshot_provider = (
+                self._state_service
+                if hasattr(self._state_service, "get_real_account_snapshot")
+                else RiskStateService()
+            )
+            account_snapshot = account_snapshot_provider.get_real_account_snapshot(
+                user_id=request.user_id,
+                exchange=signal.exchange,
+                mode=request.mode,
+                live_adapter=False,
+                request_account_balance=request.account_balance,
+                reference=reference,
+            )
             context = self._risk_context_service.build_real_context(
                 signal=signal,
                 request=manual_request,
                 entry_price=entry_price,
+                account_snapshot=account_snapshot,
+                allow_request_account_balance=True,
                 requested_notional=request.size_usd,
                 instrument_type=instrument_type,
                 stage="preview",
@@ -274,6 +290,11 @@ class RiskPreviewService:
                 "signal": signal.model_dump(mode="json"),
                 "market_data": asdict(market_data),
                 "fee_rate": asdict(fee_rate),
+                "account_snapshot": (
+                    account_snapshot.model_dump(mode="json")
+                    if account_snapshot is not None
+                    else None
+                ),
                 "risk_state": reference.state.model_dump(mode="json"),
                 "execution_profile": execution_profile.model_dump(mode="json"),
                 "risk_profile_source": risk_profile_source,

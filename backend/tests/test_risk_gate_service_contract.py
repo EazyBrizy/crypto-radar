@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
-from app.schemas.risk import LEGACY_VIRTUAL_INSTRUMENT_WARNING, ResolvedExecutionProfile
+from app.schemas.risk import AccountRiskSnapshot, LEGACY_VIRTUAL_INSTRUMENT_WARNING, ResolvedExecutionProfile
 from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanInvalidation, TradePlanRiskRules, TradePlanTarget
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
 from app.schemas.user import RiskManagementSettings
@@ -208,7 +208,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_gate_blocks_when_exchange_rules_are_missing(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -224,7 +224,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_gate_blocks_when_exchange_rules_are_stale(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -243,7 +243,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_gate_blocks_virtual_only_signal_score(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(score=65),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -262,7 +262,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_gate_blocks_missing_edge(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(edge=None),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -284,7 +284,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_gate_blocks_insufficient_edge_sample(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(edge=_edge(status="insufficient_sample", sample_size=20, expectancy_after_costs_r=0.25)),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -303,7 +303,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_gate_blocks_negative_edge_expectancy(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(edge=_edge(status="negative", sample_size=75, expectancy_after_costs_r=-0.05)),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -322,7 +322,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_gate_allows_positive_edge_with_enough_sample(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(edge=_edge(status="positive", sample_size=75, expectancy_after_costs_r=0.12)),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -436,7 +436,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_futures_gate_blocks_unknown_liquidation_when_buffer_required(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(),
                 request=ManualConfirmRequest(leverage=2),
                 entry_price=100,
@@ -455,7 +455,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_futures_with_liquidation_price_still_runs_futures_guard(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(),
                 request=ManualConfirmRequest(leverage=3, liquidation_price=80),
                 entry_price=100,
@@ -534,7 +534,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_spread_slippage_and_price_move_are_hard_blockers(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(),
                 request=ManualConfirmRequest(slippage_bps=100),
                 entry_price=102,
@@ -565,7 +565,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_virtual_only_protection_makes_real_entries_close_only(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -668,7 +668,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_gate_blocks_fallback_trade_plan(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(
                     trade_plan=_trade_plan(
                         targets=[
@@ -903,7 +903,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_low_rr_hard_guard_blocks_execution(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(trade_plan=_low_rr_trade_plan()),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -932,7 +932,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_real_low_rr_soft_guard_warns_and_allows_execution(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(trade_plan=_low_rr_trade_plan()),
                 request=ManualConfirmRequest(),
                 entry_price=100,
@@ -1038,7 +1038,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
     def test_strategy_rr_guard_override_uses_original_signal_strategy(self) -> None:
         decision = RiskGateService().evaluate(
-            context=RiskContextService().build_real_context(
+            context=_real_context(
                 signal=_signal(
                     trade_plan=_trade_plan(
                         targets=[TradePlanTarget(label="TP1", price=112.0, close_percent=100)],
@@ -1071,6 +1071,23 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertEqual(decision.status, "failed")
         self.assertEqual(decision.risk_check.risk_reward_guard_mode, "hard")
         self.assertTrue(any("Real execution RR policy rejected" in blocker for blocker in decision.blockers))
+
+
+def _real_context(**kwargs):
+    request = kwargs.get("request")
+    balance = request.account_balance if isinstance(request, ManualConfirmRequest) else 100
+    kwargs.setdefault("account_snapshot", _account_snapshot(balance))
+    return RiskContextService().build_real_context(**kwargs)
+
+
+def _account_snapshot(balance: float = 100.0) -> AccountRiskSnapshot:
+    return AccountRiskSnapshot(
+        status="fresh",
+        fetched_at=datetime.now(timezone.utc),
+        account_equity=balance,
+        available_balance=balance,
+        source="exchange",
+    )
 
 
 def _risk_settings() -> RiskManagementSettings:

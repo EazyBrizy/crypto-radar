@@ -16,7 +16,7 @@ from app.models.market import MarketAsset, MarketExchange, MarketPair
 from app.models.portfolio import Portfolio, Position
 from app.models.risk import AssetRiskGroup, ExchangeInstrumentRule, RiskProtectionState
 from app.models.user import AppUser, UserProfile
-from app.schemas.risk import RiskStateResponse
+from app.schemas.risk import AccountRiskSnapshot, PositionRiskSummary, RiskStateResponse
 from app.schemas.user import RiskManagementSettings
 from app.services.bootstrap_service import DEMO_USERNAME
 
@@ -42,6 +42,8 @@ class RiskReferenceSnapshot:
     protection_reason: str | None = None
     account_drawdown_percent: float = 0.0
     max_account_drawdown_percent: float = 0.0
+    account_snapshot: AccountRiskSnapshot | None = None
+    position_reconciliation_enabled: bool = False
 
 
 class RiskStateService:
@@ -122,6 +124,43 @@ class RiskStateService:
             else:
                 session.commit()
             return reference
+
+    def get_real_account_snapshot(
+        self,
+        *,
+        user_id: str,
+        exchange: str,
+        mode: str,
+        live_adapter: bool,
+        request_account_balance: float | Decimal | None = None,
+        reference: object | None = None,
+    ) -> AccountRiskSnapshot:
+        if not live_adapter:
+            return _dry_run_account_snapshot(
+                user_id=user_id,
+                request_account_balance=request_account_balance,
+            )
+
+        reference_snapshot = _account_snapshot_from_reference(reference)
+        if reference_snapshot is not None:
+            return reference_snapshot
+
+        return AccountRiskSnapshot(
+            status="missing",
+            fetched_at=None,
+            account_equity=None,
+            available_balance=None,
+            margin_mode=None,
+            positions=[],
+            open_risk_amount=Decimal("0"),
+            source="exchange",
+            warnings=[
+                (
+                    "Live real execution requires a fresh exchange account snapshot; "
+                    "request.account_balance is ignored."
+                )
+            ],
+        )
 
     def update_after_trade_close(
         self,
@@ -596,6 +635,130 @@ def _account_drawdown_percent(state: RiskProtectionState) -> float:
 
 def _float_or_none(value: Decimal | None) -> float | None:
     return float(value) if value is not None else None
+
+
+def _dry_run_account_snapshot(
+    *,
+    user_id: str,
+    request_account_balance: float | Decimal | None,
+) -> AccountRiskSnapshot:
+    balance = _positive_decimal(request_account_balance)
+    if balance is None:
+        return AccountRiskSnapshot(
+            status="missing",
+            fetched_at=None,
+            account_equity=None,
+            available_balance=None,
+            margin_mode=None,
+            positions=[],
+            open_risk_amount=Decimal("0"),
+            source="dry_run",
+            warnings=["Dry-run account balance is missing; request/demo balance is required."],
+        )
+    source = "demo" if user_id == "demo_user" else "dry_run"
+    return AccountRiskSnapshot(
+        status="fresh",
+        fetched_at=datetime.now(timezone.utc),
+        account_equity=balance,
+        available_balance=balance,
+        margin_mode=None,
+        positions=[],
+        open_risk_amount=Decimal("0"),
+        source=source,
+        warnings=[
+            (
+                "Dry-run real execution uses request/demo account_balance for sizing; "
+                "live adapters require a fresh exchange account snapshot."
+            )
+        ],
+    )
+
+
+def _account_snapshot_from_reference(reference: object | None) -> AccountRiskSnapshot | None:
+    if reference is None:
+        return None
+    snapshot = getattr(reference, "account_snapshot", None)
+    if isinstance(snapshot, AccountRiskSnapshot):
+        return snapshot
+    status = _first_attr(
+        reference,
+        "real_account_snapshot_status",
+        "account_snapshot_status",
+        "real_balance_status",
+    )
+    equity = _positive_decimal(_first_attr(reference, "real_account_equity", "account_equity"))
+    available = _positive_decimal(_first_attr(reference, "real_available_balance", "available_balance"))
+    if status is None and equity is None and available is None:
+        return None
+    normalized_status = str(status or "missing").strip().lower()
+    if normalized_status not in {"fresh", "stale", "missing"}:
+        normalized_status = "missing"
+    fetched_at = _datetime_attr(
+        reference,
+        "real_account_fetched_at",
+        "account_snapshot_fetched_at",
+        "fetched_at",
+    )
+    if normalized_status == "fresh" and fetched_at is None:
+        fetched_at = datetime.now(timezone.utc)
+    return AccountRiskSnapshot(
+        status=normalized_status,
+        fetched_at=fetched_at,
+        account_equity=equity,
+        available_balance=available,
+        margin_mode=_str_attr(reference, "real_margin_mode", "margin_mode"),
+        positions=_position_summaries(reference),
+        open_risk_amount=_positive_decimal(
+            _first_attr(reference, "real_open_risk_amount", "open_risk_amount")
+        )
+        or Decimal("0"),
+        source="exchange",
+        warnings=[],
+    )
+
+
+def _position_summaries(reference: object) -> list[PositionRiskSummary]:
+    raw_positions = _first_attr(reference, "real_positions", "account_positions", "positions")
+    if not isinstance(raw_positions, list):
+        return []
+    summaries: list[PositionRiskSummary] = []
+    for position in raw_positions:
+        if isinstance(position, PositionRiskSummary):
+            summaries.append(position)
+            continue
+        if not isinstance(position, dict):
+            continue
+        summaries.append(PositionRiskSummary.model_validate(position))
+    return summaries
+
+
+def _positive_decimal(value: object) -> Decimal | None:
+    try:
+        parsed = Decimal(str(value))
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _datetime_attr(reference: object, *names: str) -> datetime | None:
+    value = _first_attr(reference, *names)
+    if isinstance(value, datetime):
+        return value
+    return None
+
+
+def _str_attr(reference: object, *names: str) -> str | None:
+    value = _first_attr(reference, *names)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _first_attr(reference: object, *names: str) -> object | None:
+    for name in names:
+        if hasattr(reference, name):
+            return getattr(reference, name)
+    return None
 
 
 risk_state_service = RiskStateService()

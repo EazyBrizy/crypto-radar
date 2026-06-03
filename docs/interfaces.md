@@ -416,6 +416,49 @@ RiskGate decisions and risk audit snapshots expose the resolved
 `risk_profile_source` (`request_override`, `strategy`, `user_profile`, or
 `default`) plus field-level `execution_profile_sources` for debugging.
 
+Real-order sizing consumes a typed account snapshot before RiskGate. Live real
+execution must fetch a fresh exchange-derived account snapshot before
+`RiskContext` is built. `ManualConfirmRequest.account_balance` and
+`RiskPreviewRequest.account_balance` remain backward-compatible inputs for
+dry-run/manual simulation only; they must never be treated as the live source of
+truth for account equity, available balance, margin, or open exposure.
+
+```python
+AccountRiskSnapshotStatus = "fresh" | "stale" | "missing"
+AccountRiskSnapshotSource = "exchange" | "request" | "virtual" | "dry_run" | "demo"
+
+PositionRiskSummary = {
+    "symbol": str | None,
+    "side": "long" | "short" | "unknown",
+    "quantity": Decimal | None,
+    "notional": Decimal | None,
+    "entry_price": Decimal | None,
+    "mark_price": Decimal | None,
+    "unrealized_pnl": Decimal | None,
+    "risk_amount": Decimal | None,
+    "margin_mode": str | None,
+}
+
+AccountRiskSnapshot = {
+    "status": AccountRiskSnapshotStatus,
+    "fetched_at": datetime | None,
+    "account_equity": Decimal | None,
+    "available_balance": Decimal | None,
+    "margin_mode": str | None,
+    "positions": list[PositionRiskSummary],
+    "open_risk_amount": Decimal,
+    "source": AccountRiskSnapshotSource,
+    "warnings": list[str],
+}
+```
+
+`RiskReferenceSnapshot.account_snapshot` is the service-layer carrier for this
+contract. For dry-run real execution, the provider may construct an explicit
+`source="dry_run"` or `source="demo"` snapshot from request/demo balances and
+must include a warning/source marker. For a non-dry-run live adapter, missing or
+stale account snapshots block before adapter placement and RiskGate sizing must
+not use request/demo balance.
+
 RiskGate risk-budget and sizing snapshots are additive and backward compatible.
 Legacy fields stay present, while the resolved amount source is explicit:
 
@@ -1835,7 +1878,11 @@ Real execution keeps the existing backend risk-gate boundary and safe adapter
 layer before any production exchange integration:
 
 ```text
-RealExecutionService -> RealExecutionReadinessService -> ExchangeExecutionAdapter -> DryRunExecutionAdapter
+RealExecutionService
+-> AccountRiskSnapshotProvider
+-> RiskGate
+-> RealExecutionReadinessService
+-> ExchangeExecutionAdapter / DryRunExecutionAdapter
 ```
 
 `RealExecutionReadinessService` is the service-layer guard after RiskGate and
@@ -1856,7 +1903,8 @@ all live-readiness requirements pass:
   `idempotency_key`;
 - fresh exchange rules, `qty_step`, `tick_size`, and `min_notional` are
   available;
-- fresh real account equity and available-balance snapshots are available;
+- fresh exchange-derived account equity and available-balance snapshots are
+  available, and were the sizing source for the pre-execution RiskGate context;
 - fresh exchange fee rates are available within `real_fee_rate_ttl_seconds`;
 - futures requests have a passed liquidation projection;
 - position reconciliation is enabled;

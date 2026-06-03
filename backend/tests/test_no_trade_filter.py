@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from app.schemas.market import Features
-from app.schemas.risk import RiskContext
+from app.schemas.risk import AccountRiskSnapshot, RiskContext
 from app.schemas.signal import (
     MarketRegimeSnapshot,
     NoTradeFilterResult,
@@ -117,6 +117,13 @@ class NoTradeFilterServiceTest(unittest.TestCase):
             signal=signal,
             request=request,
             entry_price=100.0,
+            account_snapshot=AccountRiskSnapshot(
+                status="fresh",
+                fetched_at=datetime.now(timezone.utc),
+                account_equity=10_000,
+                available_balance=10_000,
+                source="exchange",
+            ),
             requested_notional=100.0,
             market_data_status="fresh",
             best_bid=99.95,

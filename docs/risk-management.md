@@ -32,6 +32,8 @@ Real trading:
 - requires the risk decision to pass;
 - requires the strategy RR guard to pass;
 - requires no hard no-trade filter;
+- requires a fresh exchange-derived account snapshot before pre-execution
+  RiskGate sizing for non-dry-run live adapters;
 - requires `edge.status == positive`;
 - requires edge `sample_size >= edge_min_sample_size`;
 - requires `expectancy_after_costs_r` to be greater than the configured minimum;
@@ -515,6 +517,11 @@ Current behavior:
 - Bybit ticker/orderbook/live position context feeds entry price, spread
   slippage, funding buffer, visible liquidity, and live matching-position
   liquidation price into the same decision path;
+- real execution builds an `AccountRiskSnapshot` before the pre-execution
+  RiskGate context. Live adapters require `source=exchange` and
+  `status=fresh`; `ManualConfirmRequest.account_balance` is accepted only for
+  dry-run/manual simulation snapshots and is surfaced with explicit
+  source/warning metadata;
 - cached/synced Bybit fee-rate context feeds position sizing in preview, real
   confirm, and virtual confirm/open paths;
 - spread-too-high, expected-slippage-too-high, price-moved-too-far, and
@@ -538,7 +545,6 @@ Current behavior:
 
 Still missing:
 
-- exchange-derived account equity and available balance for real orders;
 - projected liquidation price for brand-new futures orders;
 - actual reduce-only/protective-order placement in the future real exchange
   adapter.

@@ -73,9 +73,11 @@ from app.schemas.pipeline import (
     raw_topic_for,
 )
 from app.schemas.risk import (
+    AccountRiskSnapshot,
     BreakevenPlan,
     FuturesRiskPlan,
     MarketDataStatus,
+    PositionRiskSummary,
     PositionSizingResult,
     ResolvedExecutionProfile,
     RiskAdjustmentPlan,
@@ -167,6 +169,7 @@ from app.schemas.user import (
 __all__ = [
     "ErrorResponse",
     "AIExplanationNotReadyResponse",
+    "AccountRiskSnapshot",
     "AiReviewEvent",
     "AlphaMarketContext",
     "BacktestNotReadyResponse",
@@ -214,6 +217,7 @@ __all__ = [
     "PIPELINE_STAGES",
     "PipelineEnvelope",
     "PipelineStage",
+    "PositionRiskSummary",
     "PositionSizingResult",
     "RAW_TOPIC_BY_EVENT_TYPE",
     "RawMarketEvent",

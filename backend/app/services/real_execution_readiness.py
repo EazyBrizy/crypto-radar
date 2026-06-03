@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.domain.signal_status import is_execution_candidate_status, is_terminal_signal_status
-from app.schemas.risk import RiskDecision
+from app.schemas.risk import AccountRiskSnapshot, RiskDecision
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, RealExecutionPlan
 from app.schemas.user import RiskManagementSettings
@@ -42,6 +42,7 @@ class RealExecutionReadinessService:
         reference: Any,
         fee_rate: RiskFeeRateSnapshot | None,
         adapter: Any,
+        account_snapshot: AccountRiskSnapshot | None = None,
     ) -> RealExecutionReadinessResult:
         adapter_is_dry_run = bool(getattr(adapter, "is_dry_run", False))
         live_adapter = not adapter_is_dry_run
@@ -58,7 +59,7 @@ class RealExecutionReadinessService:
             *_live_feature_flag_blockers(risk_settings, live_adapter=live_adapter),
             *_live_adapter_blockers(adapter),
             *_exchange_rule_blockers(reference, risk_decision),
-            *_real_account_blockers(reference),
+            *_real_account_blockers(account_snapshot, reference=reference),
             *_fee_rate_blockers(fee_rate, risk_settings),
             *_reconciliation_blockers(reference, adapter),
         ]
@@ -78,11 +79,12 @@ class RealExecutionReadinessService:
                 signal.decision.execution_allowed_real if signal.decision is not None else None
             ),
             "exchange_rule_status": risk_decision.risk_check.exchange_rule_status,
-            "real_account_snapshot_status": _first_attr(
-                reference,
-                "real_account_snapshot_status",
-                "account_snapshot_status",
-                "real_balance_status",
+            "real_account_snapshot_status": _account_snapshot_status(account_snapshot, reference),
+            "real_account_snapshot_source": _account_snapshot_source(account_snapshot, reference),
+            "real_account_snapshot_fetched_at": (
+                account_snapshot.fetched_at.isoformat()
+                if account_snapshot is not None and account_snapshot.fetched_at is not None
+                else None
             ),
             "position_reconciliation_enabled": _bool_attr(
                 reference,
@@ -271,18 +273,66 @@ def _exchange_rule_blockers(reference: Any, risk_decision: RiskDecision) -> list
     return blockers
 
 
-def _real_account_blockers(reference: Any) -> list[str]:
-    if reference is None:
+def _real_account_blockers(
+    account_snapshot: AccountRiskSnapshot | None,
+    *,
+    reference: Any,
+) -> list[str]:
+    if account_snapshot is None:
+        account_snapshot = _legacy_account_snapshot(reference)
+    if account_snapshot is None:
         return ["Fresh real account equity/balance snapshot is required for live real execution."]
-    status = _first_attr(reference, "real_account_snapshot_status", "account_snapshot_status", "real_balance_status")
     blockers: list[str] = []
-    if str(status or "").strip().lower() != "fresh":
+    if account_snapshot.status != "fresh":
         blockers.append("Fresh real account equity/balance snapshot is required for live real execution.")
-    if _positive_attr(reference, "real_account_equity", "account_equity") is None:
+    if account_snapshot.source != "exchange":
+        blockers.append("Live real execution requires an exchange account snapshot, not request/demo balance.")
+    if account_snapshot.account_equity is None or account_snapshot.account_equity <= 0:
         blockers.append("Real account equity is required; request.account_balance cannot authorize live sizing.")
-    if _positive_attr(reference, "real_available_balance", "available_balance") is None:
+    if account_snapshot.available_balance is None or account_snapshot.available_balance < 0:
         blockers.append("Real available balance is required; virtual equity cannot authorize live sizing.")
     return blockers
+
+
+def _account_snapshot_status(
+    account_snapshot: AccountRiskSnapshot | None,
+    reference: Any,
+) -> str | None:
+    if account_snapshot is not None:
+        return account_snapshot.status
+    legacy = _legacy_account_snapshot(reference)
+    return legacy.status if legacy is not None else None
+
+
+def _account_snapshot_source(
+    account_snapshot: AccountRiskSnapshot | None,
+    reference: Any,
+) -> str | None:
+    if account_snapshot is not None:
+        return account_snapshot.source
+    legacy = _legacy_account_snapshot(reference)
+    return legacy.source if legacy is not None else None
+
+
+def _legacy_account_snapshot(reference: Any) -> AccountRiskSnapshot | None:
+    snapshot = _first_attr(reference, "account_snapshot")
+    if isinstance(snapshot, AccountRiskSnapshot):
+        return snapshot
+    status = _first_attr(reference, "real_account_snapshot_status", "account_snapshot_status", "real_balance_status")
+    equity = _positive_attr(reference, "real_account_equity", "account_equity")
+    available = _number_attr(reference, "real_available_balance", "available_balance")
+    if status is None and equity is None and available is None:
+        return None
+    normalized_status = str(status or "missing").strip().lower()
+    if normalized_status not in {"fresh", "stale", "missing"}:
+        normalized_status = "missing"
+    return AccountRiskSnapshot(
+        status=normalized_status,
+        account_equity=equity,
+        available_balance=available,
+        margin_mode=_first_attr(reference, "real_margin_mode", "margin_mode"),
+        source="exchange",
+    )
 
 
 def _fee_rate_blockers(
@@ -356,6 +406,14 @@ def _positive_attr(target: Any, *names: str) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+def _number_attr(target: Any, *names: str) -> float | None:
+    value = _first_attr(target, *names)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _bool_attr(target: Any, *names: str) -> bool:

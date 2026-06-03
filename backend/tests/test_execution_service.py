@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.schemas.risk import (
+    AccountRiskSnapshot,
     BreakevenPlan,
     FuturesRiskPlan,
     PositionSizingResult,
@@ -35,9 +36,11 @@ class _FakeRiskGateService:
     def __init__(self, decision: RiskDecision) -> None:
         self.decision = decision
         self.calls = 0
+        self.contexts = []
 
     def evaluate(self, *args, **kwargs) -> RiskDecision:
         self.calls += 1
+        self.contexts.append(kwargs.get("context"))
         return self.decision
 
 
@@ -201,6 +204,19 @@ class _FakeRiskState:
 
     def get_reference(self, *args, **kwargs) -> _Reference:
         return self.reference
+
+    def get_real_account_snapshot(self, *args, **kwargs) -> AccountRiskSnapshot:
+        return AccountRiskSnapshot(
+            status=self.reference.real_account_snapshot_status,
+            fetched_at=datetime.now(timezone.utc)
+            if self.reference.real_account_snapshot_status == "fresh"
+            else None,
+            account_equity=self.reference.real_account_equity,
+            available_balance=self.reference.real_available_balance,
+            margin_mode="spot",
+            open_risk_amount=self.reference.open_risk_amount,
+            source="exchange",
+        )
 
 
 class _FakeMarketDataService:
@@ -558,9 +574,107 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await service.place_order(_signal(), _request())
 
         self.assertEqual(result.status, "risk_failed")
-        self.assertIn("Real account equity is required", result.message)
-        self.assertIn("Real available balance is required", result.message)
+        self.assertIn("Fresh exchange account snapshot", result.message)
+        self.assertIn("Exchange account equity is required", result.message)
+        self.assertIn("Exchange available balance is required", result.message)
         self.assertEqual(adapter.calls, [])
+
+    async def test_live_missing_account_snapshot_blocks_before_risk_gate_and_adapter(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        gate = _FakeRiskGateService(_decision())
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    real_account_snapshot_status="missing",
+                    real_account_equity=None,
+                    real_available_balance=None,
+                )
+            ),
+            market_data_service=_FakeMarketDataService(),
+            fee_rate_service=_FakeFeeRateService(),
+            execution_adapter=adapter,
+            risk_settings_provider=lambda _user_id: _risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIn("Fresh exchange account snapshot", result.message)
+        self.assertEqual(gate.calls, 0)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_live_fresh_snapshot_is_used_for_risk_gate_sizing_context(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        gate = _FakeRiskGateService(_decision(account_equity=2_500.0))
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    real_account_equity=2_500.0,
+                    real_available_balance=2_400.0,
+                )
+            ),
+            market_data_service=_FakeMarketDataService(),
+            fee_rate_service=_FakeFeeRateService(),
+            execution_adapter=adapter,
+            risk_settings_provider=lambda _user_id: _risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request(account_balance=999_999.0))
+
+        self.assertEqual(result.status, "submitted")
+        self.assertEqual(gate.calls, 1)
+        context = gate.contexts[0]
+        self.assertEqual(context.account_equity, 2_500.0)
+        self.assertEqual(context.available_balance, 2_400.0)
+        self.assertEqual(context.account_snapshot_source, "exchange")
+
+    async def test_request_account_balance_cannot_override_fresh_exchange_snapshot(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        gate = _FakeRiskGateService(_decision(account_equity=3_000.0))
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    real_account_equity=3_000.0,
+                    real_available_balance=2_750.0,
+                )
+            ),
+            market_data_service=_FakeMarketDataService(),
+            fee_rate_service=_FakeFeeRateService(),
+            execution_adapter=adapter,
+            risk_settings_provider=lambda _user_id: _risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request(account_balance=25_000.0))
+
+        self.assertEqual(result.status, "submitted")
+        context = gate.contexts[0]
+        self.assertEqual(context.account_equity, 3_000.0)
+        self.assertNotEqual(context.account_equity, 25_000.0)
+
+    async def test_dry_run_uses_demo_request_balance_with_warning_source(self) -> None:
+        gate = _FakeRiskGateService(_decision())
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=None,
+            market_data_service=_FakeMarketDataService(),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings_provider=lambda _user_id: _risk_settings(),
+        )
+
+        result = await service.place_order(_signal(), _request(account_balance=1_234.0))
+
+        self.assertEqual(result.status, "dry_run")
+        context = gate.contexts[0]
+        self.assertEqual(context.account_equity, 1_234.0)
+        self.assertIn(context.account_snapshot_source, {"demo", "dry_run"})
+        self.assertTrue(any("Dry-run real execution uses request/demo" in warning for warning in context.account_snapshot_warnings))
 
     async def test_fee_rate_ttl_required(self) -> None:
         adapter = _FakeExecutionAdapter()
@@ -824,11 +938,11 @@ def _missing_structural_trade_plan() -> TradePlan:
     return plan.model_copy(update={"stop_loss": None})
 
 
-def _request(*, leverage: int = 1) -> ManualConfirmRequest:
+def _request(*, leverage: int = 1, account_balance: float = 1_000.0) -> ManualConfirmRequest:
     return ManualConfirmRequest(
         mode="real",
         user_id="demo_user",
-        account_balance=1_000.0,
+        account_balance=account_balance,
         risk_percent=1.0,
         leverage=leverage,
     )
@@ -866,6 +980,7 @@ def _risk_settings(
 def _decision(
     *,
     quantity: float = 1.0,
+    account_equity: float = 1_000.0,
     targets: list[TakeProfitTarget] | None = None,
     protective_orders_allowed: bool = True,
     stop_loss_source: str = "signal",
@@ -880,7 +995,7 @@ def _decision(
     ]
     sizing = PositionSizingResult(
         side="long",
-        account_equity=1_000.0,
+        account_equity=account_equity,
         risk_per_trade_percent=1.0,
         risk_amount=5.0 * quantity,
         entry_price=100.0,
@@ -898,7 +1013,7 @@ def _decision(
         instrument_type=instrument_type,
         strategy="trend_pullback_continuation",
         signal_score=80.0,
-        account_equity=1_000.0,
+        account_equity=account_equity,
         base_risk_percent=1.0,
         base_risk_amount=10.0,
         strategy_risk_multiplier=1.0,
@@ -913,7 +1028,7 @@ def _decision(
         warnings=[],
         rr=2.0,
         min_rr_ratio=1.0,
-        account_equity=1_000.0,
+        account_equity=account_equity,
         adjusted_risk_amount=10.0,
         adjusted_risk_percent=1.0,
         effective_risk_amount=5.0 * quantity,

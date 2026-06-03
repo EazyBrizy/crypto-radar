@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from decimal import Decimal
+
 from app.schemas.risk import (
+    AccountRiskSnapshot,
     LEGACY_VIRTUAL_INSTRUMENT_WARNING,
     ResolvedExecutionProfile,
     RiskContext,
@@ -164,9 +168,11 @@ class RiskContextService:
         signal: RadarSignal,
         request: ManualConfirmRequest,
         entry_price: float,
+        account_snapshot: AccountRiskSnapshot | None = None,
         requested_notional: float | None = None,
         instrument_type: TradeInstrumentType | None = None,
         stage: str = "preview",
+        allow_request_account_balance: bool = False,
         signal_stop_loss_price: float | None = None,
         atr_value: float | None = None,
         manual_take_profit_price: float | None = None,
@@ -211,6 +217,20 @@ class RiskContextService:
             request=request,
             execution_profile=execution_profile,
         )
+        snapshot = account_snapshot or (
+            _request_account_snapshot(request) if allow_request_account_balance else None
+        )
+        account_equity, available_balance, snapshot = _account_values_from_snapshot(
+            snapshot,
+            allow_request_account_balance=allow_request_account_balance,
+        )
+        snapshot_warnings = list(snapshot.warnings)
+        context_warnings = _dedupe([*normalization_warnings, *snapshot_warnings])
+        open_risk_for_context = (
+            float(snapshot.open_risk_amount)
+            if snapshot.source == "exchange"
+            else open_risk_amount
+        )
         return RiskContext(
             mode="real",
             stage=stage,
@@ -218,15 +238,20 @@ class RiskContextService:
             risk_profile_source=risk_profile_source,
             execution_profile_sources=execution_profile_sources or {},
             execution_profile=execution_profile,
-            normalization_warnings=normalization_warnings,
+            normalization_warnings=context_warnings,
             exchange=signal.exchange,
             symbol=signal.symbol,
             instrument_type=resolved_instrument_type,
             side=signal.direction,
             strategy=signal.strategy,
             signal_score=float(signal.score),
-            account_equity=request.account_balance,
-            available_balance=request.account_balance,
+            account_equity=account_equity,
+            available_balance=available_balance,
+            account_snapshot_status=snapshot.status,
+            account_snapshot_source=snapshot.source,
+            account_snapshot_fetched_at=snapshot.fetched_at,
+            account_margin_mode=snapshot.margin_mode,
+            account_snapshot_warnings=snapshot_warnings,
             entry_price=entry_price,
             signal_entry_price=_signal_entry_price(signal),
             signal_stop_loss_price=signal_stop_loss_price or signal.stop_loss,
@@ -252,7 +277,7 @@ class RiskContextService:
             market_data_source=market_data_source,
             market_data_warnings=market_data_warnings or [],
             requested_notional=requested_notional or request.size_usd,
-            open_risk_amount=open_risk_amount,
+            open_risk_amount=open_risk_for_context,
             correlated_open_risk_amount=correlated_open_risk_amount,
             daily_loss_amount=daily_loss_amount,
             exchange_min_order_size=exchange_min_order_size,
@@ -595,6 +620,51 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _request_account_snapshot(request: ManualConfirmRequest) -> AccountRiskSnapshot:
+    balance = Decimal(str(request.account_balance))
+    return AccountRiskSnapshot(
+        status="fresh",
+        fetched_at=datetime.now(timezone.utc),
+        account_equity=balance,
+        available_balance=balance,
+        margin_mode=None,
+        positions=[],
+        open_risk_amount=Decimal("0"),
+        source="request",
+        warnings=[
+            (
+                "Manual real preview uses request.account_balance for sizing; "
+                "live adapters require a fresh exchange account snapshot."
+            )
+        ],
+    )
+
+
+def _account_values_from_snapshot(
+    snapshot: AccountRiskSnapshot | None,
+    *,
+    allow_request_account_balance: bool,
+) -> tuple[float, float, AccountRiskSnapshot]:
+    if snapshot is None:
+        raise ValueError("AccountRiskSnapshot is required for real RiskGate context.")
+    if snapshot.status != "fresh":
+        raise ValueError("Fresh account risk snapshot is required for real RiskGate context.")
+    if snapshot.source != "exchange" and not allow_request_account_balance:
+        raise ValueError(
+            "Live real RiskGate context requires an exchange account snapshot; "
+            "request.account_balance is not a live source of truth."
+        )
+    if snapshot.account_equity is None or snapshot.account_equity <= 0:
+        raise ValueError("Account equity is required for real RiskGate sizing.")
+    if snapshot.available_balance is None or snapshot.available_balance < 0:
+        raise ValueError("Available balance is required for real RiskGate sizing.")
+    return (
+        float(snapshot.account_equity),
+        float(snapshot.available_balance),
+        snapshot,
+    )
 
 
 def _no_trade_blockers(context: RiskContext) -> list[str]:

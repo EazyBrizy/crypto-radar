@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 from app.exchanges.base import DryRunExecutionAdapter, ExchangeExecutionAdapter
-from app.schemas.risk import RiskDecision
+from app.schemas.risk import AccountRiskSnapshot, RiskDecision
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
     ExecutionPlannedOrder,
@@ -55,6 +55,7 @@ class RealExecutionService:
         readiness_service: RealExecutionReadinessService | None = real_execution_readiness_service,
         execution_adapter: ExchangeExecutionAdapter | None | object = _DEFAULT_EXECUTION_ADAPTER,
         risk_settings_provider: RiskSettingsProvider | None = None,
+        account_snapshot_provider: Any | None = None,
     ) -> None:
         self._risk_context_service = risk_context_service or RiskContextService()
         self._risk_gate_service = risk_gate_service or RiskGateService()
@@ -69,6 +70,7 @@ class RealExecutionService:
             else execution_adapter
         )
         self._risk_settings_provider = risk_settings_provider or get_user_risk_management_settings
+        self._account_snapshot_provider = account_snapshot_provider or self._risk_state or RiskStateService()
 
     async def place_order(
         self,
@@ -160,11 +162,36 @@ class RealExecutionService:
             if self._risk_state is not None
             else None
         )
+        live_adapter = (
+            self._execution_adapter is not None
+            and not bool(getattr(self._execution_adapter, "is_dry_run", False))
+        )
+        account_snapshot = self._get_real_account_snapshot(
+            user_id=request.user_id,
+            exchange=signal.exchange,
+            mode="real",
+            live_adapter=live_adapter,
+            request_account_balance=request.account_balance,
+            reference=reference,
+        )
+        account_snapshot_blockers = _live_account_snapshot_blockers(account_snapshot) if live_adapter else []
+        if account_snapshot_blockers:
+            return RealExecutionResult(
+                status="risk_failed",
+                signal_valid=True,
+                execution_allowed=False,
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                message="Real execution account snapshot failed: " + "; ".join(account_snapshot_blockers),
+                validation_errors=account_snapshot_blockers,
+            )
         risk_decision = self._risk_gate_service.evaluate(
             context=self._risk_context_service.build_real_context(
                 signal=signal,
                 request=request,
                 entry_price=entry_price,
+                account_snapshot=account_snapshot,
+                allow_request_account_balance=not live_adapter,
                 requested_notional=request.size_usd,
                 instrument_type=instrument_type,
                 stage="pre_execution",
@@ -226,6 +253,7 @@ class RealExecutionService:
             risk_decision,
             execution_profile=execution_profile,
             strategy_risk_settings_source=strategy_risk_settings_source,
+            account_snapshot=account_snapshot,
         )
         if not risk_decision.can_enter:
             message = _risk_rejection_message(risk_decision)
@@ -289,6 +317,7 @@ class RealExecutionService:
             risk_settings=risk_settings,
             reference=reference,
             fee_rate=fee_rate,
+            account_snapshot=account_snapshot,
             adapter=self._execution_adapter,
         )
         execution_plan = _execution_plan_with_readiness(execution_plan, readiness)
@@ -345,6 +374,7 @@ class RealExecutionService:
         risk_decision: Any,
         execution_profile: Any,
         strategy_risk_settings_source: str,
+        account_snapshot: AccountRiskSnapshot | None,
     ) -> str | None:
         if self._risk_audit is None:
             return None
@@ -357,11 +387,45 @@ class RealExecutionService:
                 "request": request.model_dump(mode="json"),
                 "signal": signal.model_dump(mode="json"),
                 "execution_profile": execution_profile.model_dump(mode="json"),
+                "account_snapshot": (
+                    account_snapshot.model_dump(mode="json")
+                    if account_snapshot is not None
+                    else None
+                ),
                 "risk_profile_source": resolved_risk_profile_source(execution_profile),
                 "strategy_risk_settings_source": strategy_risk_settings_source,
             },
         )
         return str(record_id)
+
+    def _get_real_account_snapshot(
+        self,
+        *,
+        user_id: str,
+        exchange: str,
+        mode: str,
+        live_adapter: bool,
+        request_account_balance: float,
+        reference: Any,
+    ) -> AccountRiskSnapshot:
+        provider = self._account_snapshot_provider
+        if hasattr(provider, "get_real_account_snapshot"):
+            return provider.get_real_account_snapshot(
+                user_id=user_id,
+                exchange=exchange,
+                mode=mode,
+                live_adapter=live_adapter,
+                request_account_balance=request_account_balance,
+                reference=reference,
+            )
+        return RiskStateService().get_real_account_snapshot(
+            user_id=user_id,
+            exchange=exchange,
+            mode=mode,
+            live_adapter=live_adapter,
+            request_account_balance=request_account_balance,
+            reference=reference,
+        )
 
 
 def _entry_price(signal: RadarSignal) -> float:
@@ -412,6 +476,21 @@ def _risk_rejection_message(risk_decision: RiskDecision) -> str:
     if risk_decision.blockers:
         return "Execution not allowed by risk gate: " + "; ".join(risk_decision.blockers)
     return "Real execution rejected by risk policy."
+
+
+def _live_account_snapshot_blockers(account_snapshot: AccountRiskSnapshot | None) -> list[str]:
+    if account_snapshot is None:
+        return ["Fresh exchange account snapshot is required before live RiskGate sizing."]
+    blockers: list[str] = []
+    if account_snapshot.status != "fresh":
+        blockers.append("Fresh exchange account snapshot is required before live RiskGate sizing.")
+    if account_snapshot.source != "exchange":
+        blockers.append("Live RiskGate sizing requires source=exchange account snapshot.")
+    if account_snapshot.account_equity is None or account_snapshot.account_equity <= 0:
+        blockers.append("Exchange account equity is required before live RiskGate sizing.")
+    if account_snapshot.available_balance is None or account_snapshot.available_balance < 0:
+        blockers.append("Exchange available balance is required before live RiskGate sizing.")
+    return _dedupe(blockers)
 
 
 def _readiness_rejection_message(blockers: list[str]) -> str:

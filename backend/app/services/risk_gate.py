@@ -80,6 +80,8 @@ class RiskContextService:
         taker_fee_rate: float | None = None,
         fee_rate_warnings: list[str] | None = None,
         rr_guard_context: str | None = None,
+        risk_profile_source: str = "unknown",
+        execution_profile_sources: dict[str, str] | None = None,
     ) -> RiskContext:
         account_equity = account.equity if account.equity > 0 else request.account_balance
         return RiskContext(
@@ -87,6 +89,8 @@ class RiskContextService:
             rr_guard_context=rr_guard_context,
             stage=stage,
             user_id=request.user_id,
+            risk_profile_source=risk_profile_source,
+            execution_profile_sources=execution_profile_sources or {},
             exchange=signal.exchange,
             symbol=signal.symbol,
             instrument_type="virtual",
@@ -186,6 +190,8 @@ class RiskContextService:
         maker_fee_rate: float | None = None,
         taker_fee_rate: float | None = None,
         fee_rate_warnings: list[str] | None = None,
+        risk_profile_source: str = "unknown",
+        execution_profile_sources: dict[str, str] | None = None,
     ) -> RiskContext:
         resolved_instrument_type: TradeInstrumentType = (
             instrument_type
@@ -196,6 +202,8 @@ class RiskContextService:
             mode="real",
             stage=stage,
             user_id=request.user_id,
+            risk_profile_source=risk_profile_source,
+            execution_profile_sources=execution_profile_sources or {},
             exchange=signal.exchange,
             symbol=signal.symbol,
             instrument_type=resolved_instrument_type,
@@ -432,6 +440,8 @@ class RiskGateService:
             stage=context.stage,
             status=risk_check.status,
             can_enter=risk_check.status != "failed",
+            risk_profile_source=context.risk_profile_source,
+            execution_profile_sources=context.execution_profile_sources,
             blockers=risk_check.blockers,
             warnings=_dedupe(warnings),
             exchange=context.exchange,

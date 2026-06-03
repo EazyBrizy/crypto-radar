@@ -68,6 +68,8 @@ class RiskGateServiceContractTest(unittest.TestCase):
                 entry_price=100,
                 open_positions=[],
                 stage="preview",
+                risk_profile_source="user_profile",
+                execution_profile_sources={"risk_percent": "user.risk_per_trade_percent"},
             ),
             risk_settings=_risk_settings(),
         )
@@ -80,6 +82,8 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertAlmostEqual(decision.position_sizing.risk_amount, 0.75)
         self.assertAlmostEqual(decision.checked_position_sizing.risk_amount, 0.75)
         self.assertEqual(decision.risk_check.effective_risk_amount, decision.checked_position_sizing.risk_amount)
+        self.assertEqual(decision.risk_profile_source, "user_profile")
+        self.assertEqual(decision.execution_profile_sources["risk_percent"], "user.risk_per_trade_percent")
 
     def test_virtual_gate_blocks_manual_notional_above_adjusted_risk(self) -> None:
         decision = RiskGateService().evaluate(

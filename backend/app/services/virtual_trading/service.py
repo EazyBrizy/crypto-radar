@@ -26,7 +26,6 @@ from app.core.redis_client import get_redis_client
 from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import RadarSignal
 from app.schemas.risk import RiskDecision
-from app.schemas.risk import StrategyExecutionSettings
 from app.schemas.trade import (
     CloseReason,
     CloseVirtualTradeRequest,
@@ -44,6 +43,8 @@ from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.risk_management import (
     execution_profile_resolver,
     get_user_risk_management_settings,
+    request_risk_override_to_execution_settings,
+    resolved_risk_profile_source,
     resolve_rr_guard_mode,
 )
 from app.services.risk_market_data import RiskMarketDataService, RiskMarketDataSnapshot, risk_market_data_service
@@ -258,7 +259,6 @@ class VirtualTradingService:
     def _fallback_risk_settings(request: ManualConfirmRequest) -> RiskManagementSettings:
         return RiskManagementSettings(
             risk_profile="custom",
-            risk_per_trade_percent=request.risk_percent,
             min_rr_ratio=VIRTUAL_RISK_REWARD,
             max_daily_loss_percent=50.0,
             max_account_drawdown_percent=90.0,
@@ -434,6 +434,7 @@ class VirtualTradingService:
             request=request,
             risk_settings=risk_settings,
         )
+        risk_profile_source = resolved_risk_profile_source(execution_profile)
         virtual_rr_guard_mode = resolve_rr_guard_mode(
             risk_settings,
             context="virtual",
@@ -529,6 +530,8 @@ class VirtualTradingService:
                     else 0.0
                 ),
                 user_mode_multiplier=reference.user_mode_multiplier if reference is not None else 1.0,
+                risk_profile_source=risk_profile_source,
+                execution_profile_sources=execution_profile.sources,
             ),
             risk_settings=risk_settings,
         )
@@ -628,6 +631,8 @@ class VirtualTradingService:
                     else 0.0
                 ),
                 user_mode_multiplier=reference.user_mode_multiplier if reference is not None else 1.0,
+                risk_profile_source=risk_profile_source,
+                execution_profile_sources=execution_profile.sources,
             ),
             risk_settings=risk_settings,
         )
@@ -698,6 +703,7 @@ class VirtualTradingService:
             request=request,
             risk_settings=risk_settings,
         )
+        risk_profile_source = resolved_risk_profile_source(execution_profile)
         virtual_rr_guard_mode = resolve_rr_guard_mode(
             risk_settings,
             context="virtual",
@@ -795,6 +801,8 @@ class VirtualTradingService:
                     else 0.0
                 ),
                 user_mode_multiplier=reference.user_mode_multiplier if reference is not None else 1.0,
+                risk_profile_source=risk_profile_source,
+                execution_profile_sources=execution_profile.sources,
             ),
             risk_settings=risk_settings,
         )
@@ -838,10 +846,7 @@ class VirtualTradingService:
         execution_profile = execution_profile_resolver.resolve(
             user_risk_settings=risk_settings,
             strategy_execution_settings=strategy_risk_settings,
-            request_override=_request_execution_profile(
-                request.execution_profile,
-                leverage=request.leverage,
-            ),
+            request_override=request_risk_override_to_execution_settings(request.risk_override),
             mode="virtual",
             instrument_type=_virtual_profile_instrument_type(request),
         )
@@ -938,6 +943,7 @@ class VirtualTradingService:
                     "request": request.model_dump(mode="json"),
                     "signal": signal.model_dump(mode="json"),
                     "execution_profile": execution_profile.model_dump(mode="json"),
+                    "risk_profile_source": resolved_risk_profile_source(execution_profile),
                     "strategy_risk_settings_source": strategy_risk_settings_source,
                 },
             )
@@ -965,6 +971,7 @@ class VirtualTradingService:
                     "request": request.model_dump(mode="json"),
                     "signal": signal.model_dump(mode="json"),
                     "execution_profile": execution_profile.model_dump(mode="json"),
+                    "risk_profile_source": resolved_risk_profile_source(execution_profile),
                     "strategy_risk_settings_source": strategy_risk_settings_source,
                 },
             )
@@ -1267,24 +1274,9 @@ def _virtual_fee_instrument_type(request: ManualConfirmRequest) -> str:
 def _virtual_profile_instrument_type(request: ManualConfirmRequest) -> str:
     if request.execution_profile is not None and request.execution_profile.instrument_type is not None:
         return request.execution_profile.instrument_type
+    if request.risk_override is not None and request.risk_override.leverage is not None:
+        return "futures" if request.risk_override.leverage > 1 else "spot"
     return "futures" if request.leverage > 1 else "spot"
-
-
-def _request_execution_profile(
-    execution_profile: StrategyExecutionSettings | None,
-    *,
-    leverage: int,
-) -> StrategyExecutionSettings | None:
-    values: dict[str, Any] = (
-        execution_profile.to_legacy_dict(exclude_unset=True)
-        if execution_profile is not None
-        else {}
-    )
-    if leverage != 1 and "leverage" not in values:
-        values["leverage"] = leverage
-    if not values:
-        return None
-    return StrategyExecutionSettings.model_validate(values)
 
 
 def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:

@@ -180,8 +180,10 @@ with production permission to send exchange orders.
 ## Strategy Execution Profile v1
 
 `StrategyExecutionSettings` is the typed contract stored over the existing
-`user_strategy_configs.risk_settings` JSONB container and optionally supplied as
-an explicit request override. The JSONB storage remains backward-compatible:
+`user_strategy_configs.risk_settings` JSONB container. The saved user/strategy
+execution profile is the source of truth before RiskGate. Request-level risk
+changes are allowed only through the explicit `risk_override` object on
+preview/confirm requests. The JSONB storage remains backward-compatible:
 legacy keys are accepted, but execution settings are resolved through this
 typed profile before RiskGate.
 
@@ -204,6 +206,23 @@ StrategyExecutionSettings = {
     "min_rr_ratio": Decimal | None,
     "rr_target": RRTarget | None,
     "radar_display_mode": RadarDisplayMode | None,
+}
+
+RiskOverride = {
+    "risk_mode": RiskAmountMode,
+    "risk_percent": Decimal | None,
+    "fixed_risk_amount": Decimal | None,
+    "leverage": Decimal | None,
+}
+
+RiskPreviewRequest = {
+    "risk_percent": float | None,       # deprecated legacy field
+    "risk_override": RiskOverride | None,
+}
+
+ManualConfirmRequest = {
+    "risk_percent": float | None,       # deprecated legacy field
+    "risk_override": RiskOverride | None,
 }
 ```
 
@@ -229,7 +248,7 @@ Field meanings:
 Resolution precedence:
 
 ```text
-request explicit execution profile override
+request risk_override
 > strategy execution settings in risk_settings JSONB
 > user risk_management settings
 > schema/config defaults
@@ -251,9 +270,18 @@ setup logic.
 Legacy keys such as `risk_per_trade_percent`,
 `futures_risk_per_trade_percent`, `spot_risk_per_trade_percent`, and
 `virtual_risk_per_trade_percent` remain accepted and map to percent mode when
-the new typed field is absent. A legacy request field such as
-`risk_percent = 10.0` is not considered an explicit override by itself because
-older API clients used that value as a default.
+the new typed field is absent. The request fields
+`RiskPreviewRequest.risk_percent` and `ManualConfirmRequest.risk_percent` are
+deprecated and retained only for backward-compatible parsing/audit snapshots.
+They are never considered explicit risk overrides by themselves, including the
+legacy default `risk_percent = 10.0`, because older API clients used that value
+as a request default. `risk_override.risk_mode = "percent"` requires
+`risk_override.risk_percent`; `risk_override.risk_mode = "fixed"` requires
+`risk_override.fixed_risk_amount`.
+
+RiskGate decisions and risk audit snapshots expose the resolved
+`risk_profile_source` (`request_override`, `strategy`, `user_profile`, or
+`default`) plus field-level `execution_profile_sources` for debugging.
 
 ## Pipeline Layer Services v1
 

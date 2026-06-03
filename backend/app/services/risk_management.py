@@ -12,6 +12,7 @@ from app.schemas.risk import (
     ResolvedExecutionProfile,
     RiskAdjustmentPlan,
     RiskCheckResult,
+    RiskOverride,
     StopLossPlan,
     StrategyExecutionSettings,
     TakeProfitPlan,
@@ -1603,7 +1604,7 @@ def _resolve_profile_field(
     user_value: Any,
 ) -> tuple[Any, str]:
     if request_settings is not None and field_name in request_fields:
-        return getattr(request_settings, field_name), "request"
+        return getattr(request_settings, field_name), "request_override"
     if strategy_settings is not None and field_name in strategy_fields:
         return getattr(strategy_settings, field_name), "strategy"
     if user_value is not None:
@@ -1628,7 +1629,7 @@ def _resolve_risk_percent(
         instrument_type=instrument_type,
     )
     if request_value is not None:
-        return request_value, "request"
+        return request_value, "request_override"
     strategy_value = _legacy_percent_from_settings(
         strategy_settings,
         strategy_fields,
@@ -1697,6 +1698,40 @@ def _settings_model(risk_settings: RiskManagementSettings | Mapping[str, Any]) -
         if isinstance(risk_settings, RiskManagementSettings)
         else RiskManagementSettings.model_validate(risk_settings)
     )
+
+
+def request_risk_override_to_execution_settings(
+    risk_override: RiskOverride | Mapping[str, Any] | None,
+) -> StrategyExecutionSettings | None:
+    if risk_override is None:
+        return None
+    override = (
+        risk_override
+        if isinstance(risk_override, RiskOverride)
+        else RiskOverride.model_validate(risk_override)
+    )
+    return override.to_execution_settings()
+
+
+def resolved_risk_profile_source(profile: ResolvedExecutionProfile) -> str:
+    source_key = (
+        "fixed_risk_amount"
+        if profile.risk_mode == "fixed"
+        else "risk_percent"
+    )
+    return _normalize_resolved_profile_source(profile.sources.get(source_key))
+
+
+def _normalize_resolved_profile_source(source: str | None) -> str:
+    if source == "request_override":
+        return "request_override"
+    if source == "strategy":
+        return "strategy"
+    if source == "default":
+        return "default"
+    if source == "user" or (source is not None and source.startswith("user.")):
+        return "user_profile"
+    return source or "unknown"
 
 
 def _risk_settings_mapping(risk_settings: RiskManagementSettings | Mapping[str, Any] | None) -> Mapping[str, Any]:

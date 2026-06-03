@@ -49,7 +49,6 @@ export const signalsApi = {
           user_id: "demo_user",
           auto_enter_on_confirmation: waitForConfirmation,
           account_balance: 100,
-          risk_percent: 10,
           leverage: 3,
           fee_rate: 0,
           slippage_bps: 0,
@@ -71,7 +70,6 @@ export const signalsApi = {
           user_id: "demo_user",
           instrument_type: "futures",
           account_balance: 100,
-          risk_percent: 10,
           leverage: 3,
           fee_rate: 0,
           slippage_bps: 0

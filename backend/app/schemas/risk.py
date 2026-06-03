@@ -92,6 +92,30 @@ class StrategyExecutionSettings(BaseModel):
         return self.model_dump(mode="json", exclude_none=True, exclude_unset=exclude_unset)
 
 
+class RiskOverride(BaseModel):
+    """Explicit per-request risk override for preview/confirm flows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    risk_mode: RiskAmountMode
+    risk_percent: Decimal | None = Field(default=None, gt=0, le=100)
+    fixed_risk_amount: Decimal | None = Field(default=None, gt=0)
+    leverage: Decimal | None = Field(default=None, ge=1, le=125)
+
+    @model_validator(mode="after")
+    def validate_risk_override(self) -> "RiskOverride":
+        if self.risk_mode == "percent" and self.risk_percent is None:
+            raise ValueError("risk_percent is required when risk_mode is percent")
+        if self.risk_mode == "fixed" and self.fixed_risk_amount is None:
+            raise ValueError("fixed_risk_amount is required when risk_mode is fixed")
+        return self
+
+    def to_execution_settings(self) -> StrategyExecutionSettings:
+        return StrategyExecutionSettings.model_validate(
+            self.model_dump(mode="json", exclude_none=True)
+        )
+
+
 class ResolvedExecutionProfile(BaseModel):
     execution_mode: ExecutionMode
     instrument_type: InstrumentType
@@ -276,6 +300,8 @@ class RiskContext(BaseModel):
     rr_guard_context: str | None = None
     stage: RiskDecisionStage = "preview"
     user_id: str = "demo_user"
+    risk_profile_source: str = "unknown"
+    execution_profile_sources: dict[str, str] = Field(default_factory=dict)
     exchange: str
     symbol: str
     instrument_type: TradeInstrumentType
@@ -338,6 +364,8 @@ class RiskDecision(BaseModel):
     stage: RiskDecisionStage
     status: RiskCheckStatus
     can_enter: bool
+    risk_profile_source: str = "unknown"
+    execution_profile_sources: dict[str, str] = Field(default_factory=dict)
     blockers: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     exchange: str
@@ -368,7 +396,8 @@ class RiskPreviewRequest(BaseModel):
     take_profit_price: float | None = Field(default=None, gt=0)
     size_usd: float | None = Field(default=None, gt=0)
     account_balance: float = Field(default=100.0, gt=0)
-    risk_percent: float = Field(default=10.0, gt=0, le=100)
+    risk_percent: float | None = Field(default=None, gt=0, le=100)
+    risk_override: RiskOverride | None = None
     execution_profile: StrategyExecutionSettings | None = None
     fee_rate: float = Field(default=0.0, ge=0, le=0.01)
     slippage_bps: float = Field(default=0.0, ge=0, le=2_000)

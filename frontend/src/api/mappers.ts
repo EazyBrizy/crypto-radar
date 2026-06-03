@@ -568,6 +568,8 @@ export function normalizeRiskDecision(value: unknown): RiskDecision | null {
     stage: stage === "pre_execution" || stage === "post_execution" || stage === "confirm" ? stage : "preview",
     status: normalizeRiskCheckStatus(value.status),
     can_enter: Boolean(value.can_enter ?? false),
+    risk_profile_source: String(value.risk_profile_source ?? "unknown"),
+    execution_profile_sources: normalizeStringRecord(value.execution_profile_sources),
     blockers: Array.isArray(value.blockers) ? value.blockers.map(String) : [],
     warnings: Array.isArray(value.warnings) ? value.warnings.map(String) : [],
     exchange: String(value.exchange ?? ""),
@@ -1430,6 +1432,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeMetadata(value: unknown): Record<string, unknown> {
   return isRecord(value) ? { ...value } : {};
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, String(entry)]));
 }
 
 function optionalNumber(value: unknown): number | null {

@@ -3,13 +3,18 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from app.schemas.risk import RiskPreviewRequest, RiskPreviewResponse, StrategyExecutionSettings, TradeInstrumentType
+from app.schemas.risk import RiskPreviewRequest, RiskPreviewResponse, TradeInstrumentType
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualTrade
 from app.services.risk_audit import RiskAuditService, risk_audit_service
 from app.services.risk_fee_rate import RiskFeeRateService, risk_fee_rate_service
 from app.services.risk_gate import RiskContextService, RiskGateService
-from app.services.risk_management import execution_profile_resolver, get_user_risk_management_settings
+from app.services.risk_management import (
+    execution_profile_resolver,
+    get_user_risk_management_settings,
+    request_risk_override_to_execution_settings,
+    resolved_risk_profile_source,
+)
 from app.services.risk_market_data import RiskMarketDataService, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
 from app.services.signal_service import SignalService, signal_service
@@ -52,13 +57,11 @@ class RiskPreviewService:
         execution_profile = execution_profile_resolver.resolve(
             user_risk_settings=risk_settings,
             strategy_execution_settings=strategy_risk_settings,
-            request_override=_request_execution_profile(
-                request.execution_profile,
-                leverage=request.leverage,
-            ),
+            request_override=request_risk_override_to_execution_settings(request.risk_override),
             mode=request.mode,
             instrument_type=_profile_instrument_type(instrument_type),
         )
+        risk_profile_source = resolved_risk_profile_source(execution_profile)
         risk_settings = execution_profile_resolver.apply_to_risk_settings(
             risk_settings,
             execution_profile,
@@ -144,6 +147,8 @@ class RiskPreviewService:
                 maker_fee_rate=fee_rate.maker_fee_rate,
                 taker_fee_rate=fee_rate.taker_fee_rate,
                 fee_rate_warnings=list(fee_rate.warnings),
+                risk_profile_source=risk_profile_source,
+                execution_profile_sources=execution_profile.sources,
                 daily_loss_amount=reference.daily_loss_amount,
                 correlated_open_risk_amount=reference.correlated_open_risk_amount,
                 correlation_group=reference.correlation_group,
@@ -187,6 +192,8 @@ class RiskPreviewService:
                 maker_fee_rate=fee_rate.maker_fee_rate,
                 taker_fee_rate=fee_rate.taker_fee_rate,
                 fee_rate_warnings=list(fee_rate.warnings),
+                risk_profile_source=risk_profile_source,
+                execution_profile_sources=execution_profile.sources,
                 open_risk_amount=reference.open_risk_amount,
                 correlated_open_risk_amount=reference.correlated_open_risk_amount,
                 daily_loss_amount=reference.daily_loss_amount,
@@ -213,6 +220,7 @@ class RiskPreviewService:
                 "fee_rate": asdict(fee_rate),
                 "risk_state": reference.state.model_dump(mode="json"),
                 "execution_profile": execution_profile.model_dump(mode="json"),
+                "risk_profile_source": risk_profile_source,
                 "strategy_risk_settings_source": strategy_risk_settings_source,
             },
         )
@@ -229,6 +237,7 @@ def _manual_request(request: RiskPreviewRequest) -> ManualConfirmRequest:
         user_id=request.user_id,
         account_balance=request.account_balance,
         risk_percent=request.risk_percent,
+        risk_override=request.risk_override,
         execution_profile=request.execution_profile,
         leverage=request.leverage,
         liquidation_price=request.liquidation_price,
@@ -244,28 +253,13 @@ def _instrument_type(
 ) -> TradeInstrumentType:
     if request.instrument_type is not None:
         return request.instrument_type
+    if request.risk_override is not None and request.risk_override.leverage is not None:
+        return "futures" if request.risk_override.leverage > 1 else "spot"
     return "futures" if manual_request.leverage > 1 else "spot"
 
 
 def _profile_instrument_type(instrument_type: TradeInstrumentType) -> str:
     return "futures" if instrument_type == "futures" else "spot"
-
-
-def _request_execution_profile(
-    execution_profile: StrategyExecutionSettings | None,
-    *,
-    leverage: int,
-) -> StrategyExecutionSettings | None:
-    values: dict[str, Any] = (
-        execution_profile.to_legacy_dict(exclude_unset=True)
-        if execution_profile is not None
-        else {}
-    )
-    if leverage != 1 and "leverage" not in values:
-        values["leverage"] = leverage
-    if not values:
-        return None
-    return StrategyExecutionSettings.model_validate(values)
 
 
 def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:

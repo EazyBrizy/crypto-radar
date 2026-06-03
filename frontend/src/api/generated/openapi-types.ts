@@ -2358,11 +2358,9 @@ export interface components {
              * @default 100
              */
             account_balance: number;
-            /**
-             * Risk Percent
-             * @default 10
-             */
-            risk_percent: number;
+            /** Risk Percent */
+            risk_percent?: number | null;
+            risk_override?: components["schemas"]["RiskOverride"] | null;
             execution_profile?: components["schemas"]["StrategyExecutionSettings-Input"] | null;
             /**
              * Leverage
@@ -2905,11 +2903,9 @@ export interface components {
              * @default 100
              */
             account_balance: number;
-            /**
-             * Risk Percent
-             * @default 10
-             */
-            risk_percent: number;
+            /** Risk Percent */
+            risk_percent?: number | null;
+            risk_override?: components["schemas"]["RiskOverride"] | null;
             execution_profile?: components["schemas"]["StrategyExecutionSettings-Input"] | null;
             /**
              * Leverage
@@ -3372,6 +3368,15 @@ export interface components {
             status: "passed" | "warning" | "failed";
             /** Can Enter */
             can_enter: boolean;
+            /**
+             * Risk Profile Source
+             * @default unknown
+             */
+            risk_profile_source: string;
+            /** Execution Profile Sources */
+            execution_profile_sources?: {
+                [key: string]: string;
+            };
             /** Blockers */
             blockers?: string[];
             /** Warnings */
@@ -3558,6 +3563,23 @@ export interface components {
             /** Max Risk Boost */
             max_risk_boost?: number | null;
         };
+        /**
+         * RiskOverride
+         * @description Explicit per-request risk override for preview/confirm flows.
+         */
+        RiskOverride: {
+            /**
+             * Risk Mode
+             * @enum {string}
+             */
+            risk_mode: "percent" | "fixed";
+            /** Risk Percent */
+            risk_percent?: number | string | null;
+            /** Fixed Risk Amount */
+            fixed_risk_amount?: number | string | null;
+            /** Leverage */
+            leverage?: number | string | null;
+        };
         /** RiskPreviewRequest */
         RiskPreviewRequest: {
             /** Signal Id */
@@ -3595,11 +3617,9 @@ export interface components {
              * @default 100
              */
             account_balance: number;
-            /**
-             * Risk Percent
-             * @default 10
-             */
-            risk_percent: number;
+            /** Risk Percent */
+            risk_percent?: number | null;
+            risk_override?: components["schemas"]["RiskOverride"] | null;
             execution_profile?: components["schemas"]["StrategyExecutionSettings-Input"] | null;
             /**
              * Fee Rate

@@ -6983,11 +6983,27 @@
             "default": 100
           },
           "risk_percent": {
-            "type": "number",
-            "maximum": 100,
-            "exclusiveMinimum": 0,
-            "title": "Risk Percent",
-            "default": 10
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Percent"
+          },
+          "risk_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "execution_profile": {
             "anyOf": [
@@ -8432,11 +8448,27 @@
             "default": 100
           },
           "risk_percent": {
-            "type": "number",
-            "maximum": 100,
-            "exclusiveMinimum": 0,
-            "title": "Risk Percent",
-            "default": 10
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Percent"
+          },
+          "risk_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "execution_profile": {
             "anyOf": [
@@ -9583,6 +9615,18 @@
             "type": "boolean",
             "title": "Can Enter"
           },
+          "risk_profile_source": {
+            "type": "string",
+            "title": "Risk Profile Source",
+            "default": "unknown"
+          },
+          "execution_profile_sources": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Execution Profile Sources"
+          },
           "blockers": {
             "items": {
               "type": "string"
@@ -10693,6 +10737,75 @@
         "type": "object",
         "title": "RiskManagementPatch"
       },
+      "RiskOverride": {
+        "properties": {
+          "risk_mode": {
+            "type": "string",
+            "enum": [
+              "percent",
+              "fixed"
+            ],
+            "title": "Risk Mode"
+          },
+          "risk_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Percent"
+          },
+          "fixed_risk_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Risk Amount"
+          },
+          "leverage": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 125,
+                "minimum": 1
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leverage"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "risk_mode"
+        ],
+        "title": "RiskOverride",
+        "description": "Explicit per-request risk override for preview/confirm flows."
+      },
       "RiskPreviewRequest": {
         "properties": {
           "signal_id": {
@@ -10804,11 +10917,27 @@
             "default": 100
           },
           "risk_percent": {
-            "type": "number",
-            "maximum": 100,
-            "exclusiveMinimum": 0,
-            "title": "Risk Percent",
-            "default": 10
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Percent"
+          },
+          "risk_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "execution_profile": {
             "anyOf": [

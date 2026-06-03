@@ -151,16 +151,33 @@ settings rather than user toggles.
 Risk settings are resolved as a typed execution profile before RiskGate. The
 resolver is deterministic and does not read the database itself; callers pass
 the already-loaded user risk settings, strategy `risk_settings` JSON, optional
-explicit request override, execution mode, and instrument type.
+explicit `risk_override`, execution mode, and instrument type. The saved
+user/strategy execution profile is the source of truth; request risk changes
+must use `risk_override`.
 
 Precedence:
 
 ```text
-request explicit execution profile override
+request risk_override
 > strategy risk_settings
 > user risk_management settings
 > schema/config defaults
 ```
+
+Request override contract:
+
+```python
+RiskOverride = {
+    "risk_mode": "percent" | "fixed",
+    "risk_percent": Decimal | None,
+    "fixed_risk_amount": Decimal | None,
+    "leverage": Decimal | None,
+}
+```
+
+`risk_mode = "percent"` requires `risk_percent`. `risk_mode = "fixed"`
+requires `fixed_risk_amount`. An override source is surfaced in RiskGate
+decisions/audit as `risk_profile_source = "request_override"`.
 
 For Radar display, the explicit request field is
 `radar_display_mode`. The current contract accepts and resolves the field but
@@ -172,8 +189,11 @@ Legacy percent keys remain readable for backward compatibility:
 `risk_per_trade_percent`, `spot_risk_per_trade_percent`,
 `futures_risk_per_trade_percent`, and `virtual_risk_per_trade_percent`.
 The legacy request value `risk_percent = 10.0` is not treated as an explicit
-override unless the request also sends the typed execution profile, because that
-value was historically an API default.
+override and does not replace a saved profile, because that value was
+historically an API default. `RiskPreviewRequest.risk_percent` and
+`ManualConfirmRequest.risk_percent` are deprecated/backward-compatible fields
+kept for parsing and audit snapshots only. Use `risk_override` for per-ticket
+percent, fixed-risk, or leverage changes.
 
 Invalid profile combinations must fail with an auditable validation reason.
 Examples: `risk_mode = "fixed"` without `fixed_risk_amount`, non-positive

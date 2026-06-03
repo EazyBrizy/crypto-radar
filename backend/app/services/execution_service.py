@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 from app.exchanges.base import DryRunExecutionAdapter, ExchangeExecutionAdapter
-from app.schemas.risk import RiskDecision, StrategyExecutionSettings
+from app.schemas.risk import RiskDecision
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
     ExecutionPlannedOrder,
@@ -16,7 +16,12 @@ from app.schemas.user import RiskManagementSettings
 from app.services.risk_audit import RiskAuditService, risk_audit_service
 from app.services.risk_fee_rate import RiskFeeRateService, risk_fee_rate_service
 from app.services.risk_gate import RiskContextService, RiskGateService
-from app.services.risk_management import execution_profile_resolver, get_user_risk_management_settings
+from app.services.risk_management import (
+    execution_profile_resolver,
+    get_user_risk_management_settings,
+    request_risk_override_to_execution_settings,
+    resolved_risk_profile_source,
+)
 from app.services.risk_market_data import RiskMarketDataService, risk_market_data_service
 from app.services.real_execution_readiness import (
     RealExecutionReadinessService,
@@ -71,7 +76,7 @@ class RealExecutionService:
         request: ManualConfirmRequest,
     ) -> RealExecutionResult:
         risk_settings = self._risk_settings_provider(request.user_id)
-        instrument_type = "futures" if request.leverage > 1 else "spot"
+        instrument_type = "futures" if _request_profile_leverage(request) > 1 else "spot"
         strategy_risk_settings, strategy_risk_settings_source = _strategy_risk_settings(
             signal,
             user_id=request.user_id,
@@ -79,13 +84,11 @@ class RealExecutionService:
         execution_profile = execution_profile_resolver.resolve(
             user_risk_settings=risk_settings,
             strategy_execution_settings=strategy_risk_settings,
-            request_override=_request_execution_profile(
-                request.execution_profile,
-                leverage=request.leverage,
-            ),
+            request_override=request_risk_override_to_execution_settings(request.risk_override),
             mode="real",
             instrument_type=instrument_type,
         )
+        risk_profile_source = resolved_risk_profile_source(execution_profile)
         risk_settings = execution_profile_resolver.apply_to_risk_settings(
             risk_settings,
             execution_profile,
@@ -202,6 +205,8 @@ class RealExecutionService:
                 maker_fee_rate=fee_rate.maker_fee_rate if fee_rate is not None else None,
                 taker_fee_rate=fee_rate.taker_fee_rate if fee_rate is not None else None,
                 fee_rate_warnings=list(fee_rate.warnings) if fee_rate is not None else [],
+                risk_profile_source=risk_profile_source,
+                execution_profile_sources=execution_profile.sources,
                 open_risk_amount=reference.open_risk_amount if reference is not None else 0.0,
                 correlated_open_risk_amount=(
                     reference.correlated_open_risk_amount if reference is not None else 0.0
@@ -351,6 +356,7 @@ class RealExecutionService:
                 "request": request.model_dump(mode="json"),
                 "signal": signal.model_dump(mode="json"),
                 "execution_profile": execution_profile.model_dump(mode="json"),
+                "risk_profile_source": resolved_risk_profile_source(execution_profile),
                 "strategy_risk_settings_source": strategy_risk_settings_source,
             },
         )
@@ -367,21 +373,10 @@ def _entry_price(signal: RadarSignal) -> float:
     raise ValueError("Signal has no entry zone")
 
 
-def _request_execution_profile(
-    execution_profile: StrategyExecutionSettings | None,
-    *,
-    leverage: int,
-) -> StrategyExecutionSettings | None:
-    values: dict[str, Any] = (
-        execution_profile.to_legacy_dict(exclude_unset=True)
-        if execution_profile is not None
-        else {}
-    )
-    if leverage != 1 and "leverage" not in values:
-        values["leverage"] = leverage
-    if not values:
-        return None
-    return StrategyExecutionSettings.model_validate(values)
+def _request_profile_leverage(request: ManualConfirmRequest) -> int:
+    if request.risk_override is not None and request.risk_override.leverage is not None:
+        return int(request.risk_override.leverage)
+    return request.leverage
 
 
 def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:

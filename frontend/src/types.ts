@@ -470,6 +470,8 @@ export interface RiskDecision {
   stage: "preview" | "pre_execution" | "post_execution" | "confirm";
   status: RiskCheckStatus;
   can_enter: boolean;
+  risk_profile_source: string;
+  execution_profile_sources: Record<string, string>;
   blockers: string[];
   warnings: string[];
   exchange: string;

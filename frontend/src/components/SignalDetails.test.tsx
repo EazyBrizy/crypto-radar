@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { PendingEntryIntent, RadarSignal } from "@/types";
@@ -124,7 +124,7 @@ const signal: RadarSignal = {
 };
 
 describe("SignalDetails", () => {
-  it("renders trade plan, edge metrics and risk blockers", () => {
+  it("renders compact trade plan and top blockers in the default view", () => {
     render(
       <SignalDetails
         busy={false}
@@ -136,10 +136,13 @@ describe("SignalDetails", () => {
     );
 
     expect(screen.getByText("Trade Plan")).toBeInTheDocument();
-    expect(screen.getAllByText(/TP3/u).length).toBeGreaterThan(0);
-    expect(screen.getByText("Edge Snapshot")).toBeInTheDocument();
-    expect(screen.getByText("61%")).toBeInTheDocument();
-    expect(screen.getByText("Risk blockers / warnings")).toBeInTheDocument();
+    expect(screen.getByText("Entry zone / price")).toBeInTheDocument();
+    expect(screen.getByText("Stop-loss")).toBeInTheDocument();
+    expect(screen.getByText("TP1")).toBeInTheDocument();
+    expect(screen.getByText("TP2")).toBeInTheDocument();
+    expect(screen.getByText("Runner")).toBeInTheDocument();
+    expect(screen.queryByText("Edge Snapshot")).not.toBeInTheDocument();
+    expect(screen.queryByText("Risk blockers / warnings")).not.toBeInTheDocument();
     expect(screen.getAllByText("high_spread").length).toBeGreaterThan(0);
   });
 
@@ -155,8 +158,8 @@ describe("SignalDetails", () => {
     );
 
     expect(screen.getByText("Market setup exists, wait for entry trigger")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Ждать виртуальный вход/u })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: /Открыть виртуальную сделку/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Virtual entry locked/u })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Virtual entry now/u })).not.toBeInTheDocument();
   });
 
   it("shows forming candle reason and disables actionable UI by default", () => {
@@ -196,7 +199,7 @@ describe("SignalDetails", () => {
     expect(screen.getByText("forming candle")).toBeInTheDocument();
     expect(screen.getByText("preview")).toBeInTheDocument();
     expect(screen.getAllByText(/forming candle preview/u).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /Ждать виртуальный вход/u })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Virtual entry locked/u })).toBeDisabled();
   });
 
   it("keeps actionable UI for open candles only when metadata explicitly allows it", () => {
@@ -256,7 +259,7 @@ describe("SignalDetails", () => {
     );
 
     expect(screen.getByText("forming allowed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Открыть виртуальную сделку/u })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Virtual entry now/u })).toBeEnabled();
   });
 
   it("opens real confirmation modal without calling the API action immediately", () => {
@@ -269,11 +272,11 @@ describe("SignalDetails", () => {
         onPaperTrade={vi.fn()}
         onReject={vi.fn()}
         realTradeContext={realTradeContext()}
-        signal={{ ...signal, no_trade_filter: null }}
+        signal={{ ...signal, can_enter: true, no_trade_filter: null }}
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать реальный вход/u }));
+    fireEvent.click(screen.getByRole("button", { name: /Real wait entry/u }));
 
     expect(onConfirmRealTrade).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: /Подтверждение реального входа/u })).toBeInTheDocument();
@@ -288,11 +291,11 @@ describe("SignalDetails", () => {
         onPaperTrade={vi.fn()}
         onReject={vi.fn()}
         realTradeContext={realTradeContext({ accountSnapshot: { ...accountSnapshot(), status: "stale" } })}
-        signal={{ ...signal, no_trade_filter: null }}
+        signal={{ ...signal, can_enter: true, no_trade_filter: null }}
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать реальный вход/u }));
+    fireEvent.click(screen.getByRole("button", { name: /Real wait entry/u }));
 
     expect(screen.getByText("Account snapshot устарел.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Подтвердить реальный вход/u })).toBeDisabled();
@@ -308,11 +311,11 @@ describe("SignalDetails", () => {
         onPaperTrade={vi.fn()}
         onReject={vi.fn()}
         realTradeContext={realTradeContext()}
-        signal={{ ...signal, no_trade_filter: null }}
+        signal={{ ...signal, can_enter: true, no_trade_filter: null }}
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать реальный вход/u }));
+    fireEvent.click(screen.getByRole("button", { name: /Real wait entry/u }));
     const confirmButton = screen.getByRole("button", { name: /Подтвердить реальный вход/u });
 
     expect(confirmButton).toBeEnabled();
@@ -332,12 +335,12 @@ describe("SignalDetails", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Открыть виртуальную сделку/u }));
+    fireEvent.click(screen.getByRole("button", { name: /Virtual entry now/u }));
 
     expect(onPaperTrade).toHaveBeenCalledTimes(1);
   });
 
-  it("renders decision snapshot blockers and warnings", () => {
+  it("does not render decision snapshot by default and shows it in diagnostics", () => {
     const decisionSignal: RadarSignal = {
       ...signal,
       decision: {
@@ -380,6 +383,10 @@ describe("SignalDetails", () => {
       />
     );
 
+    expect(screen.queryByText("Decision Snapshot")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Диагностика/u }));
+
     expect(screen.getByText("Decision Snapshot")).toBeInTheDocument();
     expect(screen.getByText(/rr \/ virtual: Risk\/reward is below the hard guard\./u)).toBeInTheDocument();
     expect(screen.getByText(/data \/ discovery: Open candle preview\./u)).toBeInTheDocument();
@@ -400,6 +407,74 @@ describe("SignalDetails", () => {
     expect(screen.queryByText("Decision Snapshot")).not.toBeInTheDocument();
   });
 
+  it("hides unknown edge snapshot in the default view", () => {
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={{ ...signal, edge: null }}
+      />
+    );
+
+    expect(screen.queryByText("Edge Snapshot")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Диагностика/u }));
+
+    expect(screen.getByText("Edge Snapshot")).toBeInTheDocument();
+    expect(screen.getByText("unknown edge")).toBeInTheDocument();
+  });
+
+  it("renders deduplicated top blocker messages", () => {
+    const duplicateMessage = "Duplicate blocker message.";
+    const duplicateSignal: RadarSignal = {
+      ...signal,
+      no_trade_filter: {
+        enabled: true,
+        blocked: true,
+        hard_block: true,
+        blockers: [duplicateMessage],
+        warnings: [],
+        checks: [],
+        metadata: {}
+      },
+      decision: {
+        setup_valid: true,
+        trade_plan_valid: true,
+        market_context_score: 60,
+        signal_actionable: false,
+        execution_allowed_virtual: false,
+        execution_allowed_real: null,
+        blockers: [
+          {
+            code: "duplicate_blocker",
+            message: duplicateMessage,
+            source: "risk",
+            severity: "blocker",
+            scope: "virtual",
+            metadata: {}
+          }
+        ],
+        warnings: []
+      }
+    };
+
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={duplicateSignal}
+      />
+    );
+
+    const topBlockers = screen.getByText("Top blockers").closest(".top-blocker-list");
+    expect(topBlockers).not.toBeNull();
+    expect(within(topBlockers as HTMLElement).getAllByText(duplicateMessage)).toHaveLength(1);
+  });
+
   it("creates a pending entry from the accept-and-wait button", () => {
     const onAcceptPendingEntry = vi.fn();
     render(
@@ -413,7 +488,7 @@ describe("SignalDetails", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать виртуальный вход/u }));
+    fireEvent.click(screen.getByRole("button", { name: /Virtual wait entry/u }));
 
     expect(onAcceptPendingEntry).toHaveBeenCalledTimes(1);
   });
@@ -432,11 +507,12 @@ describe("SignalDetails", () => {
       />
     );
 
-    expect(screen.getByRole("heading", { name: "Pending Entry" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Active Pending Entry" })).toBeInTheDocument();
     expect(screen.getAllByText("Waiting entry").length).toBeGreaterThan(0);
-    expect(screen.getByText("Ожидание входа активно: backend trigger service ждёт касание зоны входа.")).toBeInTheDocument();
     expect(screen.getByText("100 - 101")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Принять и ждать виртуальный вход/u })).toBeDisabled();
+    expect(screen.getByText("95")).toBeInTheDocument();
+    expect(screen.getByText("no expiry")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Virtual wait entry/u })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /Cancel waiting/u }));
     expect(onCancelPendingEntry).toHaveBeenCalledTimes(1);
   });
@@ -457,8 +533,12 @@ describe("SignalDetails", () => {
       />
     );
 
-    expect(screen.queryByRole("heading", { name: "Pending Entry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Active Pending Entry" })).not.toBeInTheDocument();
     expect(screen.queryByText("Accepted setup is waiting for the backend trigger service to detect the entry zone.")).not.toBeInTheDocument();
+    expect(screen.queryByText("История ожидания входа")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Диагностика/u }));
+
     expect(screen.getByText("История ожидания входа")).toBeInTheDocument();
     expect(screen.getAllByText("cancelled").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByText("История ожидания входа"));
@@ -485,9 +565,13 @@ describe("SignalDetails", () => {
       />
     );
 
-    expect(screen.queryByRole("heading", { name: "Pending Entry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Active Pending Entry" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Legacy auto-entry state" })).not.toBeInTheDocument();
     expect(screen.queryByText("Accepted setup is waiting for the backend trigger service to detect the entry zone.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Auto-entry diagnostics")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Диагностика/u }));
+
     expect(screen.getByText("Auto-entry diagnostics")).toBeInTheDocument();
   });
 
@@ -509,7 +593,7 @@ describe("SignalDetails", () => {
     );
 
     expect(screen.getAllByText("Requires reconfirmation").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("План изменился. Нужно подтвердить ожидание входа заново.").length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: "Active Pending Entry" })).toBeInTheDocument();
     expect(screen.getByText("Trade plan changed after acceptance; reconfirmation required.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Reconfirm plan/u }));
     expect(onReconfirmPendingEntry).toHaveBeenCalledTimes(1);

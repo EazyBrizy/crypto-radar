@@ -794,6 +794,7 @@ h3 { font-size: 15px; line-height: 1.3; }
 .pullback-guidance-block,
 .risk-reward-detail-block,
 .auto-entry-block,
+.actions-block,
 .execution-quality-block,
 .strategy-layers-block,
 .confidence-breakdown,
@@ -811,6 +812,89 @@ h3 { font-size: 15px; line-height: 1.3; }
 .decision-block p { color: #9ca3af; font-size: 13px; }
 .decision-block strong { display: block; margin: 6px 0; font-size: 17px; }
 .trade-setup { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.compact-section-title,
+.actions-block .section-title,
+.diagnostics-toggle .section-title {
+  justify-content: flex-start;
+}
+
+.compact-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.decision-card-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.trade-plan-compact-grid,
+.risk-compact-grid {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+.top-blocker-list {
+  margin-top: 12px;
+}
+
+.top-blocker-list > strong {
+  color: #f9fafb;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.compact-risk-blockers {
+  margin-top: 8px;
+}
+
+.compact-empty,
+.compact-action-note {
+  margin-top: 8px;
+  color: #9ca3af;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.compact-card-actions {
+  margin-top: 12px;
+}
+
+.compact-actions {
+  margin-top: 12px;
+}
+
+.diagnostics-panel {
+  margin-top: 14px;
+}
+
+.diagnostics-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e5e7eb;
+  text-align: left;
+}
+
+.diagnostics-toggle:hover {
+  border-color: #334155;
+}
+
+.diagnostics-toggle .section-title {
+  margin: 0;
+}
+
+.diagnostics-content {
+  margin-top: 10px;
+}
 
 .pullback-guidance-block {
   border-color: #92400e;
@@ -3222,6 +3306,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .metrics-grid,
   .execution-quality-grid,
   .real-trade-metric-grid,
+  .compact-metric-grid,
   .pullback-guidance-grid,
   .risk-reward-detail-grid,
   .strategy-layer-grid,
@@ -3261,6 +3346,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 @media (max-width: 560px) {
   .pullback-guidance-grid,
+  .compact-metric-grid,
   .risk-reward-detail-grid,
   .strategy-layer-grid,
   .layer-check-groups,

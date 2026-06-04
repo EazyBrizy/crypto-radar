@@ -7,6 +7,7 @@ import { BarChart3, CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert,
 import { Badge } from "./Badge";
 import {
   canShowSignalEntryAction,
+  isWaitingEntry,
   marketOpportunityLabel,
   marketOpportunityTone,
   riskGateTone
@@ -78,6 +79,7 @@ export function SignalDetails({
   realTradeBusy = false
 }: SignalDetailsProps) {
   const [chartOpen, setChartOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [realConfirmationOpen, setRealConfirmationOpen] = useState(false);
 
   if (!signal) {
@@ -94,7 +96,6 @@ export function SignalDetails({
   const isLong = viewModel.side === "long";
   const riskFailed = viewModel.riskSummary.riskFailed;
   const strategyRiskBlocked = viewModel.riskSummary.riskRewardBlocked;
-  const strategyRiskWarning = viewModel.riskSummary.riskRewardWarning;
   const formingCandle = viewModel.riskSummary.formingCandle;
   const openCandleAllowed = viewModel.riskSummary.openCandleAllowed;
   const formingReason = viewModel.riskSummary.formingReason;
@@ -105,149 +106,96 @@ export function SignalDetails({
   const terminalLegacyAutoEntry = viewModel.terminalLegacyAutoEntry;
   const activePendingStatus = activePendingEntry?.status ?? activeLegacyAutoEntry?.status ?? null;
   const hasActivePendingStatus = activePendingStatus != null;
-  const autoEntryPending = activePendingStatus === "pending";
-  const requiresReconfirmation = viewModel.primaryStatus === "requires_reconfirmation";
   const entryActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || strategyRiskBlocked || !statusAllowsTrade || riskFailed;
   const acceptPendingDisabled = busy
     || tradingActionsDisabled
     || pendingEntryLoading
     || hasActivePendingStatus
     || !viewModel.riskSummary.isMarketOpportunity
+    || !isWaitingEntry(signal.status)
+    || (formingCandle && !openCandleAllowed)
     || statusAllowsTrade;
   const cancelPendingDisabled = busy || tradingActionsDisabled || !activePendingEntry;
-  const realActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || !viewModel.riskSummary.isMarketOpportunity;
+  const realActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || viewModel.canEnterNow !== true || !onConfirmRealTrade;
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
-  const breakdown = signal.score_breakdown;
   const tradePlan = viewModel.tradePlanSummary;
-  const tradePlanComplete = viewModel.riskSummary.tradePlanComplete;
-  const riskRewardOk = viewModel.riskSummary.riskRewardOk;
-  const reasons = viewModel.topReasons;
+  const topBlockers = viewModel.topBlockers.slice(0, 3);
+  const reasons = viewModel.topReasons.slice(0, 6);
 
   return (
     <section className="details-panel">
       <div className="details-header">
         <div>
           <span className="muted">Signal Details</span>
-          <h2>{viewModel.title}</h2>
+          <h2>{signal.symbol}</h2>
         </div>
         <div className="details-badges">
           <Badge tone={isLong ? "green" : "red"}>{signal.direction.toUpperCase()}</Badge>
-          {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
           <Badge tone="yellow">Risk {viewModel.riskSummary.label}</Badge>
+          <Badge tone={primaryStatusTone(viewModel.primaryStatus)}>{primaryStatusLabel(viewModel.primaryStatus)}</Badge>
+          {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
           <Badge tone={marketOpportunityTone(signal)}>{formingReason ? "preview" : marketOpportunityLabel(signal)}</Badge>
           {activePendingStatus ? <Badge tone={pendingEntryTone(activePendingStatus)}>{pendingEntryLabel(activePendingStatus)}</Badge> : null}
           {signal.risk_gate_status ? <Badge tone={riskGateTone(signal.risk_gate_status)}>RiskGate {signal.risk_gate_status}</Badge> : null}
         </div>
       </div>
 
-      <div className="decision-block">
-        <span>Recommended action</span>
-        <strong>{viewModel.primaryActionLabel}</strong>
-        <p>{viewModel.recommendedActionText}</p>
-      </div>
+      <DecisionCard viewModel={viewModel} topBlockers={topBlockers} />
 
-      <RadarAnnotationBlock signal={signal} />
-      <PullbackGuidanceBlock signal={signal} />
-      <BreakoutEntryPlanBlock signal={signal} />
-      <LiquiditySweepPlanBlock signal={signal} />
-      <PendingEntryBlock
+      <ActivePendingEntryCompact
         pendingEntry={activePendingEntry}
         onReconfirmPendingEntry={onReconfirmPendingEntry}
         busy={busy || tradingActionsDisabled}
       />
-      <PendingEntryHistoryCollapsed pendingEntry={terminalPendingEntry} />
-      <AutoEntryBlock autoEntry={activeLegacyAutoEntry} />
-      <AutoEntryDiagnosticsCollapsed autoEntry={terminalLegacyAutoEntry} />
 
-      <div className="trade-setup">
-        <div><span>Entry</span><strong>{tradePlan.entryType} | {tradePlan.entryZone}</strong></div>
-        <div><span>Stop Loss</span><strong>{formatPrice(tradePlan.stopLoss)}</strong></div>
-        <div><span>Take Profit</span><strong>{formatTargetsInline(tradePlan.targets)}</strong></div>
-        <div><span>Selected RR</span><strong>{formatRMultiple(tradePlan.selectedRr)}</strong></div>
-      </div>
+      <TradePlanCompact signal={signal} tradePlan={tradePlan} />
 
-      <TradePlanDetailBlock signal={signal} />
-      <RiskRewardDetailBlock signal={signal} />
-      <EdgeSnapshotBlock signal={signal} />
-      <DecisionSnapshotBlock signal={signal} />
-      <RiskBlockersDetailBlock viewModel={viewModel} />
-
-      <ExecutionQualityBlock
+      <RiskCompact
         signal={signal}
         execution={executionPreview}
         error={executionPreviewError}
         loading={executionPreviewLoading}
+        realTradeContext={realTradeContext}
       />
 
-      <StrategyLayersBlock signal={signal} execution={executionPreview} />
+      <WhyThisSignal reasons={reasons} />
 
-      <div className="detail-actions">
-        <button className="secondary-action" onClick={() => setChartOpen((open) => !open)} type="button">
-          <BarChart3 size={17} /> {chartOpen ? "Hide Chart" : "Show Chart"}
-        </button>
-      </div>
+      <ActionsBlock
+        acceptPendingDisabled={acceptPendingDisabled}
+        activePendingEntry={activePendingEntry}
+        cancelPendingDisabled={cancelPendingDisabled}
+        chartOpen={chartOpen}
+        entryActionDisabled={entryActionDisabled}
+        onAcceptPendingEntry={() => onAcceptPendingEntry?.(signal)}
+        onCancelPendingEntry={() => activePendingEntry ? onCancelPendingEntry?.(activePendingEntry) : undefined}
+        onPaperTrade={() => onPaperTrade(signal)}
+        onReject={() => onReject(signal)}
+        onToggleChart={() => setChartOpen((open) => !open)}
+        realActionDisabled={realActionDisabled}
+        rejectDisabled={rejectDisabled}
+        setRealConfirmationOpen={setRealConfirmationOpen}
+        statusAllowsTrade={statusAllowsTrade}
+        tradingActionsDisabled={tradingActionsDisabled}
+        viewModel={viewModel}
+      />
 
       {chartOpen ? <LazySignalDetailsChart signal={signal} /> : null}
 
-      <div className="confidence-breakdown">
-        <div className="section-title">
-          <ShieldAlert size={18} />
-          <h3>Confidence Score</h3>
-        </div>
-        <ScoreLine label="Trend" value={breakdown.trend_score} max={100} />
-        <ScoreLine label="Volume" value={breakdown.volume_score} max={100} />
-        <ScoreLine label="Liquidity" value={breakdown.liquidity_score} max={100} />
-        <ScoreLine label="Orderbook" value={breakdown.orderbook_score} max={100} />
-        <ScoreLine label="Risk/Reward" value={breakdown.risk_reward_score} max={100} />
-        <ScoreLine label="Volatility" value={breakdown.volatility_score} max={100} />
-        <ScoreLine label="Overheat Penalty" value={breakdown.overheat_penalty} max={100} />
-        <ScoreLine label="News/Event Risk" value={breakdown.news_event_risk_penalty} max={100} />
-      </div>
-
-      <div className="explanation-block">
-        <h3>Why this signal?</h3>
-        <ul>
-          {reasons.map((reason) => (
-            <li key={reason}><CheckCircle2 size={16} /><span>{reason}</span></li>
-          ))}
-        </ul>
-      </div>
-
-      <div className="checklist-block">
-        <h3>Confirmation Checklist</h3>
-        <CheckRow done text="Сетап соответствует стратегии" />
-        <CheckRow done={tradePlanComplete} text="Entry, SL and TP are calculated" />
-        <CheckRow done={riskRewardOk} text="Risk/Reward is set" />
-        <CheckRow done={statusAllowsTrade} text={`Strategy status: ${signal.status.replaceAll("_", " ")}`} />
-      </div>
-
-      {signal.risks.length ? (
-        <div className="risk-block">
-          <h3>Risks</h3>
-          {signal.risks.map((risk) => <p key={risk}>{risk}</p>)}
-        </div>
-      ) : null}
-
-      <div className="detail-actions">
-        <button className="secondary-action" onClick={() => onAcceptPendingEntry?.(signal)} disabled={acceptPendingDisabled} type="button">
-          <FileCheck2 size={17} /> Принять и ждать виртуальный вход
-        </button>
-        <button className="real-action" onClick={() => setRealConfirmationOpen(true)} disabled={realActionDisabled} type="button">
-          <ShieldAlert size={17} /> Принять и ждать реальный вход
-        </button>
-        <button className="secondary-action" onClick={() => activePendingEntry ? onCancelPendingEntry?.(activePendingEntry) : undefined} disabled={cancelPendingDisabled} type="button">
-          <XCircle size={17} /> Cancel waiting
-        </button>
-        <button className="primary-action" onClick={() => onPaperTrade(signal)} disabled={entryActionDisabled} type="button">
-          <FileCheck2 size={17} /> {statusAllowsTrade ? "Открыть виртуальную сделку" : autoEntryPending ? "Виртуальный вход вооружён" : "Ждать виртуальный вход"}
-        </button>
-        <button className="secondary-action" type="button" disabled>
-          <ExternalLink size={17} /> Открыть биржу
-        </button>
-        <button className="danger-action" onClick={() => onReject(signal)} disabled={rejectDisabled} type="button">
-          <XCircle size={17} /> Отклонить сигнал
-        </button>
-      </div>
+      <DiagnosticsPanel
+        activeLegacyAutoEntry={activeLegacyAutoEntry}
+        activePendingEntry={activePendingEntry}
+        busy={busy || tradingActionsDisabled}
+        execution={executionPreview}
+        executionError={executionPreviewError}
+        executionLoading={executionPreviewLoading}
+        open={diagnosticsOpen}
+        onReconfirmPendingEntry={onReconfirmPendingEntry}
+        onToggle={() => setDiagnosticsOpen((open) => !open)}
+        signal={signal}
+        terminalLegacyAutoEntry={terminalLegacyAutoEntry}
+        terminalPendingEntry={terminalPendingEntry}
+        viewModel={viewModel}
+      />
       {realConfirmationOpen ? (
         <RealTradeConfirmationModal
           busy={realTradeBusy}
@@ -261,29 +209,449 @@ export function SignalDetails({
           signal={signal}
         />
       ) : null}
-      {tradingActionsDisabled ? (
-        <p className="form-description">Trading actions disabled until realtime data is current.</p>
-      ) : null}
-      {requiresReconfirmation ? (
-        <p className="form-description">План изменился. Нужно подтвердить ожидание входа заново.</p>
-      ) : null}
-      {riskFailed ? (
-        <p className="form-description">Entry is blocked by backend risk gate.</p>
-      ) : null}
-      {strategyRiskBlocked ? (
-        <p className="form-description">Hard R:R execution policy blocks this idea.</p>
-      ) : null}
-      {!strategyRiskBlocked && strategyRiskWarning ? (
-        <p className="form-description">{strategyRiskWarning}</p>
-      ) : null}
-      {formingReason ? (
-        <p className="form-description">{formingReason}</p>
-      ) : null}
-      {!statusAllowsTrade && !autoEntryPending && !strategyRiskBlocked ? (
-        <p className="form-description">{formingReason ? "Wait for candle close before entry." : "Wait for backend RiskGate preview to mark this opportunity execution-ready."}</p>
-      ) : null}
     </section>
   );
+}
+
+function DecisionCard({
+  viewModel,
+  topBlockers
+}: {
+  viewModel: SignalDetailsViewModel;
+  topBlockers: UiBlocker[];
+}) {
+  return (
+    <div className="decision-block decision-card">
+      <div className="section-title compact-section-title">
+        <FileCheck2 size={18} />
+        <h3>Decision</h3>
+        <Badge tone={primaryStatusTone(viewModel.primaryStatus)}>{primaryStatusLabel(viewModel.primaryStatus)}</Badge>
+      </div>
+      <div className="compact-metric-grid decision-card-grid">
+        <MetricLine label="Recommended action" value={viewModel.primaryActionLabel} />
+        <MetricLine label="Can enter now" value={canEnterNowLabel(viewModel.canEnterNow)} />
+      </div>
+      <p>{viewModel.recommendedActionText}</p>
+      <div className="top-blocker-list">
+        <strong>Top blockers</strong>
+        {topBlockers.length ? (
+          <ul className="risk-blocker-list compact-risk-blockers">
+            {topBlockers.map((blocker) => (
+              <li key={blockerKey(blocker)}>{blocker.userMessage}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="compact-empty">No active blockers from current checks.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ActivePendingEntryCompact({
+  pendingEntry,
+  onReconfirmPendingEntry,
+  busy
+}: {
+  pendingEntry: PendingEntryIntent | null;
+  onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
+  busy: boolean;
+}) {
+  if (!pendingEntry) return null;
+  const status = pendingEntry.status;
+  return (
+    <div className="auto-entry-block active-pending-compact">
+      <div className="section-title">
+        <FileCheck2 size={18} />
+        <h3>Active Pending Entry</h3>
+        <Badge tone={pendingEntryTone(status)}>{pendingEntryLabel(status)}</Badge>
+      </div>
+      <div className="compact-metric-grid">
+        <MetricLine label="State" value={pendingEntryLabel(status)} />
+        <MetricLine label="Entry zone" value={`${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
+        <MetricLine label="Stop" value={formatPrice(pendingEntry.stop_loss)} />
+        <MetricLine label="Accepted status" value={pendingEntry.accepted_signal_status.replaceAll("_", " ")} />
+        <MetricLine label="Expiry / TTL" value={formatPendingEntryExpiry(pendingEntry)} />
+      </div>
+      {pendingEntry.failure_reason ? (
+        <p>{pendingEntry.failure_reason}</p>
+      ) : null}
+      {status === "requires_reconfirmation" && onReconfirmPendingEntry ? (
+        <div className="detail-actions compact-card-actions">
+          <button className="secondary-action" disabled={busy} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
+            <FileCheck2 size={17} /> Reconfirm plan
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TradePlanCompact({
+  signal,
+  tradePlan
+}: {
+  signal: RadarSignal;
+  tradePlan: SignalDetailsViewModel["tradePlanSummary"];
+}) {
+  return (
+    <div className="risk-reward-detail-block trade-plan-compact">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Trade Plan</h3>
+        <Badge tone={tradePlan.hasTradePlan ? "blue" : "neutral"}>{tradePlan.entryType}</Badge>
+      </div>
+      <div className="compact-metric-grid trade-plan-compact-grid">
+        <MetricLine label="Entry type" value={tradePlan.entryType} />
+        <MetricLine label="Entry zone / price" value={`${tradePlan.entryZone} / ${formatPrice(tradePlan.entryPrice)}`} />
+        <MetricLine label="Stop-loss" value={formatPrice(tradePlan.stopLoss)} />
+        <MetricLine label="TP1" value={formatCompactTarget(tradePlan, 0)} />
+        <MetricLine label="TP2" value={formatCompactTarget(tradePlan, 1)} />
+        <MetricLine label="Runner" value={formatCompactRunnerTarget(tradePlan)} />
+        <MetricLine label="Selected RR" value={formatRMultiple(tradePlan.selectedRr)} />
+        <MetricLine label="Invalidation" value={formatCompactInvalidation(signal)} />
+      </div>
+    </div>
+  );
+}
+
+function RiskCompact({
+  signal,
+  execution,
+  error,
+  loading,
+  realTradeContext
+}: {
+  signal: RadarSignal;
+  execution: VirtualExecutionReport | null;
+  error: string | null;
+  loading: boolean;
+  realTradeContext?: RealTradeContext;
+}) {
+  const riskDecision = execution?.risk_decision ?? null;
+  const riskCheck = execution?.risk_check ?? riskDecision?.risk_check ?? null;
+  const sizing = execution?.position_sizing ?? riskDecision?.checked_position_sizing ?? riskDecision?.position_sizing ?? null;
+  const riskGateStatus = signal.risk_gate_status ?? riskDecision?.status ?? riskCheck?.status ?? null;
+  const riskAmount = riskCheck?.effective_risk_amount
+    ?? riskCheck?.adjusted_risk_amount
+    ?? sizing?.risk_amount
+    ?? riskDecision?.risk_adjustment_plan.adjusted_risk_amount
+    ?? null;
+  const riskPercent = riskCheck?.adjusted_risk_percent
+    ?? sizing?.risk_per_trade_percent
+    ?? riskDecision?.risk_adjustment_plan.adjusted_risk_percent
+    ?? null;
+  const requiredMargin = riskCheck?.required_margin ?? sizing?.required_margin ?? null;
+  const leverage = sizing?.leverage ?? null;
+  const availableBalance = riskCheck?.available_balance ?? realTradeContext?.accountSnapshot?.available_balance ?? null;
+
+  return (
+    <div className="risk-reward-detail-block risk-compact">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Risk</h3>
+        <Badge tone={riskGateTone(riskGateStatus)}>{riskGateStatus ?? "not previewed"}</Badge>
+      </div>
+      <div className="compact-metric-grid risk-compact-grid">
+        <MetricLine label="RiskGate" value={riskGateStatus ?? "not previewed"} />
+        <MetricLine label="Risk amount / %" value={`${formatCurrencyAmount(riskAmount)} / ${formatPercentValue(riskPercent)}`} />
+        <MetricLine label="Margin / leverage" value={`${formatCurrencyAmount(requiredMargin)} / ${leverage == null ? "-" : `${leverage}x`}`} />
+        {availableBalance != null ? <MetricLine label="Available balance" value={formatCurrencyAmount(availableBalance)} /> : null}
+        <MetricLine label="Execution quality" value={executionQualitySummary(signal, execution, error, loading)} />
+      </div>
+    </div>
+  );
+}
+
+function WhyThisSignal({ reasons }: { reasons: string[] }) {
+  return (
+    <div className="explanation-block why-signal-block">
+      <h3>Why this signal?</h3>
+      <ul>
+        {reasons.map((reason) => (
+          <li key={reason}><CheckCircle2 size={16} /><span>{reason}</span></li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ActionsBlock({
+  acceptPendingDisabled,
+  activePendingEntry,
+  cancelPendingDisabled,
+  chartOpen,
+  entryActionDisabled,
+  onAcceptPendingEntry,
+  onCancelPendingEntry,
+  onPaperTrade,
+  onReject,
+  onToggleChart,
+  realActionDisabled,
+  rejectDisabled,
+  setRealConfirmationOpen,
+  statusAllowsTrade,
+  tradingActionsDisabled,
+  viewModel
+}: {
+  acceptPendingDisabled: boolean;
+  activePendingEntry: PendingEntryIntent | null;
+  cancelPendingDisabled: boolean;
+  chartOpen: boolean;
+  entryActionDisabled: boolean;
+  onAcceptPendingEntry: () => void;
+  onCancelPendingEntry: () => void;
+  onPaperTrade: () => void;
+  onReject: () => void;
+  onToggleChart: () => void;
+  realActionDisabled: boolean;
+  rejectDisabled: boolean;
+  setRealConfirmationOpen: (open: boolean) => void;
+  statusAllowsTrade: boolean;
+  tradingActionsDisabled: boolean;
+  viewModel: SignalDetailsViewModel;
+}) {
+  return (
+    <div className="actions-block">
+      <div className="section-title">
+        <FileCheck2 size={18} />
+        <h3>Actions</h3>
+        <Badge tone={viewModel.canEnterNow === true ? "green" : viewModel.canEnterNow === false ? "red" : "yellow"}>
+          {canEnterNowLabel(viewModel.canEnterNow)}
+        </Badge>
+      </div>
+      <div className="detail-actions compact-actions">
+        <button className="secondary-action" onClick={onAcceptPendingEntry} disabled={acceptPendingDisabled} type="button">
+          <FileCheck2 size={17} /> Virtual wait entry
+        </button>
+        <button className="real-action" onClick={() => setRealConfirmationOpen(true)} disabled={realActionDisabled} type="button">
+          <ShieldAlert size={17} /> Real wait entry
+        </button>
+        <button className="primary-action" onClick={onPaperTrade} disabled={entryActionDisabled} type="button">
+          <FileCheck2 size={17} /> {statusAllowsTrade ? "Virtual entry now" : "Virtual entry locked"}
+        </button>
+        {activePendingEntry ? (
+          <button className="secondary-action" onClick={onCancelPendingEntry} disabled={cancelPendingDisabled} type="button">
+            <XCircle size={17} /> Cancel waiting
+          </button>
+        ) : null}
+        <button className="secondary-action" onClick={onToggleChart} type="button">
+          <BarChart3 size={17} /> {chartOpen ? "Hide chart" : "Open chart"}
+        </button>
+        <button className="secondary-action" type="button" disabled>
+          <ExternalLink size={17} /> Open exchange
+        </button>
+        <button className="danger-action" onClick={onReject} disabled={rejectDisabled} type="button">
+          <XCircle size={17} /> Reject / ignore
+        </button>
+      </div>
+      {tradingActionsDisabled ? (
+        <p className="compact-action-note">Trading actions disabled until realtime data is current.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function DiagnosticsPanel({
+  activeLegacyAutoEntry,
+  activePendingEntry,
+  busy,
+  execution,
+  executionError,
+  executionLoading,
+  open,
+  onReconfirmPendingEntry,
+  onToggle,
+  signal,
+  terminalLegacyAutoEntry,
+  terminalPendingEntry,
+  viewModel
+}: {
+  activeLegacyAutoEntry: RadarSignal["auto_entry"];
+  activePendingEntry: PendingEntryIntent | null;
+  busy: boolean;
+  execution: VirtualExecutionReport | null;
+  executionError: string | null;
+  executionLoading: boolean;
+  open: boolean;
+  onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
+  onToggle: () => void;
+  signal: RadarSignal;
+  terminalLegacyAutoEntry: RadarSignal["auto_entry"];
+  terminalPendingEntry: PendingEntryIntent | null;
+  viewModel: SignalDetailsViewModel;
+}) {
+  return (
+    <div className="diagnostics-panel">
+      <button
+        aria-controls="signal-diagnostics-content"
+        aria-expanded={open}
+        className="diagnostics-toggle"
+        onClick={onToggle}
+        type="button"
+      >
+        <span className="section-title">
+          <ShieldAlert size={18} />
+          <span>Диагностика</span>
+        </span>
+        <Badge tone={open ? "blue" : "neutral"}>{open ? "open" : "collapsed"}</Badge>
+      </button>
+      {open ? (
+        <div className="diagnostics-content" id="signal-diagnostics-content">
+          <RadarAnnotationBlock signal={signal} />
+          <PullbackGuidanceBlock signal={signal} />
+          <BreakoutEntryPlanBlock signal={signal} />
+          <LiquiditySweepPlanBlock signal={signal} />
+          <PendingEntryBlock
+            pendingEntry={activePendingEntry}
+            onReconfirmPendingEntry={onReconfirmPendingEntry}
+            busy={busy}
+          />
+          <PendingEntryHistoryCollapsed pendingEntry={terminalPendingEntry} />
+          <AutoEntryBlock autoEntry={activeLegacyAutoEntry} />
+          <AutoEntryDiagnosticsCollapsed autoEntry={terminalLegacyAutoEntry} />
+          <TradePlanDetailBlock signal={signal} />
+          <RiskRewardDetailBlock signal={signal} />
+          <EdgeSnapshotBlock signal={signal} />
+          <DecisionSnapshotBlock signal={signal} />
+          <RiskBlockersDetailBlock viewModel={viewModel} />
+          <ExecutionQualityBlock
+            signal={signal}
+            execution={execution}
+            error={executionError}
+            loading={executionLoading}
+          />
+          <StrategyLayersBlock signal={signal} execution={execution} />
+          <ConfidenceBreakdownBlock signal={signal} />
+          <ChecklistBlock signal={signal} viewModel={viewModel} />
+          <RiskListBlock signal={signal} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ConfidenceBreakdownBlock({ signal }: { signal: RadarSignal }) {
+  const breakdown = signal.score_breakdown;
+  return (
+    <div className="confidence-breakdown">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Confidence Score</h3>
+      </div>
+      <ScoreLine label="Trend" value={breakdown.trend_score} max={100} />
+      <ScoreLine label="Volume" value={breakdown.volume_score} max={100} />
+      <ScoreLine label="Liquidity" value={breakdown.liquidity_score} max={100} />
+      <ScoreLine label="Orderbook" value={breakdown.orderbook_score} max={100} />
+      <ScoreLine label="Risk/Reward" value={breakdown.risk_reward_score} max={100} />
+      <ScoreLine label="Volatility" value={breakdown.volatility_score} max={100} />
+      <ScoreLine label="Overheat Penalty" value={breakdown.overheat_penalty} max={100} />
+      <ScoreLine label="News/Event Risk" value={breakdown.news_event_risk_penalty} max={100} />
+    </div>
+  );
+}
+
+function ChecklistBlock({
+  signal,
+  viewModel
+}: {
+  signal: RadarSignal;
+  viewModel: SignalDetailsViewModel;
+}) {
+  return (
+    <div className="checklist-block">
+      <h3>Confirmation Checklist</h3>
+      <CheckRow done text="Сетап соответствует стратегии" />
+      <CheckRow done={viewModel.riskSummary.tradePlanComplete} text="Entry, SL and TP are calculated" />
+      <CheckRow done={viewModel.riskSummary.riskRewardOk} text="Risk/Reward is set" />
+      <CheckRow done={viewModel.riskSummary.statusAllowsTrade} text={`Strategy status: ${signal.status.replaceAll("_", " ")}`} />
+    </div>
+  );
+}
+
+function RiskListBlock({ signal }: { signal: RadarSignal }) {
+  if (!signal.risks.length) return null;
+  return (
+    <div className="risk-block">
+      <h3>Risks</h3>
+      {signal.risks.map((risk) => <p key={risk}>{risk}</p>)}
+    </div>
+  );
+}
+
+function primaryStatusTone(
+  status: SignalDetailsViewModel["primaryStatus"]
+): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (status === "execution_ready") return "green";
+  if (status === "blocked" || status === "cancelled" || status === "expired") return "red";
+  if (status === "requires_reconfirmation") return "yellow";
+  if (status === "waiting_entry") return "blue";
+  if (status === "watchlist") return "purple";
+  return "neutral";
+}
+
+function primaryStatusLabel(status: SignalDetailsViewModel["primaryStatus"]): string {
+  return status.replaceAll("_", " ");
+}
+
+function canEnterNowLabel(value: boolean | null): string {
+  if (value == null) return "not evaluated";
+  return value ? "yes" : "no";
+}
+
+function formatPendingEntryExpiry(pendingEntry: PendingEntryIntent): string {
+  if (!pendingEntry.expires_at) return "no expiry";
+  return `${formatPendingEntryTimestamp(pendingEntry.expires_at)} / ${formatPendingEntryTtl(pendingEntry.expires_at)}`;
+}
+
+function formatPendingEntryTtl(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "TTL unknown";
+  const diffMs = timestamp - Date.now();
+  if (diffMs <= 0) return "expired";
+  const diffMinutes = Math.ceil(diffMs / 60_000);
+  if (diffMinutes < 60) return `${diffMinutes}m left`;
+  return `${Math.ceil(diffMinutes / 60)}h left`;
+}
+
+function formatCompactTarget(
+  tradePlan: SignalDetailsViewModel["tradePlanSummary"],
+  index: number
+): string {
+  const target = tradePlan.targets[index];
+  if (!target) return "-";
+  const rr = target.rMultiple == null ? "" : ` / ${formatRMultiple(target.rMultiple)}`;
+  return `${target.label} ${formatPrice(target.price)}${rr}`;
+}
+
+function formatCompactRunnerTarget(tradePlan: SignalDetailsViewModel["tradePlanSummary"]): string {
+  const runner = tradePlan.targets[2] ?? tradePlan.targets.find((target) => target.action?.includes("runner")) ?? null;
+  if (!runner) return "-";
+  const rr = runner.rMultiple == null ? "" : ` / ${formatRMultiple(runner.rMultiple)}`;
+  return `${runner.label} ${formatPrice(runner.price)}${rr}`;
+}
+
+function formatCompactInvalidation(signal: RadarSignal): string {
+  const tradePlanInvalidation = signal.trade_plan?.invalidation ?? null;
+  return formatPrice(
+    tradePlanInvalidation?.hard_stop
+    ?? tradePlanInvalidation?.price
+    ?? signal.invalidation?.hard_stop
+    ?? signal.invalidation?.price
+  );
+}
+
+function executionQualitySummary(
+  signal: RadarSignal,
+  execution: VirtualExecutionReport | null,
+  error: string | null,
+  loading: boolean
+): string {
+  if (loading && !execution) return "Checking";
+  if (error && !execution) return "Preview error";
+  const gateStatus = execution?.quality_gate.status ?? scoreGateStatus(signal);
+  const impactRisk = execution?.liquidity.impact_risk ?? scoreImpactRisk(signal);
+  return `${executionQualityLabel(gateStatus, impactRisk)} / ${impactRiskLabel(impactRisk)} impact`;
 }
 
 function RealTradeConfirmationModal({

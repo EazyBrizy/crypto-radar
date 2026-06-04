@@ -292,6 +292,7 @@ class ExecutionProfileResolver:
         request_override: StrategyExecutionSettings | Mapping[str, Any] | None = None,
         mode: ExecutionMode | str,
         instrument_type: InstrumentType | str | None,
+        strategy: str | None = None,
     ) -> ResolvedExecutionProfile:
         has_user_risk_settings = user_risk_settings is not None
         settings = _settings_model(user_risk_settings or RiskManagementSettings())
@@ -407,6 +408,7 @@ class ExecutionProfileResolver:
             default=resolve_rr_guard_mode(
                 settings,
                 context=execution_mode,
+                strategy=strategy,
                 strategy_risk_settings=strategy_mapping,
             ),
             request_settings=request_settings,
@@ -693,6 +695,7 @@ def calculate_risk_check_result(
     risk_settings: RiskManagementSettings | Mapping[str, Any],
     risk_adjustment: RiskAdjustmentPlan,
     position_sizing: PositionSizingResult,
+    execution_profile: ResolvedExecutionProfile | None = None,
     take_profit_plan: TakeProfitPlan | None = None,
     futures_risk_plan: FuturesRiskPlan | None = None,
     available_balance: float | None = None,
@@ -730,11 +733,16 @@ def calculate_risk_check_result(
     signal_edge: SignalEdgeSnapshot | None = None,
 ) -> RiskCheckResult:
     settings = _settings_model(risk_settings)
-    rr_guard_mode = resolve_rr_guard_mode(
-        settings,
-        context=execution_mode,
-        strategy=strategy or risk_adjustment.strategy,
-    )
+    if execution_profile is not None:
+        rr_guard_mode = execution_profile.rr_guard_mode
+        min_rr_ratio = float(execution_profile.min_rr_ratio)
+    else:
+        rr_guard_mode = resolve_rr_guard_mode(
+            settings,
+            context=execution_mode,
+            strategy=strategy or risk_adjustment.strategy,
+        )
+        min_rr_ratio = settings.min_rr_ratio
     blockers: list[str] = []
     warnings: list[str] = list(risk_adjustment.warnings)
     warnings.extend(market_data_warnings or [])
@@ -783,10 +791,10 @@ def calculate_risk_check_result(
             if take_profit_plan.selected_rr is not None
             else take_profit_plan.targets[-1].r_multiple
         )
-        if _limit_enabled(settings.min_rr_ratio) and rr < settings.min_rr_ratio:
+        if _limit_enabled(min_rr_ratio) and rr < min_rr_ratio:
             rr_reason = _rr_policy_reason(
                 rr=rr,
-                min_rr_ratio=settings.min_rr_ratio,
+                min_rr_ratio=min_rr_ratio,
                 execution_mode=execution_mode,
                 guard_mode=rr_guard_mode,
             )
@@ -938,7 +946,7 @@ def calculate_risk_check_result(
         blockers=blockers,
         warnings=warnings,
         rr=rr,
-        min_rr_ratio=settings.min_rr_ratio,
+        min_rr_ratio=min_rr_ratio,
         risk_reward_guard_mode=rr_guard_mode,
         risk_reward_warning=risk_reward_warning,
         risk_reward_warning_reason=risk_reward_warning_reason,

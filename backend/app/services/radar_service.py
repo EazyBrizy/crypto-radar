@@ -150,6 +150,7 @@ class RadarService:
                 request_override=request_override,
                 mode="virtual",
                 instrument_type=_profile_instrument_type(strategy_settings),
+                strategy=signal.strategy,
             )
         except Exception as exc:
             logger.warning(

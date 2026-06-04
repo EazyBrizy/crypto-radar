@@ -101,6 +101,7 @@ class RealExecutionService:
             request_override=request_risk_override_to_execution_settings(request.risk_override),
             mode="real",
             instrument_type=instrument_type,
+            strategy=signal.strategy,
         )
         risk_profile_source = resolved_risk_profile_source(execution_profile)
         risk_settings = execution_profile_resolver.apply_to_risk_settings(

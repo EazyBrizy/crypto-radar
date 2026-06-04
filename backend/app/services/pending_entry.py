@@ -243,6 +243,7 @@ class PendingEntryService:
             request_override=request_risk_override_to_execution_settings(request.risk_override),
             mode=mode,
             instrument_type=_request_instrument_type(request),
+            strategy=signal.strategy,
         )
 
     def arm_from_signal(

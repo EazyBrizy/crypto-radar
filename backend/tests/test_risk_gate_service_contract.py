@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
@@ -981,6 +982,151 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertEqual(decision.risk_check.risk_reward_guard_mode, "off")
         self.assertAlmostEqual(decision.risk_check.rr or 0, 1.2)
         self.assertEqual(decision.risk_check.min_rr_ratio, 2.0)
+
+    def test_risk_gate_uses_resolved_profile_rr_policy_over_conflicting_settings(self) -> None:
+        execution_profile = ResolvedExecutionProfile(
+            execution_mode="virtual",
+            instrument_type="spot",
+            risk_mode="percent",
+            risk_percent=1,
+            leverage=1,
+            rr_guard_mode="hard",
+            min_rr_ratio=2,
+            rr_target="nearest",
+            sources={
+                "risk_percent": "strategy",
+                "rr_guard_mode": "strategy",
+                "min_rr_ratio": "strategy",
+            },
+        )
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=_low_rr_trade_plan()),
+                request=ManualConfirmRequest(liquidation_price=80),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+                execution_profile=execution_profile,
+                execution_profile_sources=execution_profile.sources,
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "min_rr_ratio": 0,
+                    "virtual_rr_guard_mode": "off",
+                }
+            ),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertTrue(decision.risk_check.risk_reward_blocked)
+        self.assertEqual(decision.risk_check.risk_reward_guard_mode, "hard")
+        self.assertEqual(decision.risk_check.min_rr_ratio, 2.0)
+        self.assertTrue(_has_rr_policy_blocker(decision))
+
+    def test_risk_gate_uses_user_resolved_rr_policy_over_conflicting_settings(self) -> None:
+        execution_profile = ResolvedExecutionProfile(
+            execution_mode="virtual",
+            instrument_type="spot",
+            risk_mode="percent",
+            risk_percent=1,
+            leverage=1,
+            rr_guard_mode="soft",
+            min_rr_ratio=2,
+            sources={
+                "risk_percent": "user.risk_per_trade_percent",
+                "rr_guard_mode": "user.virtual_rr_guard_mode",
+                "min_rr_ratio": "user",
+            },
+        )
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(trade_plan=_low_rr_trade_plan()),
+                request=ManualConfirmRequest(liquidation_price=80),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+                execution_profile=execution_profile,
+                execution_profile_sources=execution_profile.sources,
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "virtual_rr_guard_mode": "hard",
+                    "min_rr_ratio": 2,
+                }
+            ),
+        )
+
+        self.assertEqual(decision.status, "warning")
+        self.assertTrue(decision.can_enter)
+        self.assertTrue(decision.risk_check.risk_reward_warning)
+        self.assertFalse(decision.risk_check.risk_reward_blocked)
+        self.assertEqual(decision.risk_check.risk_reward_guard_mode, "soft")
+        self.assertFalse(_has_rr_policy_blocker(decision))
+
+    def test_risk_gate_uses_request_resolved_risk_percent_over_conflicting_settings(self) -> None:
+        execution_profile = ResolvedExecutionProfile(
+            execution_mode="virtual",
+            instrument_type="spot",
+            risk_mode="percent",
+            risk_percent=2,
+            leverage=1,
+            rr_guard_mode="off",
+            min_rr_ratio=0,
+            sources={
+                "risk_percent": "request_override",
+                "leverage": "request_override",
+            },
+        )
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(score=100),
+                request=ManualConfirmRequest(liquidation_price=80),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+                execution_profile=execution_profile,
+                execution_profile_sources=execution_profile.sources,
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "risk_per_trade_percent": 0.5,
+                    "spot_risk_per_trade_percent": 0.5,
+                    "min_rr_ratio": 0,
+                }
+            ),
+        )
+
+        self.assertNotEqual(decision.status, "failed")
+        self.assertAlmostEqual(decision.risk_adjustment_plan.base_risk_percent, 2.0)
+        self.assertAlmostEqual(decision.position_sizing.risk_amount, 2.0)
+        self.assertEqual(decision.execution_profile_sources["risk_percent"], "request_override")
+
+    def test_business_paths_do_not_directly_read_legacy_risk_settings_keys(self) -> None:
+        backend_root = Path(__file__).resolve().parents[1]
+        checked_files = [
+            backend_root / "app/services/risk_gate.py",
+            backend_root / "app/services/risk_preview.py",
+            backend_root / "app/services/execution_service.py",
+            backend_root / "app/services/virtual_trading/service.py",
+            backend_root / "app/strategies/pipeline.py",
+        ]
+        legacy_container = "risk_settings"
+        legacy_keys = ("risk_per_trade_percent", "leverage", "min_rr_ratio")
+        forbidden_fragments = [legacy_container + ".get("]
+        for quote in ('"', "'"):
+            forbidden_fragments.extend(
+                legacy_container + "[" + quote + key + quote + "]"
+                for key in legacy_keys
+            )
+
+        for path in checked_files:
+            text = path.read_text(encoding="utf-8")
+            for fragment in forbidden_fragments:
+                self.assertNotIn(fragment, text, f"{fragment} found in {path}")
 
     def test_take_profit_required_still_blocks_when_no_tp_plan_exists(self) -> None:
         decision = RiskGateService().evaluate(

@@ -385,6 +385,7 @@ class RiskGateService:
             risk_settings=risk_settings,
             risk_adjustment=risk_adjustment,
             position_sizing=checked_position_sizing,
+            execution_profile=context.execution_profile,
             take_profit_plan=take_profit_plan,
             futures_risk_plan=futures_risk_plan,
             available_balance=context.available_balance,

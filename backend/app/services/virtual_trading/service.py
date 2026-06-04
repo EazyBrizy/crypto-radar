@@ -26,7 +26,7 @@ from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
 from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import RadarSignal
-from app.schemas.risk import RiskDecision
+from app.schemas.risk import ResolvedExecutionProfile, RiskDecision
 from app.schemas.trade import (
     CloseReason,
     CloseVirtualTradeRequest,
@@ -46,7 +46,6 @@ from app.services.risk_management import (
     get_user_risk_management_settings,
     request_risk_override_to_execution_settings,
     resolved_risk_profile_source,
-    resolve_rr_guard_mode,
 )
 from app.services.risk_market_data import RiskMarketDataService, RiskMarketDataSnapshot, risk_market_data_service
 from app.services.risk_state import RiskStateService, risk_state_service
@@ -302,7 +301,7 @@ class VirtualTradingService:
         confirm_with_trade = getattr(self._repository, "confirm_signal_with_trade", None)
         existing = self.get_virtual_trade_by_signal(signal.id)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
-        request, risk_settings, _, _ = self._resolved_execution_profile(
+        request, risk_settings, execution_profile, _ = self._resolved_execution_profile(
             signal=signal,
             request=request,
             risk_settings=risk_settings,
@@ -311,11 +310,7 @@ class VirtualTradingService:
             ensure_signal_execution_eligible(
                 signal,
                 mode="virtual",
-                rr_guard_mode=resolve_rr_guard_mode(
-                    risk_settings,
-                    context="virtual",
-                    strategy=signal.strategy,
-                ),
+                rr_guard_mode=execution_profile.rr_guard_mode,
             )
         if existing is not None and confirm_with_trade is not None and signal.status != "confirmed":
             result: VirtualTradeConfirmationResult = confirm_with_trade(signal.id, request, existing)
@@ -365,7 +360,7 @@ class VirtualTradingService:
         if existing is not None:
             return existing
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
-        request, risk_settings, _, _ = self._resolved_execution_profile(
+        request, risk_settings, execution_profile, _ = self._resolved_execution_profile(
             signal=signal,
             request=request,
             risk_settings=risk_settings,
@@ -373,11 +368,7 @@ class VirtualTradingService:
         ensure_signal_execution_eligible(
             signal,
             mode="virtual",
-            rr_guard_mode=resolve_rr_guard_mode(
-                risk_settings,
-                context="virtual",
-                strategy=signal.strategy,
-            ),
+            rr_guard_mode=execution_profile.rr_guard_mode,
         )
         trade = self._build_virtual_trade(signal, request)
         persisted_trade = self._repository.save_virtual_trade(trade)
@@ -441,11 +432,7 @@ class VirtualTradingService:
             risk_settings=risk_settings,
         )
         risk_profile_source = resolved_risk_profile_source(execution_profile)
-        virtual_rr_guard_mode = resolve_rr_guard_mode(
-            risk_settings,
-            context="virtual",
-            strategy=signal.strategy,
-        )
+        virtual_rr_guard_mode = execution_profile.rr_guard_mode
         rr_warning = (
             None
             if virtual_rr_guard_mode == "off"
@@ -725,11 +712,7 @@ class VirtualTradingService:
             risk_settings=risk_settings,
         )
         risk_profile_source = resolved_risk_profile_source(execution_profile)
-        virtual_rr_guard_mode = resolve_rr_guard_mode(
-            risk_settings,
-            context="virtual",
-            strategy=signal.strategy,
-        )
+        virtual_rr_guard_mode = execution_profile.rr_guard_mode
         rr_warning = (
             None
             if virtual_rr_guard_mode == "off"
@@ -872,7 +855,7 @@ class VirtualTradingService:
         signal: RadarSignal,
         request: ManualConfirmRequest,
         risk_settings: RiskManagementSettings,
-    ) -> tuple[ManualConfirmRequest, RiskManagementSettings, Any, str]:
+    ) -> tuple[ManualConfirmRequest, RiskManagementSettings, ResolvedExecutionProfile, str]:
         strategy_risk_settings, strategy_risk_settings_source = _strategy_risk_settings(
             signal,
             user_id=request.user_id,
@@ -883,6 +866,7 @@ class VirtualTradingService:
             request_override=request_risk_override_to_execution_settings(request.risk_override),
             mode="virtual",
             instrument_type=_virtual_profile_instrument_type(request),
+            strategy=signal.strategy,
         )
         resolved_risk_settings = execution_profile_resolver.apply_to_risk_settings(
             risk_settings,

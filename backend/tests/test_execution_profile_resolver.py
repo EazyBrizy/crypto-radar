@@ -92,6 +92,44 @@ class ExecutionProfileResolverTest(unittest.TestCase):
         self.assertAlmostEqual(float(profile.risk_percent or 0), 2.5)
         self.assertEqual(profile.sources["risk_percent"], "strategy")
 
+    def test_strategy_level_rr_policy_override_wins(self) -> None:
+        profile = execution_profile_resolver.resolve(
+            user_risk_settings=RiskManagementSettings(
+                min_rr_ratio=1.25,
+                virtual_rr_guard_mode="soft",
+            ),
+            strategy_execution_settings={
+                "rr_guard_mode": "hard",
+                "min_rr_ratio": 3.0,
+            },
+            request_override=None,
+            mode="virtual",
+            instrument_type="spot",
+            strategy="trend_pullback_continuation",
+        )
+
+        self.assertEqual(profile.rr_guard_mode, "hard")
+        self.assertAlmostEqual(float(profile.min_rr_ratio), 3.0)
+        self.assertEqual(profile.sources["rr_guard_mode"], "strategy")
+        self.assertEqual(profile.sources["min_rr_ratio"], "strategy")
+
+    def test_user_level_strategy_rr_default_uses_strategy_context(self) -> None:
+        profile = execution_profile_resolver.resolve(
+            user_risk_settings=RiskManagementSettings(
+                min_rr_ratio=1.75,
+                virtual_rr_guard_mode="soft",
+                strategy_rr_guard_modes={"trend_pullback_continuation": "hard"},
+            ),
+            strategy_execution_settings={},
+            request_override=None,
+            mode="virtual",
+            instrument_type="spot",
+            strategy="trend_pullback_continuation",
+        )
+
+        self.assertEqual(profile.rr_guard_mode, "hard")
+        self.assertAlmostEqual(float(profile.min_rr_ratio), 1.75)
+
     def test_default_legacy_request_risk_percent_does_not_override_user_profile(self) -> None:
         request = RiskPreviewRequest(signal_id="sig_legacy", risk_percent=10.0)
         profile = execution_profile_resolver.resolve(
@@ -122,6 +160,31 @@ class ExecutionProfileResolverTest(unittest.TestCase):
         self.assertAlmostEqual(float(profile.risk_percent or 0), 2.0)
         self.assertEqual(profile.sources["risk_percent"], "request_override")
         self.assertEqual(resolved_risk_profile_source(profile), "request_override")
+
+    def test_explicit_request_override_leverage_and_percent_wins(self) -> None:
+        profile = execution_profile_resolver.resolve(
+            user_risk_settings=RiskManagementSettings(
+                risk_per_trade_percent=1.0,
+                futures_risk_per_trade_percent=1.0,
+            ),
+            strategy_execution_settings={
+                "risk_percent": 1.5,
+                "leverage": 2,
+                "instrument_type": "futures",
+            },
+            request_override=request_risk_override_to_execution_settings(
+                RiskOverride(risk_mode="percent", risk_percent=2, leverage=4)
+            ),
+            mode="real",
+            instrument_type="futures",
+            strategy="trend_pullback_continuation",
+        )
+
+        self.assertEqual(profile.risk_mode, "percent")
+        self.assertAlmostEqual(float(profile.risk_percent or 0), 2.0)
+        self.assertEqual(int(profile.leverage), 4)
+        self.assertEqual(profile.sources["risk_percent"], "request_override")
+        self.assertEqual(profile.sources["leverage"], "request_override")
 
     def test_explicit_fixed_risk_override_wins_over_saved_profile(self) -> None:
         profile = execution_profile_resolver.resolve(

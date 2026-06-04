@@ -108,7 +108,16 @@ class SignalExitPlanSnapshot(BaseModel):
 
 class SignalAutoEntrySnapshot(BaseModel):
     enabled: bool = False
-    status: Literal["pending", "triggered", "failed", "cancelled", "requires_reconfirmation"] = "pending"
+    status: Literal[
+        "pending",
+        "triggered",
+        "filling",
+        "filled",
+        "failed",
+        "cancelled",
+        "expired",
+        "requires_reconfirmation",
+    ] = "pending"
     mode: Literal["virtual", "real"] = "virtual"
     user_id: str = "demo_user"
     armed_at: Optional[datetime] = None

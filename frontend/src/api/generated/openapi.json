@@ -12805,8 +12805,11 @@
             "enum": [
               "pending",
               "triggered",
+              "filling",
+              "filled",
               "failed",
               "cancelled",
+              "expired",
               "requires_reconfirmation"
             ],
             "title": "Status",

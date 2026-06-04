@@ -47,11 +47,13 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.repository = PendingEntryIntentRepository(self.SessionFactory)
         self.signals = _FakeSignalProvider(_signal())
         self.virtual = _FakeVirtualTrading()
+        self.events = _FakePendingEntryEventPublisher()
         self.service = PendingEntryTriggerService(
             pending_entries=self.repository,
             signals=self.signals,
             virtual_trading=self.virtual,
             session_factory=self.SessionFactory,
+            event_publisher=self.events,
         )
 
     def tearDown(self) -> None:
@@ -82,6 +84,7 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
             self.virtual.calls[0][1].metadata["lifecycle_trace"]["signal_id"],
             str(SIGNAL_ID),
         )
+        self.assertEqual(self.events.statuses(), ["triggered", "filling", "filled"])
 
     def test_short_entry_touched_by_bid_fills_once(self) -> None:
         self.signals.signal = _signal(direction="short")
@@ -113,6 +116,7 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertFalse(results[0].touched)
         self.assertEqual(current.status if current else None, "pending")
         self.assertEqual(self.virtual.calls, [])
+        self.assertEqual(self.events.statuses(), [])
 
     def test_signal_invalidated_cancels_intent(self) -> None:
         created = self.repository.create_intent(_intent_create(side="long"))
@@ -147,6 +151,26 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(self.signals.auto_entry_updates[-1]["status"], "requires_reconfirmation")
         self.assertEqual(self.signals.auto_entry_updates[-1]["message"], TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON)
         self.assertEqual(self.virtual.calls, [])
+        self.assertEqual(self.events.statuses(), ["requires_reconfirmation"])
+
+    def test_event_publish_failure_does_not_rollback_trigger_transition(self) -> None:
+        created = self.repository.create_intent(_intent_create(side="long"))
+        self.signals.signal = _signal(status="invalidated")
+        service = PendingEntryTriggerService(
+            pending_entries=self.repository,
+            signals=self.signals,
+            virtual_trading=self.virtual,
+            session_factory=self.SessionFactory,
+            event_publisher=_FailingPendingEntryEventPublisher(),
+        )
+
+        with self.assertLogs("app.services.pending_entry_trigger", level="WARNING") as logs:
+            results = service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results[0].status, "cancelled")
+        self.assertEqual(current.status if current else None, "cancelled")
+        self.assertIn("Pending entry realtime event publish failed", "\n".join(logs.output))
 
     def test_changed_plan_reconfirm_then_second_touch_fills_virtual_trade(self) -> None:
         pending_service = PendingEntryService(
@@ -301,6 +325,33 @@ class _FakeVirtualTrading:
             raise self.failure
         trade = _virtual_trade(signal, request)
         return signal.model_copy(update={"status": "confirmed", "confirmed_trade_id": trade.id}), trade
+
+
+class _FakePendingEntryEventPublisher:
+    def __init__(self) -> None:
+        self.events: list[dict[str, str | None]] = []
+
+    def publish_update(self, intent: Any, *, message: str | None = None) -> None:
+        reason = message if message is not None else intent.failure_reason
+        self.events.append(
+            {
+                "pending_entry_id": str(intent.id),
+                "signal_id": str(intent.signal_id),
+                "user_id": str(intent.user_id),
+                "status": intent.status,
+                "mode": intent.mode,
+                "reason": reason,
+                "message": reason,
+            }
+        )
+
+    def statuses(self) -> list[str | None]:
+        return [event["status"] for event in self.events]
+
+
+class _FailingPendingEntryEventPublisher:
+    def publish_update(self, intent: Any, *, message: str | None = None) -> None:
+        raise RuntimeError("broker unavailable")
 
 
 def _signal(

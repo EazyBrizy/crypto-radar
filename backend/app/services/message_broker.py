@@ -34,6 +34,7 @@ class RedisMessageBroker:
         self._channel = channel
         self._enable_redis = enable_redis
         self._subscribers: set[asyncio.Queue[RealtimeEvent]] = set()
+        self._subscriber_loops: dict[asyncio.Queue[RealtimeEvent], asyncio.AbstractEventLoop | None] = {}
         self._listener_task: asyncio.Task[None] | None = None
         self._local_event_ids: deque[str] = deque(maxlen=2_000)
         self._local_event_id_set: set[str] = set()
@@ -41,11 +42,13 @@ class RedisMessageBroker:
     def subscribe(self) -> asyncio.Queue[RealtimeEvent]:
         queue: asyncio.Queue[RealtimeEvent] = asyncio.Queue(maxsize=BROKER_QUEUE_MAX_SIZE)
         self._subscribers.add(queue)
+        self._subscriber_loops[queue] = _running_loop_or_none()
         self._ensure_listener_started()
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[RealtimeEvent]) -> None:
         self._subscribers.discard(queue)
+        self._subscriber_loops.pop(queue, None)
 
     async def publish(self, event: RealtimeEvent) -> None:
         self._remember_local_event(event)
@@ -108,7 +111,7 @@ class RedisMessageBroker:
 
     def _publish_local(self, event: RealtimeEvent) -> None:
         for queue in list(self._subscribers):
-            _put_latest(queue, event)
+            _put_latest_for_subscriber(queue, event, self._subscriber_loops.get(queue))
 
     def _remember_local_event(self, event: RealtimeEvent) -> None:
         event_id = event.get("id")
@@ -138,6 +141,24 @@ def _put_latest(queue: asyncio.Queue[RealtimeEvent], event: RealtimeEvent) -> No
 
     with contextlib.suppress(asyncio.QueueFull):
         queue.put_nowait(event)
+
+
+def _put_latest_for_subscriber(
+    queue: asyncio.Queue[RealtimeEvent],
+    event: RealtimeEvent,
+    loop: asyncio.AbstractEventLoop | None,
+) -> None:
+    if loop is None or not loop.is_running() or loop is _running_loop_or_none():
+        _put_latest(queue, event)
+        return
+    loop.call_soon_threadsafe(_put_latest, queue, event)
+
+
+def _running_loop_or_none() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
 
 
 def _decode_pubsub_event(data: Any) -> RealtimeEvent | None:

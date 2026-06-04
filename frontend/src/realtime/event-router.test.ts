@@ -1,10 +1,10 @@
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 
 import { queryKeys, serverStateKeys } from "@/features/server-state/query-keys";
 import { useNotificationStore } from "@/stores/notification-store";
 import { useSignalStore } from "@/stores/signal-store";
-import type { RadarResponse, RadarSignal, TradeJournalEntry } from "@/types";
+import type { PendingEntryIntent, RadarResponse, RadarSignal, TradeJournalEntry } from "@/types";
 import { createRealtimeEventRouter } from "./event-router";
 
 const baseSignal: RadarSignal = {
@@ -314,4 +314,111 @@ describe("createRealtimeEventRouter signal feed updates", () => {
     });
     expect(useNotificationStore.getState().notifications[0]?.title).toBe("Strategy invalidation");
   });
+
+  it("routes pending_entry.updated events into pending-entry caches", () => {
+    const queryClient = new QueryClient();
+    const intent = pendingIntent();
+    const activeKey = serverStateKeys.signals.pendingEntry("sig_1", "user_1");
+    const historyKey = serverStateKeys.signals.pendingEntryHistory("sig_1", "user_1");
+    queryClient.setQueryData(activeKey, intent);
+    queryClient.setQueryData(historyKey, []);
+    queryClient.setQueryData(queryKeys.signals, [{
+      ...baseSignal,
+      auto_entry: {
+        enabled: true,
+        status: "pending",
+        mode: "virtual",
+        user_id: "user_1",
+        armed_at: "2026-05-25T10:12:41.231Z",
+        triggered_at: null,
+        message: null,
+        request: {},
+        trade_id: null,
+        real_execution: null
+      }
+    }]);
+    useSignalStore.getState().addSignal({
+      ...baseSignal,
+      auto_entry: {
+        enabled: true,
+        status: "pending",
+        mode: "virtual",
+        user_id: "user_1",
+        armed_at: "2026-05-25T10:12:41.231Z",
+        triggered_at: null,
+        message: null,
+        request: {},
+        trade_id: null,
+        real_execution: null
+      }
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const router = createRealtimeEventRouter({ queryClient, onRealtimeEvent: () => undefined });
+
+    router.route({
+      id: "evt_pending_entry_filled",
+      type: "pending_entry.updated",
+      version: 1,
+      timestamp: "2026-05-25T10:12:47.231Z",
+      payload: {
+        user_id: "user_1",
+        signal_id: "sig_1",
+        pending_entry_id: "intent_1",
+        status: "filled",
+        mode: "virtual",
+        reason: "Virtual trade filled.",
+        message: "Virtual trade filled.",
+        updated_at: "2026-05-25T10:12:47.231Z"
+      }
+    });
+
+    expect(queryClient.getQueryData(activeKey)).toBeNull();
+    expect(queryClient.getQueryData<PendingEntryIntent[]>(historyKey)?.[0]).toMatchObject({
+      id: "intent_1",
+      status: "filled",
+      failure_reason: "Virtual trade filled."
+    });
+    expect(useSignalStore.getState().signalsById.sig_1.auto_entry?.status).toBe("filled");
+    expect(queryClient.getQueryData<RadarSignal[]>(queryKeys.signals)?.[0]?.auto_entry?.status).toBe("filled");
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: activeKey });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: historyKey });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: serverStateKeys.signals.pendingEntry("sig_1", "demo_user")
+    });
+  });
 });
+
+function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntryIntent {
+  return {
+    id: "intent_1",
+    user_id: "user_1",
+    signal_id: "sig_1",
+    strategy_id: null,
+    mode: "virtual",
+    status: "pending",
+    exchange: "bybit",
+    symbol: "BTCUSDT",
+    side: "long",
+    entry_min: 67850,
+    entry_max: 68100,
+    entry_price_policy: "accepted_entry_zone",
+    stop_loss: 67420,
+    targets_snapshot: [{ label: "TP1", price: "68900" }],
+    accepted_trade_plan_snapshot: { entry: { min_price: "67850", max_price: "68100" } },
+    accepted_trade_plan_hash: "sha256:test",
+    accepted_signal_status: "active",
+    accepted_signal_version: null,
+    accepted_signal_fingerprint: null,
+    execution_profile_snapshot: {},
+    request_snapshot: {},
+    idempotency_key: "pending-entry:test",
+    expires_at: "2099-05-25T11:12:41.231Z",
+    created_at: "2026-05-25T10:12:41.231Z",
+    updated_at: "2026-05-25T10:12:41.231Z",
+    triggered_at: null,
+    filled_at: null,
+    filled_trade_id: null,
+    failure_reason: null,
+    ...overrides
+  };
+}

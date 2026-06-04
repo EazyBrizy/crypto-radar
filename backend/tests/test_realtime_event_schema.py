@@ -1,10 +1,16 @@
 import unittest
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import uuid4
 
 from app.schemas.notification import NotificationResponse
+from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.signal import RadarSignal
-from app.services.realtime_events import notification_created_event, signal_created_event
+from app.services.realtime_events import (
+    notification_created_event,
+    pending_entry_updated_event,
+    signal_created_event,
+)
 
 
 class RealtimeEventSchemaTest(unittest.TestCase):
@@ -61,6 +67,45 @@ class RealtimeEventSchemaTest(unittest.TestCase):
         self.assertEqual(event["payload"]["kind"], "alert")
         self.assertEqual(event["payload"]["title"], "Alert test")
         self.assertEqual(event["payload"]["notification"]["type"], "alert.rule_test")
+
+    def test_pending_entry_updated_event_has_lifecycle_payload(self) -> None:
+        now = datetime.now(timezone.utc)
+        intent = PendingEntryIntentRead(
+            id=uuid4(),
+            user_id=uuid4(),
+            signal_id=uuid4(),
+            mode="virtual",
+            status="filling",
+            exchange="bybit",
+            symbol="BTCUSDT",
+            side="long",
+            entry_min=Decimal("100"),
+            entry_max=Decimal("101"),
+            entry_price_policy="accepted_entry_zone",
+            stop_loss=Decimal("95"),
+            targets_snapshot=[{"label": "TP1", "price": "110"}],
+            accepted_trade_plan_snapshot={"entry": {"min_price": "100", "max_price": "101"}},
+            accepted_trade_plan_hash="sha256:test",
+            accepted_signal_status="ready",
+            execution_profile_snapshot={"risk_mode": "percent"},
+            request_snapshot={"auto_enter_on_confirmation": True},
+            idempotency_key="pending-entry:test",
+            created_at=now,
+            updated_at=now,
+            failure_reason="Order is being filled.",
+        )
+
+        event = pending_entry_updated_event(intent)
+
+        self.assertEqual(event["type"], "pending_entry.updated")
+        self.assertEqual(event["payload"]["user_id"], str(intent.user_id))
+        self.assertEqual(event["payload"]["signal_id"], str(intent.signal_id))
+        self.assertEqual(event["payload"]["pending_entry_id"], str(intent.id))
+        self.assertEqual(event["payload"]["status"], "filling")
+        self.assertEqual(event["payload"]["mode"], "virtual")
+        self.assertEqual(event["payload"]["reason"], "Order is being filled.")
+        self.assertEqual(event["payload"]["message"], "Order is being filled.")
+        self.assertEqual(event["payload"]["updated_at"], now.isoformat())
 
 
 if __name__ == "__main__":

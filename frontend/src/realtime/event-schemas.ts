@@ -1,6 +1,14 @@
 import { z } from "zod";
 
-import { RadarSignalSchema, RadarStatusSchema, SignalSideSchema, TradeInvalidationAlertSchema, TradeJournalEntrySchema } from "@/validation/common-schemas";
+import {
+  PendingEntryIntentStatusSchema,
+  RadarSignalSchema,
+  RadarStatusSchema,
+  SignalSideSchema,
+  TradeInvalidationAlertSchema,
+  TradeJournalEntrySchema,
+  TradeModeSchema
+} from "@/validation/common-schemas";
 
 const EventEnvelopeBaseSchema = z.object({
   id: z.string().min(1),
@@ -124,6 +132,17 @@ const TradeInvalidationPayloadSchema = z.object({
   fingerprint: z.string().nullable().optional()
 });
 
+const PendingEntryUpdatedPayloadSchema = z.object({
+  user_id: z.string().min(1),
+  signal_id: z.string().min(1),
+  pending_entry_id: z.string().min(1),
+  status: PendingEntryIntentStatusSchema,
+  mode: TradeModeSchema,
+  reason: z.string().nullable().optional(),
+  message: z.string().nullable().optional(),
+  updated_at: z.string().min(1)
+});
+
 export const StandardRealtimeEventSchema = z.discriminatedUnion("type", [
   EventEnvelopeBaseSchema.extend({
     type: z.literal("signal.created"),
@@ -184,6 +203,10 @@ export const StandardRealtimeEventSchema = z.discriminatedUnion("type", [
       status: z.string().min(1),
       details: z.record(z.string(), z.unknown()).default({})
     })
+  }),
+  EventEnvelopeBaseSchema.extend({
+    type: z.literal("pending_entry.updated"),
+    payload: PendingEntryUpdatedPayloadSchema
   }),
   EventEnvelopeBaseSchema.extend({
     type: z.literal("notification.created"),

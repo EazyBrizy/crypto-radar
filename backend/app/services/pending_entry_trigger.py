@@ -22,6 +22,7 @@ from app.services.pending_entry import (
     accepted_trade_plan_hash,
     pending_entry_service,
 )
+from app.services.pending_entry_events import PendingEntryUpdatePublisher, pending_entry_update_publisher
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.signal_service import signal_service
 from app.services.virtual_trading import VirtualExecutionRejected, virtual_trading_service
@@ -117,11 +118,13 @@ class PendingEntryTriggerService:
         signals: SignalProvider | None = None,
         virtual_trading: VirtualEntryExecutor | None = None,
         session_factory: sessionmaker[Session] = SessionLocal,
+        event_publisher: PendingEntryUpdatePublisher | None = None,
     ) -> None:
         self._pending_entries = pending_entries or pending_entry_service
         self._signals = signals or signal_service
         self._virtual_trading = virtual_trading or virtual_trading_service
         self._session_factory = session_factory
+        self._event_publisher = event_publisher or pending_entry_update_publisher
 
     def process_market_tick(
         self,
@@ -156,6 +159,7 @@ class PendingEntryTriggerService:
                     now=now,
                 )
                 session.commit()
+                self._publish_locked_update(record)
                 return _result(record, touched=False, reason=record.failure_reason)
             if record.expires_at is not None and _as_utc(record.expires_at) <= now:
                 _transition_locked(
@@ -165,6 +169,7 @@ class PendingEntryTriggerService:
                     now=now,
                 )
                 session.commit()
+                self._publish_locked_update(record)
                 return _result(record, touched=False, reason=record.failure_reason)
             if is_terminal_signal_status(signal.status):
                 _transition_locked(
@@ -174,6 +179,7 @@ class PendingEntryTriggerService:
                     now=now,
                 )
                 session.commit()
+                self._publish_locked_update(record)
                 return _result(record, touched=False, reason=record.failure_reason)
             try:
                 current_hash = accepted_trade_plan_hash(signal)
@@ -185,6 +191,7 @@ class PendingEntryTriggerService:
                     now=now,
                 )
                 session.commit()
+                self._publish_locked_update(record)
                 return _result(record, touched=False, reason=record.failure_reason)
             if current_hash != record.accepted_trade_plan_hash:
                 _mark_requires_reconfirmation_locked(
@@ -193,6 +200,7 @@ class PendingEntryTriggerService:
                     now=now,
                 )
                 session.commit()
+                self._publish_locked_update(record)
                 self._mirror_auto_entry(
                     record.signal_id,
                     status="requires_reconfirmation",
@@ -224,6 +232,7 @@ class PendingEntryTriggerService:
 
             _transition_locked(record, status="triggered", failure_reason=None, now=now)
             session.commit()
+            self._publish_locked_update(record)
 
         return self._execute_triggered_intent(
             intent_id=intent_id,
@@ -240,7 +249,7 @@ class PendingEntryTriggerService:
         market_tick: Any,
         touch: EntryTouchResult,
     ) -> PendingEntryTriggerResult:
-        intent = self._pending_entries.transition_status(
+        intent = self._transition_status(
             intent_id,
             status="filling",
             failure_reason=None,
@@ -284,7 +293,7 @@ class PendingEntryTriggerService:
                 return self._finish_temporary_failure(intent, reason, touch)
             return self._finish_structural_failure(intent, reason, touch)
 
-        filled = self._pending_entries.transition_status(
+        filled = self._transition_status(
             intent.id,
             status="filled",
             filled_trade_id=trade.id,
@@ -311,7 +320,7 @@ class PendingEntryTriggerService:
         reason: str,
         touch: EntryTouchResult,
     ) -> PendingEntryTriggerResult:
-        updated = self._pending_entries.transition_status(
+        updated = self._transition_status(
             intent.id,
             status="pending",
             failure_reason=reason,
@@ -336,7 +345,7 @@ class PendingEntryTriggerService:
         reason: str,
         touch: EntryTouchResult,
     ) -> PendingEntryTriggerResult:
-        updated = self._pending_entries.transition_status(
+        updated = self._transition_status(
             intent.id,
             status="failed",
             failure_reason=reason,
@@ -370,6 +379,40 @@ class PendingEntryTriggerService:
             update(str(signal_id), status=status, message=message, trade_id=trade_id)
         except Exception as exc:
             logger.warning("Pending entry legacy auto-entry mirror update failed: %s", exc)
+
+    def _transition_status(
+        self,
+        intent_id: str | UUID,
+        *,
+        status: str,
+        failure_reason: str | None = None,
+        filled_trade_id: str | UUID | None = None,
+        now: datetime | None = None,
+    ) -> PendingEntryIntentRead | None:
+        updated = self._pending_entries.transition_status(
+            intent_id,
+            status=status,
+            failure_reason=failure_reason,
+            filled_trade_id=filled_trade_id,
+            now=now,
+        )
+        if updated is not None and not _provider_publishes_pending_entry_events(self._pending_entries):
+            self._publish_update(updated)
+        return updated
+
+    def _publish_locked_update(self, record: PendingEntryIntent) -> None:
+        try:
+            intent = PendingEntryIntentRead.model_validate(record)
+        except Exception as exc:
+            logger.warning("Pending entry realtime event publish failed: %s", exc)
+            return
+        self._publish_update(intent)
+
+    def _publish_update(self, intent: PendingEntryIntentRead) -> None:
+        try:
+            self._event_publisher.publish_update(intent)
+        except Exception as exc:
+            logger.warning("Pending entry realtime event publish failed: %s", exc)
 
 
 def entry_zone_touch(
@@ -684,6 +727,10 @@ def _trade_risk_decision_id(trade: VirtualTrade) -> str | None:
     if trade.execution is None or trade.execution.risk_decision is None:
         return None
     return trade.execution.risk_decision.lifecycle_trace.risk_decision_id
+
+
+def _provider_publishes_pending_entry_events(provider: PendingEntryProvider) -> bool:
+    return getattr(provider, "publishes_pending_entry_events", False) is True
 
 
 def _utc_now() -> datetime:

@@ -65,6 +65,43 @@ class PendingEntryServiceTest(unittest.TestCase):
         self.assertEqual(intent.request_snapshot["auto_enter_on_confirmation"], True)
         self.assertEqual(repository.create_calls, 1)
 
+    def test_arm_from_signal_publishes_pending_entry_update(self) -> None:
+        repository = _FakePendingEntryRepository()
+        publisher = _FakePendingEntryEventPublisher()
+        service = self._service(repository, event_publisher=publisher)
+
+        intent = service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+
+        self.assertEqual(len(publisher.events), 1)
+        self.assertEqual(publisher.events[0]["pending_entry_id"], str(intent.id))
+        self.assertEqual(publisher.events[0]["signal_id"], str(SIGNAL_ID))
+        self.assertEqual(publisher.events[0]["user_id"], str(USER_ID))
+        self.assertEqual(publisher.events[0]["status"], "pending")
+        self.assertEqual(publisher.events[0]["mode"], "virtual")
+
+    def test_event_publish_failure_does_not_rollback_transition(self) -> None:
+        repository = _FakePendingEntryRepository()
+        created = self._service(repository).arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        service = self._service(repository, event_publisher=_FailingPendingEntryEventPublisher())
+
+        with self.assertLogs("app.services.pending_entry", level="WARNING") as logs:
+            cancelled = service.cancel_intent(created.id, user_id=USER_ID)
+
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertIn("Pending entry realtime event publish failed", "\n".join(logs.output))
+
     def test_duplicate_arm_returns_existing_active_intent(self) -> None:
         repository = _FakePendingEntryRepository()
         service = self._service(repository)
@@ -349,12 +386,14 @@ class PendingEntryServiceTest(unittest.TestCase):
         repository: "_FakePendingEntryRepository",
         *,
         signal_loader: Any | None = None,
+        event_publisher: Any | None = None,
     ) -> PendingEntryService:
         return PendingEntryService(
             repository=repository,
             session_factory=self.SessionFactory,
             signal_loader=signal_loader or (lambda _signal_id: _signal()),
             risk_settings_provider=lambda _user_id: RiskManagementSettings(),
+            event_publisher=event_publisher or _FakePendingEntryEventPublisher(),
         )
 
 
@@ -474,6 +513,30 @@ class _FakePendingEntryRepository:
         self.records = [updated if intent.id == intent_id else intent for intent in self.records]
         self.active = updated
         return updated
+
+
+class _FakePendingEntryEventPublisher:
+    def __init__(self) -> None:
+        self.events: list[dict[str, str | None]] = []
+
+    def publish_update(self, intent: PendingEntryIntentRead, *, message: str | None = None) -> None:
+        reason = message if message is not None else intent.failure_reason
+        self.events.append(
+            {
+                "pending_entry_id": str(intent.id),
+                "signal_id": str(intent.signal_id),
+                "user_id": str(intent.user_id),
+                "status": intent.status,
+                "mode": intent.mode,
+                "reason": reason,
+                "message": reason,
+            }
+        )
+
+
+class _FailingPendingEntryEventPublisher:
+    def publish_update(self, intent: PendingEntryIntentRead, *, message: str | None = None) -> None:
+        raise RuntimeError("broker unavailable")
 
 
 def _signal(

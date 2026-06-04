@@ -1,13 +1,14 @@
 import type { QueryClient } from "@tanstack/react-query";
 
+import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
 import { queryKeys, serverStateKeys } from "@/features/server-state/query-keys";
 import { warnIfRealtimeEventExceedsBudget } from "@/performance/budgets";
 import { useNotificationStore } from "@/stores/notification-store";
 import { usePriceStore } from "@/stores/price-store";
 import { useSignalStore, type SignalPatch } from "@/stores/signal-store";
-import type { HealthStatus, RadarResponse, RadarSignal, RadarStatus, SignalStatus, TradeInvalidationAlert, TradeJournalEntry, TradeJournalResponse } from "@/types";
+import type { HealthStatus, PendingEntryIntent, RadarResponse, RadarSignal, RadarStatus, SignalStatus, TradeInvalidationAlert, TradeJournalEntry, TradeJournalResponse } from "@/types";
 import { isOpenFeedSignal } from "@/utils";
-import type { NotificationRealtimePayload, RealtimeMessage, StandardRealtimeEvent } from "./event-types";
+import type { NotificationRealtimePayload, PendingEntryUpdatedPayload, RealtimeMessage, StandardRealtimeEvent } from "./event-types";
 
 const MAX_RECENT_EVENT_IDS = 1_000;
 
@@ -166,6 +167,11 @@ function routeStandardEvent(
   if (event.type === "trade.invalidation") {
     applyTradeInvalidation(options.queryClient, event.payload.alert);
     pushTradeInvalidationNotification(event.payload.alert);
+    return;
+  }
+
+  if (event.type === "pending_entry.updated") {
+    applyPendingEntryUpdated(options.queryClient, event.payload);
     return;
   }
 
@@ -353,6 +359,30 @@ function applyTradeInvalidation(queryClient: QueryClient, alert: TradeInvalidati
   void queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.list({ status: "open" }) });
 }
 
+function applyPendingEntryUpdated(queryClient: QueryClient, payload: PendingEntryUpdatedPayload) {
+  for (const userId of pendingEntryUserIds(payload.user_id)) {
+    const activeKey = serverStateKeys.signals.pendingEntry(payload.signal_id, userId);
+    const current = queryClient.getQueryData<PendingEntryIntent | null>(activeKey);
+    const updated = patchPendingEntryIntent(current, payload);
+    if (updated) {
+      queryClient.setQueryData<PendingEntryIntent | null>(
+        activeKey,
+        isActivePendingEntryStatus(payload.status) ? updated : null
+      );
+    }
+    void queryClient.invalidateQueries({ queryKey: activeKey });
+
+    if (!isTerminalPendingEntryStatus(payload.status)) continue;
+    const historyKey = serverStateKeys.signals.pendingEntryHistory(payload.signal_id, userId);
+    if (updated) {
+      queryClient.setQueryData<PendingEntryIntent[]>(historyKey, (history) => upsertPendingEntryHistory(history, updated));
+    }
+    void queryClient.invalidateQueries({ queryKey: historyKey });
+  }
+
+  patchPendingEntrySignalState(queryClient, payload);
+}
+
 function pushTradeInvalidationNotification(alert: TradeInvalidationAlert) {
   if (alert.action_dismissed) return;
   useNotificationStore.getState().push({
@@ -361,6 +391,114 @@ function pushTradeInvalidationNotification(alert: TradeInvalidationAlert) {
     message: alert.reason ?? `${alert.symbol} strategy idea is invalidated`,
     title: "Strategy invalidation"
   });
+}
+
+function patchPendingEntrySignalState(queryClient: QueryClient, payload: PendingEntryUpdatedPayload) {
+  const signal = useSignalStore.getState().signalsById[payload.signal_id];
+  if (signal) {
+    useSignalStore.getState().updateSignal(payload.signal_id, {
+      auto_entry: pendingEntryAutoEntry(signal, payload),
+      updated_at: payload.updated_at
+    });
+  }
+
+  const patchSignals = (signals: RadarSignal[] = []) =>
+    signals.map((item) => patchPendingEntrySignal(item, payload));
+
+  queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, patchSignals);
+  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.active(), patchSignals);
+  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), patchSignals);
+  queryClient.setQueriesData<RadarResponse>(
+    { queryKey: serverStateKeys.radar.all() },
+    (current) => patchRadarPendingEntrySignal(current, payload)
+  );
+}
+
+function patchPendingEntrySignal(signal: RadarSignal, payload: PendingEntryUpdatedPayload): RadarSignal {
+  if (signal.id !== payload.signal_id) return signal;
+  return {
+    ...signal,
+    auto_entry: pendingEntryAutoEntry(signal, payload),
+    updated_at: payload.updated_at
+  };
+}
+
+function patchRadarPendingEntrySignal(
+  current: RadarResponse | undefined,
+  payload: PendingEntryUpdatedPayload,
+): RadarResponse | undefined {
+  if (!current || !Array.isArray(current.signals)) return current;
+  return {
+    ...current,
+    signals: current.signals.map((signal) => patchPendingEntrySignal(signal, payload))
+  };
+}
+
+function pendingEntryAutoEntry(
+  signal: RadarSignal,
+  payload: PendingEntryUpdatedPayload,
+): NonNullable<RadarSignal["auto_entry"]> {
+  const current = signal.auto_entry;
+  const message = pendingEntryMessage(payload);
+  return {
+    enabled: isActivePendingEntryStatus(payload.status),
+    status: payload.status,
+    mode: payload.mode,
+    user_id: payload.user_id,
+    armed_at: current?.armed_at ?? (payload.status === "pending" ? payload.updated_at : null),
+    triggered_at: current?.triggered_at ?? pendingEntryTriggeredAt(payload),
+    message,
+    request: current?.request ?? {},
+    trade_id: current?.trade_id ?? null,
+    real_execution: current?.real_execution ?? null
+  };
+}
+
+function pendingEntryTriggeredAt(payload: PendingEntryUpdatedPayload): string | null {
+  if (payload.status === "triggered" || payload.status === "filling" || payload.status === "filled" || payload.status === "failed") {
+    return payload.updated_at;
+  }
+  return null;
+}
+
+function patchPendingEntryIntent(
+  current: PendingEntryIntent | null | undefined,
+  payload: PendingEntryUpdatedPayload,
+): PendingEntryIntent | null {
+  if (!current || current.id !== payload.pending_entry_id) return null;
+  const message = pendingEntryMessage(payload);
+  return {
+    ...current,
+    status: payload.status,
+    mode: payload.mode,
+    failure_reason: message ?? current.failure_reason,
+    updated_at: payload.updated_at,
+    triggered_at: payload.status === "triggered" ? payload.updated_at : current.triggered_at,
+    filled_at: payload.status === "filled" ? payload.updated_at : current.filled_at
+  };
+}
+
+function upsertPendingEntryHistory(
+  current: PendingEntryIntent[] | undefined,
+  intent: PendingEntryIntent,
+): PendingEntryIntent[] {
+  return [intent, ...(current ?? []).filter((item) => item.id !== intent.id)]
+    .sort((left, right) => pendingEntryUpdatedAt(right) - pendingEntryUpdatedAt(left));
+}
+
+function pendingEntryUpdatedAt(intent: PendingEntryIntent): number {
+  const updatedAt = Date.parse(intent.updated_at);
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const createdAt = Date.parse(intent.created_at);
+  return Number.isFinite(createdAt) ? createdAt : 0;
+}
+
+function pendingEntryMessage(payload: PendingEntryUpdatedPayload): string | null {
+  return payload.message ?? payload.reason ?? null;
+}
+
+function pendingEntryUserIds(userId: string): string[] {
+  return Array.from(new Set([userId, "demo_user", "usr_demo"].filter(Boolean)));
 }
 
 function isSignalEvent(message: RealtimeMessage): message is Extract<RealtimeMessage, { signal: RadarSignal }> {

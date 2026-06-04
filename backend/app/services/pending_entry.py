@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -32,6 +33,7 @@ from app.services.risk_management import (
     get_user_risk_management_settings,
     request_risk_override_to_execution_settings,
 )
+from app.services.pending_entry_events import PendingEntryUpdatePublisher, pending_entry_update_publisher
 from app.services.signal_risk_reward import ensure_signal_execution_eligible
 from app.services.strategy_config_service import strategy_config_service
 from app.services.user_identity import resolve_app_user_uuid
@@ -46,8 +48,12 @@ TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON = (
     "Trade plan changed after acceptance; reconfirmation required."
 )
 
+logger = logging.getLogger(__name__)
+
 
 class PendingEntryService:
+    publishes_pending_entry_events = True
+
     def __init__(
         self,
         repository: PendingEntryIntentRepository | None = None,
@@ -56,15 +62,19 @@ class PendingEntryService:
         signal_loader: SignalLoader | None = None,
         user_profile_provider: UserProfileProvider | None = None,
         risk_settings_provider: RiskSettingsProvider | None = None,
+        event_publisher: PendingEntryUpdatePublisher | None = None,
     ) -> None:
         self._repository = repository or PendingEntryIntentRepository()
         self._session_factory = session_factory or getattr(self._repository, "_session_factory", SessionLocal)
         self._signal_loader = signal_loader
         self._user_profile_provider = user_profile_provider
         self._risk_settings_provider = risk_settings_provider or get_user_risk_management_settings
+        self._event_publisher = event_publisher or pending_entry_update_publisher
 
     def create_intent(self, intent: PendingEntryIntentCreate) -> PendingEntryIntentRead:
-        return self._repository.create_intent(intent)
+        created = self._repository.create_intent(intent)
+        self._publish_update(created)
+        return created
 
     def get_by_id(self, intent_id: str | UUID) -> PendingEntryIntentRead | None:
         return self._repository.get_by_id(intent_id)
@@ -81,13 +91,16 @@ class PendingEntryService:
         filled_trade_id: str | UUID | None = None,
         now: datetime | None = None,
     ) -> PendingEntryIntentRead | None:
-        return self._repository.transition_status(
+        updated = self._repository.transition_status(
             intent_id,
             status=status,
             failure_reason=failure_reason,
             filled_trade_id=filled_trade_id,
             now=now,
         )
+        if updated is not None:
+            self._publish_update(updated)
+        return updated
 
     def lock_for_trigger(self, intent_id: str | UUID, *, session: Session) -> PendingEntryIntent | None:
         return self._repository.lock_for_trigger(intent_id, session=session)
@@ -262,6 +275,7 @@ class PendingEntryService:
         )
         if updated is None:
             raise LookupError("Pending entry intent is not found")
+        self._publish_update(updated, message="Pending entry reconfirmed.")
         if auto_entry_arm is not None:
             auto_entry_arm(
                 str(signal.id),
@@ -393,7 +407,7 @@ class PendingEntryService:
             idempotency_key=idempotency_key,
             expires_at=signal.expires_at,
         )
-        return self._repository.create_intent(intent)
+        return self.create_intent(intent)
 
     def _load_signal(self, signal_id: str | UUID) -> RadarSignal | None:
         if self._signal_loader is not None:
@@ -448,6 +462,17 @@ class PendingEntryService:
         if intent.user_id != user_uuid:
             raise PermissionError("Pending entry intent belongs to another user")
         return intent
+
+    def _publish_update(
+        self,
+        intent: PendingEntryIntentRead,
+        *,
+        message: str | None = None,
+    ) -> None:
+        try:
+            self._event_publisher.publish_update(intent, message=message)
+        except Exception as exc:
+            logger.warning("Pending entry realtime event publish failed: %s", exc)
 
 
 PendingEntryIntentService = PendingEntryService

@@ -1,4 +1,4 @@
-import type { HealthStatus, RadarSignal, RadarStatus, TradeInvalidationAlert, TradeJournalEntry } from "@/types";
+import type { HealthStatus, PendingEntryIntentStatus, RadarSignal, RadarStatus, TradeInvalidationAlert, TradeJournalEntry, TradeMode } from "@/types";
 
 export type RealtimeConnectionStatus =
   | "idle"
@@ -28,6 +28,7 @@ export type RealtimeEventType =
   | "exchange.disconnected"
   | "price.touched_entry"
   | "order.status_changed"
+  | "pending_entry.updated"
   | "notification.created"
   | "connection.heartbeat"
   | "subscription.updated"
@@ -145,6 +146,17 @@ export interface OrderStatusChangedPayload {
   details: Record<string, unknown>;
 }
 
+export interface PendingEntryUpdatedPayload {
+  user_id: string;
+  signal_id: string;
+  pending_entry_id: string;
+  status: PendingEntryIntentStatus;
+  mode: TradeMode;
+  reason?: string | null;
+  message?: string | null;
+  updated_at: string;
+}
+
 export interface NotificationRealtimePayload {
   notification: {
     id: string;
@@ -179,6 +191,7 @@ export type StandardRealtimeEvent =
   | RealtimeEventEnvelope<"exchange.disconnected", ExchangeDisconnectedPayload>
   | RealtimeEventEnvelope<"price.touched_entry", PriceTouchedEntryPayload>
   | RealtimeEventEnvelope<"order.status_changed", OrderStatusChangedPayload>
+  | RealtimeEventEnvelope<"pending_entry.updated", PendingEntryUpdatedPayload>
   | RealtimeEventEnvelope<"notification.created", NotificationRealtimePayload>
   | RealtimeEventEnvelope<"connection.heartbeat", ConnectionHeartbeatPayload>
   | RealtimeEventEnvelope<"subscription.updated", SubscriptionUpdatedPayload>

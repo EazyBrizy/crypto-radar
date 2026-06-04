@@ -6,6 +6,16 @@ export const SignalDirectionSchema = z.enum(["long", "short"]);
 export const SignalSideSchema = z.enum(["LONG", "SHORT"]);
 export const SignalStatusSchema = z.enum(SIGNAL_STATUSES);
 export const TradeModeSchema = z.enum(["virtual", "real"]);
+export const PendingEntryIntentStatusSchema = z.enum([
+  "pending",
+  "triggered",
+  "filling",
+  "filled",
+  "failed",
+  "cancelled",
+  "expired",
+  "requires_reconfirmation"
+]);
 export const TradeSourceSchema = z.enum(["virtual", "real", "backtest"]);
 export const TradeStatusSchema = z.enum(["open", "closed", "cancelled"]);
 export const TradeCloseReasonSchema = z.enum([
@@ -223,7 +233,7 @@ export const RadarSignalSchema = z.object({
   trade_plan: TradePlanSchema.nullable().optional(),
   auto_entry: z.object({
     enabled: z.boolean(),
-    status: z.enum(["pending", "triggered", "failed", "cancelled", "requires_reconfirmation"]),
+    status: PendingEntryIntentStatusSchema,
     mode: z.enum(["virtual", "real"]),
     user_id: z.string(),
     armed_at: z.string().nullable().optional(),

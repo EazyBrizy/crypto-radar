@@ -3,6 +3,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from app.schemas.notification import NotificationResponse
+from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import TradeInvalidationAlert, TradeJournalEntry, VirtualTrade
 
@@ -19,6 +20,7 @@ RealtimeEventType = Literal[
     "stop_loss.hit",
     "price.touched_entry",
     "order.status_changed",
+    "pending_entry.updated",
     "notification.created",
     "connection.heartbeat",
     "subscription.updated",
@@ -146,6 +148,27 @@ def order_status_changed_event(order_id: str, status: str, details: dict[str, An
             "orderId": order_id,
             "status": status,
             "details": details or {},
+        },
+    )
+
+
+def pending_entry_updated_event(
+    intent: PendingEntryIntentRead,
+    *,
+    message: str | None = None,
+) -> dict[str, Any]:
+    reason = message if message is not None else intent.failure_reason
+    return create_realtime_event(
+        "pending_entry.updated",
+        {
+            "user_id": str(intent.user_id),
+            "signal_id": str(intent.signal_id),
+            "pending_entry_id": str(intent.id),
+            "status": intent.status,
+            "mode": intent.mode,
+            "reason": reason,
+            "message": reason,
+            "updated_at": intent.updated_at.isoformat(),
         },
     )
 

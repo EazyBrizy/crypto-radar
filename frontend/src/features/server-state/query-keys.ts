@@ -1,4 +1,4 @@
-import type { RadarDisplayMode } from "@/features/server-state/types";
+import type { MarketUniversePairsQuery, RadarDisplayMode } from "@/features/server-state/types";
 import type { StrategyTestRunStatus } from "@/features/strategy-testing/types";
 import type { SignalStatus, Timeframe, TradeMode, TradeSource, TradeStatus } from "@/types";
 import { CandleFilterSchema, SignalHistoryFilterSchema, TradeJournalFilterSchema } from "@/validation/filter-schemas";
@@ -82,6 +82,17 @@ const normalizeStrategyTestReportFilters = (filters: StrategyTestReportFilters =
   userId: filters.userId ?? "all"
 });
 
+const normalizeMarketUniverseFilters = (filters: MarketUniversePairsQuery = {}) => ({
+  category: filters.category ?? "linear",
+  exchange: filters.exchange ?? "bybit",
+  limit: filters.limit ?? "top_200",
+  liquidity_tier: filters.liquidity_tier ?? "all",
+  quote: filters.quote ?? "USDT",
+  search: filters.search ?? "",
+  sort: filters.sort ?? "turnover_24h_desc",
+  status: filters.status ?? "active/trading"
+});
+
 export const serverStateKeys = {
   all: ["fastapi"] as const,
   health: () => [...serverStateKeys.all, "health"] as const,
@@ -108,6 +119,11 @@ export const serverStateKeys = {
     all: () => [...serverStateKeys.all, "settings"] as const,
     radar: () => [...serverStateKeys.settings.all(), "radar"] as const,
     strategyConfigs: () => [...serverStateKeys.settings.all(), "strategy-configs"] as const
+  },
+  marketUniverse: {
+    all: () => [...serverStateKeys.all, "market-universe"] as const,
+    pairs: (filters?: MarketUniversePairsQuery) =>
+      [...serverStateKeys.marketUniverse.all(), "pairs", normalizeMarketUniverseFilters(filters)] as const
   },
   risk: {
     all: () => [...serverStateKeys.all, "risk"] as const,

@@ -58,6 +58,8 @@ export const api = {
   settings: settingsApi.settings,
   watchlist: settingsApi.watchlist,
   marketPairs: settingsApi.marketPairs,
+  marketUniversePairs: settingsApi.marketUniversePairs,
+  syncMarketUniverse: settingsApi.syncMarketUniverse,
   strategyConfigs: settingsApi.strategyConfigs,
   updateStrategyConfig: settingsApi.updateStrategyConfig,
   addWatchlistPair: settingsApi.addWatchlistPair,

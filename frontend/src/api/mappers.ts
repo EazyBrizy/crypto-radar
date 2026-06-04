@@ -9,6 +9,7 @@ import type {
   ExchangeWalletBalance,
   ExchangeWalletCoinBalance,
   MarketPairOption,
+  MarketUniversePair,
   NotificationDelivery,
   PositionRiskSummary,
   PersistedNotification,
@@ -1193,6 +1194,26 @@ export function normalizeMarketPair(value: unknown): MarketPairOption {
   };
 }
 
+export function normalizeMarketUniversePair(value: unknown): MarketUniversePair {
+  const pair = isRecord(value) ? value : {};
+  return {
+    ...normalizeMarketPair(value),
+    category: nullableString(pair.category),
+    market_type: nullableString(pair.market_type),
+    turnover_24h: nullableDecimalString(pair.turnover_24h),
+    volume_24h: nullableDecimalString(pair.volume_24h),
+    last_price: nullableDecimalString(pair.last_price),
+    mark_price: nullableDecimalString(pair.mark_price),
+    bid_price: nullableDecimalString(pair.bid_price),
+    ask_price: nullableDecimalString(pair.ask_price),
+    spread_bps: nullableDecimalString(pair.spread_bps),
+    funding_rate: nullableDecimalString(pair.funding_rate),
+    liquidity_rank: optionalNumber(pair.liquidity_rank),
+    liquidity_tier: nullableString(pair.liquidity_tier),
+    synced_at: nullableString(pair.synced_at)
+  };
+}
+
 export function normalizeWatchlistResponse(value: unknown): Watchlist {
   const watchlist = value as Partial<Watchlist>;
   const pairs = Array.isArray(watchlist.pairs)
@@ -1760,6 +1781,16 @@ function optionalNumber(value: unknown): number | null {
 
 function optionalString(value: unknown): string | null {
   return typeof value === "string" && value ? value : null;
+}
+
+function nullableString(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  return String(value);
+}
+
+function nullableDecimalString(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  return String(value);
 }
 
 function optionalBoolean(value: unknown): boolean | null {

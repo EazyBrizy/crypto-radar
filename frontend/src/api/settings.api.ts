@@ -2,6 +2,10 @@ import type {
   AlertRule,
   AlertRuleDraft,
   MarketPairOption,
+  MarketUniversePair,
+  MarketUniversePairsQuery,
+  MarketUniverseSyncRequest,
+  MarketUniverseSyncResponse,
   StrategyConfig,
   StrategyConfigPatch,
   SubscriptionStatus,
@@ -17,6 +21,7 @@ import {
   normalizeConfig,
   normalizeHealth,
   normalizeMarketPair,
+  normalizeMarketUniversePair,
   normalizeRadarStatus,
   normalizeRiskState,
   normalizeStrategyConfig,
@@ -24,18 +29,7 @@ import {
   normalizeWatchlistResponse,
 } from "./mappers";
 
-export type MarketUniverseLimit = "top_100" | "top_200" | "top_500" | "all";
-
-export interface MarketPairsQuery {
-  exchange?: string;
-  category?: string;
-  quote?: string;
-  limit?: MarketUniverseLimit;
-  search?: string;
-  sort?: string;
-  liquidity_tier?: string;
-  status?: string;
-}
+export type MarketPairsQuery = MarketUniversePairsQuery;
 
 export const settingsApi = {
   async config(): Promise<RadarConfig> {
@@ -48,7 +42,7 @@ export const settingsApi = {
     return normalizeWatchlistResponse(await request(() => openApiClient.GET("/api/v1/watchlists/default")));
   },
   async marketPairs(query: MarketPairsQuery = {}): Promise<MarketPairOption[]> {
-    const params = marketPairsQueryParams(query);
+    const params = marketUniverseQueryParams(query);
     const response = await request(() =>
       openApiClient.GET(
         "/api/v1/market-pairs",
@@ -56,6 +50,34 @@ export const settingsApi = {
       )
     );
     return response.map(normalizeMarketPair);
+  },
+  async marketUniversePairs(params: MarketUniversePairsQuery = {}): Promise<MarketUniversePair[]> {
+    const query = marketUniverseQueryParams(params);
+    const response = await request(() =>
+      openApiClient.GET(
+        "/api/v1/market-universe/pairs",
+        Object.keys(query).length ? { params: { query } } : undefined
+      )
+    );
+    return response.map(normalizeMarketUniversePair);
+  },
+  async syncMarketUniverse(body: MarketUniverseSyncRequest = {}): Promise<MarketUniverseSyncResponse> {
+    const response = await request(() =>
+      openApiClient.POST("/api/v1/market-universe/sync", {
+        body: {
+          exchange: body.exchange ?? "bybit",
+          category: body.category ?? "linear",
+          quote: body.quote ?? "USDT",
+          limit: body.limit ?? "top_200",
+          sort: body.sort ?? "turnover_24h_desc",
+          persist: body.persist ?? true
+        }
+      })
+    );
+    return {
+      ...response,
+      warnings: response.warnings ?? []
+    };
   },
   async strategyConfigs(): Promise<StrategyConfig[]> {
     const response = await fetchJson<unknown[]>("/api/v1/strategies/configs?user_id=demo_user");
@@ -187,10 +209,10 @@ export const settingsApi = {
   }
 };
 
-function marketPairsQueryParams(query: MarketPairsQuery): Partial<MarketPairsQuery> {
+function marketUniverseQueryParams(query: MarketUniversePairsQuery): Partial<MarketUniversePairsQuery> {
   return Object.fromEntries(
     Object.entries(query).filter(([, value]) => value !== undefined && value !== null && value !== "")
-  ) as Partial<MarketPairsQuery>;
+  ) as Partial<MarketUniversePairsQuery>;
 }
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {

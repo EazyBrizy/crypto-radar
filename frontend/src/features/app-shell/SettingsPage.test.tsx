@@ -1,7 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "@/api";
 import {
   RISK_PROFILE_PRESETS,
   cloneRiskManagementSettings,
@@ -13,6 +15,8 @@ import type {
   ExchangeConnection,
   ExchangeConnectionDraft,
   ExchangeWalletBalance,
+  MarketUniversePair,
+  StrategyConfig,
   StrategyConfigPatch,
   UserProfile,
   UserSettingsPatch,
@@ -20,6 +24,33 @@ import type {
 } from "@/features/server-state/types";
 import type { RadarConfig } from "@/types";
 import { SettingsPage } from "./SettingsPage";
+
+vi.mock("@/api", () => ({
+  api: {
+    marketUniversePairs: vi.fn(),
+    syncMarketUniverse: vi.fn()
+  }
+}));
+
+beforeEach(() => {
+  vi.mocked(api.marketUniversePairs).mockReset();
+  vi.mocked(api.syncMarketUniverse).mockReset();
+  vi.mocked(api.marketUniversePairs).mockResolvedValue([
+    marketUniversePair({ id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa1", symbol: "BTCUSDT", tier: "high", rank: 1 }),
+    marketUniversePair({ id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa2", symbol: "DOGEUSDT", tier: "low", rank: 2 })
+  ]);
+  vi.mocked(api.syncMarketUniverse).mockResolvedValue({
+    category: "linear",
+    exchange: "bybit",
+    quote: "USDT",
+    requested_limit: "top_100",
+    skipped_count: 0,
+    synced_at: "2026-06-04T00:00:00.000Z",
+    synced_count: 2,
+    total_available_count: 2,
+    warnings: []
+  });
+});
 
 describe("SettingsPage risk profile UX", () => {
   it("switching risk mode changes required fields", async () => {
@@ -105,11 +136,102 @@ describe("SettingsPage exchange balance UX", () => {
   });
 });
 
+describe("SettingsPage strategy pair selector", () => {
+  it("renders pair selector for an opened strategy config", async () => {
+    const user = userEvent.setup();
+    renderSettingsPage({ strategyConfigs: [strategyConfig()] });
+
+    await openStrategySettings(user);
+
+    expect(screen.getByText("Торговые пары стратегии")).toBeInTheDocument();
+    expect(await screen.findByText("BTCUSDT")).toBeInTheDocument();
+    expect(screen.getAllByText("Все пары из scanner universe").length).toBeGreaterThan(0);
+  });
+
+  it("sync button calls market universe sync mutation", async () => {
+    const user = userEvent.setup();
+    renderSettingsPage({ strategyConfigs: [strategyConfig()] });
+
+    await openStrategySettings(user);
+    await user.click(screen.getByRole("button", { name: "Синхронизировать пары с биржи" }));
+
+    await waitFor(() => {
+      expect(api.syncMarketUniverse).toHaveBeenCalledWith({
+        category: "linear",
+        exchange: "bybit",
+        limit: "top_100",
+        persist: true,
+        quote: "USDT",
+        sort: "turnover_24h_desc"
+      });
+    });
+  });
+
+  it("selecting pairs updates the draft state and shows low-liquidity warning", async () => {
+    const user = userEvent.setup();
+    renderSettingsPage({ strategyConfigs: [strategyConfig()] });
+
+    await openStrategySettings(user);
+    await user.click(await screen.findByRole("checkbox", { name: "Выбрать пару DOGEUSDT" }));
+
+    expect(screen.getAllByText("Выбрано 1 пар").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/DOGEUSDT/u).length).toBeGreaterThan(0);
+    expect(screen.getByText(/low-liquidity/u)).toBeInTheDocument();
+  });
+
+  it("saving strategy sends selected pairs payload", async () => {
+    const user = userEvent.setup();
+    const onUpdateStrategyConfig = vi.fn<SettingsPagePropsForTest["onUpdateStrategyConfig"]>().mockResolvedValue(null);
+    renderSettingsPage({ onUpdateStrategyConfig, strategyConfigs: [strategyConfig()] });
+
+    await openStrategySettings(user);
+    await user.click(await screen.findByRole("checkbox", { name: "Выбрать пару BTCUSDT" }));
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() => {
+      expect(onUpdateStrategyConfig).toHaveBeenCalledWith(
+        STRATEGY_CONFIG_ID,
+        expect.objectContaining({
+          pairs: [{ exchange: "bybit", symbol: "BTCUSDT" }]
+        })
+      );
+    });
+  });
+
+  it("clearing selected pairs sends empty pairs array for scanner-universe semantics", async () => {
+    const user = userEvent.setup();
+    const onUpdateStrategyConfig = vi.fn<SettingsPagePropsForTest["onUpdateStrategyConfig"]>().mockResolvedValue(null);
+    renderSettingsPage({
+      onUpdateStrategyConfig,
+      strategyConfigs: [
+        strategyConfig({ pairs: [{ exchange: "bybit", symbol: "BTCUSDT" }] })
+      ]
+    });
+
+    await openStrategySettings(user);
+    await user.click(screen.getByRole("button", { name: "Очистить" }));
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() => {
+      expect(onUpdateStrategyConfig).toHaveBeenCalledWith(
+        STRATEGY_CONFIG_ID,
+        expect.objectContaining({ pairs: [] })
+      );
+    });
+  });
+});
+
 async function openRiskSettings(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: /Risk management/u }));
 }
 
+async function openStrategySettings(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: /Strategies/u }));
+  await user.click(screen.getByRole("button", { name: /Trend Pullback/u }));
+}
+
 const EXCHANGE_CONNECTION_ID = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+const STRATEGY_CONFIG_ID = "cccccccc-cccc-4ccc-cccc-cccccccccccc";
 
 type RenderSettingsPageOptions = {
   exchangeAccountSnapshots?: Record<string, AccountRiskSnapshot | null>;
@@ -117,41 +239,54 @@ type RenderSettingsPageOptions = {
   exchangeConnections?: ExchangeConnection[];
   exchangeWalletBalances?: Record<string, ExchangeWalletBalance | null>;
   onRefreshExchangeBalance?: SettingsPagePropsForTest["onRefreshExchangeBalance"];
+  onUpdateStrategyConfig?: SettingsPagePropsForTest["onUpdateStrategyConfig"];
+  strategyConfigs?: StrategyConfig[];
 };
 
 function renderSettingsPage(options: RenderSettingsPageOptions = {}) {
   const onUpdateRiskManagement = vi.fn<SettingsPagePropsForTest["onUpdateRiskManagement"]>().mockResolvedValue(null);
+  const onUpdateStrategyConfig =
+    options.onUpdateStrategyConfig ??
+    vi.fn<SettingsPagePropsForTest["onUpdateStrategyConfig"]>().mockResolvedValue(null);
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      mutations: { retry: false },
+      queries: { retry: false }
+    }
+  });
 
   render(
-    <SettingsPage
-      alertRules={[]}
-      availablePairs={[]}
-      busy={false}
-      config={radarConfig()}
-      exchangeAccountSnapshots={options.exchangeAccountSnapshots ?? {}}
-      exchangeBalanceLoading={options.exchangeBalanceLoading ?? {}}
-      exchangeConnections={options.exchangeConnections ?? []}
-      exchangeWalletBalances={options.exchangeWalletBalances ?? {}}
-      riskState={null}
-      strategyConfigs={[]}
-      userProfile={userProfile()}
-      onCreateAlert={vi.fn<SettingsPagePropsForTest["onCreateAlert"]>().mockResolvedValue(null)}
-      onCreateExchangeConnection={vi.fn<SettingsPagePropsForTest["onCreateExchangeConnection"]>().mockResolvedValue(null)}
-      onDeleteAlert={vi.fn<SettingsPagePropsForTest["onDeleteAlert"]>().mockResolvedValue(null)}
-      onDeleteExchangeConnection={vi.fn<SettingsPagePropsForTest["onDeleteExchangeConnection"]>().mockResolvedValue(null)}
-      onRefreshExchangeBalance={options.onRefreshExchangeBalance ?? vi.fn<SettingsPagePropsForTest["onRefreshExchangeBalance"]>().mockResolvedValue(null)}
-      onSelectSimulationLevel={vi.fn<SettingsPagePropsForTest["onSelectSimulationLevel"]>().mockResolvedValue(null)}
-      onSyncExchangeConnection={vi.fn<SettingsPagePropsForTest["onSyncExchangeConnection"]>().mockResolvedValue(null)}
-      onTestAlert={vi.fn<SettingsPagePropsForTest["onTestAlert"]>().mockResolvedValue(null)}
-      onTestExchangeConnection={vi.fn<SettingsPagePropsForTest["onTestExchangeConnection"]>().mockResolvedValue(null)}
-      onToggleAlert={vi.fn<SettingsPagePropsForTest["onToggleAlert"]>().mockResolvedValue(null)}
-      onToggleExchangeConnection={vi.fn<SettingsPagePropsForTest["onToggleExchangeConnection"]>().mockResolvedValue(null)}
-      onUpdateRiskManagement={onUpdateRiskManagement}
-      onUpdateStrategyConfig={vi.fn<SettingsPagePropsForTest["onUpdateStrategyConfig"]>().mockResolvedValue(null)}
-    />
+    <QueryClientProvider client={queryClient}>
+      <SettingsPage
+        alertRules={[]}
+        availablePairs={[]}
+        busy={false}
+        config={radarConfig()}
+        exchangeAccountSnapshots={options.exchangeAccountSnapshots ?? {}}
+        exchangeBalanceLoading={options.exchangeBalanceLoading ?? {}}
+        exchangeConnections={options.exchangeConnections ?? []}
+        exchangeWalletBalances={options.exchangeWalletBalances ?? {}}
+        riskState={null}
+        strategyConfigs={options.strategyConfigs ?? []}
+        userProfile={userProfile()}
+        onCreateAlert={vi.fn<SettingsPagePropsForTest["onCreateAlert"]>().mockResolvedValue(null)}
+        onCreateExchangeConnection={vi.fn<SettingsPagePropsForTest["onCreateExchangeConnection"]>().mockResolvedValue(null)}
+        onDeleteAlert={vi.fn<SettingsPagePropsForTest["onDeleteAlert"]>().mockResolvedValue(null)}
+        onDeleteExchangeConnection={vi.fn<SettingsPagePropsForTest["onDeleteExchangeConnection"]>().mockResolvedValue(null)}
+        onRefreshExchangeBalance={options.onRefreshExchangeBalance ?? vi.fn<SettingsPagePropsForTest["onRefreshExchangeBalance"]>().mockResolvedValue(null)}
+        onSelectSimulationLevel={vi.fn<SettingsPagePropsForTest["onSelectSimulationLevel"]>().mockResolvedValue(null)}
+        onSyncExchangeConnection={vi.fn<SettingsPagePropsForTest["onSyncExchangeConnection"]>().mockResolvedValue(null)}
+        onTestAlert={vi.fn<SettingsPagePropsForTest["onTestAlert"]>().mockResolvedValue(null)}
+        onTestExchangeConnection={vi.fn<SettingsPagePropsForTest["onTestExchangeConnection"]>().mockResolvedValue(null)}
+        onToggleAlert={vi.fn<SettingsPagePropsForTest["onToggleAlert"]>().mockResolvedValue(null)}
+        onToggleExchangeConnection={vi.fn<SettingsPagePropsForTest["onToggleExchangeConnection"]>().mockResolvedValue(null)}
+        onUpdateRiskManagement={onUpdateRiskManagement}
+        onUpdateStrategyConfig={onUpdateStrategyConfig}
+      />
+    </QueryClientProvider>
   );
 
-  return { onUpdateRiskManagement };
+  return { onUpdateRiskManagement, onUpdateStrategyConfig };
 }
 
 type SettingsPagePropsForTest = {
@@ -176,6 +311,70 @@ function radarConfig(): RadarConfig {
     symbols: [],
     timeframes: ["15m"],
     use_all_symbols: true
+  };
+}
+
+function strategyConfig(overrides: Partial<Pick<StrategyConfig, "pairs">> = {}): StrategyConfig {
+  return {
+    created_at: "2026-06-04T00:00:00.000Z",
+    exchanges: ["bybit"],
+    id: STRATEGY_CONFIG_ID,
+    is_enabled: true,
+    name: "Trend Pullback",
+    pairs: overrides.pairs ?? [],
+    params: {
+      max_spread_bps: 25,
+      min_24h_volume_quote: 10_000_000,
+      min_history: 50
+    },
+    risk_settings: {
+      fixed_risk_currency: "USDT",
+      radar_display_mode: "all_market_opportunities",
+      risk_mode: "percent",
+      risk_percent: 1,
+      rr_guard_mode: "soft"
+    },
+    strategy_code: "trend_pullback_continuation",
+    strategy_name: "Trend Pullback",
+    strategy_version: "1.0",
+    strategy_version_id: "dddddddd-dddd-4ddd-dddd-dddddddddddd",
+    timeframes: ["15m"],
+    updated_at: "2026-06-04T00:00:00.000Z",
+    user_id: "demo_user"
+  };
+}
+
+function marketUniversePair({
+  id,
+  rank,
+  symbol,
+  tier
+}: {
+  id: string;
+  rank: number;
+  symbol: string;
+  tier: string;
+}): MarketUniversePair {
+  return {
+    ask_price: "100.1",
+    base_asset: symbol.replace(/USDT$/u, ""),
+    bid_price: "99.9",
+    category: "linear",
+    exchange: "bybit",
+    funding_rate: "0.0001",
+    id,
+    last_price: "100",
+    liquidity_rank: rank,
+    liquidity_tier: tier,
+    market_type: "perpetual",
+    mark_price: "100",
+    quote_asset: "USDT",
+    spread_bps: tier === "low" ? "35" : "5",
+    status: "active",
+    symbol,
+    synced_at: "2026-06-04T00:00:00.000Z",
+    turnover_24h: tier === "low" ? "1000000" : "150000000",
+    volume_24h: "1000"
   };
 }
 

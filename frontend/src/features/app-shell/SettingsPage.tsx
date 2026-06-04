@@ -1,5 +1,5 @@
-import { Bell, BookOpen, ChevronDown, FlaskConical, Gauge, Info, KeyRound, Radio, RefreshCw, Save, Send, Shield, SlidersHorizontal, Trash2 } from "lucide-react";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { AlertTriangle, Bell, BookOpen, CheckSquare, ChevronDown, FlaskConical, Gauge, Info, KeyRound, ListChecks, Radio, RefreshCw, Save, Send, Shield, SlidersHorizontal, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import { Badge } from "@/components/Badge";
 import { StrategyTestingPanel } from "@/features/strategy-testing/StrategyTestingPanel";
@@ -19,6 +19,8 @@ import type {
   ExchangeConnectionDraft,
   ExchangeWalletBalance,
   MarketPairOption,
+  MarketUniverseLimit,
+  MarketUniversePair,
   RadarDisplayMode,
   RiskManagementSettings,
   RiskAmountMode,
@@ -27,6 +29,7 @@ import type {
   StopLossMode,
   StrategyConfig,
   StrategyConfigPatch,
+  StrategyPairScope,
   TrailingMode,
   VirtualFeeModel,
   VirtualRiskMode,
@@ -35,6 +38,10 @@ import type {
   UserSettingsPatch,
   VirtualSimulationLevel
 } from "@/features/server-state/types";
+import {
+  useMarketUniversePairsQuery,
+  useSyncMarketUniverseMutation
+} from "@/features/server-state/use-server-state";
 import type { RadarConfig, RiskProtectionMode, RiskStateResponse } from "@/types";
 
 interface SettingsPageProps {
@@ -112,6 +119,36 @@ const RADAR_DISPLAY_MODES: Array<{ value: RadarDisplayMode; label: string }> = [
 ];
 
 const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
+const MARKET_UNIVERSE_LIMITS: Array<{ value: MarketUniverseLimit; label: string }> = [
+  { value: "top_100", label: "Top 100" },
+  { value: "top_200", label: "Top 200" },
+  { value: "top_500", label: "Top 500" },
+  { value: "all", label: "Все" }
+];
+const MARKET_UNIVERSE_CATEGORIES = [
+  { value: "linear", label: "USDT Perpetual" }
+];
+const MARKET_UNIVERSE_SORTS = [
+  { value: "turnover_24h_desc", label: "24h turnover" }
+];
+const MARKET_UNIVERSE_TIERS = [
+  { value: "", label: "Все tier" },
+  { value: "high", label: "High" },
+  { value: "medium", label: "Medium" },
+  { value: "low", label: "Low" },
+  { value: "unknown", label: "Unknown" }
+];
+const DEFAULT_MARKET_UNIVERSE_FILTERS = {
+  category: "linear",
+  exchange: "bybit",
+  limit: "top_100" as MarketUniverseLimit,
+  liquidity_tier: "",
+  quote: "USDT",
+  search: "",
+  sort: "turnover_24h_desc",
+  status: "active/trading"
+};
+const EMPTY_MARKET_UNIVERSE_PAIRS: MarketUniversePair[] = [];
 const EXECUTION_PROFILE_HELP = {
   fixedRisk: "Fixed risk is the maximum loss budget in the selected currency. Backend RiskGate still caps and sizes the trade.",
   leverage: "Leverage changes required margin and futures liquidation checks. It does not reduce trade risk.",
@@ -686,6 +723,8 @@ export function SettingsPage({
 }: SettingsPageProps) {
   const [openSettingsSections, setOpenSettingsSections] = useState<Set<SettingsSectionId>>(() => new Set());
   const [openStrategyIds, setOpenStrategyIds] = useState<Set<string>>(() => new Set());
+  const [strategyPairDrafts, setStrategyPairDrafts] = useState<Record<string, StrategyPairScope[]>>({});
+  const [strategySaveErrors, setStrategySaveErrors] = useState<Record<string, string>>({});
   const [pairId, setPairId] = useState("");
   const [conditionType, setConditionType] = useState("price_above");
   const [targetPrice, setTargetPrice] = useState("");
@@ -712,6 +751,13 @@ export function SettingsPage({
   );
   const enabledStrategyCount = useMemo(
     () => strategyConfigs.filter((strategyConfig) => strategyConfig.is_enabled).length,
+    [strategyConfigs]
+  );
+  const strategyPairSourceKey = useMemo(
+    () =>
+      strategyConfigs
+        .map((strategyConfig) => `${strategyConfig.id}:${pairScopeListKey(strategyConfig.pairs)}`)
+        .join("|"),
     [strategyConfigs]
   );
   const simulationLevel = userProfile?.settings.virtual_trading.simulation_level ?? "mvp";
@@ -790,6 +836,17 @@ export function SettingsPage({
   const riskValidationErrors = useMemo(() => validateRiskDraft(riskDraft), [riskDraft]);
   const riskDraftValid = Object.keys(riskValidationErrors).length === 0;
 
+  useEffect(() => {
+    setStrategyPairDrafts(
+      Object.fromEntries(
+        strategyConfigs.map((strategyConfig) => [
+          strategyConfig.id,
+          dedupeStrategyPairs(strategyConfig.pairs)
+        ])
+      )
+    );
+  }, [strategyPairSourceKey, strategyConfigs]);
+
   function updateRiskDraft(values: Partial<RiskManagementSettings>) {
     setRiskDraftState({
       key: riskManagementKey,
@@ -832,6 +889,14 @@ export function SettingsPage({
       }
       return next;
     });
+  }
+
+  function updateStrategyPairDraft(strategyId: string, pairs: StrategyPairScope[]) {
+    setStrategyPairDrafts((current) => ({
+      ...current,
+      [strategyId]: dedupeStrategyPairs(pairs)
+    }));
+    setStrategySaveErrors((current) => omitRecordKey(current, strategyId));
   }
 
   async function handleCreateAlert() {
@@ -919,13 +984,22 @@ export function SettingsPage({
     if (Number.isFinite(leverage) && leverage >= 1) {
       riskSettings.leverage = leverage;
     }
-    await onUpdateStrategyConfig(configItem.id, {
-      is_enabled: formData.has("is_enabled"),
-      exchanges,
-      timeframes,
-      params,
-      risk_settings: riskSettings
-    });
+    try {
+      await onUpdateStrategyConfig(configItem.id, {
+        is_enabled: formData.has("is_enabled"),
+        exchanges,
+        pairs: strategyPairDrafts[configItem.id] ?? dedupeStrategyPairs(configItem.pairs),
+        timeframes,
+        params,
+        risk_settings: riskSettings
+      });
+      setStrategySaveErrors((current) => omitRecordKey(current, configItem.id));
+    } catch (exc) {
+      setStrategySaveErrors((current) => ({
+        ...current,
+        [configItem.id]: strategyUpdateErrorMessage(exc)
+      }));
+    }
   }
 
   async function handleSelectRiskProfile(profile: RiskProfileName) {
@@ -1177,6 +1251,8 @@ export function SettingsPage({
               const contextTimeframeMap = getContextTimeframeMap(strategyConfig.params);
               const strategyOpen = openStrategyIds.has(strategyConfig.id);
               const activeSetupsOnly = Boolean(strategyConfig.risk_settings.show_only_active_setups);
+              const pairDraft = strategyPairDrafts[strategyConfig.id] ?? strategyConfig.pairs;
+              const pairSummary = pairDraft.length ? `Выбрано ${pairDraft.length} пар` : "Все пары из scanner universe";
               return (
                 <form
                   className={`strategy-config-row ${strategyOpen ? "open" : ""}`}
@@ -1195,7 +1271,7 @@ export function SettingsPage({
                       {[
                         strategyConfig.exchanges.join(", "),
                         strategyConfig.timeframes.join(", "),
-                        strategyConfig.pairs.length ? `${strategyConfig.pairs.length} watchlist pairs` : "All watchlist pairs"
+                        pairSummary
                       ].join(" | ")}
                     </span>
                     <span className="hidden">
@@ -1205,7 +1281,7 @@ export function SettingsPage({
                       {" · "}
                       {strategyConfig.timeframes.join(", ")}
                       {" · "}
-                      {strategyConfig.pairs.length ? `${strategyConfig.pairs.length} watchlist pairs` : "All watchlist pairs"}
+                      {pairSummary}
                     </span>
                   </div>
                   <div className="strategy-summary-badges">
@@ -1296,6 +1372,13 @@ export function SettingsPage({
                     </div>
                   </div>
                 </div>
+
+                <StrategyPairSelector
+                  busy={busy}
+                  onChange={(pairs) => updateStrategyPairDraft(strategyConfig.id, pairs)}
+                  selectedPairs={pairDraft}
+                  strategyId={strategyConfig.id}
+                />
 
                 <div className="strategy-quality-grid">
                   <label>
@@ -1528,8 +1611,14 @@ export function SettingsPage({
                   </label>
                 </div>
 
+                    {strategySaveErrors[strategyConfig.id] ? (
+                      <div className="strategy-error-message" role="alert">
+                        {strategySaveErrors[strategyConfig.id]}
+                      </div>
+                    ) : null}
+
                     <div className="strategy-apply-row">
-                      <Badge tone="purple">Pairs in Watchlist</Badge>
+                      <Badge tone="purple">{pairSummary}</Badge>
                       <button className="primary-action compact-action" disabled={busy} type="submit">
                         <Save size={15} />
                         Apply
@@ -2399,6 +2488,296 @@ export function SettingsPage({
   );
 }
 
+interface StrategyPairSelectorProps {
+  busy: boolean;
+  onChange: (pairs: StrategyPairScope[]) => void;
+  selectedPairs: StrategyPairScope[];
+  strategyId: string;
+}
+
+function StrategyPairSelector({
+  busy,
+  onChange,
+  selectedPairs,
+  strategyId
+}: StrategyPairSelectorProps) {
+  const [exchange, setExchange] = useState(DEFAULT_MARKET_UNIVERSE_FILTERS.exchange);
+  const [category, setCategory] = useState(DEFAULT_MARKET_UNIVERSE_FILTERS.category);
+  const [limit, setLimit] = useState<MarketUniverseLimit>(DEFAULT_MARKET_UNIVERSE_FILTERS.limit);
+  const [search, setSearch] = useState(DEFAULT_MARKET_UNIVERSE_FILTERS.search);
+  const [liquidityTier, setLiquidityTier] = useState(DEFAULT_MARKET_UNIVERSE_FILTERS.liquidity_tier);
+  const [sort, setSort] = useState(DEFAULT_MARKET_UNIVERSE_FILTERS.sort);
+  const queryParams = useMemo(
+    () => ({
+      category,
+      exchange,
+      limit,
+      liquidity_tier: liquidityTier || undefined,
+      quote: DEFAULT_MARKET_UNIVERSE_FILTERS.quote,
+      search: search.trim() || undefined,
+      sort,
+      status: DEFAULT_MARKET_UNIVERSE_FILTERS.status
+    }),
+    [category, exchange, limit, liquidityTier, search, sort]
+  );
+  const pairsQuery = useMarketUniversePairsQuery(queryParams);
+  const syncUniverseMutation = useSyncMarketUniverseMutation();
+  const universePairs = pairsQuery.data ?? EMPTY_MARKET_UNIVERSE_PAIRS;
+  const selectedPairKeys = useMemo(
+    () => new Set(selectedPairs.map(pairKey)),
+    [selectedPairs]
+  );
+  const lowLiquidityPairs = useMemo(
+    () =>
+      universePairs.filter(
+        (pair) => selectedPairKeys.has(pairKey(pair)) && pair.liquidity_tier?.toLowerCase() === "low"
+      ),
+    [selectedPairKeys, universePairs]
+  );
+  const visibleLimitLabel = MARKET_UNIVERSE_LIMITS.find((option) => option.value === limit)?.label ?? "Top N";
+  const lastSyncAt = syncUniverseMutation.data?.synced_at ?? latestSyncedAt(universePairs);
+  const selectedSummary = selectedPairs.length ? `Выбрано ${selectedPairs.length} пар` : "Все пары из scanner universe";
+  const selectorTitleId = `strategy-pair-selector-${strategyId}`;
+
+  function togglePair(pair: MarketUniversePair, checked: boolean) {
+    const scope = pairScope(pair);
+    if (checked) {
+      onChange(dedupeStrategyPairs([...selectedPairs, scope]));
+      return;
+    }
+    onChange(selectedPairs.filter((selectedPair) => pairKey(selectedPair) !== pairKey(scope)));
+  }
+
+  function selectVisiblePairs() {
+    onChange(dedupeStrategyPairs([...selectedPairs, ...universePairs.map(pairScope)]));
+  }
+
+  function replaceWithVisibleTop() {
+    onChange(dedupeStrategyPairs(universePairs.map(pairScope)));
+  }
+
+  function clearSelectedPairs() {
+    onChange([]);
+  }
+
+  async function syncUniverse() {
+    try {
+      await syncUniverseMutation.mutateAsync({
+        category,
+        exchange,
+        limit,
+        persist: true,
+        quote: DEFAULT_MARKET_UNIVERSE_FILTERS.quote,
+        sort
+      });
+    } catch {
+      // Mutation state renders the error message in this block.
+    }
+  }
+
+  return (
+    <section className="strategy-pair-selector" aria-labelledby={selectorTitleId}>
+      <div className="strategy-pair-selector-head">
+        <div>
+          <span id={selectorTitleId}>Торговые пары стратегии</span>
+          <strong>{selectedSummary}</strong>
+        </div>
+        <div className="strategy-pair-sync">
+          <span>Последняя синхронизация: {lastSyncAt ? formatDateTime(lastSyncAt) : "нет данных"}</span>
+          <button
+            className="secondary-action compact-action"
+            disabled={busy || syncUniverseMutation.isPending}
+            onClick={syncUniverse}
+            type="button"
+          >
+            <RefreshCw size={15} />
+            Синхронизировать пары с биржи
+          </button>
+        </div>
+      </div>
+
+      <div className="strategy-pair-filter-grid">
+        <label>
+          <span>Exchange</span>
+          <select
+            aria-label="Exchange universe"
+            disabled={busy}
+            onChange={(event) => setExchange(event.target.value)}
+            value={exchange}
+          >
+            <option value="bybit">Bybit</option>
+          </select>
+        </label>
+        <label>
+          <span>Market</span>
+          <select
+            aria-label="Market category universe"
+            disabled={busy}
+            onChange={(event) => setCategory(event.target.value)}
+            value={category}
+          >
+            {MARKET_UNIVERSE_CATEGORIES.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Universe size</span>
+          <select
+            aria-label="Universe size"
+            disabled={busy}
+            onChange={(event) => setLimit(event.target.value as MarketUniverseLimit)}
+            value={limit}
+          >
+            {MARKET_UNIVERSE_LIMITS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Search</span>
+          <input
+            aria-label="Search pair symbol"
+            disabled={busy}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="BTCUSDT"
+            value={search}
+          />
+        </label>
+        <label>
+          <span>Liquidity tier</span>
+          <select
+            aria-label="Liquidity tier"
+            disabled={busy}
+            onChange={(event) => setLiquidityTier(event.target.value)}
+            value={liquidityTier}
+          >
+            {MARKET_UNIVERSE_TIERS.map((option) => (
+              <option key={option.value || "all"} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Sort</span>
+          <select
+            aria-label="Sort market universe"
+            disabled={busy}
+            onChange={(event) => setSort(event.target.value)}
+            value={sort}
+          >
+            {MARKET_UNIVERSE_SORTS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="strategy-pair-actions">
+        <button
+          className="secondary-action compact-action"
+          disabled={busy || universePairs.length === 0}
+          onClick={selectVisiblePairs}
+          type="button"
+        >
+          <CheckSquare size={15} />
+          Выбрать видимые
+        </button>
+        <button
+          className="secondary-action compact-action"
+          disabled={busy || universePairs.length === 0}
+          onClick={replaceWithVisibleTop}
+          type="button"
+        >
+          <ListChecks size={15} />
+          Выбрать {visibleLimitLabel} видимых
+        </button>
+        <button
+          className="secondary-action compact-action"
+          disabled={busy || selectedPairs.length === 0}
+          onClick={clearSelectedPairs}
+          type="button"
+        >
+          <Trash2 size={15} />
+          Очистить
+        </button>
+        <Badge tone={selectedPairs.length ? "blue" : "purple"}>{selectedSummary}</Badge>
+      </div>
+
+      {lowLiquidityPairs.length ? (
+        <div className="strategy-liquidity-warning" role="alert">
+          <AlertTriangle size={16} />
+          <span>Выбраны low-liquidity пары: {lowLiquidityPairs.map((pair) => pair.symbol).join(", ")}</span>
+        </div>
+      ) : null}
+
+      {pairsQuery.error || syncUniverseMutation.error ? (
+        <div className="strategy-error-message" role="alert">
+          {pairsQuery.error
+            ? `Не удалось загрузить universe: ${errorMessage(pairsQuery.error)}`
+            : `Не удалось синхронизировать universe: ${errorMessage(syncUniverseMutation.error)}`}
+        </div>
+      ) : null}
+
+      <div className="strategy-pair-table-wrap">
+        <table className="strategy-pair-table">
+          <thead>
+            <tr>
+              <th aria-label="Выбор пары" />
+              <th>Symbol</th>
+              <th>24h turnover</th>
+              <th>Spread bps</th>
+              <th>Liquidity tier</th>
+              <th>Funding</th>
+              <th>Status</th>
+              <th>Rank</th>
+            </tr>
+          </thead>
+          <tbody>
+            {universePairs.map((pair) => {
+              const checked = selectedPairKeys.has(pairKey(pair));
+              return (
+                <tr key={pair.id || pairKey(pair)}>
+                  <td>
+                    <input
+                      aria-label={`Выбрать пару ${pair.symbol}`}
+                      checked={checked}
+                      disabled={busy}
+                      onChange={(event) => togglePair(pair, event.target.checked)}
+                      type="checkbox"
+                    />
+                  </td>
+                  <td>
+                    <strong>{pair.symbol}</strong>
+                    <span>{pair.base_asset}/{pair.quote_asset}</span>
+                  </td>
+                  <td>{formatCompactUsd(pair.turnover_24h)}</td>
+                  <td>{formatBps(pair.spread_bps)}</td>
+                  <td>
+                    <Badge tone={liquidityTierTone(pair.liquidity_tier)}>{pair.liquidity_tier ?? "unknown"}</Badge>
+                  </td>
+                  <td>{formatFunding(pair.funding_rate)}</td>
+                  <td>{formatUniverseStatus(pair.status)}</td>
+                  <td>{pair.liquidity_rank ?? "-"}</td>
+                </tr>
+              );
+            })}
+            {pairsQuery.isLoading ? (
+              <tr>
+                <td colSpan={8}>Загрузка universe...</td>
+              </tr>
+            ) : null}
+            {!pairsQuery.isLoading && universePairs.length === 0 ? (
+              <tr>
+                <td colSpan={8}>Нет пар в локальном universe. Синхронизируйте пары с биржи.</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function HelpTooltip({ text }: { text: string }) {
   return (
     <span aria-label={text} className="risk-help-tooltip" role="img" title={text}>
@@ -2614,6 +2993,118 @@ function uniqueStrings(values: string[]): string[] {
 
 function dedupeStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean)));
+}
+
+function pairKey(pair: Pick<StrategyPairScope, "exchange" | "symbol">): string {
+  return `${pair.exchange.trim().toLowerCase()}:${pair.symbol.trim().toUpperCase()}`;
+}
+
+function pairScope(pair: Pick<MarketUniversePair, "exchange" | "symbol">): StrategyPairScope {
+  return {
+    exchange: pair.exchange.trim().toLowerCase(),
+    symbol: pair.symbol.trim().toUpperCase()
+  };
+}
+
+function dedupeStrategyPairs(pairs: StrategyPairScope[]): StrategyPairScope[] {
+  const seen = new Set<string>();
+  const deduped: StrategyPairScope[] = [];
+  for (const pair of pairs) {
+    const scope = {
+      exchange: pair.exchange.trim().toLowerCase(),
+      symbol: pair.symbol.trim().toUpperCase()
+    };
+    const key = pairKey(scope);
+    if (!scope.exchange || !scope.symbol || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(scope);
+  }
+  return deduped;
+}
+
+function pairScopeListKey(pairs: StrategyPairScope[]): string {
+  return dedupeStrategyPairs(pairs).map(pairKey).join(",");
+}
+
+function latestSyncedAt(pairs: MarketUniversePair[]): string | null {
+  let latestTimestamp = 0;
+  let latestValue: string | null = null;
+  for (const pair of pairs) {
+    if (!pair.synced_at) continue;
+    const timestamp = Date.parse(pair.synced_at);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+      latestValue = pair.synced_at;
+    }
+  }
+  return latestValue;
+}
+
+function formatDateTime(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "short",
+    timeStyle: "short"
+  }).format(new Date(timestamp));
+}
+
+function formatCompactUsd(value: string | null): string {
+  const numericValue = decimalStringToNumber(value);
+  if (numericValue == null) return "-";
+  return new Intl.NumberFormat("en-US", {
+    currency: "USD",
+    maximumFractionDigits: 2,
+    notation: Math.abs(numericValue) >= 1_000_000 ? "compact" : "standard",
+    style: "currency"
+  }).format(numericValue);
+}
+
+function formatBps(value: string | null): string {
+  const numericValue = decimalStringToNumber(value);
+  return numericValue == null ? "-" : numericValue.toFixed(2);
+}
+
+function formatFunding(value: string | null): string {
+  const numericValue = decimalStringToNumber(value);
+  return numericValue == null ? "-" : `${(numericValue * 100).toFixed(4)}%`;
+}
+
+function decimalStringToNumber(value: string | null): number | null {
+  if (value == null || value === "") return null;
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function liquidityTierTone(tier: string | null): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  const normalized = tier?.toLowerCase();
+  if (normalized === "high") return "green";
+  if (normalized === "medium") return "yellow";
+  if (normalized === "low") return "red";
+  return "neutral";
+}
+
+function formatUniverseStatus(status: string): string {
+  return status.replaceAll("_", " ");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown error";
+}
+
+function strategyUpdateErrorMessage(error: unknown): string {
+  const message = errorMessage(error);
+  if (/not found in market_pairs|market pair .* is not found/i.test(message)) {
+    return "Пара не найдена в локальном universe. Сначала синхронизируйте пары с биржи.";
+  }
+  return message;
+}
+
+function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record;
+  const next = { ...record };
+  delete next[key];
+  return next;
 }
 
 function getContextTimeframeMap(params: Record<string, unknown>): Record<string, string> {

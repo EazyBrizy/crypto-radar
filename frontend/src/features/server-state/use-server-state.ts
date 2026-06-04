@@ -14,6 +14,8 @@ import type {
   AccountRiskSnapshot,
   ExchangeConnectionDraft,
   ExchangeWalletBalance,
+  MarketUniversePairsQuery,
+  MarketUniverseSyncRequest,
   NotificationDraft,
   RadarDisplayMode,
   StrategyConfigPatch,
@@ -287,6 +289,28 @@ export function useMarketPairsQuery() {
     queryKey: serverStateKeys.watchlist.pairs(),
     queryFn: () => api.marketPairs(),
     staleTime: serverStatePolicy.staticStaleTimeMs
+  });
+}
+
+export function useMarketUniversePairsQuery(params: MarketUniversePairsQuery = {}) {
+  return useQuery({
+    queryKey: serverStateKeys.marketUniverse.pairs(params),
+    queryFn: () => api.marketUniversePairs(params),
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useSyncMarketUniverseMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request: MarketUniverseSyncRequest) => api.syncMarketUniverse(request),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.marketUniverse.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.watchlist.pairs() })
+      ]);
+    }
   });
 }
 

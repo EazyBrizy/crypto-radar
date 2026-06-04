@@ -156,6 +156,56 @@ export interface MarketPairOption {
   status: string;
 }
 
+export type MarketUniverseLimit = "top_100" | "top_200" | "top_500" | "all";
+
+export interface MarketUniversePairsQuery {
+  exchange?: string;
+  category?: string;
+  quote?: string;
+  limit?: MarketUniverseLimit;
+  search?: string;
+  sort?: string;
+  liquidity_tier?: string;
+  status?: string;
+}
+
+export interface MarketUniversePair extends MarketPairOption {
+  category: string | null;
+  market_type: string | null;
+  turnover_24h: string | null;
+  volume_24h: string | null;
+  last_price: string | null;
+  mark_price: string | null;
+  bid_price: string | null;
+  ask_price: string | null;
+  spread_bps: string | null;
+  funding_rate: string | null;
+  liquidity_rank: number | null;
+  liquidity_tier: string | null;
+  synced_at: string | null;
+}
+
+export interface MarketUniverseSyncRequest {
+  exchange?: string;
+  category?: string;
+  quote?: string;
+  limit?: MarketUniverseLimit;
+  sort?: string;
+  persist?: boolean;
+}
+
+export interface MarketUniverseSyncResponse {
+  exchange: string;
+  category: string;
+  quote: string;
+  requested_limit: MarketUniverseLimit;
+  synced_count: number;
+  total_available_count: number;
+  skipped_count: number;
+  synced_at: string;
+  warnings: string[];
+}
+
 export interface StrategyPairScope {
   exchange: string;
   symbol: string;

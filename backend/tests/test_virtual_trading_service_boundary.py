@@ -16,6 +16,17 @@ from app.schemas.trade import (
     VirtualMarketSnapshot,
     VirtualTrade,
 )
+from app.schemas.risk import (
+    BreakevenPlan,
+    PositionSizingResult,
+    RiskAdjustmentPlan,
+    RiskCheckResult,
+    RiskDecision,
+    StopLossPlan,
+    TakeProfitPlan,
+    TakeProfitTarget,
+    TrailingStopPlan,
+)
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_fee_rate import RiskFeeRateSnapshot
 from app.services.risk_market_data import RiskMarketDataSnapshot
@@ -23,6 +34,7 @@ from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.trade_service import trade_service as compatibility_trade_service
 from app.services.virtual_trading import (
     VirtualExecutionEngine,
+    VirtualExecutionRejected,
     VirtualTradingService,
     get_virtual_simulation_model_info,
     virtual_trading_service,
@@ -72,6 +84,86 @@ class VirtualTradingServiceBoundaryTest(unittest.TestCase):
         ])
         self.assertIn("Risk/reward warning", warning_text)
         self.assertNotIn("blocked", warning_text.lower())
+
+    def test_risk_gate_block_prevents_virtual_trade_creation(self) -> None:
+        repository = _EphemeralTradeRepository()
+        service = _service(
+            RiskManagementSettings(max_price_deviation_bps=0),
+            repository=repository,
+            risk_gate_service=_StaticRiskGateService(
+                _risk_decision(
+                    can_enter=False,
+                    status="failed",
+                    blockers=["RiskGate blocked this virtual entry."],
+                )
+            ),
+        )
+
+        with self.assertRaises(ValueError) as exc:
+            service.open_virtual_trade(_signal("sig_risk_gate_block"), _request())
+
+        self.assertIn("RiskGate blocked this virtual entry.", str(exc.exception))
+        self.assertEqual(repository.list_virtual_trades(), [])
+
+    def test_rejected_virtual_execution_prevents_trade_creation(self) -> None:
+        repository = _EphemeralTradeRepository()
+        service = _service(
+            RiskManagementSettings(max_price_deviation_bps=0),
+            repository=repository,
+        )
+
+        with self.assertRaises(VirtualExecutionRejected) as exc:
+            service.open_virtual_trade(
+                _signal("sig_virtual_execution_rejected"),
+                ManualConfirmRequest(
+                    simulation_mode="impact_aware",
+                    size_usd=4_000.0,
+                    market_snapshot=_snapshot(),
+                    max_virtual_slippage_bps=0,
+                    min_fill_ratio=0.9,
+                ),
+            )
+
+        self.assertEqual(exc.exception.report.status, "rejected_virtual_execution")
+        self.assertIsNone(exc.exception.report.average_price)
+        self.assertEqual(repository.list_virtual_trades(), [])
+
+    def test_quality_gate_blocked_with_fill_creates_trade_with_quality_warning(self) -> None:
+        repository = _EphemeralTradeRepository()
+        service = _service(
+            RiskManagementSettings(max_price_deviation_bps=0),
+            repository=repository,
+        )
+
+        trade = service.open_virtual_trade(
+            _signal("sig_quality_gate_warn_only"),
+            ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                size_usd=1_000.0,
+                market_snapshot=_thin_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+        )
+
+        self.assertEqual(repository.list_virtual_trades(), [trade])
+        self.assertEqual(trade.status, "open")
+        self.assertIsNotNone(trade.execution)
+        assert trade.execution is not None
+        self.assertEqual(trade.execution.status, "filled")
+        self.assertIsNotNone(trade.execution.average_price)
+        self.assertEqual(trade.execution.quality_gate.status, "blocked")
+        self.assertIsNotNone(trade.execution.risk_decision)
+        assert trade.execution.risk_decision is not None
+        self.assertTrue(trade.execution.risk_decision.can_enter)
+        self.assertEqual(trade.execution.risk_decision.blockers, [])
+        self.assertIn(
+            "Virtual execution quality warning: quality_gate blocked is a simulation realism warning; entry permission remains RiskGate.",
+            trade.execution.notes,
+        )
+        self.assertEqual(
+            trade.model_dump(mode="json")["execution"]["quality_gate"]["status"],
+            "blocked",
+        )
 
     def test_no_trade_signal_blocks_virtual_confirm_and_open(self) -> None:
         service = _service(RiskManagementSettings(max_price_deviation_bps=0))
@@ -217,12 +309,26 @@ class _ZeroFeeRateService:
         )
 
 
-def _service(risk_settings: RiskManagementSettings) -> VirtualTradingService:
+class _StaticRiskGateService:
+    def __init__(self, decision: RiskDecision) -> None:
+        self.decision = decision
+
+    def evaluate(self, **kwargs) -> RiskDecision:
+        return self.decision
+
+
+def _service(
+    risk_settings: RiskManagementSettings,
+    *,
+    repository: _EphemeralTradeRepository | None = None,
+    risk_gate_service: _StaticRiskGateService | None = None,
+) -> VirtualTradingService:
     return VirtualTradingService(
-        repository=_EphemeralTradeRepository(),
+        repository=repository or _EphemeralTradeRepository(),
         risk_settings_provider=lambda _user_id: risk_settings,
         market_data_service=_StaticMarketDataService(),
         fee_rate_service=_ZeroFeeRateService(),
+        risk_gate_service=risk_gate_service,
     )
 
 
@@ -315,6 +421,155 @@ def _snapshot() -> VirtualMarketSnapshot:
         volume_15m_usd=120_000,
         average_trade_size_usd=250,
         volatility_1m_percent=0.4,
+    )
+
+
+def _thin_snapshot() -> VirtualMarketSnapshot:
+    return VirtualMarketSnapshot(
+        best_bid=99.5,
+        best_ask=100.0,
+        bids=[
+            OrderBookLevel(price=99.5, notional_usd=600),
+            OrderBookLevel(price=99.0, notional_usd=1_200),
+        ],
+        asks=[
+            OrderBookLevel(price=100.0, notional_usd=500),
+            OrderBookLevel(price=100.4, notional_usd=700),
+            OrderBookLevel(price=101.0, notional_usd=600),
+        ],
+        volume_1m_usd=700,
+        volume_5m_usd=7_300,
+        volume_15m_usd=12_000,
+        average_trade_size_usd=120,
+        volatility_1m_percent=1.8,
+    )
+
+
+def _risk_decision(
+    *,
+    can_enter: bool = True,
+    status: str = "passed",
+    blockers: list[str] | None = None,
+) -> RiskDecision:
+    blockers = blockers or []
+    sizing = PositionSizingResult(
+        side="long",
+        account_equity=10_000.0,
+        risk_per_trade_percent=1.0,
+        risk_amount=10.0,
+        entry_price=100.0,
+        stop_loss_price=90.0,
+        stop_distance_per_unit=10.0,
+        effective_risk_per_unit=10.0,
+        position_size_base=1.0,
+        notional=100.0,
+        leverage=1,
+        required_margin=100.0,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+    )
+    risk_adjustment = RiskAdjustmentPlan(
+        instrument_type="spot",
+        strategy="trend_pullback_continuation",
+        signal_score=82.0,
+        account_equity=10_000.0,
+        base_risk_percent=1.0,
+        base_risk_amount=100.0,
+        strategy_risk_multiplier=1.0,
+        signal_score_multiplier=1.0,
+        adjusted_risk_percent=1.0,
+        adjusted_risk_amount=100.0,
+        signal_trade_allowed=True,
+    )
+    risk_check = RiskCheckResult(
+        status=status,
+        blockers=blockers,
+        warnings=[],
+        rr=3.0,
+        min_rr_ratio=2.0,
+        account_equity=10_000.0,
+        adjusted_risk_amount=100.0,
+        adjusted_risk_percent=1.0,
+        effective_risk_amount=10.0,
+        position_notional=100.0,
+        position_size_base=1.0,
+        required_margin=100.0,
+        max_daily_loss_percent=50.0,
+        max_account_drawdown_percent=90.0,
+        max_open_risk_percent=100.0,
+        max_correlated_risk_percent=100.0,
+        exchange_rule_status="fresh",
+        market_data_status="fresh",
+    )
+    return RiskDecision(
+        mode="virtual",
+        stage="pre_execution",
+        status=status,
+        can_enter=can_enter,
+        blockers=blockers,
+        exchange="bybit",
+        symbol="BTCUSDT",
+        instrument_type="spot",
+        requested_notional=None,
+        risk_adjustment_plan=risk_adjustment,
+        position_sizing=sizing,
+        checked_position_sizing=sizing,
+        risk_check=risk_check,
+        stop_loss_plan=StopLossPlan(
+            side="long",
+            mode="structure",
+            entry_price=100.0,
+            stop_loss_price=90.0,
+            risk_per_unit=10.0,
+            source="signal",
+            default_stop_loss_percent=1.5,
+            atr_period=14,
+            atr_multiplier=2.0,
+        ),
+        take_profit_plan=TakeProfitPlan(
+            mode="risk_multiple",
+            side="long",
+            entry_price=100.0,
+            stop_loss_price=90.0,
+            risk_per_unit=10.0,
+            partial_take_profit_enabled=True,
+            targets=[
+                TakeProfitTarget(
+                    label="TP1",
+                    r_multiple=1.0,
+                    price=110.0,
+                    close_percent=50.0,
+                    action="observe",
+                ),
+                TakeProfitTarget(
+                    label="TP2",
+                    r_multiple=3.0,
+                    price=130.0,
+                    close_percent=50.0,
+                    action="full_close",
+                ),
+            ],
+            selected_rr=3.0,
+        ),
+        breakeven_plan=BreakevenPlan(
+            side="long",
+            entry_price=100.0,
+            stop_loss_price=90.0,
+            risk_per_unit=10.0,
+            move_after_r=1.0,
+            trigger_price=110.0,
+            breakeven_stop_price=100.0,
+        ),
+        trailing_stop_plan=TrailingStopPlan(
+            side="long",
+            enabled=False,
+            mode="percent",
+            entry_price=100.0,
+            current_price=100.0,
+            trailing_percent=0.0,
+            atr_multiplier=2.0,
+            source="disabled",
+        ),
     )
 
 

@@ -1035,7 +1035,11 @@ class VirtualTradingService:
                 "breakeven_plan": risk_decision.breakeven_plan,
                 "trailing_stop_plan": risk_decision.trailing_stop_plan,
                 "futures_risk_plan": risk_decision.futures_risk_plan,
-                "notes": _dedupe_strings([*execution.notes, *risk_decision.notes]),
+                "notes": _dedupe_strings([
+                    *execution.notes,
+                    *_virtual_execution_quality_notes(execution),
+                    *risk_decision.notes,
+                ]),
             }
         )
 
@@ -1412,6 +1416,18 @@ def _rr_warning_note(reason: str | None) -> str | None:
         detail = value.split(":", 1)[1].strip()
         return f"{summary} {detail}" if detail and detail != summary else summary
     return f"{summary} {value}"
+
+
+def _virtual_execution_quality_notes(execution: VirtualExecutionReport) -> list[str]:
+    status = execution.quality_gate.status
+    if status not in {"warning", "blocked"}:
+        return []
+    return [
+        (
+            f"Virtual execution quality warning: quality_gate {status} is "
+            "a simulation realism warning; entry permission remains RiskGate."
+        )
+    ]
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:

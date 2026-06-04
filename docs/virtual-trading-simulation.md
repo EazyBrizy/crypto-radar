@@ -10,6 +10,15 @@ liquidity score, and private impact path. It must not decide whether a trade is
 allowed to enter. Entry permission belongs to the backend risk gate and
 `user_profiles.settings.risk_management`.
 
+Virtual entry creation uses three separate decisions:
+
+- `RiskGate` block means no virtual trade is created.
+- Virtual execution `rejected_virtual_execution`, a zero fill, or a missing
+  average fill price means no virtual trade is created.
+- `quality_gate.status = "blocked"` is a simulation realism warning by
+  default. It must be surfaced in notes/audit/response, but it is not an entry
+  veto when RiskGate passes and a fill exists.
+
 ## Service Boundary
 
 Primary module:
@@ -133,4 +142,8 @@ It should answer:
 - what smaller virtual size would look more realistic.
 
 It must not be used as the final entry permission. A blocked `quality_gate`
-status is a simulation warning, not a trade-entry veto.
+status is a simulation warning, not a trade-entry veto. If the product later
+wants this quality gate to block virtual entry, that must be introduced as an
+explicit documented setting such as `virtual_execution_quality_policy =
+warn_only | block`; there is no implicit block-by-quality behavior in the
+current contract.

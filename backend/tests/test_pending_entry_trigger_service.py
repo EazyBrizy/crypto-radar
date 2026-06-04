@@ -12,12 +12,18 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401
 from app.models.pending_entry import PendingEntryIntent
+from app.models.user import AppUser
 from app.repositories.pending_entry_repository import PendingEntryIntentRepository
 from app.schemas.pending_entry import PendingEntryIntentCreate
 from app.schemas.risk import ResolvedExecutionProfile
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualTrade
-from app.services.pending_entry import accepted_trade_plan_hash
+from app.schemas.user import RiskManagementSettings
+from app.services.pending_entry import (
+    TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
+    PendingEntryService,
+    accepted_trade_plan_hash,
+)
 from app.services.pending_entry_trigger import PendingEntryTriggerService, entry_zone_touch
 
 USER_ID = UUID("7d7a4f33-a570-4334-b65f-3e5b4f0bb4a1")
@@ -35,7 +41,9 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
             future=True,
         )
         self.SessionFactory = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
+        _create_sqlite_user_tables(self.engine)
         _create_sqlite_tables(self.engine)
+        _seed_demo_user(self.SessionFactory)
         self.repository = PendingEntryIntentRepository(self.SessionFactory)
         self.signals = _FakeSignalProvider(_signal())
         self.virtual = _FakeVirtualTrading()
@@ -125,8 +133,67 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         current = self.repository.get_by_id(created.id)
 
         self.assertEqual(results[0].status, "requires_reconfirmation")
+        self.assertEqual(results[0].reason, TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON)
         self.assertEqual(current.status if current else None, "requires_reconfirmation")
+        self.assertEqual(current.failure_reason if current else None, TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON)
+        self.assertEqual(
+            current.accepted_trade_plan_snapshot if current else None,
+            created.accepted_trade_plan_snapshot,
+        )
+        self.assertEqual(
+            current.request_snapshot["pending_entry_lifecycle_events"][-1]["event"] if current else None,
+            "pending_entry.requires_reconfirmation",
+        )
+        self.assertEqual(self.signals.auto_entry_updates[-1]["status"], "requires_reconfirmation")
+        self.assertEqual(self.signals.auto_entry_updates[-1]["message"], TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON)
         self.assertEqual(self.virtual.calls, [])
+
+    def test_changed_plan_reconfirm_then_second_touch_fills_virtual_trade(self) -> None:
+        pending_service = PendingEntryService(
+            repository=self.repository,
+            session_factory=self.SessionFactory,
+            signal_loader=lambda _signal_id: self.signals.signal,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(),
+        )
+        created = pending_service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        old_hash = created.accepted_trade_plan_hash
+        self.signals.signal = _signal(entry_min=99.0, entry_max=100.0, stop_loss=94.0, take_profit_1=111.0)
+
+        blocked = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.0})
+        blocked_current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(blocked[0].status, "requires_reconfirmation")
+        self.assertEqual(blocked_current.status if blocked_current else None, "requires_reconfirmation")
+        self.assertEqual(self.virtual.calls, [])
+
+        reconfirmed = pending_service.reconfirm_intent(
+            created.id,
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+        )
+        self.assertEqual(reconfirmed.id, created.id)
+        self.assertEqual(reconfirmed.status, "pending")
+        self.assertEqual(reconfirmed.entry_min, Decimal("99"))
+        self.assertEqual(reconfirmed.entry_max, Decimal("100"))
+        self.assertNotEqual(reconfirmed.accepted_trade_plan_hash, old_hash)
+        self.assertEqual(reconfirmed.accepted_trade_plan_hash, accepted_trade_plan_hash(self.signals.signal))
+        self.assertEqual(
+            reconfirmed.request_snapshot["pending_entry_lifecycle_events"][-1]["event"],
+            "pending_entry.reconfirmed",
+        )
+
+        filled = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.0})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(filled[0].status, "filled")
+        self.assertEqual(current.status if current else None, "filled")
+        self.assertEqual(filled[0].virtual_trade_id, str(TRADE_ID))
+        self.assertEqual(len(self.virtual.calls), 1)
 
     def test_stop_hash_changed_requires_reconfirmation(self) -> None:
         created = self.repository.create_intent(_intent_create(side="long"))
@@ -400,6 +467,46 @@ def _create_sqlite_tables(engine: Any) -> None:
                 """
             )
         )
+
+
+def _create_sqlite_user_tables(engine: Any) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE app_users (
+                    id UUID PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    username TEXT,
+                    status TEXT,
+                    locale TEXT,
+                    timezone TEXT,
+                    risk_profile TEXT,
+                    created_at DATETIME,
+                    updated_at DATETIME
+                )
+                """
+            )
+        )
+
+
+def _seed_demo_user(session_factory: Any) -> None:
+    now = datetime.now(timezone.utc)
+    with session_factory() as session:
+        session.add(
+            AppUser(
+                id=USER_ID,
+                email="demo@crypto-radar.local",
+                username="demo",
+                status="active",
+                locale="ru",
+                timezone="Europe/Warsaw",
+                risk_profile="balanced",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.commit()
 
 
 if __name__ == "__main__":

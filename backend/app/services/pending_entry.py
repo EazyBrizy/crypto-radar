@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -41,6 +41,10 @@ RiskSettingsProvider = Callable[[str], RiskManagementSettings]
 UserProfileProvider = Callable[[str], Any]
 AutoEntryUpdater = Callable[..., Any]
 AutoEntryArm = Callable[..., Any]
+
+TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON = (
+    "Trade plan changed after acceptance; reconfirmation required."
+)
 
 
 class PendingEntryService:
@@ -206,11 +210,14 @@ class PendingEntryService:
                 raise ValueError("Terminal pending entry intent cannot be reconfirmed")
             return intent
 
-        self.transition_status(
-            intent.id,
-            status="cancelled",
-            failure_reason="Reconfirmed with a new accepted trade plan.",
-        )
+        signal = self._load_signal(intent.signal_id)
+        if signal is None:
+            raise LookupError("Signal is not found")
+        if is_terminal_signal_status(signal.status):
+            raise ValueError("Signal cannot be reconfirmed for pending entry in terminal status")
+        if not is_market_opportunity_status(signal.status):
+            raise ValueError("Signal is not a market opportunity")
+
         next_request = request_model.model_copy(
             update={
                 "mode": intent.mode,
@@ -218,11 +225,50 @@ class PendingEntryService:
                 "auto_enter_on_confirmation": True,
             }
         )
-        return self.arm_signal_workflow(
-            signal_id=intent.signal_id,
-            request=next_request,
-            auto_entry_arm=auto_entry_arm,
+        execution_profile = self.resolve_execution_profile(signal, next_request, mode=intent.mode)
+        ensure_signal_execution_eligible(
+            signal,
+            mode=intent.mode,
+            rr_guard_mode=execution_profile.rr_guard_mode,
         )
+        accepted_plan = _accepted_trade_plan(signal)
+        trade_plan_hash = accepted_trade_plan_hash(signal)
+        request_snapshot = _request_snapshot(next_request, mode=intent.mode)
+        request_snapshot = _with_reconfirmation_lifecycle_event(
+            request_snapshot=request_snapshot,
+            previous_snapshot=intent.request_snapshot,
+            previous_intent=intent,
+            accepted_trade_plan_hash=trade_plan_hash,
+            signal=signal,
+        )
+        update_reconfirmed = getattr(self._repository, "update_reconfirmed_acceptance", None)
+        if update_reconfirmed is None:
+            raise RuntimeError("Pending entry repository does not support reconfirmation updates")
+        updated = update_reconfirmed(
+            intent.id,
+            entry_min=accepted_plan.entry_min,
+            entry_max=accepted_plan.entry_max,
+            entry_price_policy=accepted_plan.entry_price_policy,
+            stop_loss=accepted_plan.stop_loss,
+            targets_snapshot=accepted_plan.targets_snapshot,
+            accepted_trade_plan_snapshot=accepted_plan.snapshot,
+            accepted_trade_plan_hash=trade_plan_hash,
+            accepted_signal_status=signal.status,
+            accepted_signal_version=accepted_plan.signal_version,
+            accepted_signal_fingerprint=_signal_fingerprint(signal, trade_plan_hash),
+            execution_profile_snapshot=execution_profile.model_dump(mode="json"),
+            request_snapshot=request_snapshot,
+            expires_at=signal.expires_at,
+        )
+        if updated is None:
+            raise LookupError("Pending entry intent is not found")
+        if auto_entry_arm is not None:
+            auto_entry_arm(
+                str(signal.id),
+                next_request.model_dump(mode="json"),
+                pending_entry_intent=updated,
+            )
+        return updated
 
     def reconcile_signal_trade_plan(
         self,
@@ -538,6 +584,34 @@ def _request_snapshot(
     return snapshot
 
 
+def _with_reconfirmation_lifecycle_event(
+    *,
+    request_snapshot: dict[str, Any],
+    previous_snapshot: dict[str, Any],
+    previous_intent: PendingEntryIntentRead,
+    accepted_trade_plan_hash: str,
+    signal: RadarSignal,
+) -> dict[str, Any]:
+    updated = dict(request_snapshot)
+    previous_events = previous_snapshot.get("pending_entry_lifecycle_events")
+    lifecycle_events = list(previous_events) if isinstance(previous_events, list) else []
+    lifecycle_events.append(
+        {
+            "event": "pending_entry.reconfirmed",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "intent_id": str(previous_intent.id),
+            "signal_id": str(previous_intent.signal_id),
+            "previous_status": previous_intent.status,
+            "previous_accepted_trade_plan_hash": previous_intent.accepted_trade_plan_hash,
+            "previous_accepted_trade_plan_snapshot": previous_intent.accepted_trade_plan_snapshot,
+            "accepted_trade_plan_hash": accepted_trade_plan_hash,
+            "accepted_signal_status": signal.status,
+        }
+    )
+    updated["pending_entry_lifecycle_events"] = lifecycle_events[-20:]
+    return updated
+
+
 def _manual_confirm_request(request: ManualConfirmRequest | dict[str, Any] | None) -> ManualConfirmRequest:
     if request is None:
         return ManualConfirmRequest(auto_enter_on_confirmation=True)
@@ -577,7 +651,7 @@ def _signal_fingerprint(signal: RadarSignal, trade_plan_hash: str) -> str:
 def _reconfirmation_reason(hash_error: str | None) -> str:
     if hash_error:
         return f"Current trade plan requires reconfirmation: {hash_error}"
-    return "Accepted trade plan changed; please reconfirm current entry, stop, and targets."
+    return TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON
 
 
 def _idempotency_key(

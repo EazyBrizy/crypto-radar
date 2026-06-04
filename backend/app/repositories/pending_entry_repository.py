@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -211,6 +213,55 @@ class PendingEntryIntentRepository:
             if status == "filled":
                 record.filled_at = changed_at
                 record.filled_trade_id = parsed_trade_id
+            session.commit()
+            return _to_read(record)
+
+    def update_reconfirmed_acceptance(
+        self,
+        intent_id: str | UUID,
+        *,
+        entry_min: Decimal,
+        entry_max: Decimal,
+        entry_price_policy: str,
+        stop_loss: Decimal,
+        targets_snapshot: dict[str, Any] | list[Any],
+        accepted_trade_plan_snapshot: dict[str, Any],
+        accepted_trade_plan_hash: str,
+        accepted_signal_status: str,
+        accepted_signal_version: str | None,
+        accepted_signal_fingerprint: str | None,
+        execution_profile_snapshot: dict[str, Any],
+        request_snapshot: dict[str, Any],
+        expires_at: datetime | None,
+        now: datetime | None = None,
+    ) -> PendingEntryIntentRead | None:
+        parsed_id = _parse_uuid(intent_id)
+        if parsed_id is None:
+            return None
+        with self._session_factory() as session:
+            record = session.get(PendingEntryIntent, parsed_id)
+            if record is None:
+                return None
+            changed_at = now or datetime.now(timezone.utc)
+            record.status = "pending"
+            record.entry_min = entry_min
+            record.entry_max = entry_max
+            record.entry_price_policy = entry_price_policy.strip()
+            record.stop_loss = stop_loss
+            record.targets_snapshot = targets_snapshot
+            record.accepted_trade_plan_snapshot = accepted_trade_plan_snapshot
+            record.accepted_trade_plan_hash = accepted_trade_plan_hash.strip()
+            record.accepted_signal_status = accepted_signal_status
+            record.accepted_signal_version = accepted_signal_version
+            record.accepted_signal_fingerprint = accepted_signal_fingerprint
+            record.execution_profile_snapshot = execution_profile_snapshot
+            record.request_snapshot = request_snapshot
+            record.expires_at = expires_at
+            record.failure_reason = None
+            record.triggered_at = None
+            record.filled_at = None
+            record.filled_trade_id = None
+            record.updated_at = changed_at
             session.commit()
             return _to_read(record)
 

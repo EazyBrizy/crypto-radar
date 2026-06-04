@@ -17,7 +17,11 @@ from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.risk import RiskOverride, StrategyExecutionSettings
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, RecentTradePrint, VirtualMarketSnapshot, VirtualTrade
-from app.services.pending_entry import accepted_trade_plan_hash, pending_entry_service
+from app.services.pending_entry import (
+    TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
+    accepted_trade_plan_hash,
+    pending_entry_service,
+)
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.signal_service import signal_service
 from app.services.virtual_trading import VirtualExecutionRejected, virtual_trading_service
@@ -183,13 +187,17 @@ class PendingEntryTriggerService:
                 session.commit()
                 return _result(record, touched=False, reason=record.failure_reason)
             if current_hash != record.accepted_trade_plan_hash:
-                _transition_locked(
+                _mark_requires_reconfirmation_locked(
                     record,
-                    status="requires_reconfirmation",
-                    failure_reason="Accepted trade plan hash changed before entry touch fill.",
+                    current_trade_plan_hash=current_hash,
                     now=now,
                 )
                 session.commit()
+                self._mirror_auto_entry(
+                    record.signal_id,
+                    status="requires_reconfirmation",
+                    message=TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
+                )
                 return _result(record, touched=False, reason=record.failure_reason)
 
             touch = entry_zone_touch(
@@ -519,6 +527,37 @@ def _transition_locked(
         record.triggered_at = now
     if status == "filled":
         record.filled_at = now
+
+
+def _mark_requires_reconfirmation_locked(
+    record: PendingEntryIntent,
+    *,
+    current_trade_plan_hash: str,
+    now: datetime,
+) -> None:
+    _transition_locked(
+        record,
+        status="requires_reconfirmation",
+        failure_reason=TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
+        now=now,
+    )
+    snapshot = dict(record.request_snapshot or {})
+    raw_events = snapshot.get("pending_entry_lifecycle_events")
+    lifecycle_events = list(raw_events) if isinstance(raw_events, list) else []
+    lifecycle_events.append(
+        {
+            "event": "pending_entry.requires_reconfirmation",
+            "created_at": now.isoformat(),
+            "intent_id": str(record.id),
+            "signal_id": str(record.signal_id),
+            "reason": TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
+            "accepted_trade_plan_hash": record.accepted_trade_plan_hash,
+            "current_trade_plan_hash": current_trade_plan_hash,
+            "accepted_trade_plan_snapshot": record.accepted_trade_plan_snapshot,
+        }
+    )
+    snapshot["pending_entry_lifecycle_events"] = lifecycle_events[-20:]
+    record.request_snapshot = snapshot
 
 
 def _result(

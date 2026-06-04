@@ -14,7 +14,10 @@ from app.schemas.risk import ResolvedExecutionProfile
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest
 from app.schemas.user import RiskManagementSettings
-from app.services.pending_entry import PendingEntryService
+from app.services.pending_entry import (
+    TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
+    PendingEntryService,
+)
 
 USER_ID = UUID("ba520631-d035-4f95-a4c0-3b40553dd524")
 SIGNAL_ID = UUID("ba520631-d035-4f95-a4c0-3b40553dd527")
@@ -256,6 +259,50 @@ class PendingEntryServiceTest(unittest.TestCase):
 
         self.assertEqual(reconfirmed.id, created.id)
 
+    def test_reconfirm_updates_existing_intent_with_current_trade_plan(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = self._service(repository)
+        created = service.arm_from_signal(
+            user_id="demo_user",
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id="demo_user", auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        old_snapshot = created.accepted_trade_plan_snapshot
+        old_hash = created.accepted_trade_plan_hash
+        requires = repository.transition_status(
+            created.id,
+            status="requires_reconfirmation",
+            failure_reason=TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
+        )
+        self.assertIsNotNone(requires)
+        changed_service = self._service(
+            repository,
+            signal_loader=lambda _signal_id: _signal(entry_min=99.0, entry_max=100.0, stop_loss=94.0, take_profit_1=111.0),
+        )
+
+        reconfirmed = changed_service.reconfirm_intent(
+            created.id,
+            request=ManualConfirmRequest(user_id="usr_demo", auto_enter_on_confirmation=True),
+        )
+
+        self.assertEqual(reconfirmed.id, created.id)
+        self.assertEqual(reconfirmed.status, "pending")
+        self.assertIsNone(reconfirmed.failure_reason)
+        self.assertEqual(reconfirmed.entry_min, Decimal("99"))
+        self.assertEqual(reconfirmed.entry_max, Decimal("100"))
+        self.assertEqual(reconfirmed.stop_loss, Decimal("94"))
+        self.assertEqual(reconfirmed.targets_snapshot[0]["price"], "111")
+        self.assertNotEqual(reconfirmed.accepted_trade_plan_hash, old_hash)
+        self.assertEqual(reconfirmed.accepted_trade_plan_snapshot["entry"]["min_price"], "99")
+        self.assertEqual(reconfirmed.accepted_signal_status, "active")
+        self.assertIsNotNone(reconfirmed.accepted_signal_fingerprint)
+        event = reconfirmed.request_snapshot["pending_entry_lifecycle_events"][-1]
+        self.assertEqual(event["event"], "pending_entry.reconfirmed")
+        self.assertEqual(event["previous_accepted_trade_plan_hash"], old_hash)
+        self.assertEqual(event["previous_accepted_trade_plan_snapshot"], old_snapshot)
+
     def test_cancelled_intent_is_history_not_active_and_can_rearm(self) -> None:
         repository = _FakePendingEntryRepository()
         service = self._service(repository)
@@ -318,6 +365,7 @@ class _FakePendingEntryRepository:
         self.records: list[PendingEntryIntentRead] = []
         self.idempotency_keys: list[str] = []
         self.transitions: list[tuple[UUID, str, str | None]] = []
+        self.reconfirmation_updates = 0
 
     def get_active_for_user_signal_mode(
         self,
@@ -401,6 +449,30 @@ class _FakePendingEntryRepository:
         )
         self.records = [updated if intent.id == intent_id else intent for intent in self.records]
         self.active = updated if updated.status in {"pending", "triggered", "filling", "requires_reconfirmation"} else None
+        return updated
+
+    def update_reconfirmed_acceptance(
+        self,
+        intent_id: UUID,
+        **updates: Any,
+    ) -> PendingEntryIntentRead | None:
+        existing = self.get_by_id(intent_id)
+        if existing is None:
+            return None
+        self.reconfirmation_updates += 1
+        updated = existing.model_copy(
+            update={
+                **updates,
+                "status": "pending",
+                "failure_reason": None,
+                "triggered_at": None,
+                "filled_at": None,
+                "filled_trade_id": None,
+                "updated_at": updates.get("now") or datetime.now(timezone.utc),
+            }
+        )
+        self.records = [updated if intent.id == intent_id else intent for intent in self.records]
+        self.active = updated
         return updated
 
 

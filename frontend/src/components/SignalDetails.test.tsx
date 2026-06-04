@@ -414,15 +414,17 @@ describe("SignalDetails", () => {
   });
 
   it("shows requires reconfirmation banner", () => {
+    const onReconfirmPendingEntry = vi.fn();
     render(
       <SignalDetails
         busy={false}
         executionPreview={null}
+        onReconfirmPendingEntry={onReconfirmPendingEntry}
         onPaperTrade={vi.fn()}
         onReject={vi.fn()}
         pendingEntry={pendingIntent({
           status: "requires_reconfirmation",
-          failure_reason: "Accepted trade plan changed; please reconfirm current entry, stop, and targets."
+          failure_reason: "Trade plan changed after acceptance; reconfirmation required."
         })}
         signal={{ ...signal, status: "ready", no_trade_filter: null }}
       />
@@ -430,7 +432,9 @@ describe("SignalDetails", () => {
 
     expect(screen.getAllByText("Requires reconfirmation").length).toBeGreaterThan(0);
     expect(screen.getAllByText("План изменился. Нужно подтвердить ожидание входа заново.").length).toBeGreaterThan(0);
-    expect(screen.getByText(/Accepted trade plan changed/u)).toBeInTheDocument();
+    expect(screen.getByText("Trade plan changed after acceptance; reconfirmation required.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Reconfirm plan/u }));
+    expect(onReconfirmPendingEntry).toHaveBeenCalledTimes(1);
   });
 });
 

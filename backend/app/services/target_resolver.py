@@ -4,6 +4,7 @@ from typing import Any, Literal, Mapping, Sequence, cast
 
 from app.schemas.market import AlphaMarketContext, Features, LiquidityPoolFeatures
 from app.schemas.trade_plan import TargetSource, TargetThesis
+from app.services.risk_reward_plan import risk_reward_plan_service
 from app.services.support_resistance import SupportResistanceSnapshot
 
 
@@ -365,9 +366,14 @@ def _with_distance_metadata(
     distance = _target_reward(direction, entry, thesis.price)
     metadata["distance"] = distance
     if stop_loss is not None:
-        risk = abs(entry - stop_loss)
-        if risk > 0 and distance is not None:
-            metadata["r_multiple"] = round(distance / risk, 4)
+        rr_calculation = risk_reward_plan_service.calculate_rr(
+            entry,
+            stop_loss,
+            thesis.price,
+            direction,
+        )
+        if rr_calculation.rr_value is not None:
+            metadata["r_multiple"] = rr_calculation.rr_value
     return thesis.model_copy(update={"metadata": metadata})
 
 

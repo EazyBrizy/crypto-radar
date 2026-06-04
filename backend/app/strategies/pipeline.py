@@ -2165,7 +2165,16 @@ def _distance_r(signal: StrategySignal, entry: float, level: float) -> float | N
     risk = abs(entry - signal.stop_loss)
     if risk <= 0:
         return None
-    return abs(level - entry) / risk
+    if level == entry:
+        return 0.0
+    side = "long" if level >= entry else "short"
+    synthetic_stop = entry - risk if side == "long" else entry + risk
+    return risk_reward_plan_service.calculate_rr(
+        entry,
+        synthetic_stop,
+        level,
+        side,
+    ).rr_value
 
 
 def _obstacle_status(

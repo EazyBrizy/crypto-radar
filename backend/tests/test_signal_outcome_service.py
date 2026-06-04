@@ -148,6 +148,19 @@ class SignalOutcomeServiceTest(unittest.TestCase):
 
         self.assertIsNone(plan)
 
+    def test_tracking_plan_calculates_target_r_from_rr_helper(self) -> None:
+        signal = _trading_signal(take_profit=[102, 104])
+
+        plan = _tracking_plan_from_signal(signal, tracking_min_score=70)
+
+        self.assertIsNotNone(plan)
+        targets = plan.targets if plan is not None else []
+        self.assertEqual([target.label for target in targets], ["TP1", "TP2"])
+        self.assertEqual(
+            [target.r_multiple for target in targets],
+            [Decimal("1.0"), Decimal("2.0")],
+        )
+
 
 def _outcome(
     *,

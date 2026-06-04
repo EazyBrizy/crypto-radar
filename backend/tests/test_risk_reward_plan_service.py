@@ -96,11 +96,17 @@ class RiskRewardPlanServiceTest(unittest.TestCase):
 
     def test_pipeline_and_risk_gate_use_same_target_basis(self) -> None:
         expected_rr_by_policy = {"nearest": 1.2, "final": 3.0}
+        expected_target_by_policy = {"nearest": "TP1", "final": "TP2"}
         for rr_target, expected_rr in expected_rr_by_policy.items():
             with self.subTest(rr_target=rr_target):
                 trade_plan = _trade_plan(
                     targets=[_target("TP1", 112), _target("TP2", 130)],
                     selected_rr_target=rr_target,
+                )
+                rr_plan = risk_reward_plan_service.select_rr_target(
+                    trade_plan,
+                    rr_target,
+                    side="long",
                 )
                 pipeline_assessment = RiskRewardAssessmentService().assess(
                     _strategy_signal(trade_plan=trade_plan),
@@ -127,8 +133,25 @@ class RiskRewardPlanServiceTest(unittest.TestCase):
                     ),
                 )
 
+                self.assertEqual(
+                    rr_plan.selected_target.label if rr_plan.selected_target else None,
+                    expected_target_by_policy[rr_target],
+                )
+                self.assertAlmostEqual(rr_plan.rr_value or 0, expected_rr)
                 self.assertAlmostEqual(pipeline_assessment.rr or 0, expected_rr)
+                self.assertAlmostEqual(
+                    pipeline_assessment.first_target_rr or 0,
+                    rr_plan.first_target_rr or 0,
+                )
+                self.assertAlmostEqual(
+                    pipeline_assessment.final_target_rr or 0,
+                    rr_plan.final_target_rr or 0,
+                )
                 self.assertAlmostEqual(decision.risk_check.rr or 0, pipeline_assessment.rr or 0)
+                self.assertAlmostEqual(
+                    decision.take_profit_plan.selected_rr or 0,
+                    rr_plan.rr_value or 0,
+                )
                 self.assertEqual(decision.take_profit_plan.selected_rr_target, pipeline_assessment.target_key)
 
 

@@ -20,6 +20,7 @@ from app.services.execution_ambiguity import (
     normalize_virtual_execution_ambiguity_policy,
     resolve_stop_target_ambiguity,
 )
+from app.services.risk_reward_plan import risk_reward_plan_service
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +373,7 @@ def _tracking_plan_from_signal(signal: TradingSignal, tracking_min_score: int) -
     if signal.direction == "short" and stop_loss <= entry_price:
         return None
 
-    targets = _extract_targets(signal, snapshot, entry_price, risk)
+    targets = _extract_targets(signal, snapshot, entry_price, stop_loss)
     if not targets:
         return None
 
@@ -406,7 +407,7 @@ def _extract_targets(
     signal: TradingSignal,
     snapshot: dict[str, Any],
     entry_price: Decimal,
-    risk: Decimal,
+    stop_loss: Decimal,
 ) -> list[_Target]:
     raw_targets: list[dict[str, Any]] = []
     trade_plan = snapshot.get("trade_plan") if isinstance(snapshot.get("trade_plan"), dict) else {}
@@ -432,7 +433,15 @@ def _extract_targets(
             continue
         r_multiple = _optional_decimal(raw_target.get("r_multiple"))
         if r_multiple is None:
-            r_multiple = _target_r(signal.direction, entry_price, price, risk)
+            rr_calculation = risk_reward_plan_service.calculate_rr(
+                float(entry_price),
+                float(stop_loss),
+                float(price),
+                signal.direction,
+            )
+            if rr_calculation.rr_value is None:
+                continue
+            r_multiple = Decimal(str(rr_calculation.rr_value))
         if r_multiple <= 0:
             continue
         if signal.direction == "long" and price <= entry_price:
@@ -569,12 +578,6 @@ def _current_r(outcome: SignalOutcome, price: Decimal) -> Decimal:
 
 def _risk(outcome: SignalOutcome) -> Decimal:
     return abs(_decimal(outcome.entry_price) - _decimal(outcome.stop_loss))
-
-
-def _target_r(direction: str, entry_price: Decimal, target_price: Decimal, risk: Decimal) -> Decimal:
-    if direction == "long":
-        return (target_price - entry_price) / risk
-    return (entry_price - target_price) / risk
 
 
 def _result_from_realized_r(realized_r: Decimal) -> str:

@@ -1,8 +1,16 @@
-import { Bell, BookOpen, ChevronDown, FlaskConical, Gauge, KeyRound, Radio, RefreshCw, Save, Send, Shield, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Bell, BookOpen, ChevronDown, FlaskConical, Gauge, Info, KeyRound, Radio, RefreshCw, Save, Send, Shield, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import { Badge } from "@/components/Badge";
 import { StrategyTestingPanel } from "@/features/strategy-testing/StrategyTestingPanel";
+import {
+  RISK_MANAGEMENT_SCHEMA_LIMITS,
+  RISK_PROFILE_PRESETS,
+  STRATEGY_EXECUTION_SCHEMA_LIMITS,
+  cloneRiskManagementSettings,
+  riskProfilePreset,
+  type RiskProfilePresetName
+} from "@/features/server-state/risk-management-contract";
 import type {
   AlertRule,
   AlertRuleDraft,
@@ -98,6 +106,14 @@ const RADAR_DISPLAY_MODES: Array<{ value: RadarDisplayMode; label: string }> = [
 ];
 
 const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
+const EXECUTION_PROFILE_HELP = {
+  fixedRisk: "Fixed risk is the maximum loss budget in the selected currency. Backend RiskGate still caps and sizes the trade.",
+  leverage: "Leverage changes required margin and futures liquidation checks. It does not reduce trade risk.",
+  percentRisk: "Percent risk is the equity percentage the profile may risk per trade before backend caps and multipliers.",
+  radarMode: "All shows every market setup. Execution-ready shows only opportunities passing a read-only RiskGate preview now.",
+  rrGuard: "Hard can block execution, soft records a warning, and off records RR only.",
+  virtualVsReal: "Virtual is simulation/paper execution. Real execution reruns RiskGate and readiness checks on fresh account, market, and exchange-rule data."
+} as const;
 const MAX_BODY_ATR_DEFAULTS: Record<string, number> = {
   trend_pullback_continuation: 2.0,
   volatility_squeeze_breakout: 2.5,
@@ -195,6 +211,20 @@ type RiskGuardField =
   | "virtual_rr_guard_mode"
   | "backtest_rr_guard_mode"
   | "real_rr_guard_mode";
+
+type RiskValidationField =
+  | "fixed_risk_amount"
+  | "futures_max_leverage"
+  | "max_leverage"
+  | "risk_per_trade_percent";
+
+type RiskValidationErrors = Partial<Record<RiskValidationField, string>>;
+
+type NumericInputLimits = {
+  max?: number;
+  min: number;
+  minExclusive: boolean;
+};
 
 const RR_GUARD_FIELD_LABELS: Array<{
   key: RiskGuardField;
@@ -675,10 +705,14 @@ export function SettingsPage({
     [strategyConfigs]
   );
   const simulationLevel = userProfile?.settings.virtual_trading.simulation_level ?? "mvp";
-  const riskManagement = userProfile?.settings.risk_management ?? defaultRiskManagement();
+  const riskManagement = userProfile?.settings.risk_management ?? cloneRiskManagementSettings();
   const riskManagementKey = [
     riskManagement.risk_profile,
+    riskManagement.risk_mode,
     riskManagement.risk_per_trade_percent,
+    riskManagement.fixed_risk_amount,
+    riskManagement.fixed_risk_currency,
+    riskManagement.radar_display_mode,
     riskManagement.min_rr_ratio,
     riskManagement.rr_guard_mode,
     riskManagement.discovery_rr_guard_mode,
@@ -743,6 +777,8 @@ export function SettingsPage({
   } | null>(null);
   const riskDraft = riskDraftState?.key === riskManagementKey ? riskDraftState.value : riskManagement;
   const customRiskEnabled = riskManagement.risk_profile === "custom";
+  const riskValidationErrors = useMemo(() => validateRiskDraft(riskDraft), [riskDraft]);
+  const riskDraftValid = Object.keys(riskValidationErrors).length === 0;
 
   function updateRiskDraft(values: Partial<RiskManagementSettings>) {
     setRiskDraftState({
@@ -883,10 +919,16 @@ export function SettingsPage({
   }
 
   async function handleSelectRiskProfile(profile: RiskProfileName) {
+    setRiskDraftState({
+      key: riskManagementKey,
+      value: riskProfilePreset(profile)
+    });
     await onUpdateRiskManagement({ risk_profile: profile });
   }
 
   async function handleSaveCustomRisk() {
+    if (!riskDraftValid) return;
+
     await onUpdateRiskManagement({
       risk_profile: "custom",
       risk_management: {
@@ -1313,7 +1355,7 @@ export function SettingsPage({
                       ))
                     : null}
                   <label>
-                    <span>Risk mode</span>
+                    <span title={EXECUTION_PROFILE_HELP.percentRisk}>Risk mode</span>
                     <select
                       defaultValue={String(strategyConfig.risk_settings.risk_mode ?? "percent")}
                       disabled={busy}
@@ -1325,24 +1367,25 @@ export function SettingsPage({
                     </select>
                   </label>
                   <label>
-                    <span>Strategy risk %</span>
+                    <span title={EXECUTION_PROFILE_HELP.percentRisk}>Strategy risk %</span>
                     <input
                       defaultValue={strategyConfig.risk_settings.risk_percent == null ? "" : String(strategyConfig.risk_settings.risk_percent)}
                       disabled={busy}
                       inputMode="decimal"
-                      min="0"
+                      max={STRATEGY_EXECUTION_SCHEMA_LIMITS.risk_percent.max}
+                      min={STRATEGY_EXECUTION_SCHEMA_LIMITS.risk_percent.min}
                       name="risk:risk_percent"
                       step="0.05"
                       type="number"
                     />
                   </label>
                   <label>
-                    <span>Fixed risk</span>
+                    <span title={EXECUTION_PROFILE_HELP.fixedRisk}>Fixed risk</span>
                     <input
                       defaultValue={strategyConfig.risk_settings.fixed_risk_amount == null ? "" : String(strategyConfig.risk_settings.fixed_risk_amount)}
                       disabled={busy}
                       inputMode="decimal"
-                      min="0"
+                      min={STRATEGY_EXECUTION_SCHEMA_LIMITS.fixed_risk_amount.min}
                       name="risk:fixed_risk_amount"
                       step="1"
                       type="number"
@@ -1358,19 +1401,20 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span>Leverage</span>
+                    <span title={EXECUTION_PROFILE_HELP.leverage}>Leverage</span>
                     <input
                       defaultValue={strategyConfig.risk_settings.leverage == null ? "" : String(strategyConfig.risk_settings.leverage)}
                       disabled={busy}
                       inputMode="decimal"
-                      min="1"
+                      max={STRATEGY_EXECUTION_SCHEMA_LIMITS.leverage.max}
+                      min={STRATEGY_EXECUTION_SCHEMA_LIMITS.leverage.min}
                       name="risk:leverage"
                       step="1"
                       type="number"
                     />
                   </label>
                   <label>
-                    <span>Radar mode</span>
+                    <span title={EXECUTION_PROFILE_HELP.radarMode}>Radar mode</span>
                     <select
                       defaultValue={String(strategyConfig.risk_settings.radar_display_mode ?? "all_market_opportunities")}
                       disabled={busy}
@@ -1405,7 +1449,7 @@ export function SettingsPage({
                     </select>
                   </label>
                   <label>
-                    <span>R:R guard</span>
+                    <span title={EXECUTION_PROFILE_HELP.rrGuard}>R:R guard</span>
                     <select
                       defaultValue={normalizeRRGuardMode(strategyConfig.risk_settings.rr_guard_mode, riskManagement.discovery_rr_guard_mode)}
                       disabled={busy}
@@ -1484,23 +1528,35 @@ export function SettingsPage({
           {riskTab === "profile" ? (
             <>
               <div className="segmented">
-                {RISK_PROFILES.map((profile) => (
-                  <button
-                    className={riskManagement.risk_profile === profile.value ? "active" : ""}
-                    disabled={busy}
-                    key={profile.value}
-                    onClick={() => handleSelectRiskProfile(profile.value)}
-                    title={profile.caption}
-                    type="button"
-                  >
-                    {profile.label}
-                  </button>
-                ))}
+                {RISK_PROFILES.map((profile) => {
+                  const preset = profile.value === "custom"
+                    ? null
+                    : RISK_PROFILE_PRESETS[profile.value as RiskProfilePresetName];
+                  const presetSummary = preset
+                    ? `${formatPercentValue(preset.risk_per_trade_percent)} risk / ${preset.min_rr_ratio.toFixed(2)}R`
+                    : profile.caption;
+
+                  return (
+                    <button
+                      className={riskManagement.risk_profile === profile.value ? "active" : ""}
+                      disabled={busy}
+                      key={profile.value}
+                      onClick={() => handleSelectRiskProfile(profile.value)}
+                      title={profile.caption}
+                      type="button"
+                    >
+                      <span>{profile.label}</span>
+                      <small>{presetSummary}</small>
+                    </button>
+                  );
+                })}
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
                   <strong>Execution profile</strong>
+                  <HelpTooltip text={EXECUTION_PROFILE_HELP.virtualVsReal} />
                 </div>
+                <p className="risk-help-note">{EXECUTION_PROFILE_HELP.virtualVsReal}</p>
                 <div className="risk-mode-grid two-option-grid">
                   {RISK_AMOUNT_MODES.map((mode) => (
                     <button
@@ -1508,6 +1564,7 @@ export function SettingsPage({
                       disabled={busy || !customRiskEnabled}
                       key={mode.value}
                       onClick={() => updateRiskDraft({ risk_mode: mode.value })}
+                      title={mode.value === "percent" ? EXECUTION_PROFILE_HELP.percentRisk : EXECUTION_PROFILE_HELP.fixedRisk}
                       type="button"
                     >
                       {mode.label}
@@ -1516,22 +1573,30 @@ export function SettingsPage({
                 </div>
                 <div className="risk-settings-grid compact-risk-grid">
                   <label className="risk-setting-field">
-                    <span>Fixed risk</span>
+                    <FieldLabel help={EXECUTION_PROFILE_HELP.fixedRisk} label="Fixed risk" />
                     <div>
                       <input
+                        aria-describedby="fixed-risk-help fixed-risk-error"
                         aria-label="Fixed risk"
+                        aria-invalid={Boolean(riskValidationErrors.fixed_risk_amount)}
+                        aria-required={riskDraft.risk_mode === "fixed"}
                         disabled={busy || !customRiskEnabled || riskDraft.risk_mode !== "fixed"}
                         inputMode="decimal"
-                        min="0"
+                        min={RISK_MANAGEMENT_SCHEMA_LIMITS.fixed_risk_amount.min}
                         onChange={(event) => updateRiskDraft({
                           fixed_risk_amount: event.target.value === "" ? null : Number(event.target.value)
                         })}
+                        required={riskDraft.risk_mode === "fixed"}
                         step="1"
                         type="number"
                         value={riskDraft.fixed_risk_amount ?? ""}
                       />
                       <small>{riskDraft.fixed_risk_currency}</small>
                     </div>
+                    <small className="risk-help-text" id="fixed-risk-help">{EXECUTION_PROFILE_HELP.fixedRisk}</small>
+                    {riskValidationErrors.fixed_risk_amount ? (
+                      <small className="risk-field-error" id="fixed-risk-error">{riskValidationErrors.fixed_risk_amount}</small>
+                    ) : null}
                   </label>
                   <label className="risk-setting-field">
                     <span>Currency</span>
@@ -1546,10 +1611,11 @@ export function SettingsPage({
                     </div>
                   </label>
                   <label className="risk-setting-field">
-                    <span>Radar mode</span>
+                    <FieldLabel help={EXECUTION_PROFILE_HELP.radarMode} label="Radar mode" />
                     <div>
                       <select
                         aria-label="Radar mode"
+                        title={EXECUTION_PROFILE_HELP.radarMode}
                         disabled={busy || !customRiskEnabled}
                         onChange={(event) => updateRiskDraft({ radar_display_mode: event.target.value as RadarDisplayMode })}
                         value={riskDraft.radar_display_mode}
@@ -1559,28 +1625,44 @@ export function SettingsPage({
                         ))}
                       </select>
                     </div>
+                    <small className="risk-help-text">{EXECUTION_PROFILE_HELP.radarMode}</small>
                   </label>
                 </div>
               </div>
               <div className="risk-settings-grid">
-                {RISK_PROFILE_FIELD_LABELS.map((field) => (
-                  <label className="risk-setting-field" key={field.key}>
-                    <span>{field.label}</span>
-                    <div>
-                      <input
-                        aria-label={field.label}
-                        disabled={busy || !customRiskEnabled}
-                        inputMode="decimal"
-                        min="0"
-                        onChange={(event) => updateRiskDraft({ [field.key]: Number(event.target.value) })}
-                        step={field.step}
-                        type="number"
-                        value={riskDraft[field.key]}
-                      />
-                      <small>{field.suffix}</small>
-                    </div>
-                  </label>
-                ))}
+                {RISK_PROFILE_FIELD_LABELS.map((field) => {
+                  const error = riskValidationErrorForField(riskValidationErrors, field.key);
+                  const help = riskNumericFieldHelp(field.key);
+                  const limits = riskNumericFieldLimits(field.key);
+                  const required = field.key === "risk_per_trade_percent" && riskDraft.risk_mode === "percent";
+
+                  return (
+                    <label className="risk-setting-field" key={field.key}>
+                      <FieldLabel help={help} label={field.label} />
+                      <div>
+                        <input
+                          aria-describedby={`${field.key}-help ${field.key}-error`}
+                          aria-label={field.label}
+                          aria-invalid={Boolean(error)}
+                          aria-required={required}
+                          disabled={busy || !customRiskEnabled}
+                          inputMode="decimal"
+                          max={limits?.max}
+                          min={limits?.min ?? 0}
+                          onChange={(event) => updateRiskDraft({ [field.key]: Number(event.target.value) })}
+                          required={required}
+                          step={field.step}
+                          title={help}
+                          type="number"
+                          value={riskDraft[field.key]}
+                        />
+                        <small>{field.suffix}</small>
+                      </div>
+                      {help ? <small className="risk-help-text" id={`${field.key}-help`}>{help}</small> : null}
+                      {error ? <small className="risk-field-error" id={`${field.key}-error`}>{error}</small> : null}
+                    </label>
+                  );
+                })}
               </div>
               <div className="risk-inclusion-strip">
                 <Badge tone="blue">Fees included</Badge>
@@ -1671,16 +1753,19 @@ export function SettingsPage({
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
                   <strong>R:R guard policy</strong>
+                  <HelpTooltip text={EXECUTION_PROFILE_HELP.rrGuard} />
                 </div>
+                <p className="risk-help-note">{EXECUTION_PROFILE_HELP.rrGuard}</p>
                 <div className="risk-settings-grid compact-risk-grid">
                   {RR_GUARD_FIELD_LABELS.map((field) => (
                     <label className="risk-setting-field" key={field.key}>
-                      <span>{field.label}</span>
+                      <FieldLabel help={EXECUTION_PROFILE_HELP.rrGuard} label={field.label} />
                       <div>
                         <select
                           aria-label={field.label}
                           disabled={busy || !customRiskEnabled}
                           onChange={(event) => updateRiskDraft({ [field.key]: event.target.value as RRGuardMode })}
+                          title={EXECUTION_PROFILE_HELP.rrGuard}
                           value={riskDraft[field.key]}
                         >
                           {RR_GUARD_MODES.map((mode) => (
@@ -1934,24 +2019,36 @@ export function SettingsPage({
                   <span>Liquidation buffer required</span>
                 </label>
                 <div className="risk-settings-grid">
-                  {FUTURES_FIELD_LABELS.map((field) => (
-                    <label className="risk-setting-field" key={field.key}>
-                      <span>{field.label}</span>
-                      <div>
-                        <input
-                          aria-label={field.label}
-                          disabled={busy || !customRiskEnabled}
-                          inputMode="decimal"
-                          min="0"
-                          onChange={(event) => updateRiskDraft({ [field.key]: Number(event.target.value) })}
-                          step={field.step}
-                          type="number"
-                          value={riskDraft[field.key]}
-                        />
-                        <small>{field.suffix}</small>
-                      </div>
-                    </label>
-                  ))}
+                  {FUTURES_FIELD_LABELS.map((field) => {
+                    const error = riskValidationErrorForField(riskValidationErrors, field.key);
+                    const help = riskNumericFieldHelp(field.key);
+                    const limits = riskNumericFieldLimits(field.key);
+
+                    return (
+                      <label className="risk-setting-field" key={field.key}>
+                        <FieldLabel help={help} label={field.label} />
+                        <div>
+                          <input
+                            aria-describedby={`${field.key}-help ${field.key}-error`}
+                            aria-label={field.label}
+                            aria-invalid={Boolean(error)}
+                            disabled={busy || !customRiskEnabled}
+                            inputMode="decimal"
+                            max={limits?.max}
+                            min={limits?.min ?? 0}
+                            onChange={(event) => updateRiskDraft({ [field.key]: Number(event.target.value) })}
+                            step={field.step}
+                            title={help}
+                            type="number"
+                            value={riskDraft[field.key]}
+                          />
+                          <small>{field.suffix}</small>
+                        </div>
+                        {help ? <small className="risk-help-text" id={`${field.key}-help`}>{help}</small> : null}
+                        {error ? <small className="risk-field-error" id={`${field.key}-error`}>{error}</small> : null}
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
               <div className="risk-plan-block">
@@ -1959,24 +2056,36 @@ export function SettingsPage({
                   <strong>Futures risk budget</strong>
                 </div>
                 <div className="risk-settings-grid">
-                  {FUTURES_TRADE_TYPE_FIELD_LABELS.map((field) => (
-                    <label className="risk-setting-field" key={field.key}>
-                      <span>{field.label}</span>
-                      <div>
-                        <input
-                          aria-label={field.label}
-                          disabled={busy || !customRiskEnabled}
-                          inputMode="decimal"
-                          min="0"
-                          onChange={(event) => updateRiskDraft({ [field.key]: Number(event.target.value) })}
-                          step={field.step}
-                          type="number"
-                          value={riskDraft[field.key]}
-                        />
-                        <small>{field.suffix}</small>
-                      </div>
-                    </label>
-                  ))}
+                  {FUTURES_TRADE_TYPE_FIELD_LABELS.map((field) => {
+                    const error = riskValidationErrorForField(riskValidationErrors, field.key);
+                    const help = riskNumericFieldHelp(field.key);
+                    const limits = riskNumericFieldLimits(field.key);
+
+                    return (
+                      <label className="risk-setting-field" key={field.key}>
+                        <FieldLabel help={help} label={field.label} />
+                        <div>
+                          <input
+                            aria-describedby={`${field.key}-help ${field.key}-error`}
+                            aria-label={field.label}
+                            aria-invalid={Boolean(error)}
+                            disabled={busy || !customRiskEnabled}
+                            inputMode="decimal"
+                            max={limits?.max}
+                            min={limits?.min ?? 0}
+                            onChange={(event) => updateRiskDraft({ [field.key]: Number(event.target.value) })}
+                            step={field.step}
+                            title={help}
+                            type="number"
+                            value={riskDraft[field.key]}
+                          />
+                          <small>{field.suffix}</small>
+                        </div>
+                        {help ? <small className="risk-help-text" id={`${field.key}-help`}>{help}</small> : null}
+                        {error ? <small className="risk-field-error" id={`${field.key}-error`}>{error}</small> : null}
+                      </label>
+                    );
+                  })}
                 </div>
                 <label className="risk-checkbox-row">
                   <input
@@ -1996,7 +2105,9 @@ export function SettingsPage({
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
                   <strong>Virtual risk budget</strong>
+                  <HelpTooltip text={EXECUTION_PROFILE_HELP.virtualVsReal} />
                 </div>
+                <p className="risk-help-note">{EXECUTION_PROFILE_HELP.virtualVsReal}</p>
                 <div className="risk-mode-grid two-option-grid">
                   {VIRTUAL_RISK_MODES.map((mode) => (
                     <button
@@ -2037,6 +2148,7 @@ export function SettingsPage({
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
                   <strong>Virtual execution</strong>
+                  <HelpTooltip text={EXECUTION_PROFILE_HELP.virtualVsReal} />
                 </div>
                 <div className="risk-mode-grid">
                   {VIRTUAL_SLIPPAGE_MODELS.map((model) => (
@@ -2082,10 +2194,14 @@ export function SettingsPage({
           ) : null}
 
           <div className="risk-profile-footer">
-            <span>Balanced is the default profile. Limits reduce risk exposure but cannot guarantee safety.</span>
+            <span>
+              {riskDraftValid
+                ? "Balanced is the default profile. Limits reduce risk exposure but cannot guarantee safety."
+                : Object.values(riskValidationErrors)[0]}
+            </span>
             <button
               className="secondary-action"
-              disabled={busy || !customRiskEnabled}
+              disabled={busy || !customRiskEnabled || !riskDraftValid}
               onClick={handleSaveCustomRisk}
               type="button"
             >
@@ -2223,6 +2339,23 @@ export function SettingsPage({
         </SettingsAccordionSection>
       </div>
     </section>
+  );
+}
+
+function HelpTooltip({ text }: { text: string }) {
+  return (
+    <span aria-label={text} className="risk-help-tooltip" role="img" title={text}>
+      <Info aria-hidden="true" size={14} />
+    </span>
+  );
+}
+
+function FieldLabel({ help, label }: { help?: string; label: string }) {
+  return (
+    <span className="risk-field-label">
+      <span>{label}</span>
+      {help ? <HelpTooltip text={help} /> : null}
+    </span>
   );
 }
 
@@ -2444,80 +2577,58 @@ function formatRiskUsageValue(used: number, limit: number): string {
   return `${formatPercentValue(used)} / ${limit <= 0 ? "Off" : formatPercentValue(limit)}`;
 }
 
-function defaultRiskManagement(): RiskManagementSettings {
-  return {
-    risk_profile: "balanced",
-    risk_mode: "percent",
-    risk_per_trade_percent: 1,
-    fixed_risk_amount: null,
-    fixed_risk_currency: "USDT",
-    radar_display_mode: "all_market_opportunities",
-    min_rr_ratio: 2,
-    rr_guard_mode: "soft",
-    discovery_rr_guard_mode: "soft",
-    real_rr_guard_mode: "hard",
-    virtual_rr_guard_mode: "soft",
-    backtest_rr_guard_mode: "soft",
-    strategy_rr_guard_modes: {},
-    max_daily_loss_percent: 3,
-    max_weekly_loss_percent: 7,
-    max_account_drawdown_percent: 10,
-    max_open_risk_percent: 5,
-    max_correlated_risk_percent: 3,
-    max_spread_bps: 50,
-    max_slippage_bps: 150,
-    max_price_deviation_bps: 100,
-    max_orderbook_liquidity_ratio: 1,
-    include_fees_in_risk: true,
-    include_slippage_in_risk: true,
-    stop_loss_required: true,
-    take_profit_required: true,
-    stop_loss_mode: "fixed_percent",
-    default_stop_loss_percent: 1.5,
-    atr_period: 14,
-    atr_multiplier: 2,
-    take_profit_mode: "risk_multiple",
-    tp1_r_multiple: 1,
-    tp2_r_multiple: 2,
-    tp3_r_multiple: 3,
-    partial_take_profit_enabled: true,
-    tp1_close_percent: 30,
-    tp2_close_percent: 40,
-    tp3_close_percent: 30,
-    move_sl_to_breakeven_after_r: 1,
-    breakeven_offset_percent: 0.05,
-    trailing_stop_enabled: true,
-    trailing_mode: "atr",
-    trailing_atr_multiplier: 1.5,
-    trailing_stop_percent: 0.5,
-    max_leverage: 3,
-    min_liquidation_buffer_percent: 2,
-    liquidation_buffer_required: true,
-    spot_risk_per_trade_percent: 1,
-    spot_max_position_size_percent: 20,
-    spot_stop_required: true,
-    futures_risk_per_trade_percent: 0.5,
-    futures_max_leverage: 3,
-    futures_max_open_risk_percent: 3,
-    futures_liquidation_buffer_required: true,
-    virtual_risk_mode: "same_as_real",
-    virtual_risk_per_trade_percent: 1,
-    virtual_starting_balance: 10000,
-    virtual_slippage_model: "spread_based",
-    virtual_fee_model: "exchange_based",
-    virtual_trading_uses_realistic_execution: true,
-    strategy_risk_multipliers: {
-      trend_following: 1,
-      trend_pullback_continuation: 1,
-      breakout: 0.75,
-      scalping: 0.5,
-      mean_reversion: 0.75,
-      smart_money_setup: 1,
-      news_event_trade: 0.25
-    },
-    auto_reduce_risk_after_losses: true,
-    allow_risk_increase_after_profit: false,
-    increase_risk_after_profit_streak: false,
-    max_risk_boost: 1.25
-  };
+function validateRiskDraft(settings: RiskManagementSettings): RiskValidationErrors {
+  const errors: RiskValidationErrors = {};
+
+  if (settings.risk_mode === "percent" && !isPositiveNumber(settings.risk_per_trade_percent)) {
+    errors.risk_per_trade_percent = "Risk percent is required when risk mode is Percent.";
+  }
+
+  if (settings.risk_mode === "fixed" && !isPositiveNumber(settings.fixed_risk_amount)) {
+    errors.fixed_risk_amount = "Fixed amount is required when risk mode is Fixed.";
+  }
+
+  validateLeverageValue(errors, "max_leverage", settings.max_leverage, "Max leverage");
+  validateLeverageValue(errors, "futures_max_leverage", settings.futures_max_leverage, "Futures max leverage");
+
+  return errors;
+}
+
+function validateLeverageValue(
+  errors: RiskValidationErrors,
+  field: "futures_max_leverage" | "max_leverage",
+  value: number,
+  label: string
+) {
+  const limits = RISK_MANAGEMENT_SCHEMA_LIMITS[field];
+  if (!Number.isFinite(value) || value < limits.min || (limits.max != null && value > limits.max)) {
+    errors[field] = `${label} must be between ${limits.min} and ${limits.max}.`;
+  }
+}
+
+function riskNumericFieldHelp(field: RiskNumericField): string | undefined {
+  if (field === "risk_per_trade_percent") return EXECUTION_PROFILE_HELP.percentRisk;
+  if (field === "max_leverage" || field === "futures_max_leverage") return EXECUTION_PROFILE_HELP.leverage;
+  return undefined;
+}
+
+function riskNumericFieldLimits(field: RiskNumericField): NumericInputLimits | undefined {
+  if (field === "risk_per_trade_percent") return RISK_MANAGEMENT_SCHEMA_LIMITS.risk_per_trade_percent;
+  if (field === "max_leverage") return RISK_MANAGEMENT_SCHEMA_LIMITS.max_leverage;
+  if (field === "futures_max_leverage") return RISK_MANAGEMENT_SCHEMA_LIMITS.futures_max_leverage;
+  return undefined;
+}
+
+function riskValidationErrorForField(
+  errors: RiskValidationErrors,
+  field: RiskNumericField
+): string | undefined {
+  if (field === "risk_per_trade_percent") return errors.risk_per_trade_percent;
+  if (field === "max_leverage") return errors.max_leverage;
+  if (field === "futures_max_leverage") return errors.futures_max_leverage;
+  return undefined;
+}
+
+function isPositiveNumber(value: number | null): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }

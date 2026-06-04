@@ -1606,6 +1606,22 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   color: #cbd5e1;
 }
 
+.segmented button span,
+.segmented button small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.segmented button small {
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .segmented .active { border-color: #2563eb; background: #172554; }
 
 .risk-settings-grid {
@@ -1627,6 +1643,54 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .risk-setting-field small {
   color: #9ca3af;
   font-size: 12px;
+}
+
+.risk-setting-field .risk-field-label {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+}
+
+.risk-field-label > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.risk-help-tooltip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: #93c5fd;
+  cursor: help;
+}
+
+.risk-help-note,
+.risk-setting-field .risk-help-text,
+.risk-setting-field .risk-field-error {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.risk-help-note {
+  color: #94a3b8;
+}
+
+.risk-setting-field .risk-help-text {
+  display: block;
+  margin-top: 6px;
+  color: #94a3b8;
+}
+
+.risk-setting-field .risk-field-error {
+  display: block;
+  margin-top: 5px;
+  color: #fca5a5;
 }
 
 .risk-setting-field div {

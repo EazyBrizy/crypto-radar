@@ -1,14 +1,16 @@
 import asyncio
 import contextlib
+import hashlib
 import logging
 import time
 from typing import Optional
 
+from app.core.config import settings
 from app.services.market_scanner import MarketScanner
 from app.services.candle_service import candle_service
 from app.services.message_broker import realtime_event_broker
 from app.services.notification_service import notification_service
-from app.services.radar_config_service import radar_config_service
+from app.services.radar_config_service import ScannerUniverseLimitError, radar_config_service
 from app.services.realtime_events import signal_created_event, signal_updated_event
 from app.services.signal_service import SignalService, signal_service
 
@@ -32,7 +34,7 @@ class ScannerRunner:
         self._external_scanner = scanner is not None
         self._stopping = False
         self._last_update_event_monotonic: dict[str, float] = {}
-        self._scanner_subscription_hash = radar_config_service.scanner_subscription_hash()
+        self._scanner_subscription_hash = self._scanner_subscription_hash_for_current_config()
 
     @property
     def is_running(self) -> bool:
@@ -65,7 +67,7 @@ class ScannerRunner:
         logger.info("Scanner runner started")
 
     async def reconfigure(self) -> None:
-        next_subscription_hash = radar_config_service.scanner_subscription_hash()
+        next_subscription_hash = self._scanner_subscription_hash_for_current_config()
         should_rebuild = next_subscription_hash != self._scanner_subscription_hash
         was_running = self.is_running
         if was_running and should_rebuild:
@@ -167,8 +169,35 @@ class ScannerRunner:
 
     @staticmethod
     def _build_configured_scanner() -> MarketScanner:
-        candle_service.configure_timeframes(radar_config_service.selected_timeframes())
+        timeframes = radar_config_service.selected_timeframes()
+        candle_service.configure_timeframes(timeframes)
+        try:
+            scanner_universe = radar_config_service.scanner_universe()
+        except ScannerUniverseLimitError as exc:
+            logger.warning("Scanner universe blocked by pair guard: %s", exc)
+            return MarketScanner(
+                symbols=[],
+                exchanges=[],
+                scan_pairs=[],
+                universe_source="blocked",
+                universe_warning=str(exc),
+                max_scanner_pairs=settings.max_scanner_pairs,
+                estimated_strategy_checks=0,
+            )
         return MarketScanner(
-            symbols=radar_config_service.selected_symbols(),
-            exchanges=radar_config_service.selected_exchanges(),
+            symbols=[symbol for _, symbol in scanner_universe.pairs],
+            exchanges=[exchange for exchange, _ in scanner_universe.pairs],
+            scan_pairs=scanner_universe.pairs,
+            universe_source=scanner_universe.source,
+            universe_warning=scanner_universe.warning,
+            max_scanner_pairs=scanner_universe.max_pairs,
+            estimated_strategy_checks=scanner_universe.estimated_strategy_checks,
         )
+
+    @staticmethod
+    def _scanner_subscription_hash_for_current_config() -> str:
+        try:
+            return radar_config_service.scanner_subscription_hash()
+        except ScannerUniverseLimitError as exc:
+            digest = hashlib.sha256(str(exc).encode("utf-8")).hexdigest()[:16]
+            return f"blocked:{digest}"

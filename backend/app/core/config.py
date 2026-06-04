@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     signal_outcome_tracking_min_score: int = 70
     signal_outcome_same_candle_resolution: str = "conservative_stop_first"
     strategy_performance_min_sample_size: int = 30
+    max_scanner_pairs: int = 200
+    truncate_scanner_pairs_over_limit: bool = False
 
 
 settings = Settings()

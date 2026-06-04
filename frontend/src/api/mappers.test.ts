@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeExecutionReport } from "./mappers";
+import { normalizeExecutionReport, normalizeRadarStatus } from "./mappers";
 
 describe("normalizeExecutionReport", () => {
   it("preserves realistic virtual fill result diagnostics", () => {
@@ -47,5 +47,29 @@ describe("normalizeExecutionReport", () => {
     expect(report?.fill_result?.reason).toBe("requested_notional_above_safe_size");
     expect(report?.fill_result?.raw_inputs_snapshot.symbol).toBe("LOWCAPUSDT");
     expect(report?.raw_inputs_snapshot.market_data_status).toBe("fresh");
+  });
+});
+
+describe("normalizeRadarStatus", () => {
+  it("preserves scanner universe diagnostics", () => {
+    const status = normalizeRadarStatus({
+      status: "ok",
+      scanner_enabled: true,
+      scanner_running: true,
+      processed_signals: 0,
+      scan_pairs: ["bybit:XRPUSDT", "bybit:BTCUSDT"],
+      scanner_pairs_count: 2,
+      scanner_universe_source: "explicit pairs",
+      scanner_universe_warning: "Scanner universe has 3 pairs, max_scanner_pairs=2.",
+      estimated_strategy_checks: 6,
+      max_scanner_pairs: 2
+    });
+
+    expect(status.scan_pairs).toEqual(["bybit:XRPUSDT", "bybit:BTCUSDT"]);
+    expect(status.scanner_pairs_count).toBe(2);
+    expect(status.scanner_universe_source).toBe("explicit pairs");
+    expect(status.scanner_universe_warning).toContain("max_scanner_pairs=2");
+    expect(status.estimated_strategy_checks).toBe(6);
+    expect(status.max_scanner_pairs).toBe(2);
   });
 });

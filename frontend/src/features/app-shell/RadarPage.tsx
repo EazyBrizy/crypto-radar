@@ -49,6 +49,10 @@ export function RadarPage(props: RadarPageProps) {
   const highConfidence = props.signals.filter((signal) => signal.score >= 80).length;
   const positiveEdge = props.signals.filter((signal) => signal.edge?.status === "positive").length;
   const blockedIdeas = props.signals.filter((signal) => isRiskRewardBlocked(signal) || signal.no_trade_filter?.blocked || signal.risk_gate_status === "failed" || signal.can_enter === false).length;
+  const scannerPairCount = props.radarStatus?.scanner_pairs_count ?? props.health?.scanner_pairs_count ?? props.radarStatus?.symbols.length ?? 0;
+  const scannerUniverse = props.radarStatus?.scanner_universe_source ?? props.health?.scanner_universe_source ?? "default";
+  const estimatedEvaluations = props.radarStatus?.estimated_strategy_checks ?? props.health?.estimated_strategy_checks ?? 0;
+  const scannerWarning = props.radarStatus?.scanner_universe_warning ?? props.health?.scanner_universe_warning ?? null;
   const latestSeries = Object.entries(props.radarStatus?.candle_history ?? {})
     .sort(([, left], [, right]) => right - left)
     .slice(0, 6);
@@ -90,8 +94,11 @@ export function RadarPage(props: RadarPageProps) {
           <div className="scanner-stats">
             <span>Signals found: {props.radarStatus?.signals_found ?? props.health?.signals_found ?? 0}</span>
             <span>Seeded candles: {props.radarStatus?.candles_seeded ?? props.health?.candles_seeded ?? 0}</span>
-            <span>Pairs: {props.radarStatus?.symbols.length ?? 0}</span>
+            <span>Pairs: {scannerPairCount}</span>
+            <span>Universe: {scannerUniverse}</span>
+            <span>Estimated evaluations: {estimatedEvaluations}</span>
             <span>Timeframes: {props.radarStatus?.timeframes.join(", ") ?? "1m, 5m, 15m, 1h, 4h, 1d"}</span>
+            {scannerWarning ? <span>Warning: {scannerWarning}</span> : null}
           </div>
           <div className="history-grid">
             {latestSeries.length ? latestSeries.map(([series, candles]) => (

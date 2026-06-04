@@ -937,6 +937,11 @@ export interface HealthStatus {
   strategy_evaluations?: number;
   signals_found?: number;
   candles_seeded?: number;
+  scanner_pairs_count?: number;
+  scanner_universe_source?: string;
+  scanner_universe_warning?: string | null;
+  estimated_strategy_checks?: number;
+  max_scanner_pairs?: number | null;
   last_symbol?: string | null;
   last_price?: number | null;
 }
@@ -944,6 +949,12 @@ export interface HealthStatus {
 export interface RadarStatus extends HealthStatus {
   exchanges: string[];
   symbols: string[];
+  scan_pairs: string[];
+  scanner_pairs_count: number;
+  scanner_universe_source: string;
+  scanner_universe_warning: string | null;
+  estimated_strategy_checks: number;
+  max_scanner_pairs: number | null;
   timeframes: string[];
   strategies: string[];
   scanner_subscription_hash: string | null;

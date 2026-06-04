@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from collections import defaultdict, deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
@@ -122,9 +122,31 @@ class MarketScanner:
         pending_entry_trigger: PendingEntryTriggerProcessor | None = pending_entry_trigger_service,
         derivative_market: DerivativeMarketSnapshotService | None = derivative_market_snapshot_service,
         alpha_market_context: AlphaMarketContextService | None = alpha_market_context_service,
+        scan_pairs: Iterable[tuple[str, str]] | None = None,
+        universe_source: str = "default",
+        universe_warning: str | None = None,
+        max_scanner_pairs: int | None = None,
+        estimated_strategy_checks: int | None = None,
     ) -> None:
-        self._symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
-        self._exchanges = [exchange.lower() for exchange in (exchanges or ["bybit"])]
+        requested_symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
+        requested_exchanges = [exchange.lower() for exchange in (exchanges or ["bybit"])]
+        explicit_scan_pairs = scan_pairs is not None
+        self._scan_pairs = _normalize_scan_pairs(
+            scan_pairs
+            if explicit_scan_pairs
+            else [
+                (exchange, symbol)
+                for exchange in requested_exchanges
+                for symbol in requested_symbols
+            ]
+        )
+        self._scan_pair_keys = set(self._scan_pairs)
+        self._symbols_by_exchange = _symbols_by_exchange(self._scan_pairs)
+        self._symbols = _unique_symbols(self._scan_pairs) or ([] if explicit_scan_pairs else requested_symbols)
+        self._exchanges = _unique_exchanges(self._scan_pairs) or ([] if explicit_scan_pairs else requested_exchanges)
+        self._universe_source = universe_source
+        self._universe_warning = universe_warning
+        self._max_scanner_pairs = max_scanner_pairs
         self._adapters = self._build_adapters()
         self._candle_store = candle_store
         self._market_persistence = market_persistence
@@ -149,17 +171,33 @@ class MarketScanner:
         )
         self._last_alpha_context_by_series: dict[tuple[str, str, str], AlphaMarketContext] = {}
         self._history_warmed_up = False
+        self._estimated_strategy_checks = (
+            estimated_strategy_checks
+            if estimated_strategy_checks is not None
+            else self._estimate_strategy_checks()
+        )
 
     def _build_adapters(self) -> list[BybitAdapter]:
         adapters: list[BybitAdapter] = []
         for exchange in self._exchanges:
+            symbols = self._symbols_by_exchange.get(exchange, [])
+            if not symbols:
+                continue
             if exchange == "bybit":
-                adapters.append(BybitAdapter(self._symbols))
+                adapters.append(BybitAdapter(symbols))
             else:
                 logger.warning("Exchange adapter is not implemented: %s", exchange)
         return adapters
 
     async def process_tick(self, data: MarketData) -> List[StrategySignal]:
+        if not self._can_scan_pair(data.exchange, data.symbol):
+            logger.debug(
+                "Market tick skipped outside scanner universe: %s:%s",
+                data.exchange,
+                data.symbol,
+            )
+            return []
+
         self._stats.ticks_processed += 1
         self._stats.last_tick_at = data.timestamp
         self._stats.last_exchange = data.exchange
@@ -608,6 +646,12 @@ class MarketScanner:
         return {
             "exchanges": self.exchanges,
             "symbols": self.symbols,
+            "scan_pairs": [f"{exchange}:{symbol}" for exchange, symbol in self._scan_pairs],
+            "scanner_pairs_count": len(self._scan_pairs),
+            "scanner_universe_source": self._universe_source,
+            "scanner_universe_warning": self._universe_warning,
+            "max_scanner_pairs": self._max_scanner_pairs,
+            "estimated_strategy_checks": self._estimated_strategy_checks,
             "timeframes": self._candle_store.timeframes,
             "strategies": self._strategy_engine.strategy_names,
             "ticks_processed": self._stats.ticks_processed,
@@ -632,14 +676,37 @@ class MarketScanner:
     def exchanges(self) -> list[str]:
         return list(self._exchanges)
 
+    def _can_scan_pair(self, exchange: str, symbol: str) -> bool:
+        return _symbol_key(exchange, symbol) in self._scan_pair_keys
+
+    def _estimate_strategy_checks(self) -> int:
+        if self._strategy_configs is not None:
+            try:
+                runtime_configs = self._strategy_configs.runtime_configs()
+            except Exception as exc:
+                logger.warning("Strategy config lookup failed for scanner estimate: %s", exc)
+                runtime_configs = []
+            if runtime_configs:
+                return sum(
+                    1
+                    for exchange, symbol in self._scan_pairs
+                    for timeframe in self._candle_store.timeframes
+                    for config in runtime_configs
+                    if config.matches(exchange=exchange, symbol=symbol, timeframe=timeframe)
+                )
+        return len(self._scan_pairs) * len(self._candle_store.timeframes) * self._strategy_engine.strategy_count
+
     def _log_heartbeat(self) -> None:
         now = time.monotonic()
         if now - self._last_heartbeat_monotonic < HEARTBEAT_INTERVAL_SEC:
             return
         self._last_heartbeat_monotonic = now
         logger.info(
-            "Scanner heartbeat: ticks=%s candles=%s features=%s strategy_checks=%s "
-            "signals=%s last=%s:%s price=%s",
+            "Scanner heartbeat: pairs=%s timeframes=%s strategy_checks=%s ticks=%s "
+            "candles=%s features=%s actual_strategy_checks=%s signals=%s last=%s:%s price=%s",
+            len(self._scan_pairs),
+            len(self._candle_store.timeframes),
+            self._estimated_strategy_checks,
             self._stats.ticks_processed,
             self._stats.candles_updated,
             self._stats.features_built,
@@ -691,6 +758,15 @@ class MarketScanner:
             ", ".join(self._exchanges),
             ", ".join(self._symbols),
         )
+        logger.info(
+            "Scanner activity: pairs=%s timeframes=%s strategy_checks=%s universe=%s",
+            len(self._scan_pairs),
+            len(self._candle_store.timeframes),
+            self._estimated_strategy_checks,
+            self._universe_source,
+        )
+        if self._universe_warning:
+            logger.warning("Scanner universe warning: %s", self._universe_warning)
         async for tick in self.listen():
             signals = await self.process_tick(tick)
             for signal in signals:
@@ -704,13 +780,14 @@ class MarketScanner:
         if "bybit" not in self._exchanges:
             return
 
+        bybit_symbols = self._symbols_by_exchange.get("bybit", [])
         logger.info(
             "Warming up OHLCV history from Bybit for symbols=%s timeframes=%s",
-            ", ".join(self._symbols),
+            ", ".join(bybit_symbols),
             ", ".join(self._candle_store.timeframes),
         )
         seeded_total = 0
-        for symbol in self._symbols:
+        for symbol in bybit_symbols:
             for timeframe in self._candle_store.timeframes:
                 try:
                     candles = await asyncio.to_thread(
@@ -768,3 +845,28 @@ def _features_with_derivative_context(
 
 def _symbol_key(exchange: str, symbol: str) -> tuple[str, str]:
     return (exchange.strip().lower(), symbol.strip().upper())
+
+
+def _normalize_scan_pairs(pairs: Iterable[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    normalized = [
+        _symbol_key(exchange, symbol)
+        for exchange, symbol in pairs
+        if exchange.strip() and symbol.strip()
+    ]
+    return tuple(dict.fromkeys(normalized))
+
+
+def _symbols_by_exchange(pairs: Iterable[tuple[str, str]]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = defaultdict(list)
+    for exchange, symbol in pairs:
+        if symbol not in result[exchange]:
+            result[exchange].append(symbol)
+    return dict(result)
+
+
+def _unique_symbols(pairs: Iterable[tuple[str, str]]) -> list[str]:
+    return list(dict.fromkeys(symbol for _, symbol in pairs))
+
+
+def _unique_exchanges(pairs: Iterable[tuple[str, str]]) -> list[str]:
+    return list(dict.fromkeys(exchange for exchange, _ in pairs))

@@ -77,10 +77,12 @@ def _scanner_status(
     scanner_enabled: bool | None = None,
 ) -> dict[str, object]:
     enabled = runner is not None if scanner_enabled is None else scanner_enabled
+    config_status = _scanner_config_status()
     if runner is not None:
         return {
             "status": "ok",
             "scanner_enabled": enabled,
+            **config_status,
             **runner.scanner_status,
         }
 
@@ -89,11 +91,17 @@ def _scanner_status(
         "scanner_enabled": enabled,
         "scanner_running": False,
         "scanner_stopping": False,
-        "scanner_subscription_hash": radar_config_service.scanner_subscription_hash(),
+        "scanner_subscription_hash": config_status["scanner_subscription_hash"],
         "strategy_config_hash": radar_config_service.strategy_config_hash(),
         "processed_signals": 0,
         "exchanges": [],
         "symbols": [],
+        "scan_pairs": config_status["scan_pairs"],
+        "scanner_pairs_count": config_status["scanner_pairs_count"],
+        "scanner_universe_source": config_status["scanner_universe_source"],
+        "scanner_universe_warning": config_status["scanner_universe_warning"],
+        "max_scanner_pairs": config_status["max_scanner_pairs"],
+        "estimated_strategy_checks": config_status["estimated_strategy_checks"],
         "timeframes": [],
         "strategies": [],
         "ticks_processed": 0,
@@ -108,4 +116,29 @@ def _scanner_status(
         "last_symbol": None,
         "last_price": None,
         "candle_history": {},
+    }
+
+
+def _scanner_config_status() -> dict[str, object]:
+    try:
+        universe = radar_config_service.scanner_universe()
+        subscription_hash = radar_config_service.scanner_subscription_hash(universe)
+    except Exception as exc:
+        return {
+            "scanner_subscription_hash": "blocked",
+            "scan_pairs": [],
+            "scanner_pairs_count": 0,
+            "scanner_universe_source": "blocked",
+            "scanner_universe_warning": str(exc),
+            "max_scanner_pairs": None,
+            "estimated_strategy_checks": 0,
+        }
+    return {
+        "scanner_subscription_hash": subscription_hash,
+        "scan_pairs": [f"{exchange}:{symbol}" for exchange, symbol in universe.pairs],
+        "scanner_pairs_count": len(universe.pairs),
+        "scanner_universe_source": universe.source,
+        "scanner_universe_warning": universe.warning,
+        "max_scanner_pairs": universe.max_pairs,
+        "estimated_strategy_checks": universe.estimated_strategy_checks,
     }

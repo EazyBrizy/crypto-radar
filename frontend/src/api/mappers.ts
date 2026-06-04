@@ -1627,6 +1627,11 @@ export function normalizeHealth(value: unknown): HealthStatus {
     strategy_evaluations: Number(health.strategy_evaluations ?? 0),
     signals_found: Number(health.signals_found ?? 0),
     candles_seeded: Number(health.candles_seeded ?? 0),
+    scanner_pairs_count: Number(health.scanner_pairs_count ?? 0),
+    scanner_universe_source: String(health.scanner_universe_source ?? "default"),
+    scanner_universe_warning: health.scanner_universe_warning ?? null,
+    estimated_strategy_checks: Number(health.estimated_strategy_checks ?? 0),
+    max_scanner_pairs: health.max_scanner_pairs == null ? null : Number(health.max_scanner_pairs),
     last_symbol: health.last_symbol ?? null,
     last_price: health.last_price ?? null
   };
@@ -1634,10 +1639,17 @@ export function normalizeHealth(value: unknown): HealthStatus {
 
 export function normalizeRadarStatus(value: unknown): RadarStatus {
   const status = value as Partial<RadarStatus>;
+  const scanPairs = status.scan_pairs ?? [];
   return {
     ...normalizeHealth(status),
     exchanges: status.exchanges ?? [],
     symbols: status.symbols ?? [],
+    scan_pairs: scanPairs,
+    scanner_pairs_count: Number(status.scanner_pairs_count ?? scanPairs.length ?? status.symbols?.length ?? 0),
+    scanner_universe_source: String(status.scanner_universe_source ?? "default"),
+    scanner_universe_warning: status.scanner_universe_warning ?? null,
+    estimated_strategy_checks: Number(status.estimated_strategy_checks ?? 0),
+    max_scanner_pairs: status.max_scanner_pairs == null ? null : Number(status.max_scanner_pairs),
     timeframes: status.timeframes ?? [],
     strategies: status.strategies ?? [],
     scanner_subscription_hash: status.scanner_subscription_hash ?? null,

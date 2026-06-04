@@ -196,6 +196,11 @@ async def health() -> dict[str, object]:
             else {}
         ),
         "processed_signals": runner.processed_signals if runner else 0,
+        "scanner_pairs_count": scanner_status.get("scanner_pairs_count", 0),
+        "scanner_universe_source": scanner_status.get("scanner_universe_source", "default"),
+        "scanner_universe_warning": scanner_status.get("scanner_universe_warning"),
+        "estimated_strategy_checks": scanner_status.get("estimated_strategy_checks", 0),
+        "max_scanner_pairs": scanner_status.get("max_scanner_pairs"),
         "ticks_processed": scanner_status.get("ticks_processed", 0),
         "features_built": scanner_status.get("features_built", 0),
         "strategy_evaluations": scanner_status.get("strategy_evaluations", 0),

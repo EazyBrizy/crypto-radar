@@ -16,6 +16,7 @@ from app.models.market import MarketExchange, MarketPair
 from app.models.outbox import OutboxEvent
 from app.models.signal import TradingSignal, TradingSignalEvent
 from app.models.strategy import StrategyTemplate, StrategyVersion
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.market import CandleState
 from app.schemas.signal import RadarSignal, SignalScoreBreakdown, StrategySignal
 from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
@@ -259,6 +260,7 @@ class PostgresSignalRepository:
                 _update_record_from_signal(record, signal, db_status, expires_at=expires_at)
                 record.updated_at = now
 
+            record.features_snapshot = _with_signal_lifecycle_trace(record.features_snapshot, record.id)
             result = _persist_signal_event(session, record, event_type, old_status=None, now=now)
             session.commit()
             return result
@@ -353,6 +355,7 @@ class PostgresSignalRepository:
             if record.status in OPEN_SIGNAL_STATUSES:
                 self._signal_outcomes.create_tracking_for_signal(record, session=session)
 
+            record.features_snapshot = _with_signal_lifecycle_trace(record.features_snapshot, record.id)
             result = _persist_signal_event(
                 session,
                 record,
@@ -426,6 +429,7 @@ class PostgresSignalRepository:
             if not isinstance(lifecycle_events, list):
                 lifecycle_events = []
             snapshot["lifecycle_events"] = [*lifecycle_events[-19:], lifecycle_event]
+            snapshot = _with_signal_lifecycle_trace(snapshot, record.id)
             record.features_snapshot = snapshot
             result = _persist_signal_event(
                 session,
@@ -458,6 +462,7 @@ class PostgresSignalRepository:
                 "message": "Auto-entry is armed and waiting for strategy confirmation",
                 "request": request,
             }
+            snapshot = _with_signal_lifecycle_trace(snapshot, record.id)
             record.features_snapshot = snapshot
             record.updated_at = now
             result = _persist_signal_event(
@@ -503,6 +508,7 @@ class PostgresSignalRepository:
             snapshot["auto_entry"] = auto_entry
             if message:
                 snapshot["status_reason"] = message
+            snapshot = _with_signal_lifecycle_trace(snapshot, record.id)
             record.features_snapshot = snapshot
             record.updated_at = now
             result = _persist_signal_event(
@@ -533,6 +539,7 @@ class PostgresSignalRepository:
             record.updated_at = now
             snapshot = dict(record.features_snapshot or {})
             snapshot["decision"] = {key: value for key, value in decision.items() if value is not None}
+            snapshot = _with_signal_lifecycle_trace(snapshot, record.id)
             record.features_snapshot = snapshot
             result = _persist_signal_event(
                 session,
@@ -578,6 +585,7 @@ def _expire_open_signal_records(session: Session, now: datetime) -> bool:
         old_status = record.status
         record.status = "expired"
         record.updated_at = now
+        record.features_snapshot = _with_signal_lifecycle_trace(record.features_snapshot, record.id)
         _persist_signal_event(
             session,
             record,
@@ -760,6 +768,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         decision_mode=decision.get("decision_mode"),
         decision_note=decision.get("decision_note"),
         confirmed_trade_id=decision.get("confirmed_trade_id"),
+        lifecycle_trace=_signal_lifecycle_trace(snapshot, record.id),
     )
 
 
@@ -784,6 +793,25 @@ def _trade_plan_from_snapshot_or_record(
         selected_rr_target=_string_or_none(snapshot.get("selected_rr_target")),
         min_rr_ratio=_float(snapshot.get("min_rr_ratio")),
     )
+
+
+def _with_signal_lifecycle_trace(snapshot: dict[str, Any] | None, signal_id: UUID) -> dict[str, Any]:
+    updated = dict(snapshot or {})
+    trace = _signal_lifecycle_trace(updated, signal_id)
+    updated["lifecycle_trace"] = trace.model_dump(mode="json", exclude_none=True)
+    return updated
+
+
+def _signal_lifecycle_trace(snapshot: dict[str, Any], signal_id: UUID) -> LifecycleTrace:
+    raw_trace = snapshot.get("lifecycle_trace")
+    if isinstance(raw_trace, dict):
+        try:
+            trace = LifecycleTrace.model_validate(raw_trace)
+        except ValueError:
+            trace = LifecycleTrace()
+    else:
+        trace = LifecycleTrace()
+    return trace.model_copy(update={"signal_id": str(signal_id)})
 
 
 def _snapshot_candle_state(snapshot: dict[str, Any]) -> CandleState:
@@ -930,6 +958,7 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "edge": _model_dump_optional(signal.edge),
         "no_trade_filter": _model_dump_optional(signal.no_trade_filter),
         "decision_snapshot": _model_dump_optional(signal.decision),
+        "lifecycle_trace": signal.lifecycle_trace.model_dump(mode="json", exclude_none=True),
         "decision": {
             "confirmed_trade_id": signal.confirmed_trade_id,
             "decision_mode": signal.decision_mode,
@@ -976,7 +1005,7 @@ def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str
     if not existing:
         return incoming
     merged = dict(incoming)
-    for key in ("decision", "decision_snapshot", "lifecycle_events"):
+    for key in ("decision", "decision_snapshot", "lifecycle_events", "lifecycle_trace"):
         value = existing.get(key)
         if value is not None and key not in merged:
             merged[key] = value

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import hashlib
 from typing import Any
 
 from app.schemas.trade import (
@@ -367,7 +368,28 @@ def _close_quantity(
     exit_fees = trade.exit_fees + exit_fee
     realized_pnl = trade.realized_pnl + realized_delta
     fees = entry_fee_total + exit_fees
+    exit_event_id = _exit_event_id(
+        trade=trade,
+        reason=reason,
+        target_label=target_label,
+        now=now,
+        quantity=close_quantity,
+        exit_price=slipped_exit,
+    )
+    lifecycle_trace = trade.lifecycle_trace.model_copy(
+        update={
+            "signal_id": trade.signal_id,
+            "virtual_trade_id": trade.id,
+            "exit_event_id": exit_event_id,
+        }
+    )
     event = VirtualTradeLifecycleEvent(
+        signal_id=trade.signal_id,
+        pending_entry_intent_id=lifecycle_trace.pending_entry_intent_id,
+        risk_decision_id=lifecycle_trace.risk_decision_id,
+        virtual_trade_id=trade.id,
+        real_order_id=lifecycle_trace.real_order_id,
+        exit_event_id=exit_event_id,
         event_type=reason,
         reason=reason,
         target_label=target_label,
@@ -378,10 +400,12 @@ def _close_quantity(
         exit_fee=exit_fee,
         stop_loss=trade.current_stop_loss or trade.stop_loss,
         created_at=now,
+        lifecycle_trace=lifecycle_trace,
         metadata={
             "gross_pnl": gross_pnl,
             "allocated_entry_fee": allocated_entry_fee,
             "trigger_price": exit_price,
+            "exit_slippage_bps": _exit_slippage_bps_for_trade(trade, reason),
         },
     )
     updates: dict[str, Any] = {
@@ -403,6 +427,7 @@ def _close_quantity(
         "close_reason": reason,
         "updated_at": now,
         "lifecycle_events": [*trade.lifecycle_events, event],
+        "lifecycle_trace": lifecycle_trace,
     }
     closed = remaining_after <= _EPSILON
     if closed:
@@ -689,6 +714,31 @@ def _append_event(
     event: VirtualTradeLifecycleEvent,
 ) -> VirtualTrade:
     return trade.model_copy(update={"lifecycle_events": [*trade.lifecycle_events, event]})
+
+
+def _exit_event_id(
+    *,
+    trade: VirtualTrade,
+    reason: CloseReason,
+    target_label: str | None,
+    now: datetime,
+    quantity: float,
+    exit_price: float,
+) -> str:
+    payload = "|".join(
+        [
+            trade.id,
+            trade.signal_id,
+            reason,
+            target_label or "",
+            now.isoformat(),
+            f"{quantity:.12f}",
+            f"{exit_price:.12f}",
+            str(len(trade.lifecycle_events)),
+        ]
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"exit:{digest}"
 
 
 def _initial_quantity(trade: VirtualTrade) -> float:

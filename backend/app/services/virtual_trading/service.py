@@ -661,8 +661,16 @@ class VirtualTradingService:
         )
         quantity = size_usd / entry_price
         now = datetime.now(timezone.utc)
+        trade_id = f"vtr_{uuid4().hex[:12]}"
+        lifecycle_trace = filled_decision.lifecycle_trace.model_copy(
+            update={
+                "signal_id": signal.id,
+                "virtual_trade_id": trade_id,
+            }
+        )
+        execution = execution.model_copy(update={"lifecycle_trace": lifecycle_trace})
         trade = VirtualTrade(
-            id=f"vtr_{uuid4().hex[:12]}",
+            id=trade_id,
             user_id=gate_request.user_id,
             signal_id=signal.id,
             exchange=signal.exchange,
@@ -690,6 +698,7 @@ class VirtualTradingService:
             execution=execution,
             opened_at=now,
             updated_at=now,
+            lifecycle_trace=lifecycle_trace,
         )
         trade = initialize_virtual_trade_lifecycle(trade)
         return arm_virtual_trade_time_stop(
@@ -961,8 +970,10 @@ class VirtualTradingService:
                 decision=decision,
                 user_id=request.user_id,
                 signal_id=signal.id,
+                pending_entry_intent_id=decision.lifecycle_trace.pending_entry_intent_id,
                 input_snapshot={
                     "flow": "virtual_trade.blocked_attempt",
+                    "lifecycle_trace": decision.lifecycle_trace.model_dump(mode="json", exclude_none=True),
                     "request": request.model_dump(mode="json"),
                     "signal": signal.model_dump(mode="json"),
                     "execution_profile": execution_profile.model_dump(mode="json"),
@@ -989,8 +1000,10 @@ class VirtualTradingService:
                 decision=decision,
                 user_id=request.user_id,
                 signal_id=signal.id,
+                pending_entry_intent_id=decision.lifecycle_trace.pending_entry_intent_id,
                 input_snapshot={
                     "flow": "virtual_execution.preview",
+                    "lifecycle_trace": decision.lifecycle_trace.model_dump(mode="json", exclude_none=True),
                     "request": request.model_dump(mode="json"),
                     "signal": signal.model_dump(mode="json"),
                     "execution_profile": execution_profile.model_dump(mode="json"),
@@ -1013,6 +1026,7 @@ class VirtualTradingService:
         return execution.model_copy(
             update={
                 "risk_decision": risk_decision,
+                "lifecycle_trace": risk_decision.lifecycle_trace,
                 "risk_adjustment_plan": risk_decision.risk_adjustment_plan,
                 "risk_check": risk_decision.risk_check,
                 "position_sizing": risk_decision.position_sizing,

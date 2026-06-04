@@ -43,6 +43,7 @@ from app.schemas.market import (
     RecentTradesAggregate,
     VwapReactionFeatures,
 )
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.external_exchange import (
     ExternalExchangeOrderResponse,
     ExternalExchangeTradeResponse,
@@ -213,6 +214,7 @@ __all__ = [
     "KAFKA_TOPICS",
     "KafkaTopic",
     "LiquidityPoolFeatures",
+    "LifecycleTrace",
     "MarketData",
     "MarketDataStatus",
     "NORMALIZED_TOPIC_BY_EVENT_TYPE",

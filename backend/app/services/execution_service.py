@@ -9,6 +9,7 @@ from app.exchanges.base import (
     exchange_execution_capabilities,
     protective_order_strategy_for_adapter,
 )
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.risk import AccountRiskSnapshot, RiskDecision
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
@@ -191,6 +192,7 @@ class RealExecutionService:
         )
         account_snapshot_blockers = _live_account_snapshot_blockers(account_snapshot) if live_adapter else []
         if account_snapshot_blockers:
+            lifecycle_trace = _request_lifecycle_trace(signal, request)
             return RealExecutionResult(
                 status="risk_failed",
                 signal_valid=True,
@@ -199,6 +201,7 @@ class RealExecutionService:
                 symbol=signal.symbol,
                 message="Real execution account snapshot failed: " + "; ".join(account_snapshot_blockers),
                 validation_errors=account_snapshot_blockers,
+                lifecycle_trace=lifecycle_trace,
             )
         risk_decision = self._risk_gate_service.evaluate(
             context=self._risk_context_service.build_real_context(
@@ -270,6 +273,7 @@ class RealExecutionService:
             strategy_risk_settings_source=strategy_risk_settings_source,
             account_snapshot=account_snapshot,
         )
+        lifecycle_trace = _execution_lifecycle_trace(risk_decision, risk_decision_id)
         if not risk_decision.can_enter:
             message = _risk_rejection_message(risk_decision)
             return RealExecutionResult(
@@ -281,11 +285,13 @@ class RealExecutionService:
                 message=message,
                 risk_decision=risk_decision,
                 risk_decision_id=risk_decision_id,
+                lifecycle_trace=lifecycle_trace,
             )
         execution_plan = _build_execution_plan(
             signal=signal,
             request=request,
             risk_decision=risk_decision,
+            lifecycle_trace=lifecycle_trace,
             adapter=self._execution_adapter,
             account_snapshot=account_snapshot,
         )
@@ -315,6 +321,7 @@ class RealExecutionService:
                 idempotency_key=execution_plan.idempotency_key,
                 warnings=normalization.warnings,
                 validation_errors=validation_errors,
+                lifecycle_trace=execution_plan.lifecycle_trace,
             )
         if not_implemented_reason is not None:
             return RealExecutionResult(
@@ -331,6 +338,7 @@ class RealExecutionService:
                 idempotency_key=execution_plan.idempotency_key,
                 adapter=getattr(self._execution_adapter, "name", None),
                 warnings=normalization.warnings,
+                lifecycle_trace=execution_plan.lifecycle_trace,
             )
 
         readiness = self._readiness_service.evaluate(
@@ -360,6 +368,7 @@ class RealExecutionService:
                 idempotency_key=execution_plan.idempotency_key,
                 warnings=_dedupe([*normalization.warnings, *readiness.warnings]),
                 validation_errors=readiness.blockers,
+                lifecycle_trace=execution_plan.lifecycle_trace,
             )
 
         planned_orders = await _place_execution_plan(
@@ -376,6 +385,7 @@ class RealExecutionService:
             planned_orders=planned_orders,
             adapter_is_dry_run=getattr(self._execution_adapter, "is_dry_run", False),
         )
+        lifecycle_trace = execution_plan.lifecycle_trace
         return RealExecutionResult(
             status=result_status,
             signal_valid=True,
@@ -390,6 +400,7 @@ class RealExecutionService:
             idempotency_key=execution_plan.idempotency_key,
             adapter=adapter_name,
             warnings=_dedupe([*normalization.warnings, *readiness.warnings]),
+            lifecycle_trace=lifecycle_trace,
         )
 
     def _record_real_attempt(
@@ -407,8 +418,10 @@ class RealExecutionService:
             decision=risk_decision,
             user_id=request.user_id,
             signal_id=signal.id,
+            pending_entry_intent_id=risk_decision.lifecycle_trace.pending_entry_intent_id,
             input_snapshot={
                 "flow": "real_order.attempt",
+                "lifecycle_trace": risk_decision.lifecycle_trace.model_dump(mode="json", exclude_none=True),
                 "request": request.model_dump(mode="json"),
                 "signal": signal.model_dump(mode="json"),
                 "execution_profile": execution_profile.model_dump(mode="json"),
@@ -467,6 +480,41 @@ def _request_profile_leverage(request: ManualConfirmRequest) -> int:
     if request.risk_override is not None and request.risk_override.leverage is not None:
         return int(request.risk_override.leverage)
     return request.leverage
+
+
+def _request_lifecycle_trace(signal: RadarSignal, request: ManualConfirmRequest) -> LifecycleTrace:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    raw_trace = metadata.get("lifecycle_trace")
+    if isinstance(raw_trace, LifecycleTrace):
+        trace = raw_trace
+    elif isinstance(raw_trace, dict):
+        try:
+            trace = LifecycleTrace.model_validate(raw_trace)
+        except ValueError:
+            trace = LifecycleTrace()
+    else:
+        trace = LifecycleTrace()
+    return trace.model_copy(
+        update={
+            "signal_id": signal.id,
+            "pending_entry_intent_id": (
+                metadata.get("pending_entry_intent_id")
+                or trace.pending_entry_intent_id
+            ),
+        }
+    )
+
+
+def _execution_lifecycle_trace(
+    risk_decision: RiskDecision,
+    risk_decision_id: str | None,
+) -> LifecycleTrace:
+    return risk_decision.lifecycle_trace.model_copy(
+        update={
+            "risk_decision_id": risk_decision_id,
+            "audit_id": risk_decision_id,
+        }
+    )
 
 
 def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:
@@ -584,6 +632,7 @@ def _build_execution_plan(
     signal: RadarSignal,
     request: ManualConfirmRequest,
     risk_decision: RiskDecision,
+    lifecycle_trace: LifecycleTrace,
     adapter: Any | None,
     account_snapshot: AccountRiskSnapshot | None = None,
 ) -> RealExecutionPlan:
@@ -603,6 +652,12 @@ def _build_execution_plan(
     client_order_id = f"cr-{digest[:20]}"
     entry_client_order_id = _order_client_id(digest, "entry")
     stop_client_order_id = _order_client_id(digest, "protective_stop")
+    plan_trace = lifecycle_trace.model_copy(
+        update={
+            "signal_id": signal.id,
+            "real_order_id": entry_client_order_id,
+        }
+    )
     orders = [
         ExecutionPlannedOrder(
             role="entry",
@@ -615,8 +670,12 @@ def _build_execution_plan(
             reduce_only=False,
             client_order_id=entry_client_order_id,
             idempotency_key=f"{idempotency_key}:entry",
+            lifecycle_trace=plan_trace.model_copy(update={"real_order_id": entry_client_order_id}),
             metadata={
                 "signal_id": signal.id,
+                "lifecycle_trace": plan_trace.model_copy(
+                    update={"real_order_id": entry_client_order_id}
+                ).model_dump(mode="json", exclude_none=True),
                 "plan_version": plan_version,
                 "strategy": signal.strategy,
                 "timeframe": signal.timeframe,
@@ -636,8 +695,12 @@ def _build_execution_plan(
             reduce_only=True,
             client_order_id=stop_client_order_id,
             idempotency_key=f"{idempotency_key}:sl",
+            lifecycle_trace=plan_trace.model_copy(update={"real_order_id": stop_client_order_id}),
             metadata={
                 "signal_id": signal.id,
+                "lifecycle_trace": plan_trace.model_copy(
+                    update={"real_order_id": stop_client_order_id}
+                ).model_dump(mode="json", exclude_none=True),
                 "plan_version": plan_version,
                 "stop_loss_source": risk_decision.stop_loss_plan.source,
                 "role": "protective_stop",
@@ -663,8 +726,12 @@ def _build_execution_plan(
                 close_percent=target.close_percent,
                 client_order_id=tp_client_order_id,
                 idempotency_key=f"{idempotency_key}:tp{index}",
+                lifecycle_trace=plan_trace.model_copy(update={"real_order_id": tp_client_order_id}),
                 metadata={
                     "signal_id": signal.id,
+                    "lifecycle_trace": plan_trace.model_copy(
+                        update={"real_order_id": tp_client_order_id}
+                    ).model_dump(mode="json", exclude_none=True),
                     "plan_version": plan_version,
                     "target_label": target.label,
                     "r_multiple": target.r_multiple,
@@ -692,8 +759,10 @@ def _build_execution_plan(
         client_order_id=client_order_id,
         protective_order_strategy=protective_order_strategy,
         planned_orders=orders,
+        lifecycle_trace=plan_trace,
         metadata={
             "signal_id": signal.id,
+            "lifecycle_trace": plan_trace.model_dump(mode="json", exclude_none=True),
             "plan_version": plan_version,
             "strategy": signal.strategy,
             "timeframe": signal.timeframe,
@@ -961,6 +1030,16 @@ def _execution_plan_with_placed_orders(
     planned_orders: list[ExecutionPlannedOrder],
     adapter_is_dry_run: bool,
 ) -> RealExecutionPlan:
+    planned_orders = [_order_with_placement_trace(order) for order in planned_orders]
+    entry_order = next((order for order in planned_orders if order.role == "entry"), None)
+    real_order_id = (
+        entry_order.exchange_order_id
+        if entry_order is not None and entry_order.exchange_order_id
+        else entry_order.client_order_id
+        if entry_order is not None
+        else plan.lifecycle_trace.real_order_id
+    )
+    lifecycle_trace = plan.lifecycle_trace.model_copy(update={"real_order_id": real_order_id})
     partial_orders = [
         order
         for order in planned_orders
@@ -969,6 +1048,7 @@ def _execution_plan_with_placed_orders(
     ]
     metadata = {
         **plan.metadata,
+        "lifecycle_trace": lifecycle_trace.model_dump(mode="json", exclude_none=True),
         "post_adapter_order_statuses": {
             order.client_order_id: order.status for order in planned_orders
         },
@@ -1009,7 +1089,27 @@ def _execution_plan_with_placed_orders(
         }
     else:
         metadata["reconciliation_required"] = False
-    return plan.model_copy(update={"planned_orders": planned_orders, "metadata": metadata})
+    return plan.model_copy(
+        update={
+            "planned_orders": planned_orders,
+            "metadata": metadata,
+            "lifecycle_trace": lifecycle_trace,
+        }
+    )
+
+
+def _order_with_placement_trace(order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
+    real_order_id = order.exchange_order_id or order.client_order_id
+    lifecycle_trace = order.lifecycle_trace.model_copy(update={"real_order_id": real_order_id})
+    return order.model_copy(
+        update={
+            "lifecycle_trace": lifecycle_trace,
+            "metadata": {
+                **order.metadata,
+                "lifecycle_trace": lifecycle_trace.model_dump(mode="json", exclude_none=True),
+            },
+        }
+    )
 
 
 real_execution_service = RealExecutionService()

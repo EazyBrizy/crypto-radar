@@ -466,7 +466,11 @@ class PostgresVirtualTradeRepository:
         session.add(position)
         session.flush()
 
-        persisted_trade = trade.model_copy(update={"id": str(position.id)})
+        persisted_trade = _trade_with_lifecycle_trace(
+            trade.model_copy(update={"id": str(position.id)}),
+            signal_id=str(signal.id),
+            virtual_trade_id=str(position.id),
+        )
         order.metadata_ = {
             **(order.metadata_ or {}),
             "position_id": str(position.id),
@@ -489,9 +493,25 @@ class PostgresVirtualTradeRepository:
             idempotency_key=idempotency_key,
         )
         if risk_decision is not None:
+            persisted_trade = _trade_with_lifecycle_trace(
+                persisted_trade,
+                signal_id=str(signal.id),
+                virtual_trade_id=str(position.id),
+                risk_decision_id=str(risk_decision.id),
+            )
             order.metadata_ = {
                 **(order.metadata_ or {}),
                 "risk_decision_id": str(risk_decision.id),
+                "lifecycle_trace": persisted_trade.lifecycle_trace.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                ),
+                "virtual_trade": persisted_trade.model_dump(mode="json"),
+                "virtual_execution": (
+                    persisted_trade.execution.model_dump(mode="json")
+                    if persisted_trade.execution is not None
+                    else None
+                ),
             }
         _reserve_risk_balance(
             session=session,
@@ -1112,9 +1132,31 @@ def _persist_open_trade_risk_snapshot(
         return None
 
     decision = execution.risk_decision
+    pending_entry_intent_id = decision.lifecycle_trace.pending_entry_intent_id
+    trace = _risk_lifecycle_trace(
+        decision,
+        risk_decision_id=None,
+        signal_id=str(signal.id),
+        virtual_trade_id=str(position.id),
+    )
+    input_snapshot = {
+        "flow": "virtual_trade.opened",
+        "lifecycle_trace": trace,
+        "idempotency_key": idempotency_key,
+        "external_user_id": trade.user_id,
+        "request": request.model_dump(mode="json") if request is not None else None,
+        "signal": {
+            "id": str(signal.id),
+            "exchange_id": str(signal.exchange_id),
+            "pair_id": str(signal.pair_id),
+            "symbol": signal.pair.symbol,
+        },
+        "execution": execution.model_dump(mode="json"),
+    }
     risk_decision = RiskDecisionRecord(
         user_id=user.id,
         signal_id=signal.id,
+        pending_entry_intent_id=_parse_uuid(pending_entry_intent_id),
         portfolio_id=portfolio.id,
         order_id=order.id,
         position_id=position.id,
@@ -1124,24 +1166,23 @@ def _persist_open_trade_risk_snapshot(
         status=decision.status,
         blockers=decision.blockers,
         warnings=decision.warnings,
-        input_snapshot={
-            "flow": "virtual_trade.opened",
-            "idempotency_key": idempotency_key,
-            "external_user_id": trade.user_id,
-            "request": request.model_dump(mode="json") if request is not None else None,
-            "signal": {
-                "id": str(signal.id),
-                "exchange_id": str(signal.exchange_id),
-                "pair_id": str(signal.pair_id),
-                "symbol": signal.pair.symbol,
-            },
-            "execution": execution.model_dump(mode="json"),
-        },
+        input_snapshot=input_snapshot,
         result_snapshot=decision.model_dump(mode="json"),
         created_at=trade.opened_at,
     )
     session.add(risk_decision)
     session.flush()
+    trace = _risk_lifecycle_trace(
+        decision,
+        risk_decision_id=str(risk_decision.id),
+        signal_id=str(signal.id),
+        virtual_trade_id=str(position.id),
+    )
+    risk_decision.input_snapshot = _snapshot_with_lifecycle_trace(input_snapshot, trace)
+    risk_decision.result_snapshot = _snapshot_with_lifecycle_trace(
+        decision.model_dump(mode="json"),
+        trace,
+    )
 
     sizing = decision.checked_position_sizing
     adjustment = decision.risk_adjustment_plan
@@ -1283,6 +1324,7 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
         closed_at=position.closed_at,
         target_states=snapshot.get("target_states") or [],
         lifecycle_events=snapshot.get("lifecycle_events") or [],
+        lifecycle_trace=snapshot.get("lifecycle_trace") or {},
     )
 
 
@@ -1376,6 +1418,74 @@ def _primary_risk_group(pair: MarketPair) -> str | None:
     if not groups:
         return None
     return groups[0].group_code
+
+
+def _trade_with_lifecycle_trace(
+    trade: VirtualTrade,
+    *,
+    signal_id: str,
+    virtual_trade_id: str,
+    risk_decision_id: str | None = None,
+) -> VirtualTrade:
+    trace = trade.lifecycle_trace.model_copy(
+        update={
+            "signal_id": signal_id,
+            "virtual_trade_id": virtual_trade_id,
+            "risk_decision_id": risk_decision_id or trade.lifecycle_trace.risk_decision_id,
+            "audit_id": risk_decision_id or trade.lifecycle_trace.audit_id,
+        }
+    )
+    execution = trade.execution
+    if execution is not None:
+        risk_decision = execution.risk_decision
+        if risk_decision is not None:
+            risk_decision = risk_decision.model_copy(
+                update={
+                    "lifecycle_trace": risk_decision.lifecycle_trace.model_copy(
+                        update={
+                            "signal_id": signal_id,
+                            "virtual_trade_id": virtual_trade_id,
+                            "risk_decision_id": risk_decision_id
+                            or risk_decision.lifecycle_trace.risk_decision_id,
+                            "audit_id": risk_decision_id
+                            or risk_decision.lifecycle_trace.audit_id,
+                        }
+                    )
+                }
+            )
+        execution = execution.model_copy(
+            update={
+                "lifecycle_trace": trace,
+                "risk_decision": risk_decision,
+            }
+        )
+    return trade.model_copy(update={"lifecycle_trace": trace, "execution": execution})
+
+
+def _risk_lifecycle_trace(
+    decision: Any,
+    *,
+    risk_decision_id: str | None,
+    signal_id: str,
+    virtual_trade_id: str,
+) -> dict[str, Any]:
+    trace = decision.lifecycle_trace.model_dump(mode="json", exclude_none=True)
+    trace.update(
+        {
+            "signal_id": signal_id,
+            "virtual_trade_id": virtual_trade_id,
+        }
+    )
+    if risk_decision_id is not None:
+        trace["risk_decision_id"] = risk_decision_id
+        trace["audit_id"] = risk_decision_id
+    return trace
+
+
+def _snapshot_with_lifecycle_trace(snapshot: dict[str, Any], trace: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(snapshot)
+    updated["lifecycle_trace"] = trace
+    return updated
 
 
 def _parse_uuid(value: str | UUID | None) -> UUID | None:

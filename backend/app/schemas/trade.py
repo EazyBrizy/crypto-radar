@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.risk import (
     BreakevenPlan,
     FuturesRiskPlan,
@@ -152,6 +153,7 @@ class ExecutionPlannedOrder(BaseModel):
     avg_fill_price: Optional[float] = Field(default=None, gt=0)
     remaining_qty: Optional[float] = Field(default=None, ge=0)
     fees: Optional[float] = Field(default=None, ge=0)
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -174,6 +176,7 @@ class RealExecutionPlan(BaseModel):
     client_order_id: str = Field(..., min_length=1)
     protective_order_strategy: ProtectiveOrderStrategy = "unsupported"
     planned_orders: list[ExecutionPlannedOrder] = Field(default_factory=list)
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -251,6 +254,7 @@ class VirtualExecutionReport(BaseModel):
     breakeven_plan: Optional[BreakevenPlan] = None
     trailing_stop_plan: Optional[TrailingStopPlan] = None
     futures_risk_plan: Optional[FuturesRiskPlan] = None
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
     simulated_path: Optional[VirtualSimulatedPositionPath] = None
     rejected_reason: Optional[str] = None
     notes: list[str] = Field(default_factory=list)
@@ -275,6 +279,7 @@ class ManualConfirmRequest(BaseModel):
     min_fill_ratio: float = Field(default=0.25, ge=0, le=1)
     market_snapshot: Optional[VirtualMarketSnapshot] = None
     max_open_positions: int = Field(default=3, ge=1, le=100)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RealConfirmRequest(ManualConfirmRequest):
@@ -345,6 +350,12 @@ class VirtualTradeTargetState(BaseModel):
 
 
 class VirtualTradeLifecycleEvent(BaseModel):
+    signal_id: Optional[str] = None
+    pending_entry_intent_id: Optional[str] = None
+    risk_decision_id: Optional[str] = None
+    virtual_trade_id: Optional[str] = None
+    real_order_id: Optional[str] = None
+    exit_event_id: Optional[str] = None
     event_type: str
     reason: Optional[CloseReason] = None
     target_label: Optional[str] = None
@@ -355,6 +366,7 @@ class VirtualTradeLifecycleEvent(BaseModel):
     exit_fee: Optional[float] = Field(default=None, ge=0)
     stop_loss: Optional[float] = Field(default=None, gt=0)
     created_at: datetime
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -420,6 +432,7 @@ class VirtualTrade(BaseModel):
     screenshots: list[str] = Field(default_factory=list)
     target_states: list[VirtualTradeTargetState] = Field(default_factory=list)
     lifecycle_events: list[VirtualTradeLifecycleEvent] = Field(default_factory=list)
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
 
 
 class RealExecutionResult(BaseModel):
@@ -438,6 +451,7 @@ class RealExecutionResult(BaseModel):
     adapter: Optional[str] = None
     warnings: list[str] = Field(default_factory=list)
     validation_errors: list[str] = Field(default_factory=list)
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
 
 
 class ManualDecisionResponse(BaseModel):

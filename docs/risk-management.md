@@ -143,6 +143,10 @@ PostgreSQL remains the source of truth:
   accepted signal/trade-plan/profile/request snapshots. This table is the
   source of truth for new pending-entry workflows; `features_snapshot.auto_entry`
   is legacy/read-mirror state only.
+- `risk_decisions.pending_entry_intent_id` links a RiskGate preview or
+  execution decision to the deferred-entry intent that caused it, when present.
+  The full signal -> intent -> RiskGate -> entry -> exit correlation is stored
+  as additive `lifecycle_trace` metadata in snapshots and event payloads.
 
 Current JSON shape:
 
@@ -648,11 +652,19 @@ Current write coverage:
 - successful virtual opens persist `risk_decisions` and
   `position_risk_snapshots` from the backend `RiskDecision`;
 - manual/API preview checks persist `risk_decisions` with `stage=preview`;
+- pending-entry trigger-time RiskGate decisions persist or return
+  `lifecycle_trace.signal_id` and `lifecycle_trace.pending_entry_intent_id`,
+  and durable audit rows store `risk_decision_id` / `audit_id` in the same
+  trace snapshot;
 - Radar read-only execution-ready previews do not persist `risk_decisions`;
 - blocked virtual attempts persist failed `risk_decisions` without order/position
-  ids;
+  ids, but keep signal and pending-intent trace ids when the attempt came from a
+  pending entry workflow;
 - real confirm attempts persist `risk_decisions` before any future exchange
   adapter is called;
+- virtual trade close lifecycle events include `exit_event_id` and the
+  available signal/intent/risk/trade trace ids. This is correlation only and
+  does not change PnL, fee, or slippage calculation.
 - manual Bybit instrument-rule sync upserts `exchange_instrument_rules`;
 - automatic Bybit instrument-rule sync starts with FastAPI, refreshes configured
   categories periodically, and stores `fetched_at` / `updated_at` for TTL checks;

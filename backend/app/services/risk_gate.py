@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.risk import (
     AccountRiskSnapshot,
     LEGACY_VIRTUAL_INSTRUMENT_WARNING,
@@ -98,11 +100,15 @@ class RiskContextService:
             request=request,
             execution_profile=execution_profile,
         )
+        lifecycle_trace = _lifecycle_trace_from_request(signal, request)
         return RiskContext(
             mode="virtual",
             rr_guard_context=rr_guard_context,
             stage=stage,
             user_id=request.user_id,
+            signal_id=str(signal.id),
+            pending_entry_intent_id=lifecycle_trace.pending_entry_intent_id,
+            lifecycle_trace=lifecycle_trace,
             risk_profile_source=risk_profile_source,
             execution_profile_sources=execution_profile_sources or {},
             execution_profile=execution_profile,
@@ -231,10 +237,14 @@ class RiskContextService:
             if snapshot.source == "exchange"
             else open_risk_amount
         )
+        lifecycle_trace = _lifecycle_trace_from_request(signal, request)
         return RiskContext(
             mode="real",
             stage=stage,
             user_id=request.user_id,
+            signal_id=str(signal.id),
+            pending_entry_intent_id=lifecycle_trace.pending_entry_intent_id,
+            lifecycle_trace=lifecycle_trace,
             risk_profile_source=risk_profile_source,
             execution_profile_sources=execution_profile_sources or {},
             execution_profile=execution_profile,
@@ -496,6 +506,7 @@ class RiskGateService:
             stage=context.stage,
             status=risk_check.status,
             can_enter=risk_check.status != "failed",
+            lifecycle_trace=_decision_trace(context),
             risk_profile_source=context.risk_profile_source,
             execution_profile_sources=context.execution_profile_sources,
             blockers=risk_check.blockers,
@@ -751,6 +762,48 @@ def _invalid_trade_plan_take_profit_plan(
         source="trade_plan_invalid",
         notes=notes,
     )
+
+
+def _lifecycle_trace_from_request(signal: RadarSignal, request: ManualConfirmRequest) -> LifecycleTrace:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    trace = _parse_lifecycle_trace(metadata.get("lifecycle_trace"))
+    pending_entry_intent_id = metadata.get("pending_entry_intent_id") or trace.pending_entry_intent_id
+    return trace.model_copy(
+        update={
+            "signal_id": str(signal.id),
+            "pending_entry_intent_id": _string_or_none(pending_entry_intent_id),
+        }
+    )
+
+
+def _parse_lifecycle_trace(value: Any) -> LifecycleTrace:
+    if isinstance(value, LifecycleTrace):
+        return value
+    if isinstance(value, dict):
+        try:
+            return LifecycleTrace.model_validate(value)
+        except ValueError:
+            return LifecycleTrace()
+    return LifecycleTrace()
+
+
+def _decision_trace(context: RiskContext) -> LifecycleTrace:
+    return context.lifecycle_trace.model_copy(
+        update={
+            "signal_id": _string_or_none(context.signal_id) or context.lifecycle_trace.signal_id,
+            "pending_entry_intent_id": (
+                _string_or_none(context.pending_entry_intent_id)
+                or context.lifecycle_trace.pending_entry_intent_id
+            ),
+        }
+    )
+
+
+def _string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 risk_context_service = RiskContextService()

@@ -1,6 +1,6 @@
 import unittest
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from app.schemas.signal import (
     NoTradeFilterResult,
@@ -104,6 +104,44 @@ class VirtualTradingServiceBoundaryTest(unittest.TestCase):
 
         self.assertIn("RiskGate blocked this virtual entry.", str(exc.exception))
         self.assertEqual(repository.list_virtual_trades(), [])
+
+    def test_risk_gate_block_trace_includes_signal_and_intent_id(self) -> None:
+        repository = _EphemeralTradeRepository()
+        audit = _FakeRiskAuditService()
+        service = _service(
+            RiskManagementSettings(max_price_deviation_bps=0),
+            repository=repository,
+            risk_gate_service=_TraceRiskGateService(),
+            risk_audit=audit,
+        )
+        signal = _signal("sig_pending_block_trace")
+        request = _request().model_copy(
+            update={
+                "metadata": {
+                    "pending_entry_intent_id": "intent-abc",
+                    "lifecycle_trace": {
+                        "signal_id": signal.id,
+                        "pending_entry_intent_id": "intent-abc",
+                    },
+                }
+            }
+        )
+
+        with self.assertRaises(ValueError) as exc:
+            service.open_virtual_trade(signal, request)
+
+        self.assertIn("RiskGate blocked pending entry.", str(exc.exception))
+        self.assertEqual(repository.list_virtual_trades(), [])
+        self.assertEqual(len(audit.calls), 1)
+        call = audit.calls[0]
+        self.assertEqual(call["pending_entry_intent_id"], "intent-abc")
+        self.assertEqual(call["decision"].lifecycle_trace.signal_id, signal.id)
+        self.assertEqual(call["decision"].lifecycle_trace.pending_entry_intent_id, "intent-abc")
+        self.assertEqual(call["input_snapshot"]["lifecycle_trace"]["signal_id"], signal.id)
+        self.assertEqual(
+            call["input_snapshot"]["lifecycle_trace"]["pending_entry_intent_id"],
+            "intent-abc",
+        )
 
     def test_rejected_virtual_execution_prevents_trade_creation(self) -> None:
         repository = _EphemeralTradeRepository()
@@ -317,11 +355,31 @@ class _StaticRiskGateService:
         return self.decision
 
 
+class _TraceRiskGateService:
+    def evaluate(self, **kwargs) -> RiskDecision:
+        context = kwargs["context"]
+        return _risk_decision(
+            can_enter=False,
+            status="failed",
+            blockers=["RiskGate blocked pending entry."],
+        ).model_copy(update={"lifecycle_trace": context.lifecycle_trace})
+
+
+class _FakeRiskAuditService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def record_decision(self, **kwargs) -> str:
+        self.calls.append(kwargs)
+        return "risk-audit-id"
+
+
 def _service(
     risk_settings: RiskManagementSettings,
     *,
     repository: _EphemeralTradeRepository | None = None,
-    risk_gate_service: _StaticRiskGateService | None = None,
+    risk_gate_service: Any | None = None,
+    risk_audit: Any | None = None,
 ) -> VirtualTradingService:
     return VirtualTradingService(
         repository=repository or _EphemeralTradeRepository(),
@@ -329,6 +387,7 @@ def _service(
         market_data_service=_StaticMarketDataService(),
         fee_rate_service=_ZeroFeeRateService(),
         risk_gate_service=risk_gate_service,
+        risk_audit=risk_audit,
     )
 
 

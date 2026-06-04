@@ -48,6 +48,8 @@ class RiskPersistenceModelsTest(unittest.TestCase):
         self.assertIn("ck_risk_decisions_status", constraint_names)
         self.assertIn("idx_risk_decisions_user_time", index_names)
         self.assertIn("idx_risk_decisions_status_time", index_names)
+        self.assertIn("idx_risk_decisions_pending_entry_time", index_names)
+        self.assertIn("pending_entry_intent_id", table.c)
 
     def test_position_risk_snapshot_uses_high_precision_numeric(self) -> None:
         table = PositionRiskSnapshot.__table__

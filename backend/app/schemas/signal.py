@@ -4,6 +4,7 @@ from typing import Any, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from app.schemas.decision import SignalDecisionSnapshot
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.trade_plan import TradePlan
 from app.schemas.market import CandleState
 
@@ -231,6 +232,7 @@ class RadarSignal(BaseModel):
     risk_gate_status: Optional[RadarRiskGateStatus] = None
     can_enter: Optional[bool] = None
     display_reason: Optional[str] = None
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
 
 
 class RadarResponse(BaseModel):

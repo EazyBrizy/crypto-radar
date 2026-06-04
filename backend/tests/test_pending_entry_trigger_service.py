@@ -51,7 +51,7 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         _restore_column_types(self._type_patches)
 
     def test_long_entry_touched_by_ask_fills_once(self) -> None:
-        self.repository.create_intent(_intent_create(side="long"))
+        created = self.repository.create_intent(_intent_create(side="long"))
 
         results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5, "last": 99.0})
 
@@ -59,9 +59,21 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(results[0].status, "filled")
         self.assertEqual(results[0].price_source, "ask")
         self.assertEqual(results[0].virtual_trade_id, str(TRADE_ID))
+        self.assertEqual(results[0].signal_id, str(SIGNAL_ID))
+        self.assertEqual(results[0].lifecycle_trace.signal_id, str(SIGNAL_ID))
+        self.assertEqual(results[0].lifecycle_trace.pending_entry_intent_id, str(created.id))
+        self.assertEqual(results[0].lifecycle_trace.virtual_trade_id, str(TRADE_ID))
         self.assertEqual(len(self.virtual.calls), 1)
         self.assertEqual(self.virtual.calls[0][0].status, "entry_touched")
         self.assertEqual(self.virtual.calls[0][1].market_snapshot.best_ask, 100.5)
+        self.assertEqual(
+            self.virtual.calls[0][1].metadata["pending_entry_intent_id"],
+            str(created.id),
+        )
+        self.assertEqual(
+            self.virtual.calls[0][1].metadata["lifecycle_trace"]["signal_id"],
+            str(SIGNAL_ID),
+        )
 
     def test_short_entry_touched_by_bid_fills_once(self) -> None:
         self.signals.signal = _signal(direction="short")

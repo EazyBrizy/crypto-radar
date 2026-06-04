@@ -308,11 +308,13 @@ class RiskPreviewService:
             decision=evaluation.decision,
             user_id=evaluation.user_id,
             signal_id=evaluation.signal_id,
+            pending_entry_intent_id=evaluation.decision.lifecycle_trace.pending_entry_intent_id,
             input_snapshot=evaluation.input_snapshot,
         )
 
 
 def _manual_request(request: RiskPreviewRequest) -> ManualConfirmRequest:
+    metadata = _preview_metadata(request)
     return ManualConfirmRequest(
         mode=request.mode,
         user_id=request.user_id,
@@ -325,7 +327,20 @@ def _manual_request(request: RiskPreviewRequest) -> ManualConfirmRequest:
         size_usd=request.size_usd,
         fee_rate=request.fee_rate,
         slippage_bps=request.slippage_bps,
+        metadata=metadata,
     )
+
+
+def _preview_metadata(request: RiskPreviewRequest) -> dict[str, Any]:
+    trace = {
+        "signal_id": request.signal_id,
+        "pending_entry_intent_id": request.pending_entry_intent_id,
+    }
+    trace = {key: value for key, value in trace.items() if value is not None}
+    metadata: dict[str, Any] = {"lifecycle_trace": trace}
+    if request.pending_entry_intent_id is not None:
+        metadata["pending_entry_intent_id"] = request.pending_entry_intent_id
+    return metadata
 
 
 def _instrument_type(

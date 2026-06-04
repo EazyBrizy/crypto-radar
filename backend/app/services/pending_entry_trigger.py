@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import logging
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.database import SessionLocal
 from app.domain.signal_status import is_terminal_signal_status
 from app.models.pending_entry import PendingEntryIntent
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.risk import RiskOverride, StrategyExecutionSettings
 from app.schemas.signal import RadarSignal
@@ -92,11 +93,14 @@ class PendingEntryTriggerResult:
     intent_id: str
     status: str
     touched: bool
+    signal_id: str | None = None
     price: Decimal | None = None
     price_source: str | None = None
     virtual_trade_id: str | None = None
+    risk_decision_id: str | None = None
     reason: str | None = None
     warnings: tuple[str, ...] = ()
+    lifecycle_trace: LifecycleTrace = field(default_factory=LifecycleTrace)
 
 
 class PendingEntryTriggerService:
@@ -200,9 +204,14 @@ class PendingEntryTriggerService:
                     intent_id=str(record.id),
                     status=record.status,
                     touched=False,
+                    signal_id=str(record.signal_id),
                     price=touch.price,
                     price_source=touch.price_source,
                     warnings=touch.warnings,
+                    lifecycle_trace=LifecycleTrace(
+                        signal_id=str(record.signal_id),
+                        pending_entry_intent_id=str(record.id),
+                    ),
                 )
 
             _transition_locked(record, status="triggered", failure_reason=None, now=now)
@@ -234,10 +243,12 @@ class PendingEntryTriggerService:
                 intent_id=str(intent_id),
                 status="failed",
                 touched=True,
+                signal_id=signal.id,
                 price=touch.price,
                 price_source=touch.price_source,
                 reason="Triggered pending entry intent disappeared before fill.",
                 warnings=touch.warnings,
+                lifecycle_trace=LifecycleTrace(signal_id=signal.id),
             )
         if intent.mode != "virtual":
             return self._finish_structural_failure(
@@ -277,10 +288,13 @@ class PendingEntryTriggerService:
             intent_id=str(intent.id),
             status=filled.status if filled is not None else "filled",
             touched=True,
+            signal_id=str(intent.signal_id),
             price=touch.price,
             price_source=touch.price_source,
             virtual_trade_id=trade.id,
+            risk_decision_id=_trade_risk_decision_id(trade),
             warnings=touch.warnings,
+            lifecycle_trace=_trade_lifecycle_trace(intent, trade),
         )
 
     def _finish_temporary_failure(
@@ -300,10 +314,12 @@ class PendingEntryTriggerService:
             intent_id=str(intent.id),
             status=updated.status if updated is not None else "pending",
             touched=True,
+            signal_id=str(intent.signal_id),
             price=touch.price,
             price_source=touch.price_source,
             reason=reason,
             warnings=touch.warnings,
+            lifecycle_trace=_intent_lifecycle_trace(intent),
         )
 
     def _finish_structural_failure(
@@ -323,10 +339,12 @@ class PendingEntryTriggerService:
             intent_id=str(intent.id),
             status=updated.status if updated is not None else "failed",
             touched=True,
+            signal_id=str(intent.signal_id),
             price=touch.price,
             price_source=touch.price_source,
             reason=reason,
             warnings=touch.warnings,
+            lifecycle_trace=_intent_lifecycle_trace(intent),
         )
 
     def _mirror_auto_entry(
@@ -394,6 +412,7 @@ def _trigger_confirm_request(
         "user_id": str(intent.user_id),
         "auto_enter_on_confirmation": True,
         "market_snapshot": _virtual_market_snapshot(market_tick, intent.side, touch),
+        "metadata": _trigger_request_metadata(request, intent, touch),
     }
     accepted_profile = _accepted_execution_profile(intent.execution_profile_snapshot)
     if accepted_profile is not None:
@@ -405,6 +424,30 @@ def _trigger_confirm_request(
         if risk_override is not None:
             updates["risk_override"] = risk_override
     return request.model_copy(update=updates)
+
+
+def _trigger_request_metadata(
+    request: ManualConfirmRequest,
+    intent: PendingEntryIntentRead,
+    touch: EntryTouchResult,
+) -> dict[str, Any]:
+    metadata = dict(request.metadata or {})
+    raw_trace = metadata.get("lifecycle_trace")
+    trace = dict(raw_trace) if isinstance(raw_trace, dict) else {}
+    trace.update(
+        {
+            "signal_id": str(intent.signal_id),
+            "pending_entry_intent_id": str(intent.id),
+        }
+    )
+    metadata["pending_entry_intent_id"] = str(intent.id)
+    metadata["lifecycle_trace"] = trace
+    metadata["pending_entry_trigger"] = {
+        "touch_price": str(touch.price) if touch.price is not None else None,
+        "touch_price_source": touch.price_source,
+        "warnings": list(touch.warnings),
+    }
+    return metadata
 
 
 def _accepted_execution_profile(snapshot: dict[str, Any]) -> StrategyExecutionSettings | None:
@@ -484,11 +527,19 @@ def _result(
     touched: bool,
     reason: str | None,
 ) -> PendingEntryTriggerResult:
+    trace = LifecycleTrace(
+        signal_id=str(record.signal_id),
+        pending_entry_intent_id=str(record.id),
+        virtual_trade_id=str(record.filled_trade_id) if record.filled_trade_id is not None else None,
+    )
     return PendingEntryTriggerResult(
         intent_id=str(record.id),
         status=record.status,
         touched=touched,
+        signal_id=str(record.signal_id),
+        virtual_trade_id=str(record.filled_trade_id) if record.filled_trade_id is not None else None,
         reason=reason,
+        lifecycle_trace=trace,
     )
 
 
@@ -566,6 +617,34 @@ def _decimal(value: Decimal | float | str, field_name: str) -> Decimal:
 def _is_temporary_riskgate_failure(reason: str) -> bool:
     normalized = reason.lower()
     return any(marker in normalized for marker in TEMPORARY_RISKGATE_REASON_MARKERS)
+
+
+def _intent_lifecycle_trace(intent: PendingEntryIntentRead) -> LifecycleTrace:
+    return LifecycleTrace(
+        signal_id=str(intent.signal_id),
+        pending_entry_intent_id=str(intent.id),
+        virtual_trade_id=str(intent.filled_trade_id) if intent.filled_trade_id is not None else None,
+    )
+
+
+def _trade_lifecycle_trace(intent: PendingEntryIntentRead, trade: VirtualTrade) -> LifecycleTrace:
+    trace = trade.lifecycle_trace.model_copy(
+        update={
+            "signal_id": str(intent.signal_id),
+            "pending_entry_intent_id": str(intent.id),
+            "virtual_trade_id": trade.id,
+            "risk_decision_id": _trade_risk_decision_id(trade),
+        }
+    )
+    return trace
+
+
+def _trade_risk_decision_id(trade: VirtualTrade) -> str | None:
+    if trade.lifecycle_trace.risk_decision_id is not None:
+        return trade.lifecycle_trace.risk_decision_id
+    if trade.execution is None or trade.execution.risk_decision is None:
+        return None
+    return trade.execution.risk_decision.lifecycle_trace.risk_decision_id
 
 
 def _utc_now() -> datetime:

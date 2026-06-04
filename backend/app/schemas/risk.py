@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.signal import NoTradeFilterResult, SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan
 
@@ -389,6 +390,9 @@ class RiskContext(BaseModel):
     rr_guard_context: str | None = None
     stage: RiskDecisionStage = "preview"
     user_id: str = "demo_user"
+    signal_id: str | None = None
+    pending_entry_intent_id: str | None = None
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
     risk_profile_source: str = "unknown"
     execution_profile_sources: dict[str, str] = Field(default_factory=dict)
     execution_profile: ResolvedExecutionProfile | None = None
@@ -480,6 +484,7 @@ class RiskDecision(BaseModel):
     stage: RiskDecisionStage
     status: RiskCheckStatus
     can_enter: bool
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
     risk_profile_source: str = "unknown"
     execution_profile_sources: dict[str, str] = Field(default_factory=dict)
     blockers: list[str] = Field(default_factory=list)
@@ -502,6 +507,7 @@ class RiskDecision(BaseModel):
 
 class RiskPreviewRequest(BaseModel):
     signal_id: str = Field(..., min_length=1)
+    pending_entry_intent_id: str | None = Field(default=None, min_length=1)
     mode: RiskExecutionMode = "virtual"
     user_id: str = "demo_user"
     instrument_type: LegacyTradeInstrumentType | None = None

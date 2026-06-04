@@ -177,6 +177,69 @@ Virtual execution may continue to surface research warnings for weak RR,
 unknown or weak edge, or incomplete context, but warnings must not be confused
 with production permission to send exchange orders.
 
+## Lifecycle Trace v1
+
+Signal, RiskGate, entry, and exit records share additive correlation metadata
+so the lifecycle can be reconstructed without moving business decisions into an
+audit layer.
+
+Canonical lifecycle trace fields:
+
+```python
+LifecycleTrace = {
+    "signal_id": UUID | str | None,
+    "pending_entry_intent_id": UUID | str | None,
+    "risk_decision_id": UUID | str | None,
+    "audit_id": UUID | str | None,
+    "virtual_trade_id": UUID | str | None,
+    "real_order_id": str | None,
+    "exit_event_id": str | None,
+}
+```
+
+Field meanings:
+
+- `signal_id`: persisted `trading_signals.id` for the market setup.
+- `pending_entry_intent_id`: accepted deferred-entry workflow that led to the
+  entry attempt, when the attempt came from pending entry.
+- `risk_decision_id`: persisted `risk_decisions.id` for the RiskGate decision.
+- `audit_id`: alias of the durable audit record id when the event references an
+  audit row; for RiskGate decisions it equals `risk_decision_id`.
+- `virtual_trade_id`: persisted virtual position/trade id after simulated fill.
+- `real_order_id`: exchange order id after adapter placement when available;
+  before placement, dry-run, or not-implemented paths may use the stable entry
+  `client_order_id` as the planned real order identity.
+- `exit_event_id`: stable id on a virtual or real exit lifecycle event.
+
+Trace placement:
+
+- Signal creation/update stores `features_snapshot.lifecycle_trace.signal_id`
+  and emits it through signal event payloads and analytics `features_json`.
+- Pending entry stores the accepted `signal_id` and carries
+  `pending_entry_intent_id` in the trigger-time confirm request metadata.
+- RiskGate context and decisions carry `lifecycle_trace.signal_id` and, when
+  present, `pending_entry_intent_id`. Persisted `risk_decisions` rows keep
+  `signal_id` and `pending_entry_intent_id` as queryable columns and store the
+  full trace in input/result snapshots with `risk_decision_id`/`audit_id`.
+- Virtual entry stores the trace on `VirtualTrade`, the entry order metadata,
+  the persisted virtual-trade audit payload, and the outbox payload.
+- Virtual exit lifecycle events include `signal_id`, `virtual_trade_id`,
+  `pending_entry_intent_id`, `risk_decision_id` when known, and
+  `exit_event_id`. PnL, fee, and slippage calculations are unchanged; the trace
+  only correlates the already-calculated event.
+- Real execution stores the trace on `RealExecutionResult`,
+  `RealExecutionPlan.metadata`, and each `ExecutionPlannedOrder.metadata`.
+
+Rules:
+
+- Lifecycle trace fields are nullable and additive. Legacy records may omit the
+  trace or individual ids.
+- The audit layer records ids and snapshots only. It must not decide why a
+  signal appears, why RiskGate passes or blocks, whether to enter, or how to
+  exit.
+- A real order may be submitted only after fresh pre-execution RiskGate and
+  readiness checks pass; trace metadata does not weaken those gates.
+
 ## Strategy Execution Profile v1
 
 `StrategyExecutionSettings` is the typed contract stored over the existing
@@ -217,6 +280,7 @@ RiskOverride = {
 
 RiskPreviewRequest = {
     "mode": ExecutionMode,
+    "pending_entry_intent_id": UUID | str | None,
     "instrument_type": InstrumentType | None,
     "risk_percent": float | None,       # deprecated legacy field
     "risk_override": RiskOverride | None,
@@ -226,6 +290,7 @@ ManualConfirmRequest = {
     "mode": ExecutionMode,
     "risk_percent": float | None,       # deprecated legacy field
     "risk_override": RiskOverride | None,
+    "metadata": dict,                   # additive request/audit metadata
 }
 
 ManualDecisionResponse = {

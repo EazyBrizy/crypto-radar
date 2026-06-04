@@ -27,6 +27,7 @@ class RiskDecisionRecord(Base):
         CheckConstraint("status IN ('passed', 'warning', 'failed')", name="ck_risk_decisions_status"),
         Index("idx_risk_decisions_user_time", "user_id", text("created_at DESC")),
         Index("idx_risk_decisions_signal_time", "signal_id", text("created_at DESC")),
+        Index("idx_risk_decisions_pending_entry_time", "pending_entry_intent_id", text("created_at DESC")),
         Index("idx_risk_decisions_status_time", "status", text("created_at DESC")),
         Index("idx_risk_decisions_position_time", "position_id", text("created_at DESC")),
     )
@@ -42,6 +43,11 @@ class RiskDecisionRecord(Base):
     )
     signal_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("trading_signals.id", name="fk_risk_decisions_signal_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    pending_entry_intent_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("pending_entry_intents.id", name="fk_risk_decisions_pending_entry_intent_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -92,6 +98,7 @@ class RiskDecisionRecord(Base):
 
     user: Mapped["AppUser"] = relationship(back_populates="risk_decisions")
     signal: Mapped["TradingSignal | None"] = relationship()
+    pending_entry_intent: Mapped["PendingEntryIntent | None"] = relationship()
     portfolio: Mapped["Portfolio | None"] = relationship()
     order: Mapped["Order | None"] = relationship(back_populates="risk_decisions")
     position: Mapped["Position | None"] = relationship(back_populates="risk_decisions")

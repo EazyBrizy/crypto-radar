@@ -4,6 +4,7 @@ from typing import Optional
 from unittest.mock import patch
 
 from app.api.v1.trades import close_market_trade
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.risk import RiskOverride
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
@@ -222,6 +223,32 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         account = service.get_virtual_account()
         self.assertAlmostEqual(account.realized_pnl, updated.realized_pnl)
         self.assertAlmostEqual(account.equity, 100 + updated.realized_pnl + updated.unrealized_pnl)
+
+    def test_virtual_close_event_can_be_traced_back_to_signal(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(side="long", stop_loss=95.0, now=now).model_copy(
+            update={
+                "lifecycle_trace": LifecycleTrace(
+                    signal_id="signal_long",
+                    pending_entry_intent_id="intent-123",
+                    risk_decision_id="risk-456",
+                    virtual_trade_id="lifecycle_long",
+                )
+            }
+        )
+
+        closed = apply_virtual_trade_market_price(trade, 94.0, now).trade
+
+        self.assertEqual(closed.status, "closed")
+        event = closed.lifecycle_events[-1]
+        self.assertEqual(event.signal_id, "signal_long")
+        self.assertEqual(event.pending_entry_intent_id, "intent-123")
+        self.assertEqual(event.risk_decision_id, "risk-456")
+        self.assertEqual(event.virtual_trade_id, "lifecycle_long")
+        self.assertIsNotNone(event.exit_event_id)
+        self.assertEqual(event.lifecycle_trace.exit_event_id, event.exit_event_id)
+        self.assertEqual(event.lifecycle_trace.signal_id, "signal_long")
+        self.assertIn("exit_slippage_bps", event.metadata)
 
     def test_realized_pnl_updates_after_partial_take_profit(self) -> None:
         now = datetime.now(timezone.utc)

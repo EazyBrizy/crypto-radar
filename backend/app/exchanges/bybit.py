@@ -30,10 +30,14 @@ BYBIT_WALLET_BALANCE_PATH = "/v5/account/wallet-balance"
 BYBIT_TICKERS_PATH = "/v5/market/tickers"
 BYBIT_ORDERBOOK_PATH = "/v5/market/orderbook"
 BYBIT_POSITION_LIST_PATH = "/v5/position/list"
+BYBIT_ORDER_CREATE_PATH = "/v5/order/create"
+BYBIT_TRADING_STOP_PATH = "/v5/position/trading-stop"
+BYBIT_EXECUTION_LIST_PATH = "/v5/execution/list"
 LIVE_ORDER_PLACEMENT_DISABLED_REASON = "Live order placement is disabled by backend configuration."
 BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON = (
     "Bybit mainnet order placement is disabled by backend configuration."
 )
+BYBIT_TESTNET_API_URL = "https://api-testnet.bybit.com"
 DEFAULT_SYMBOLS = ("DOGEUSDT",)
 LINEAR_SYMBOL_ALIASES = {"PEPEUSDT": "1000PEPEUSDT"}
 RECONNECT_DELAY_SEC = 5.0
@@ -150,30 +154,69 @@ class BybitPositionInfo:
     raw_payload: dict
 
 
-class BybitRealExecutionAdapter:
-    """Future real Bybit execution adapter.
+@dataclass(frozen=True)
+class BybitOrderCreateRequest:
+    category: str
+    symbol: str
+    side: str
+    order_type: str
+    qty: Decimal
+    price: Decimal | None = None
+    time_in_force: str = "GTC"
+    order_link_id: str = ""
+    reduce_only: bool = False
+    take_profit: Decimal | None = None
+    stop_loss: Decimal | None = None
+    tp_sl_mode: str | None = None
+    position_idx: int = 0
 
-    This skeleton intentionally does not submit, cancel, or fetch private order
-    state. Wire it only after real order submission has explicit tests and
-    secret handling.
+
+@dataclass(frozen=True)
+class BybitOrderAck:
+    order_id: str
+    order_link_id: str
+    raw_payload: Mapping[str, Any]
+
+
+class BybitRealExecutionAdapter:
+    """Guarded Bybit V5 real execution adapter.
+
+    The adapter is live-capable only after backend feature flags allow order
+    placement. MVP execution relies on Bybit order/create native stopLoss for
+    entry protection; fills remain owned by reconciliation, not by the ack.
     """
 
     name = "bybit_real"
     is_dry_run = False
-    live_order_placement_implemented = False
+    live_order_placement_implemented = True
     supports_bracket_orders = False
     supports_oco = False
-    guarantees_protective_after_entry = False
-    supports_reduce_only = False
+    guarantees_protective_after_entry = True
+    supports_reduce_only = True
+    uses_entry_native_protection = True
+    position_reconciliation_enabled = True
 
     def __init__(
         self,
         *,
         connection_metadata: Mapping[str, Any] | None = None,
         settings_override: Any | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        base_url: str | None = None,
+        recv_window: int = 5_000,
+        timestamp_ms: int | None = None,
+        urlopen=urllib.request.urlopen,
     ) -> None:
         self.connection_metadata = dict(connection_metadata or {})
         self._settings = settings_override or default_settings
+        self._api_key = api_key
+        self._api_secret = api_secret
+        self._base_url = base_url
+        self._recv_window = recv_window
+        self._timestamp_ms = timestamp_ms
+        self._urlopen = urlopen
+        self._orders: dict[tuple[str, str, str], ExecutionPlannedOrder] = {}
 
     def live_order_placement_safety_reason(self) -> str | None:
         if not (
@@ -190,15 +233,83 @@ class BybitRealExecutionAdapter:
 
     async def place_order(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
         self._raise_order_placement_blocker()
-        raise NotImplementedError("Bybit real order submission is not implemented")
+        create_request = self._order_create_request(order)
+        existing = self._orders.get(_planned_order_key(order))
+        if existing is not None and existing.idempotency_key == order.idempotency_key:
+            return existing.model_copy(
+                update={"metadata": {**existing.metadata, "idempotent_replay": True}}
+            )
+        api_key, api_secret = self._credentials()
+        ack = create_bybit_order(
+            api_key=api_key,
+            api_secret=api_secret,
+            request=create_request,
+            base_url=self._resolved_base_url(),
+            recv_window=self._recv_window,
+            timestamp_ms=self._timestamp_ms,
+            urlopen=self._urlopen,
+        )
+        placed = order.model_copy(
+            update={
+                "status": "submitted",
+                "exchange_order_id": ack.order_id,
+                "filled_qty": None,
+                "avg_fill_price": None,
+                "remaining_qty": None,
+                "fees": None,
+                "metadata": {
+                    **order.metadata,
+                    "bybit_order_ack": {
+                        "order_id": ack.order_id,
+                        "order_link_id": ack.order_link_id,
+                        "raw_payload": dict(ack.raw_payload),
+                    },
+                    "order_link_id": ack.order_link_id,
+                },
+            }
+        )
+        self._orders[_planned_order_key(placed)] = placed
+        return placed
 
     async def place_protective_stop(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
         self._raise_order_placement_blocker()
-        raise NotImplementedError("Bybit protective stop submission is not implemented")
+        stop_loss = _positive_decimal(order.stop_price, "stopLoss")
+        take_profit = _optional_positive_decimal(order.metadata.get("native_take_profit"))
+        api_key, api_secret = self._credentials()
+        raw_payload = set_bybit_trading_stop(
+            api_key=api_key,
+            api_secret=api_secret,
+            category=self._category_for_order(order),
+            symbol=order.symbol,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            tp_sl_mode=_metadata_text(order.metadata, "tp_sl_mode") or "Full",
+            position_idx=self._position_idx_for_order(order, _bybit_side(order.side)),
+            base_url=self._resolved_base_url(),
+            recv_window=self._recv_window,
+            timestamp_ms=self._timestamp_ms,
+            urlopen=self._urlopen,
+        )
+        placed = order.model_copy(
+            update={
+                "status": "submitted",
+                "metadata": {
+                    **order.metadata,
+                    "bybit_trading_stop_ack": dict(raw_payload),
+                },
+            }
+        )
+        self._orders[_planned_order_key(placed)] = placed
+        return placed
 
     async def place_take_profit(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
         self._raise_order_placement_blocker()
-        raise NotImplementedError("Bybit take-profit submission is not implemented")
+        if not order.reduce_only:
+            raise ValueError("Bybit take-profit order must be reduce-only.")
+        if order.price is None:
+            raise ValueError("Bybit take-profit order requires price.")
+        take_profit_order = order.model_copy(update={"order_type": "limit"})
+        return await self.place_order(take_profit_order)
 
     async def cancel_order(
         self,
@@ -225,7 +336,13 @@ class BybitRealExecutionAdapter:
         symbol: str,
         client_order_id: str,
     ) -> ExecutionPlannedOrder | None:
-        raise NotImplementedError("Bybit real order lookup is not implemented")
+        return self._orders.get(
+            (
+                exchange.strip().lower(),
+                symbol.strip().upper(),
+                client_order_id,
+            )
+        )
 
     async def get_open_orders(
         self,
@@ -233,7 +350,15 @@ class BybitRealExecutionAdapter:
         exchange: str,
         symbol: str,
     ) -> list[ExecutionPlannedOrder]:
-        raise NotImplementedError("Bybit real open-order lookup is not implemented")
+        exchange_key = exchange.strip().lower()
+        symbol_key = symbol.strip().upper()
+        return [
+            order
+            for key, order in self._orders.items()
+            if key[0] == exchange_key
+            and key[1] == symbol_key
+            and order.status not in {"cancelled", "canceled", "rejected", "expired"}
+        ]
 
     async def get_position(
         self,
@@ -247,6 +372,97 @@ class BybitRealExecutionAdapter:
         reason = self.live_order_placement_safety_reason()
         if reason is not None:
             raise NotImplementedError(reason)
+
+    def _order_create_request(self, order: ExecutionPlannedOrder) -> BybitOrderCreateRequest:
+        category = self._category_for_order(order)
+        bybit_side = _bybit_side(order.side)
+        bybit_order_type = _bybit_order_type(order.order_type)
+        qty = _positive_decimal(order.quantity, "qty")
+        price = None
+        if bybit_order_type == "Limit":
+            price = _positive_decimal(order.price, "price")
+        stop_loss = _optional_positive_decimal(order.metadata.get("native_stop_loss"))
+        take_profit = _optional_positive_decimal(order.metadata.get("native_take_profit"))
+        if (
+            order.role == "entry"
+            and not order.reduce_only
+            and _truthy_setting(self._settings, "require_protective_stop_for_live_entry")
+            and stop_loss is None
+        ):
+            raise ValueError(
+                "Bybit live entry requires native stopLoss when "
+                "require_protective_stop_for_live_entry=true."
+            )
+        return BybitOrderCreateRequest(
+            category=category,
+            symbol=order.symbol,
+            side=bybit_side,
+            order_type=bybit_order_type,
+            qty=qty,
+            price=price,
+            time_in_force=order.time_in_force or ("GTC" if bybit_order_type == "Limit" else "IOC"),
+            order_link_id=order.client_order_id,
+            reduce_only=order.reduce_only,
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            tp_sl_mode=(
+                _metadata_text(order.metadata, "tp_sl_mode")
+                or ("Full" if stop_loss is not None or take_profit is not None else None)
+            ),
+            position_idx=self._position_idx_for_order(order, bybit_side),
+        )
+
+    def _category_for_order(self, order: ExecutionPlannedOrder) -> str:
+        category = (
+            _metadata_text(order.metadata, "category")
+            or _metadata_text(self.connection_metadata, "category")
+            or _metadata_text(self.connection_metadata, "position_category")
+            or "linear"
+        )
+        return _normalize_private_category(category)
+
+    def _position_idx_for_order(self, order: ExecutionPlannedOrder, side: str) -> int:
+        raw_position_idx = (
+            order.metadata.get("position_idx")
+            if isinstance(order.metadata, Mapping)
+            else None
+        )
+        if raw_position_idx is None:
+            raw_position_idx = self.connection_metadata.get("position_idx")
+        if raw_position_idx is not None:
+            try:
+                return int(raw_position_idx)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Bybit position_idx must be an integer.") from exc
+        position_mode = (
+            _metadata_text(order.metadata, "position_mode")
+            or _metadata_text(self.connection_metadata, "position_mode")
+            or _metadata_text(self.connection_metadata, "account_position_mode")
+        )
+        hedge_mode = self.connection_metadata.get("hedge_mode")
+        if (
+            isinstance(position_mode, str)
+            and position_mode.strip().lower() in {"hedge", "hedged", "both_sides"}
+        ) or _truthy_metadata_value(hedge_mode):
+            return 1 if side == "Buy" else 2
+        return 0
+
+    def _credentials(self) -> tuple[str, str]:
+        api_key = (self._api_key or getattr(self._settings, "bybit_api_key", "") or "").strip()
+        api_secret = (self._api_secret or getattr(self._settings, "bybit_secret", "") or "").strip()
+        if not api_key or not api_secret:
+            raise ValueError("Bybit live order placement requires api_key and api_secret.")
+        return api_key, api_secret
+
+    def _resolved_base_url(self) -> str:
+        if self._base_url:
+            return self._base_url.rstrip("/")
+        api_base_url = _metadata_text(self.connection_metadata, "api_base_url")
+        if api_base_url:
+            return api_base_url.rstrip("/")
+        if self._metadata_is_testnet():
+            return BYBIT_TESTNET_API_URL
+        return BYBIT_API_URL
 
     def _metadata_is_testnet(self) -> bool:
         testnet_value = self.connection_metadata.get("testnet")
@@ -278,6 +494,82 @@ def _truthy_metadata_value(value: object) -> bool:
     return bool(value)
 
 
+def create_bybit_order(
+    *,
+    api_key: str,
+    api_secret: str,
+    request: BybitOrderCreateRequest,
+    base_url: str = BYBIT_API_URL,
+    recv_window: int = 5_000,
+    timestamp_ms: int | None = None,
+    urlopen=urllib.request.urlopen,
+) -> BybitOrderAck:
+    body = _order_create_payload(request)
+    payload = _post_private_json(
+        api_key=api_key,
+        api_secret=api_secret,
+        base_url=base_url,
+        path=BYBIT_ORDER_CREATE_PATH,
+        body=body,
+        recv_window=recv_window,
+        timestamp_ms=timestamp_ms,
+        urlopen=urlopen,
+        label="order-create",
+    )
+    result = payload.get("result", {})
+    result_payload: Mapping[str, Any] = result if isinstance(result, Mapping) else {}
+    order_id = str(result_payload.get("orderId") or "").strip()
+    order_link_id = str(result_payload.get("orderLinkId") or request.order_link_id).strip()
+    if not order_id:
+        raise BybitApiError("Bybit order-create response did not include orderId")
+    if not order_link_id:
+        raise BybitApiError("Bybit order-create response did not include orderLinkId")
+    return BybitOrderAck(
+        order_id=order_id,
+        order_link_id=order_link_id,
+        raw_payload=payload,
+    )
+
+
+def set_bybit_trading_stop(
+    *,
+    api_key: str,
+    api_secret: str,
+    category: str,
+    symbol: str,
+    stop_loss: Decimal,
+    take_profit: Decimal | None = None,
+    tp_sl_mode: str = "Full",
+    position_idx: int = 0,
+    base_url: str = BYBIT_API_URL,
+    recv_window: int = 5_000,
+    timestamp_ms: int | None = None,
+    urlopen=urllib.request.urlopen,
+) -> Mapping[str, Any]:
+    body: dict[str, Any] = {
+        "category": _normalize_private_category(category),
+        "symbol": _normalize_private_symbol(symbol),
+        "stopLoss": _decimal_to_bybit_string(_positive_decimal(stop_loss, "stopLoss")),
+        "tpslMode": tp_sl_mode.strip() or "Full",
+        "positionIdx": int(position_idx),
+    }
+    if take_profit is not None:
+        body["takeProfit"] = _decimal_to_bybit_string(
+            _positive_decimal(take_profit, "takeProfit")
+        )
+    return _post_private_json(
+        api_key=api_key,
+        api_secret=api_secret,
+        base_url=base_url,
+        path=BYBIT_TRADING_STOP_PATH,
+        body=body,
+        recv_window=recv_window,
+        timestamp_ms=timestamp_ms,
+        urlopen=urlopen,
+        label="trading-stop",
+    )
+
+
 def fetch_bybit_fee_rates(
     *,
     api_key: str,
@@ -296,22 +588,15 @@ def fetch_bybit_fee_rates(
     if symbol:
         params["symbol"] = LINEAR_SYMBOL_ALIASES.get(symbol.strip().upper(), symbol.strip().upper())
     query_string = urllib.parse.urlencode(params)
-    timestamp = str(timestamp_ms or int(time.time() * 1000))
-    recv_window_value = str(recv_window)
-    signature_payload = f"{timestamp}{api_key}{recv_window_value}{query_string}"
-    signature = hmac.new(
-        api_secret.encode("utf-8"),
-        signature_payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}{BYBIT_FEE_RATE_PATH}?{query_string}",
-        headers={
-            "X-BAPI-API-KEY": api_key,
-            "X-BAPI-TIMESTAMP": timestamp,
-            "X-BAPI-RECV-WINDOW": recv_window_value,
-            "X-BAPI-SIGN": signature,
-        },
+        headers=_private_request_headers(
+            api_key=api_key,
+            api_secret=api_secret,
+            recv_window=recv_window,
+            timestamp_ms=timestamp_ms,
+            signed_payload=query_string,
+        ),
         method="GET",
     )
 
@@ -719,6 +1004,46 @@ def _get_public_json(
     return payload
 
 
+def _post_private_json(
+    *,
+    api_key: str,
+    api_secret: str,
+    base_url: str,
+    path: str,
+    body: Mapping[str, Any],
+    recv_window: int,
+    timestamp_ms: int | None,
+    urlopen,
+    label: str,
+) -> dict:
+    json_body = json.dumps(body, separators=(",", ":"))
+    headers = {
+        **_private_request_headers(
+            api_key=api_key,
+            api_secret=api_secret,
+            recv_window=recv_window,
+            timestamp_ms=timestamp_ms,
+            signed_payload=json_body,
+        ),
+        "Content-Type": "application/json",
+    }
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}{path}",
+        data=json_body.encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, TimeoutError, json.JSONDecodeError) as exc:
+        raise BybitApiError(f"Bybit {label} request failed: {exc}") from exc
+    ret_code = payload.get("retCode")
+    if ret_code != 0:
+        raise BybitApiError(f"Bybit {label} request failed: {ret_code} {payload.get('retMsg')}")
+    return payload
+
+
 def _get_private_json(
     *,
     api_key: str,
@@ -732,22 +1057,15 @@ def _get_private_json(
     label: str,
 ) -> dict:
     query_string = urllib.parse.urlencode(params)
-    timestamp = str(timestamp_ms or int(time.time() * 1000))
-    recv_window_value = str(recv_window)
-    signature_payload = f"{timestamp}{api_key}{recv_window_value}{query_string}"
-    signature = hmac.new(
-        api_secret.encode("utf-8"),
-        signature_payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}{path}?{query_string}",
-        headers={
-            "X-BAPI-API-KEY": api_key,
-            "X-BAPI-TIMESTAMP": timestamp,
-            "X-BAPI-RECV-WINDOW": recv_window_value,
-            "X-BAPI-SIGN": signature,
-        },
+        headers=_private_request_headers(
+            api_key=api_key,
+            api_secret=api_secret,
+            recv_window=recv_window,
+            timestamp_ms=timestamp_ms,
+            signed_payload=query_string,
+        ),
         method="GET",
     )
     try:
@@ -759,6 +1077,157 @@ def _get_private_json(
     if ret_code != 0:
         raise BybitApiError(f"Bybit {label} request failed: {ret_code} {payload.get('retMsg')}")
     return payload
+
+
+def _private_request_headers(
+    *,
+    api_key: str,
+    api_secret: str,
+    recv_window: int,
+    timestamp_ms: int | None,
+    signed_payload: str,
+) -> dict[str, str]:
+    timestamp = str(timestamp_ms or int(time.time() * 1000))
+    recv_window_value = str(recv_window)
+    signature_payload = f"{timestamp}{api_key}{recv_window_value}{signed_payload}"
+    signature = hmac.new(
+        api_secret.encode("utf-8"),
+        signature_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-BAPI-API-KEY": api_key,
+        "X-BAPI-TIMESTAMP": timestamp,
+        "X-BAPI-RECV-WINDOW": recv_window_value,
+        "X-BAPI-SIGN": signature,
+    }
+
+
+def _order_create_payload(request: BybitOrderCreateRequest) -> dict[str, Any]:
+    category = _normalize_private_category(request.category)
+    symbol = _normalize_private_symbol(request.symbol)
+    side = _normalize_bybit_side(request.side)
+    order_type = _normalize_bybit_order_type(request.order_type)
+    qty = _positive_decimal(request.qty, "qty")
+    order_link_id = request.order_link_id.strip()
+    if not order_link_id:
+        raise ValueError("Bybit orderLinkId is required.")
+    time_in_force = request.time_in_force.strip()
+    if not time_in_force:
+        raise ValueError("Bybit timeInForce is required.")
+    payload: dict[str, Any] = {
+        "category": category,
+        "symbol": symbol,
+        "side": side,
+        "orderType": order_type,
+        "qty": _decimal_to_bybit_string(qty),
+        "timeInForce": time_in_force,
+        "orderLinkId": order_link_id,
+        "reduceOnly": bool(request.reduce_only),
+        "positionIdx": int(request.position_idx),
+    }
+    if order_type == "Limit":
+        payload["price"] = _decimal_to_bybit_string(_positive_decimal(request.price, "price"))
+    elif request.price is not None:
+        raise ValueError("Bybit Market order payload must not include price.")
+    if request.stop_loss is not None:
+        payload["stopLoss"] = _decimal_to_bybit_string(
+            _positive_decimal(request.stop_loss, "stopLoss")
+        )
+    if request.take_profit is not None:
+        payload["takeProfit"] = _decimal_to_bybit_string(
+            _positive_decimal(request.take_profit, "takeProfit")
+        )
+    if request.tp_sl_mode is not None and request.tp_sl_mode.strip():
+        payload["tpslMode"] = request.tp_sl_mode.strip()
+    return payload
+
+
+def _normalize_private_category(category: str) -> str:
+    normalized = category.strip().lower()
+    if normalized != "linear":
+        raise ValueError("Bybit live order placement MVP supports only linear category.")
+    return normalized
+
+
+def _normalize_private_symbol(symbol: str) -> str:
+    value = symbol.strip()
+    if not value:
+        raise ValueError("Bybit order symbol is required.")
+    if value != value.upper():
+        raise ValueError("Bybit order symbol must be uppercase.")
+    return LINEAR_SYMBOL_ALIASES.get(value, value)
+
+
+def _bybit_side(side: str) -> str:
+    normalized = side.strip().lower()
+    if normalized == "buy":
+        return "Buy"
+    if normalized == "sell":
+        return "Sell"
+    raise ValueError("Bybit order side must be buy or sell.")
+
+
+def _normalize_bybit_side(side: str) -> str:
+    normalized = side.strip().lower()
+    if normalized in {"buy", "sell"}:
+        return _bybit_side(normalized)
+    if side in {"Buy", "Sell"}:
+        return side
+    raise ValueError("Bybit order side must be Buy or Sell.")
+
+
+def _bybit_order_type(order_type: str) -> str:
+    normalized = order_type.strip().lower()
+    if normalized == "market":
+        return "Market"
+    if normalized in {"limit", "take_profit"}:
+        return "Limit"
+    raise ValueError("Bybit order type must be market or limit for order/create.")
+
+
+def _normalize_bybit_order_type(order_type: str) -> str:
+    normalized = order_type.strip().lower()
+    if normalized in {"market", "limit"}:
+        return "Market" if normalized == "market" else "Limit"
+    if order_type in {"Market", "Limit"}:
+        return order_type
+    raise ValueError("Bybit order type must be Market or Limit.")
+
+
+def _metadata_text(metadata: Mapping[str, Any], name: str) -> str | None:
+    value = metadata.get(name)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _optional_positive_decimal(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    return _positive_decimal(value, "decimal")
+
+
+def _positive_decimal(value: Any, label: str) -> Decimal:
+    parsed = _decimal_or_none(value)
+    if parsed is None or parsed <= 0:
+        raise ValueError(f"Bybit {label} must be a positive Decimal value.")
+    return parsed
+
+
+def _decimal_to_bybit_string(value: Decimal) -> str:
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _planned_order_key(order: ExecutionPlannedOrder) -> tuple[str, str, str]:
+    return (
+        order.exchange.strip().lower(),
+        order.symbol.strip().upper(),
+        order.client_order_id,
+    )
 
 
 def _parse_instrument_rule(

@@ -1,10 +1,16 @@
+import hashlib
+import hmac
+import json
 import unittest
 from dataclasses import dataclass
+from decimal import Decimal
 
 from app.core.config import Settings
 from app.exchanges.base import DryRunExecutionAdapter, exchange_execution_capabilities
 from app.exchanges.bybit import (
     BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON,
+    BYBIT_ORDER_CREATE_PATH,
+    BYBIT_TRADING_STOP_PATH,
     LIVE_ORDER_PLACEMENT_DISABLED_REASON,
     BybitRealExecutionAdapter,
 )
@@ -48,8 +54,8 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
         bybit = exchange_execution_capabilities(BybitRealExecutionAdapter())
         self.assertFalse(bybit.supports_bracket_orders)
         self.assertFalse(bybit.supports_oco)
-        self.assertFalse(bybit.guarantees_protective_after_entry)
-        self.assertFalse(bybit.supports_reduce_only)
+        self.assertTrue(bybit.guarantees_protective_after_entry)
+        self.assertTrue(bybit.supports_reduce_only)
 
     async def test_bybit_live_order_defaults_block_submission(self) -> None:
         adapter = BybitRealExecutionAdapter(settings_override=_live_trading_settings())
@@ -200,19 +206,157 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
                 replacement=_planned_order(role="entry", client_order_id="entry-replace-bad"),
             )
 
-    async def test_bybit_real_adapter_skeleton_does_not_submit_orders(self) -> None:
+    async def test_bybit_testnet_order_create_posts_signed_body(self) -> None:
+        captured = {}
+
+        def fake_urlopen(request, timeout: int):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return _Response(
+                {
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {"orderId": "bybit-order-1", "orderLinkId": "entry-3"},
+                }
+            )
+
         adapter = BybitRealExecutionAdapter(
+            connection_metadata={"testnet": True},
             settings_override=_live_trading_settings(
                 enable_live_trading=True,
                 enable_bybit_live_order_placement=True,
-                enable_bybit_mainnet_order_placement=True,
-            )
+            ),
+            api_key="api_key",
+            api_secret="api_secret",
+            timestamp_ms=1_676_360_412_362,
+            urlopen=fake_urlopen,
+        )
+        order = _planned_order(
+            role="entry",
+            client_order_id="entry-3",
+            price=None,
+            metadata={"native_stop_loss": 95.0, "category": "linear"},
         )
 
-        with self.assertRaises(NotImplementedError) as raised:
-            await adapter.place_order(_planned_order(role="entry", client_order_id="entry-3"))
+        placed = await adapter.place_order(order)
 
-        self.assertEqual(str(raised.exception), "Bybit real order submission is not implemented")
+        request = captured["request"]
+        body = request.data.decode("utf-8")
+        payload = json.loads(body)
+        expected_signature = hmac.new(
+            b"api_secret",
+            f"1676360412362api_key5000{body}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertEqual(request.full_url, f"https://api-testnet.bybit.com{BYBIT_ORDER_CREATE_PATH}")
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("X-bapi-api-key"), "api_key")
+        self.assertEqual(request.get_header("X-bapi-timestamp"), "1676360412362")
+        self.assertEqual(request.get_header("X-bapi-sign"), expected_signature)
+        self.assertEqual(captured["timeout"], 10)
+        self.assertEqual(
+            payload,
+            {
+                "category": "linear",
+                "symbol": "BTCUSDT",
+                "side": "Buy",
+                "orderType": "Market",
+                "qty": "1",
+                "timeInForce": "IOC",
+                "orderLinkId": "entry-3",
+                "reduceOnly": False,
+                "positionIdx": 0,
+                "stopLoss": "95",
+                "tpslMode": "Full",
+            },
+        )
+        self.assertEqual(placed.status, "submitted")
+        self.assertEqual(placed.exchange_order_id, "bybit-order-1")
+        self.assertEqual(placed.client_order_id, "entry-3")
+        self.assertIsNone(placed.filled_qty)
+        self.assertEqual(placed.metadata["order_link_id"], "entry-3")
+
+    async def test_bybit_limit_order_without_price_is_rejected_before_http(self) -> None:
+        calls = 0
+
+        def fake_urlopen(request, timeout: int):
+            nonlocal calls
+            calls += 1
+            return _Response({"retCode": 0, "retMsg": "OK", "result": {}})
+
+        adapter = _enabled_bybit_adapter(urlopen=fake_urlopen)
+        order = _planned_order(
+            role="entry",
+            client_order_id="limit-no-price",
+            order_type="limit",
+            price=None,
+            metadata={"native_stop_loss": 95.0},
+        )
+
+        with self.assertRaises(ValueError):
+            await adapter.place_order(order)
+
+        self.assertEqual(calls, 0)
+
+    async def test_bybit_live_entry_requires_native_stop_loss_when_guard_enabled(self) -> None:
+        calls = 0
+
+        def fake_urlopen(request, timeout: int):
+            nonlocal calls
+            calls += 1
+            return _Response({"retCode": 0, "retMsg": "OK", "result": {}})
+
+        adapter = _enabled_bybit_adapter(urlopen=fake_urlopen)
+
+        with self.assertRaises(ValueError) as raised:
+            await adapter.place_order(_planned_order(role="entry", client_order_id="missing-sl"))
+
+        self.assertIn("requires native stopLoss", str(raised.exception))
+        self.assertEqual(calls, 0)
+
+    async def test_bybit_trading_stop_posts_signed_body(self) -> None:
+        captured = {}
+
+        def fake_urlopen(request, timeout: int):
+            captured["request"] = request
+            return _Response({"retCode": 0, "retMsg": "OK", "result": {}})
+
+        adapter = _enabled_bybit_adapter(urlopen=fake_urlopen)
+        stop = _planned_order(
+            role="protective_stop",
+            client_order_id="stop-1",
+            side="sell",
+            order_type="stop",
+            reduce_only=True,
+            stop_price=95.0,
+            metadata={"native_take_profit": Decimal("110.5"), "tp_sl_mode": "Full"},
+        )
+
+        placed = await adapter.place_protective_stop(stop)
+
+        request = captured["request"]
+        body = request.data.decode("utf-8")
+        payload = json.loads(body)
+        expected_signature = hmac.new(
+            b"api_secret",
+            f"1676360412362api_key5000{body}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertEqual(request.full_url, f"https://api-testnet.bybit.com{BYBIT_TRADING_STOP_PATH}")
+        self.assertEqual(request.get_header("X-bapi-sign"), expected_signature)
+        self.assertEqual(
+            payload,
+            {
+                "category": "linear",
+                "symbol": "BTCUSDT",
+                "stopLoss": "95",
+                "tpslMode": "Full",
+                "positionIdx": 0,
+                "takeProfit": "110.5",
+            },
+        )
+        self.assertEqual(placed.status, "submitted")
+        self.assertIn("bybit_trading_stop_ack", placed.metadata)
 
 
 @dataclass(frozen=True)
@@ -221,6 +365,20 @@ class _LiveTradingSettings:
     enable_bybit_live_order_placement: bool = False
     enable_bybit_mainnet_order_placement: bool = False
     require_protective_stop_for_live_entry: bool = True
+
+
+class _Response:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
 
 
 def _live_trading_settings(
@@ -238,6 +396,20 @@ def _live_trading_settings(
     )
 
 
+def _enabled_bybit_adapter(*, urlopen) -> BybitRealExecutionAdapter:
+    return BybitRealExecutionAdapter(
+        connection_metadata={"testnet": True},
+        settings_override=_live_trading_settings(
+            enable_live_trading=True,
+            enable_bybit_live_order_placement=True,
+        ),
+        api_key="api_key",
+        api_secret="api_secret",
+        timestamp_ms=1_676_360_412_362,
+        urlopen=urlopen,
+    )
+
+
 def _planned_order(
     *,
     role: str,
@@ -248,6 +420,7 @@ def _planned_order(
     price: float | None = 100.0,
     stop_price: float | None = None,
     close_percent: float | None = None,
+    metadata: dict | None = None,
 ) -> ExecutionPlannedOrder:
     return ExecutionPlannedOrder(
         role=role,
@@ -262,6 +435,7 @@ def _planned_order(
         close_percent=close_percent,
         client_order_id=client_order_id,
         idempotency_key=f"idempotency:{client_order_id}",
+        metadata=metadata or {},
     )
 
 

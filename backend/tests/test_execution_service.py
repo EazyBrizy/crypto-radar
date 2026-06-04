@@ -1,3 +1,4 @@
+import json
 import unittest
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -195,6 +196,20 @@ class _LiveTradingSettings:
     enable_bybit_live_order_placement: bool = False
     enable_bybit_mainnet_order_placement: bool = False
     require_protective_stop_for_live_entry: bool = True
+
+
+class _BybitResponse:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
 
 
 def _order_key(order: ExecutionPlannedOrder) -> tuple[str, str, str]:
@@ -399,13 +414,32 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(market_data.calls, 0)
         self.assertEqual(fee_rates.calls, 0)
 
-    async def test_bybit_testnet_live_flags_reach_adapter_implementation_blocker(self) -> None:
+    async def test_bybit_testnet_live_flags_submit_entry_with_native_stop_loss(self) -> None:
+        captured_requests = []
+
+        def fake_urlopen(request, timeout: int):
+            captured_requests.append(request)
+            return _BybitResponse(
+                {
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {
+                        "orderId": "bybit-order-svc-1",
+                        "orderLinkId": json.loads(request.data.decode("utf-8"))["orderLinkId"],
+                    },
+                }
+            )
+
         adapter = BybitRealExecutionAdapter(
             connection_metadata={"testnet": True},
             settings_override=_LiveTradingSettings(
                 enable_live_trading=True,
                 enable_bybit_live_order_placement=True,
             ),
+            api_key="api_key",
+            api_secret="api_secret",
+            timestamp_ms=1_676_360_412_362,
+            urlopen=fake_urlopen,
         )
         service = _service(
             _decision(),
@@ -417,9 +451,20 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
 
         result = await service.place_order(_signal(), _request())
 
-        self.assertEqual(result.status, "not_implemented")
+        self.assertEqual(result.status, "submitted")
         self.assertTrue(result.execution_allowed)
-        self.assertIn("not implemented", result.message)
+        self.assertEqual(len(captured_requests), 1)
+        payload = json.loads(captured_requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["category"], "linear")
+        self.assertEqual(payload["symbol"], "BTCUSDT")
+        self.assertEqual(payload["orderType"], "Market")
+        self.assertEqual(payload["stopLoss"], "95")
+        self.assertIn("orderLinkId", payload)
+        self.assertEqual(result.planned_orders[0].status, "submitted")
+        self.assertEqual(result.planned_orders[0].exchange_order_id, "bybit-order-svc-1")
+        self.assertIsNone(result.planned_orders[0].filled_qty)
+        self.assertEqual(result.planned_orders[1].status, "submitted")
+        self.assertTrue(result.planned_orders[1].metadata["attached_to_entry_order_create"])
         self.assertNotEqual(result.message, LIVE_ORDER_PLACEMENT_DISABLED_REASON)
 
     async def test_bybit_mainnet_live_order_flag_blocks_before_http_boundaries(self) -> None:

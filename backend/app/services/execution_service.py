@@ -706,6 +706,28 @@ def _build_execution_plan(
             "real_order_id": entry_client_order_id,
         }
     )
+    entry_metadata = {
+        "signal_id": signal.id,
+        "lifecycle_trace": plan_trace.model_copy(
+            update={"real_order_id": entry_client_order_id}
+        ).model_dump(mode="json", exclude_none=True),
+        "plan_version": plan_version,
+        "strategy": signal.strategy,
+        "timeframe": signal.timeframe,
+        "role": "entry",
+        "client_order_id": entry_client_order_id,
+        "reduce_only": False,
+    }
+    if _adapter_uses_entry_native_protection(adapter):
+        entry_metadata.update(
+            {
+                "category": "linear",
+                "native_stop_loss": risk_decision.stop_loss_plan.stop_loss_price,
+                "native_take_profit": _native_full_take_profit_price(risk_decision),
+                "tp_sl_mode": "Full",
+                "native_protection_source": "entry_order_create",
+            }
+        )
     orders = [
         ExecutionPlannedOrder(
             role="entry",
@@ -719,18 +741,7 @@ def _build_execution_plan(
             client_order_id=entry_client_order_id,
             idempotency_key=f"{idempotency_key}:entry",
             lifecycle_trace=plan_trace.model_copy(update={"real_order_id": entry_client_order_id}),
-            metadata={
-                "signal_id": signal.id,
-                "lifecycle_trace": plan_trace.model_copy(
-                    update={"real_order_id": entry_client_order_id}
-                ).model_dump(mode="json", exclude_none=True),
-                "plan_version": plan_version,
-                "strategy": signal.strategy,
-                "timeframe": signal.timeframe,
-                "role": "entry",
-                "client_order_id": entry_client_order_id,
-                "reduce_only": False,
-            },
+            metadata=entry_metadata,
         ),
         ExecutionPlannedOrder(
             role="protective_stop",
@@ -915,6 +926,8 @@ async def _place_execution_plan(
     placement_blockers = _live_placement_safety_blockers(plan, adapter)
     if placement_blockers:
         raise ValueError("; ".join(placement_blockers))
+    if _adapter_uses_entry_native_protection(adapter):
+        return await _place_entry_native_protection_plan(plan, adapter)
     placed: list[ExecutionPlannedOrder] = []
     for order in plan.planned_orders:
         existing = await adapter.get_order(
@@ -940,6 +953,75 @@ async def _place_execution_plan(
             placed.append(await adapter.place_protective_stop(order))
         else:
             placed.append(await adapter.place_take_profit(order))
+    return placed
+
+
+async def _place_entry_native_protection_plan(
+    plan: RealExecutionPlan,
+    adapter: ExchangeExecutionAdapter,
+) -> list[ExecutionPlannedOrder]:
+    entry_order = next((order for order in plan.planned_orders if order.role == "entry"), None)
+    stop_order = next((order for order in plan.planned_orders if order.role == "protective_stop"), None)
+    if entry_order is None:
+        raise ValueError("Execution plan must contain an entry order.")
+    if stop_order is None or stop_order.stop_price is None:
+        raise ValueError("Entry-native Bybit placement requires a protective stop before entry.")
+
+    native_take_profit = _native_full_take_profit_order(plan.planned_orders)
+    entry_metadata = {
+        **entry_order.metadata,
+        "native_stop_loss": stop_order.stop_price,
+        "native_take_profit": native_take_profit.price if native_take_profit is not None else None,
+        "native_protection_source": "entry_order_create",
+        "tp_sl_mode": "Full",
+    }
+    entry_with_native_protection = entry_order.model_copy(update={"metadata": entry_metadata})
+    existing = await adapter.get_order(
+        exchange=entry_with_native_protection.exchange,
+        symbol=entry_with_native_protection.symbol,
+        client_order_id=entry_with_native_protection.client_order_id,
+    )
+    if existing is not None and _same_idempotent_order(existing, entry_with_native_protection):
+        placed_entry = existing.model_copy(
+            update={"metadata": {**existing.metadata, "idempotent_replay": True}}
+        )
+    else:
+        placed_entry = await adapter.place_order(entry_with_native_protection)
+
+    placed: list[ExecutionPlannedOrder] = [placed_entry]
+    for order in plan.planned_orders:
+        if order.client_order_id == entry_order.client_order_id:
+            continue
+        if order.role == "protective_stop":
+            # Bybit MVP attaches stopLoss in order/create. Sending another stop
+            # immediately after ack could duplicate protection before fill sync.
+            placed.append(
+                order.model_copy(
+                    update={
+                        "status": "submitted",
+                        "exchange_order_id": placed_entry.exchange_order_id,
+                        "metadata": {
+                            **order.metadata,
+                            "attached_to_entry_order_create": True,
+                            "entry_client_order_id": placed_entry.client_order_id,
+                            "entry_exchange_order_id": placed_entry.exchange_order_id,
+                        },
+                    }
+                )
+            )
+            continue
+        placed.append(
+            order.model_copy(
+                update={
+                    "metadata": {
+                        **order.metadata,
+                        "deferred_until_reconciliation": True,
+                        "entry_client_order_id": placed_entry.client_order_id,
+                        "entry_exchange_order_id": placed_entry.exchange_order_id,
+                    }
+                }
+            )
+        )
     return placed
 
 
@@ -1005,6 +1087,42 @@ def _execution_intent_digest(
 
 def _order_client_id(digest: str, suffix: str) -> str:
     return f"cr-{digest[:18]}-{suffix}"
+
+
+def _adapter_uses_entry_native_protection(adapter: Any | None) -> bool:
+    if adapter is None or bool(getattr(adapter, "is_dry_run", False)):
+        return False
+    return bool(getattr(adapter, "uses_entry_native_protection", False))
+
+
+def _native_full_take_profit_price(risk_decision: RiskDecision) -> float | None:
+    target = _native_full_take_profit_target(risk_decision.take_profit_plan.targets)
+    return target.price if target is not None else None
+
+
+def _native_full_take_profit_order(
+    orders: list[ExecutionPlannedOrder],
+) -> ExecutionPlannedOrder | None:
+    targets = [
+        order
+        for order in orders
+        if order.role == "take_profit"
+        and order.price is not None
+        and order.close_percent is not None
+        and order.close_percent >= 99.999999
+    ]
+    return targets[0] if len(targets) == 1 else None
+
+
+def _native_full_take_profit_target(targets: Any) -> Any | None:
+    full_targets = [
+        target
+        for target in targets
+        if getattr(target, "price", None) is not None
+        and getattr(target, "close_percent", 0.0) is not None
+        and target.close_percent >= 99.999999
+    ]
+    return full_targets[0] if len(full_targets) == 1 else None
 
 
 def _entry_order_side(side: str) -> str:

@@ -85,12 +85,27 @@ not an execution candidate. RiskGate preview/confirm is evaluated only after
 the centralized execution-candidate status helper accepts the signal status:
 `entry_touched`, `actionable`, or `confirmed`.
 
+Pending entry intent state is also not final entry permission. A
+`PendingEntryIntent` records that the user accepted a specific signal, trade
+plan, execution profile, mode, and request snapshot, then waits for the accepted
+entry zone. The intent lifecycle (`pending -> triggered -> filling ->
+filled/failed/cancelled/expired/requires_reconfirmation`) is stored in
+PostgreSQL separately from `features_snapshot.auto_entry`; the snapshot key may
+remain only as a read mirror/backward-compatibility surface. When an intent
+triggers, virtual or real execution must rebuild RiskGate context from current
+account, market/orderbook, exchange rules, fee, and signal data. Real execution
+still must pass `RealExecutionReadinessService` before any adapter order.
+
 ## Storage
 
 PostgreSQL remains the source of truth:
 
 - `app_users.risk_profile` stores the selected profile name.
 - `user_profiles.settings.risk_management` stores the active numeric limits.
+- `pending_entry_intents` stores deferred user entry intents and their
+  accepted signal/trade-plan/profile/request snapshots. This table is the
+  source of truth for new pending-entry workflows; `features_snapshot.auto_entry`
+  is legacy/read-mirror state only.
 
 Current JSON shape:
 

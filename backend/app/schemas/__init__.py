@@ -72,6 +72,13 @@ from app.schemas.pipeline import (
     normalized_topic_for,
     raw_topic_for,
 )
+from app.schemas.pending_entry import (
+    PendingEntryIntentCreate,
+    PendingEntryIntentMode,
+    PendingEntryIntentRead,
+    PendingEntryIntentSide,
+    PendingEntryIntentStatus,
+)
 from app.schemas.risk import (
     AccountRiskSnapshot,
     BreakevenPlan,
@@ -216,6 +223,11 @@ __all__ = [
     "OHLCVCandle",
     "OrderBookAlphaFeatures",
     "OrderBookLevel",
+    "PendingEntryIntentCreate",
+    "PendingEntryIntentMode",
+    "PendingEntryIntentRead",
+    "PendingEntryIntentSide",
+    "PendingEntryIntentStatus",
     "PIPELINE_STAGES",
     "PipelineEnvelope",
     "PipelineStage",

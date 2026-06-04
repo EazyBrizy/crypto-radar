@@ -5,6 +5,7 @@ from app.models.exchange_connection import UserExchangeConnection
 from app.models.market import MarketAsset, MarketDerivativeSnapshot, MarketExchange, MarketPair
 from app.models.notification import Notification, NotificationDelivery
 from app.models.outbox import OutboxEvent
+from app.models.pending_entry import PendingEntryIntent
 from app.models.portfolio import Order, OrderFill, Portfolio, PortfolioBalance
 from app.models.portfolio import PortfolioBalanceLedger, Position
 from app.models.risk import AssetRiskGroup, ExchangeInstrumentRule
@@ -32,6 +33,7 @@ __all__ = [
     "Order",
     "OrderFill",
     "OutboxEvent",
+    "PendingEntryIntent",
     "Portfolio",
     "PortfolioBalance",
     "PortfolioBalanceLedger",

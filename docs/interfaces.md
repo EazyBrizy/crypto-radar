@@ -342,6 +342,102 @@ AND RiskGate preview/confirm returns can_enter=true
 AND real execution readiness passes for real orders
 ```
 
+## Pending Entry Intent Lifecycle v1
+
+`PendingEntryIntent` is the user workflow lifecycle for deferred entry. It is
+separate from `SignalStatus`: a signal describes a market setup, while a
+pending entry intent records that a user accepted that setup and wants entry
+only when the accepted entry zone is reached.
+
+`active` signal status never creates a pending entry permission by itself. A
+signal can be `active`, `ready`, or `entry_touched` without any user intent. A
+pending entry intent can exist only after the user accepts a concrete signal,
+trade-plan snapshot, execution profile, mode, and request snapshot.
+
+Canonical intent statuses:
+
+- `pending`: user accepted the signal, and the system is waiting for price to
+  reach the accepted entry zone.
+- `triggered`: the accepted entry zone was reached and the intent is ready for
+  the execution flow to re-check current eligibility.
+- `filling`: an execution path has started placing/simulating the entry, but
+  the fill is not final.
+- `filled`: the entry completed and the intent points to the filled trade.
+- `failed`: the intent could not proceed; `failure_reason` must explain why.
+- `cancelled`: user or system explicitly cancelled the intent.
+- `expired`: the intent exceeded its TTL before fill.
+- `requires_reconfirmation`: the accepted signal/trade-plan/profile snapshot is
+  stale or no longer matches the current signal enough to proceed.
+
+Canonical helper groups:
+
+```python
+ACTIVE_PENDING_ENTRY_INTENT_STATUSES = {
+    "pending",
+    "triggered",
+    "filling",
+    "requires_reconfirmation",
+}
+
+TERMINAL_PENDING_ENTRY_INTENT_STATUSES = {
+    "filled",
+    "failed",
+    "cancelled",
+    "expired",
+}
+```
+
+`PendingEntryIntent` stores the acceptance snapshot, not strategy params:
+
+```python
+PendingEntryIntent = {
+    "id": UUID,
+    "user_id": UUID,
+    "signal_id": UUID,
+    "strategy_id": UUID | None,
+    "mode": "virtual" | "real",
+    "status": PendingEntryIntentStatus,
+    "exchange": str,
+    "symbol": str,
+    "side": "long" | "short",
+    "entry_min": Decimal,
+    "entry_max": Decimal,
+    "entry_price_policy": str,
+    "stop_loss": Decimal,
+    "targets_snapshot": list | dict,
+    "accepted_trade_plan_snapshot": dict,
+    "accepted_trade_plan_hash": str,
+    "accepted_signal_status": SignalStatus,
+    "accepted_signal_version": str | None,
+    "accepted_signal_fingerprint": str | None,
+    "execution_profile_snapshot": dict,
+    "request_snapshot": dict,
+    "idempotency_key": str,
+    "expires_at": datetime | None,
+    "created_at": datetime,
+    "updated_at": datetime,
+    "triggered_at": datetime | None,
+    "filled_at": datetime | None,
+    "filled_trade_id": UUID | None,
+    "failure_reason": str | None,
+}
+```
+
+Pending entry permission is:
+
+```text
+PendingEntryIntent.status in {"triggered", "filling"}
+AND accepted snapshots are still valid for the current signal/fingerprint
+AND RiskGate preview/confirm passes on fresh account and market context
+AND real execution readiness passes before any real adapter order
+```
+
+`features_snapshot.auto_entry` may remain as a read mirror for legacy signals
+and backward-compatible UI rendering. It is not the source of truth for new
+pending-entry workflows. New services must create and transition
+`PendingEntryIntent` records and may mirror a compact status into
+`features_snapshot.auto_entry` only for compatibility.
+
 Radar `execution_ready` first applies `is_execution_candidate_status`, then
 uses a read-only RiskGate preview. Manual virtual/real confirmation must run
 RiskGate again on the current request. Real execution must run

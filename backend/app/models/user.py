@@ -56,6 +56,10 @@ class AppUser(Base):
     portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="user")
     orders: Mapped[list["Order"]] = relationship(back_populates="user")
     positions: Mapped[list["Position"]] = relationship(back_populates="user")
+    pending_entry_intents: Mapped[list["PendingEntryIntent"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     external_orders: Mapped[list["ExternalExchangeOrder"]] = relationship(back_populates="user")
     external_trades: Mapped[list["ExternalExchangeTrade"]] = relationship(back_populates="user")
     notifications: Mapped[list["Notification"]] = relationship(back_populates="user")

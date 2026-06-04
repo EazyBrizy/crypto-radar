@@ -84,6 +84,10 @@ class TradingSignal(Base):
     )
     orders: Mapped[list["Order"]] = relationship(back_populates="signal")
     positions: Mapped[list["Position"]] = relationship(back_populates="signal")
+    pending_entry_intents: Mapped[list["PendingEntryIntent"]] = relationship(
+        back_populates="signal",
+        cascade="all, delete-orphan",
+    )
     ai_explanations: Mapped[list["SignalAIExplanation"]] = relationship(
         back_populates="signal",
         cascade="all, delete-orphan",

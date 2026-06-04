@@ -109,4 +109,23 @@ describe("paper trade eligibility", () => {
     expect(canArmAutoEntry(lowRrSignal)).toBe(true);
     expect(canSendPaperTrade(lowRrSignal)).toBe(false);
   });
+
+  it("allows market opportunities to arm pending entry and blocks duplicate pending arms", () => {
+    expect(canArmAutoEntry(signalWithStatus("active"))).toBe(true);
+    expect(canArmAutoEntry({
+      ...signalWithStatus("ready"),
+      auto_entry: {
+        enabled: true,
+        status: "pending",
+        mode: "virtual",
+        user_id: "user_1",
+        armed_at: "2026-05-31T07:00:00.000Z",
+        triggered_at: null,
+        message: null,
+        request: {},
+        trade_id: null,
+        real_execution: null
+      }
+    })).toBe(false);
+  });
 });

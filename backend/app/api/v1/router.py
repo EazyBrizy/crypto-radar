@@ -9,6 +9,7 @@ from app.api.v1 import (
     exchanges,
     health,
     notifications,
+    pending_entry,
     radar,
     realtime,
     risk,
@@ -30,6 +31,7 @@ api_router.include_router(candles.router)
 api_router.include_router(exchanges.router)
 api_router.include_router(health.router)
 api_router.include_router(notifications.router)
+api_router.include_router(pending_entry.router)
 api_router.include_router(radar.router)
 api_router.include_router(realtime.router)
 api_router.include_router(risk.router)

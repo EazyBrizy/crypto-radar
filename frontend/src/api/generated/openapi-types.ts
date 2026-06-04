@@ -435,6 +435,58 @@ export interface paths {
         patch: operations["update_notification_api_v1_notifications__notification_id__patch"];
         trace?: never;
     };
+    "/api/v1/signals/{signal_id}/pending-entry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pending Entries For Signal */
+        get: operations["list_pending_entries_for_signal_api_v1_signals__signal_id__pending_entry_get"];
+        put?: never;
+        /** Arm Pending Entry */
+        post: operations["arm_pending_entry_api_v1_signals__signal_id__pending_entry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pending-entry/{intent_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Pending Entry */
+        post: operations["cancel_pending_entry_api_v1_pending_entry__intent_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pending-entry/{intent_id}/reconfirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reconfirm Pending Entry */
+        post: operations["reconfirm_pending_entry_api_v1_pending_entry__intent_id__reconfirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/radar": {
         parameters: {
             query?: never;
@@ -2429,6 +2481,7 @@ export interface components {
             virtual_trade?: components["schemas"]["VirtualTrade"] | null;
             real_execution?: components["schemas"]["RealExecutionResult"] | null;
             real_execution_result?: components["schemas"]["RealExecutionResult"] | null;
+            pending_entry_intent?: components["schemas"]["PendingEntryIntentRead"] | null;
             /** Message */
             message: string;
         };
@@ -2686,6 +2739,111 @@ export interface components {
             quantity?: number | null;
             /** Notional Usd */
             notional_usd?: number | null;
+        };
+        /** PendingEntryActionRequest */
+        PendingEntryActionRequest: {
+            /**
+             * User Id
+             * @default demo_user
+             */
+            user_id: string;
+        };
+        /** PendingEntryIntentRead */
+        PendingEntryIntentRead: {
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /**
+             * Signal Id
+             * Format: uuid
+             */
+            signal_id: string;
+            /** Strategy Id */
+            strategy_id?: string | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "virtual" | "real";
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "triggered" | "filling" | "filled" | "failed" | "cancelled" | "expired" | "requires_reconfirmation";
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** Entry Min */
+            entry_min: string;
+            /** Entry Max */
+            entry_max: string;
+            /** Entry Price Policy */
+            entry_price_policy: string;
+            /** Stop Loss */
+            stop_loss: string;
+            /** Targets Snapshot */
+            targets_snapshot?: {
+                [key: string]: unknown;
+            } | unknown[];
+            /** Accepted Trade Plan Snapshot */
+            accepted_trade_plan_snapshot?: {
+                [key: string]: unknown;
+            };
+            /** Accepted Trade Plan Hash */
+            accepted_trade_plan_hash: string;
+            /**
+             * Accepted Signal Status
+             * @enum {string}
+             */
+            accepted_signal_status: "new" | "active" | "watchlist" | "ready" | "actionable" | "wait_for_pullback" | "confirmed" | "rejected" | "expired" | "invalidated" | "closed" | "entry_touched";
+            /** Accepted Signal Version */
+            accepted_signal_version?: string | null;
+            /** Accepted Signal Fingerprint */
+            accepted_signal_fingerprint?: string | null;
+            /** Execution Profile Snapshot */
+            execution_profile_snapshot?: {
+                [key: string]: unknown;
+            };
+            /** Request Snapshot */
+            request_snapshot?: {
+                [key: string]: unknown;
+            };
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Triggered At */
+            triggered_at?: string | null;
+            /** Filled At */
+            filled_at?: string | null;
+            /** Filled Trade Id */
+            filled_trade_id?: string | null;
+            /** Failure Reason */
+            failure_reason?: string | null;
         };
         /** PositionSizingResult */
         PositionSizingResult: {
@@ -4862,10 +5020,10 @@ export interface components {
             slippage_bps: number | string;
             /**
              * Same Candle Policy
-             * @default stop_first
+             * @default conservative_stop_first
              * @enum {string}
              */
-            same_candle_policy: "stop_first" | "target_first" | "ignore_ambiguous";
+            same_candle_policy: "conservative_stop_first" | "target_first" | "intrabar_unknown" | "stop_first" | "ignore_ambiguous";
             /** Params */
             params?: {
                 [key: string]: unknown;
@@ -7217,6 +7375,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NotificationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pending_entries_for_signal_api_v1_signals__signal_id__pending_entry_get: {
+        parameters: {
+            query?: {
+                user_id?: string;
+            };
+            header?: never;
+            path: {
+                signal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingEntryIntentRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    arm_pending_entry_api_v1_signals__signal_id__pending_entry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                signal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ManualConfirmRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingEntryIntentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_pending_entry_api_v1_pending_entry__intent_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                intent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PendingEntryActionRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingEntryIntentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconfirm_pending_entry_api_v1_pending_entry__intent_id__reconfirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                intent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ManualConfirmRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingEntryIntentRead"];
                 };
             };
             /** @description Validation Error */

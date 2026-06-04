@@ -32,6 +32,7 @@ import type {
   MarketDataStatus,
   NoTradeFilterResult,
   OhlcvCandle,
+  PendingEntryIntent,
   RadarConfig,
   RadarSignal,
   RadarStatus,
@@ -161,6 +162,41 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     can_enter: optionalBoolean(enriched.can_enter),
     display_reason: optionalString(enriched.display_reason),
     confirmed_trade_id: signal.confirmed_trade_id ?? null
+  };
+}
+
+export function normalizePendingEntryIntent(value: unknown): PendingEntryIntent {
+  const intent = isRecord(value) ? value : {};
+  return {
+    id: String(intent.id ?? ""),
+    user_id: String(intent.user_id ?? ""),
+    signal_id: String(intent.signal_id ?? ""),
+    strategy_id: optionalString(intent.strategy_id),
+    mode: intent.mode === "real" ? "real" : "virtual",
+    status: normalizePendingEntryStatus(intent.status),
+    exchange: String(intent.exchange ?? ""),
+    symbol: String(intent.symbol ?? ""),
+    side: intent.side === "short" ? "short" : "long",
+    entry_min: Number(intent.entry_min ?? 0),
+    entry_max: Number(intent.entry_max ?? 0),
+    entry_price_policy: String(intent.entry_price_policy ?? "accepted_entry_zone"),
+    stop_loss: Number(intent.stop_loss ?? 0),
+    targets_snapshot: normalizeTargetsSnapshot(intent.targets_snapshot),
+    accepted_trade_plan_snapshot: normalizeMetadata(intent.accepted_trade_plan_snapshot),
+    accepted_trade_plan_hash: String(intent.accepted_trade_plan_hash ?? ""),
+    accepted_signal_status: normalizeSignalStatus(intent.accepted_signal_status),
+    accepted_signal_version: optionalString(intent.accepted_signal_version),
+    accepted_signal_fingerprint: optionalString(intent.accepted_signal_fingerprint),
+    execution_profile_snapshot: normalizeMetadata(intent.execution_profile_snapshot),
+    request_snapshot: normalizeMetadata(intent.request_snapshot),
+    idempotency_key: String(intent.idempotency_key ?? ""),
+    expires_at: optionalString(intent.expires_at),
+    created_at: String(intent.created_at ?? new Date().toISOString()),
+    updated_at: String(intent.updated_at ?? new Date().toISOString()),
+    triggered_at: optionalString(intent.triggered_at),
+    filled_at: optionalString(intent.filled_at),
+    filled_trade_id: optionalString(intent.filled_trade_id),
+    failure_reason: optionalString(intent.failure_reason)
   };
 }
 
@@ -911,6 +947,28 @@ function normalizeStringList(value: unknown): string[] {
 function normalizeSignalStatus(value: unknown): SignalStatus {
   if (typeof value === "string" && (SIGNAL_STATUSES as readonly string[]).includes(value)) return value as SignalStatus;
   return "active";
+}
+
+function normalizePendingEntryStatus(value: unknown): PendingEntryIntent["status"] {
+  if (
+    value === "triggered" ||
+    value === "filling" ||
+    value === "filled" ||
+    value === "failed" ||
+    value === "cancelled" ||
+    value === "expired" ||
+    value === "requires_reconfirmation"
+  ) {
+    return value;
+  }
+  return "pending";
+}
+
+function normalizeTargetsSnapshot(value: unknown): PendingEntryIntent["targets_snapshot"] {
+  if (Array.isArray(value)) {
+    return value.filter(isRecord).map((target) => ({ ...target }));
+  }
+  return normalizeMetadata(value);
 }
 
 function normalizeImpactRisk(value: unknown): ImpactRisk {

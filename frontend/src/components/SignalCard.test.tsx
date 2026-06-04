@@ -225,4 +225,26 @@ describe("SignalCard", () => {
 
     expect(screen.getByText("market quality blocker")).toBeInTheDocument();
   });
+
+  it("shows pending entry mirror status on the radar card", () => {
+    const signal: RadarSignal = {
+      ...baseSignal,
+      auto_entry: {
+        enabled: true,
+        status: "requires_reconfirmation",
+        mode: "virtual",
+        user_id: "user_1",
+        armed_at: "2026-05-31T07:00:00.000Z",
+        triggered_at: null,
+        message: "Accepted trade plan changed.",
+        request: {},
+        trade_id: null,
+        real_execution: null
+      }
+    };
+
+    render(<SignalCard signal={signal} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("Requires reconfirmation")).toBeInTheDocument();
+  });
 });

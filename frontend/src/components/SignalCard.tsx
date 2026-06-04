@@ -12,7 +12,7 @@ import {
 } from "@/domain/signal-status";
 import { useSignalPrice } from "@/stores/price-store";
 import { useSignalStore } from "@/stores/signal-store";
-import type { DecisionReason, RadarSignal, SignalEdgeStatus } from "../types";
+import type { DecisionReason, PendingEntryIntentStatus, RadarSignal, SignalEdgeStatus } from "../types";
 import {
   formatPrice,
   isRiskRewardBlocked,
@@ -86,6 +86,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
         <Badge tone={marketOpportunityTone(signal)}>{marketOpportunityLabel(signal)}</Badge>
         {signal.risk_gate_status ? <Badge tone={riskGateTone(signal.risk_gate_status)}>RiskGate {signal.risk_gate_status}</Badge> : null}
         {signal.risk_gate_status === "failed" || signal.can_enter === false ? <Badge tone="red">Risk blocked</Badge> : null}
+        {signal.auto_entry ? <Badge tone={pendingEntryTone(signal.auto_entry.status)}>{pendingEntryLabel(signal.auto_entry.status)}</Badge> : null}
         {decisionBadge ? <Badge tone={decisionBadge.tone}>{decisionBadge.label}</Badge> : null}
         {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
         <Badge tone={edge.tone}>{edge.label}</Badge>
@@ -156,6 +157,22 @@ function decisionBadgeInfo(
 
 function decisionSourceLabel(reason: DecisionReason): string {
   return reason.source.replaceAll("_", " ");
+}
+
+function pendingEntryTone(
+  status: PendingEntryIntentStatus
+): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (status === "pending") return "blue";
+  if (status === "requires_reconfirmation") return "yellow";
+  if (status === "failed" || status === "cancelled" || status === "expired") return "red";
+  if (status === "triggered" || status === "filling" || status === "filled") return "green";
+  return "neutral";
+}
+
+function pendingEntryLabel(status: PendingEntryIntentStatus): string {
+  if (status === "pending") return "Waiting entry";
+  if (status === "requires_reconfirmation") return "Requires reconfirmation";
+  return status.replaceAll("_", " ");
 }
 
 export const SignalCardById = memo(function SignalCardById({

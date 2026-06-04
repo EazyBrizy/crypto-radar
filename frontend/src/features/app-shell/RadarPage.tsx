@@ -5,7 +5,7 @@ import { SignalDetails } from "@/components/SignalDetails";
 import { SignalFeed } from "@/components/SignalFeed";
 import { canShowEnterButton } from "@/domain/signal-status";
 import type { RadarDisplayMode } from "@/features/server-state/types";
-import type { HealthStatus, RadarSignal, RadarStatus, SignalStatus, VirtualExecutionReport } from "@/types";
+import type { HealthStatus, PendingEntryIntent, RadarSignal, RadarStatus, SignalStatus, VirtualExecutionReport } from "@/types";
 import { isRiskRewardBlocked } from "@/utils";
 
 interface RadarPageProps {
@@ -17,6 +17,9 @@ interface RadarPageProps {
   health: HealthStatus | null;
   loading: boolean;
   onFilterChange: (filter: "all" | "long" | "short") => void;
+  onAcceptPendingEntry: (signal: RadarSignal) => void;
+  onCancelPendingEntry: (intent: PendingEntryIntent) => void;
+  onReconfirmPendingEntry: (intent: PendingEntryIntent) => void;
   onRadarDisplayModeChange: (mode: RadarDisplayMode) => void;
   onSignalViewChange: (view: "open" | "history") => void;
   onStatusFilterChange: (filter: "all" | SignalStatus) => void;
@@ -27,12 +30,14 @@ interface RadarPageProps {
   radarStatus: RadarStatus | null;
   selectedSignal: RadarSignal | null;
   selectedSignalId: string | null;
+  selectedPendingEntry?: PendingEntryIntent | null;
   signalIds: string[];
   signals: RadarSignal[];
   actionError?: string | null;
   executionPreview?: VirtualExecutionReport | null;
   executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
+  pendingEntryLoading?: boolean;
   tradingActionsDisabled?: boolean;
 }
 
@@ -168,8 +173,13 @@ export function RadarPage(props: RadarPageProps) {
       <SignalDetails
         signal={props.selectedSignal}
         onPaperTrade={props.onPaperTrade}
+        onAcceptPendingEntry={props.onAcceptPendingEntry}
+        onCancelPendingEntry={props.onCancelPendingEntry}
+        onReconfirmPendingEntry={props.onReconfirmPendingEntry}
         onReject={props.onReject}
         busy={props.busy}
+        pendingEntry={props.selectedPendingEntry ?? null}
+        pendingEntryLoading={props.pendingEntryLoading ?? false}
         executionPreview={props.executionPreview ?? null}
         executionPreviewError={props.executionPreviewError ?? null}
         executionPreviewLoading={props.executionPreviewLoading ?? false}

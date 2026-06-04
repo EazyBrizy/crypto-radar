@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RadarSignal } from "@/types";
+import type { PendingEntryIntent, RadarSignal } from "@/types";
 import { SignalDetails } from "./SignalDetails";
 
 vi.mock("next/dynamic", () => ({
@@ -321,4 +321,98 @@ describe("SignalDetails", () => {
     expect(screen.getByText("Trade Plan")).toBeInTheDocument();
     expect(screen.queryByText("Decision Snapshot")).not.toBeInTheDocument();
   });
+
+  it("creates a pending entry from the accept-and-wait button", () => {
+    const onAcceptPendingEntry = vi.fn();
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onAcceptPendingEntry={onAcceptPendingEntry}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={{ ...signal, status: "ready", no_trade_filter: null }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать вход/u }));
+
+    expect(onAcceptPendingEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows pending intent state, entry zone and cancel action", () => {
+    const onCancelPendingEntry = vi.fn();
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onCancelPendingEntry={onCancelPendingEntry}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        pendingEntry={pendingIntent()}
+        signal={{ ...signal, status: "ready", no_trade_filter: null }}
+      />
+    );
+
+    expect(screen.getAllByText("Waiting entry").length).toBeGreaterThan(0);
+    expect(screen.getByText("100 - 101")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Принять и ждать вход/u })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Cancel waiting/u }));
+    expect(onCancelPendingEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows requires reconfirmation banner", () => {
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        pendingEntry={pendingIntent({
+          status: "requires_reconfirmation",
+          failure_reason: "Accepted trade plan changed; please reconfirm current entry, stop, and targets."
+        })}
+        signal={{ ...signal, status: "ready", no_trade_filter: null }}
+      />
+    );
+
+    expect(screen.getAllByText("Requires reconfirmation").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Accepted trade plan changed/u)).toBeInTheDocument();
+    expect(screen.getByText(/Reconfirmation is required/u)).toBeInTheDocument();
+  });
 });
+
+function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntryIntent {
+  return {
+    id: "intent_1",
+    user_id: "user_1",
+    signal_id: signal.id,
+    strategy_id: null,
+    mode: "virtual",
+    status: "pending",
+    exchange: signal.exchange,
+    symbol: signal.symbol,
+    side: signal.direction,
+    entry_min: 100,
+    entry_max: 101,
+    entry_price_policy: "accepted_entry_zone",
+    stop_loss: 95,
+    targets_snapshot: [{ label: "TP1", price: "110" }],
+    accepted_trade_plan_snapshot: { entry: { min_price: "100", max_price: "101" } },
+    accepted_trade_plan_hash: "sha256:test",
+    accepted_signal_status: "ready",
+    accepted_signal_version: null,
+    accepted_signal_fingerprint: null,
+    execution_profile_snapshot: {},
+    request_snapshot: {},
+    idempotency_key: "pending-entry:test",
+    expires_at: null,
+    created_at: "2026-05-31T07:00:00.000Z",
+    updated_at: "2026-05-31T07:00:00.000Z",
+    triggered_at: null,
+    filled_at: null,
+    filled_trade_id: null,
+    failure_reason: null,
+    ...overrides
+  };
+}

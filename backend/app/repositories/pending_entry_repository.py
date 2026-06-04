@@ -134,6 +134,28 @@ class PendingEntryIntentRepository:
             ).all()
             return [_to_read(record) for record in records]
 
+    def list_active_for_signal_user(
+        self,
+        *,
+        signal_id: str | UUID,
+        user_id: str | UUID,
+    ) -> list[PendingEntryIntentRead]:
+        parsed_signal_id = _parse_uuid(signal_id)
+        parsed_user_id = _parse_uuid(user_id)
+        if parsed_signal_id is None or parsed_user_id is None:
+            return []
+        with self._session_factory() as session:
+            records = session.scalars(
+                select(PendingEntryIntent)
+                .where(
+                    PendingEntryIntent.signal_id == parsed_signal_id,
+                    PendingEntryIntent.user_id == parsed_user_id,
+                    PendingEntryIntent.status.in_(ACTIVE_PENDING_ENTRY_INTENT_STATUSES),
+                )
+                .order_by(PendingEntryIntent.created_at.asc())
+            ).all()
+            return [_to_read(record) for record in records]
+
     def transition_status(
         self,
         intent_id: str | UUID,

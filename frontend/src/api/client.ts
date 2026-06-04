@@ -25,6 +25,23 @@ export async function request<T>(operation: () => Promise<ApiResult<T>>): Promis
   }
 }
 
+export async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  try {
+    const headers = new Headers(init.headers);
+    if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    const response = await apiFetch(`${API_BASE}${path}`, {
+      ...init,
+      headers
+    });
+    if (!response.ok) {
+      throw new Error(await responseErrorDetail(response));
+    }
+    return await response.json() as T;
+  } catch (exc) {
+    throw normalizeApiError(exc);
+  }
+}
+
 async function unwrap<T>(result: ApiResult<T>): Promise<T> {
   if (result.error || !result.response.ok) {
     const detail = getErrorDetail(result.error);
@@ -36,6 +53,16 @@ async function unwrap<T>(result: ApiResult<T>): Promise<T> {
   }
 
   return result.data;
+}
+
+async function responseErrorDetail(response: Response): Promise<string> {
+  try {
+    const payload = await response.json();
+    const detail = getErrorDetail(payload);
+    return detail ?? `API error ${response.status}`;
+  } catch {
+    return `API error ${response.status}`;
+  }
 }
 
 function getErrorDetail(error: unknown): string | null {

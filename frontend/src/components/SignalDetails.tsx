@@ -9,12 +9,13 @@ import {
   canShowEnterButton,
   isEntryTouched,
   isExecutionReady,
+  isMarketOpportunity,
   isWaitingEntry,
   marketOpportunityLabel,
   marketOpportunityTone,
   riskGateTone
 } from "@/domain/signal-status";
-import type { DecisionReason, ExecutionGateStatus, ImpactRisk, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
+import type { DecisionReason, ExecutionGateStatus, ImpactRisk, PendingEntryIntent, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
 import {
   entryZone,
   formingCandleReason,
@@ -40,8 +41,13 @@ const LazySignalDetailsChart = dynamic(
 interface SignalDetailsProps {
   signal: RadarSignal | null;
   onPaperTrade: (signal: RadarSignal) => void;
+  onAcceptPendingEntry?: (signal: RadarSignal) => void;
+  onCancelPendingEntry?: (intent: PendingEntryIntent) => void;
+  onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
   onReject: (signal: RadarSignal) => void;
   busy: boolean;
+  pendingEntry?: PendingEntryIntent | null;
+  pendingEntryLoading?: boolean;
   executionPreview: VirtualExecutionReport | null;
   executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
@@ -51,8 +57,13 @@ interface SignalDetailsProps {
 export function SignalDetails({
   signal,
   onPaperTrade,
+  onAcceptPendingEntry,
+  onCancelPendingEntry,
+  onReconfirmPendingEntry,
   onReject,
   busy,
+  pendingEntry = null,
+  pendingEntryLoading = false,
   executionPreview,
   executionPreviewError = null,
   executionPreviewLoading = false,
@@ -78,8 +89,19 @@ export function SignalDetails({
   const openCandleAllowed = isOpenCandleActionableAllowed(signal);
   const formingReason = formingCandleReason(signal);
   const statusAllowsTrade = canShowEnterButton(signal) && (!formingCandle || openCandleAllowed);
-  const autoEntryPending = signal.auto_entry?.status === "pending";
+  const pendingStatus = pendingEntry?.status ?? signal.auto_entry?.status ?? null;
+  const activePendingStatus = pendingStatus ? isActivePendingEntryStatus(pendingStatus) : false;
+  const activePendingEntry = pendingEntry && isActivePendingEntryStatus(pendingEntry.status) ? pendingEntry : null;
+  const autoEntryPending = pendingStatus === "pending";
+  const requiresReconfirmation = pendingStatus === "requires_reconfirmation";
   const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || strategyRiskBlocked || !statusAllowsTrade || riskFailed;
+  const acceptPendingDisabled = busy
+    || tradingActionsDisabled
+    || pendingEntryLoading
+    || activePendingStatus
+    || !isMarketOpportunity(signal.status)
+    || statusAllowsTrade;
+  const cancelPendingDisabled = busy || tradingActionsDisabled || !activePendingEntry;
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const breakdown = signal.score_breakdown;
   const tradePlan = signalTradePlanSummary(signal);
@@ -102,6 +124,7 @@ export function SignalDetails({
           {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
           <Badge tone="yellow">Risk {riskLabel(signal)}</Badge>
           <Badge tone={marketOpportunityTone(signal)}>{formingReason ? "preview" : marketOpportunityLabel(signal)}</Badge>
+          {pendingStatus ? <Badge tone={pendingEntryTone(pendingStatus)}>{pendingEntryLabel(pendingStatus)}</Badge> : null}
           {signal.risk_gate_status ? <Badge tone={riskGateTone(signal.risk_gate_status)}>RiskGate {signal.risk_gate_status}</Badge> : null}
         </div>
       </div>
@@ -116,6 +139,12 @@ export function SignalDetails({
       <PullbackGuidanceBlock signal={signal} />
       <BreakoutEntryPlanBlock signal={signal} />
       <LiquiditySweepPlanBlock signal={signal} />
+      <PendingEntryBlock
+        pendingEntry={pendingEntry}
+        pendingStatus={pendingStatus}
+        onReconfirmPendingEntry={onReconfirmPendingEntry}
+        busy={busy || tradingActionsDisabled}
+      />
       <AutoEntryBlock signal={signal} />
 
       <div className="trade-setup">
@@ -188,6 +217,12 @@ export function SignalDetails({
       ) : null}
 
       <div className="detail-actions">
+        <button className="secondary-action" onClick={() => onAcceptPendingEntry?.(signal)} disabled={acceptPendingDisabled} type="button">
+          <FileCheck2 size={17} /> Принять и ждать вход
+        </button>
+        <button className="secondary-action" onClick={() => activePendingEntry ? onCancelPendingEntry?.(activePendingEntry) : undefined} disabled={cancelPendingDisabled} type="button">
+          <XCircle size={17} /> Cancel waiting
+        </button>
         <button className="primary-action" onClick={() => onPaperTrade(signal)} disabled={entryActionDisabled} type="button">
           <FileCheck2 size={17} /> {statusAllowsTrade ? "Paper Trade" : autoEntryPending ? "Auto Paper Armed" : "Waiting Entry"}
         </button>
@@ -200,6 +235,9 @@ export function SignalDetails({
       </div>
       {tradingActionsDisabled ? (
         <p className="form-description">Trading actions disabled until realtime data is current.</p>
+      ) : null}
+      {requiresReconfirmation ? (
+        <p className="form-description">Accepted entry plan changed. Reconfirmation is required before this pending entry can continue.</p>
       ) : null}
       {riskFailed ? (
         <p className="form-description">Entry is blocked by backend risk gate.</p>
@@ -272,13 +310,80 @@ function AutoEntryBlock({ signal }: { signal: RadarSignal }) {
   );
 }
 
+function PendingEntryBlock({
+  pendingEntry,
+  pendingStatus,
+  onReconfirmPendingEntry,
+  busy
+}: {
+  pendingEntry: PendingEntryIntent | null;
+  pendingStatus: PendingEntryIntent["status"] | null;
+  onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
+  busy: boolean;
+}) {
+  if (!pendingEntry && !pendingStatus) return null;
+  const status = pendingEntry?.status ?? pendingStatus ?? "pending";
+  return (
+    <div className="auto-entry-block">
+      <div className="section-title">
+        <FileCheck2 size={18} />
+        <h3>Pending Entry</h3>
+        <Badge tone={pendingEntryTone(status)}>{pendingEntryLabel(status)}</Badge>
+      </div>
+      {status === "requires_reconfirmation" ? (
+        <div className="risk-blocker-list">
+          <span>{pendingEntry?.failure_reason ?? "Accepted entry, stop or target changed; reconfirm the current plan before waiting continues."}</span>
+        </div>
+      ) : (
+        <p>Accepted setup is waiting for the backend trigger service to detect the entry zone.</p>
+      )}
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Entry zone" value={pendingEntry ? `${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}` : "-"} />
+        <MetricLine label="Stop" value={pendingEntry ? formatPrice(pendingEntry.stop_loss) : "-"} />
+        <MetricLine label="Mode" value={pendingEntry?.mode ?? "-"} />
+        <MetricLine label="Accepted status" value={pendingEntry?.accepted_signal_status?.replaceAll("_", " ") ?? "-"} />
+      </div>
+      {status === "requires_reconfirmation" && pendingEntry && onReconfirmPendingEntry ? (
+        <div className="detail-actions">
+          <button className="secondary-action" disabled={busy} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
+            <FileCheck2 size={17} /> Reconfirm plan
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function autoEntryTone(
-  status: "pending" | "triggered" | "failed" | "cancelled" | "requires_reconfirmation"
+  status: PendingEntryIntent["status"]
 ): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
   if (status === "pending") return "blue";
-  if (status === "failed" || status === "cancelled") return "red";
+  if (status === "failed" || status === "cancelled" || status === "expired") return "red";
   if (status === "requires_reconfirmation") return "yellow";
   return "green";
+}
+
+function pendingEntryTone(
+  status: PendingEntryIntent["status"]
+): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (status === "pending") return "blue";
+  if (status === "requires_reconfirmation") return "yellow";
+  if (status === "triggered" || status === "filling" || status === "filled") return "green";
+  if (status === "failed" || status === "cancelled" || status === "expired") return "red";
+  return "neutral";
+}
+
+function pendingEntryLabel(status: PendingEntryIntent["status"]): string {
+  if (status === "pending") return "Waiting entry";
+  if (status === "requires_reconfirmation") return "Requires reconfirmation";
+  return status.replaceAll("_", " ");
+}
+
+function isActivePendingEntryStatus(status: PendingEntryIntent["status"]): boolean {
+  return status === "pending"
+    || status === "triggered"
+    || status === "filling"
+    || status === "requires_reconfirmation";
 }
 
 function PullbackGuidanceBlock({ signal }: { signal: RadarSignal }) {

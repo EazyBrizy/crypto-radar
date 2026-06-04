@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.domain.pending_entry_intent import is_terminal_pending_entry_intent_status
 from app.domain.signal_status import is_market_opportunity_status, is_terminal_signal_status
 from app.models.pending_entry import PendingEntryIntent
 from app.repositories.pending_entry_repository import PendingEntryIntentRepository
@@ -30,12 +31,14 @@ from app.services.risk_management import (
     get_user_risk_management_settings,
     request_risk_override_to_execution_settings,
 )
+from app.services.signal_risk_reward import ensure_signal_execution_eligible
 from app.services.strategy_config_service import strategy_config_service
 
 SignalLoader = Callable[[str], RadarSignal | None]
 RiskSettingsProvider = Callable[[str], RiskManagementSettings]
 UserProfileProvider = Callable[[str], Any]
 AutoEntryUpdater = Callable[..., Any]
+AutoEntryArm = Callable[..., Any]
 
 
 class PendingEntryService:
@@ -80,6 +83,111 @@ class PendingEntryService:
 
     def lock_for_trigger(self, intent_id: str | UUID, *, session: Session) -> PendingEntryIntent | None:
         return self._repository.lock_for_trigger(intent_id, session=session)
+
+    def list_active_for_signal_user(
+        self,
+        *,
+        signal_id: str | UUID,
+        user_id: str | UUID,
+    ) -> list[PendingEntryIntentRead]:
+        user_uuid = self._resolve_user_uuid(user_id)
+        list_for_user = getattr(self._repository, "list_active_for_signal_user", None)
+        if list_for_user is not None:
+            return list_for_user(signal_id=signal_id, user_id=user_uuid)
+        return [
+            intent
+            for intent in self._repository.list_active_for_signal(signal_id)
+            if intent.user_id == user_uuid
+        ]
+
+    def cancel_intent(
+        self,
+        intent_id: str | UUID,
+        *,
+        user_id: str | UUID,
+        reason: str = "Cancelled by user.",
+    ) -> PendingEntryIntentRead:
+        intent = self._get_visible_intent(intent_id, user_id=user_id)
+        if is_terminal_pending_entry_intent_status(intent.status):
+            return intent
+        updated = self.transition_status(
+            intent.id,
+            status="cancelled",
+            failure_reason=reason,
+        )
+        if updated is None:
+            raise LookupError("Pending entry intent is not found")
+        return updated
+
+    def arm_signal_workflow(
+        self,
+        *,
+        signal_id: str | UUID,
+        request: ManualConfirmRequest | dict[str, Any] | None = None,
+        auto_entry_arm: AutoEntryArm | None = None,
+    ) -> PendingEntryIntentRead:
+        request_model = _manual_confirm_request(request)
+        raw_mode = str(request_model.mode or "virtual").strip().lower()
+        mode: PendingEntryIntentMode = "real" if raw_mode == "real" else "virtual"
+        signal = self._load_signal(signal_id)
+        if signal is None:
+            raise LookupError("Signal is not found")
+        execution_profile = self.resolve_execution_profile(signal, request_model, mode=mode)
+        ensure_signal_execution_eligible(
+            signal,
+            mode=mode,
+            rr_guard_mode=execution_profile.rr_guard_mode,
+        )
+        intent = self.arm_from_signal(
+            user_id=request_model.user_id,
+            signal_id=signal.id,
+            mode=mode,
+            request=request_model,
+            execution_profile=execution_profile,
+        )
+        if auto_entry_arm is not None:
+            mirror_request = request_model.model_dump(mode="json")
+            auto_entry_arm(str(signal.id), mirror_request, pending_entry_intent=intent)
+        return intent
+
+    def reconfirm_intent(
+        self,
+        intent_id: str | UUID,
+        *,
+        request: ManualConfirmRequest | dict[str, Any] | None = None,
+        auto_entry_arm: AutoEntryArm | None = None,
+    ) -> PendingEntryIntentRead:
+        request_model = _manual_confirm_request(request)
+        intent = self._get_visible_intent(intent_id, user_id=request_model.user_id)
+        if intent.status != "requires_reconfirmation":
+            if is_terminal_pending_entry_intent_status(intent.status):
+                existing = self._get_active_intent(
+                    user_id=intent.user_id,
+                    signal_id=intent.signal_id,
+                    mode=intent.mode,
+                )
+                if existing is not None:
+                    return existing
+                raise ValueError("Terminal pending entry intent cannot be reconfirmed")
+            return intent
+
+        self.transition_status(
+            intent.id,
+            status="cancelled",
+            failure_reason="Reconfirmed with a new accepted trade plan.",
+        )
+        next_request = request_model.model_copy(
+            update={
+                "mode": intent.mode,
+                "user_id": str(intent.user_id),
+                "auto_enter_on_confirmation": True,
+            }
+        )
+        return self.arm_signal_workflow(
+            signal_id=intent.signal_id,
+            request=next_request,
+            auto_entry_arm=auto_entry_arm,
+        )
 
     def reconcile_signal_trade_plan(
         self,
@@ -235,6 +343,20 @@ class PendingEntryService:
             return None
         return get_active(user_id=user_id, signal_id=signal_id, mode=mode)
 
+    def _get_visible_intent(
+        self,
+        intent_id: str | UUID,
+        *,
+        user_id: str | UUID,
+    ) -> PendingEntryIntentRead:
+        intent = self.get_by_id(intent_id)
+        if intent is None:
+            raise LookupError("Pending entry intent is not found")
+        user_uuid = self._resolve_user_uuid(user_id)
+        if intent.user_id != user_uuid:
+            raise PermissionError("Pending entry intent belongs to another user")
+        return intent
+
 
 PendingEntryIntentService = PendingEntryService
 
@@ -368,6 +490,18 @@ def _request_snapshot(
     snapshot["mode"] = mode
     snapshot["pending_entry_flow"] = "arm_from_signal"
     return snapshot
+
+
+def _manual_confirm_request(request: ManualConfirmRequest | dict[str, Any] | None) -> ManualConfirmRequest:
+    if request is None:
+        return ManualConfirmRequest(auto_enter_on_confirmation=True)
+    if isinstance(request, ManualConfirmRequest):
+        if request.auto_enter_on_confirmation:
+            return request
+        return request.model_copy(update={"auto_enter_on_confirmation": True})
+    payload = dict(request)
+    payload["auto_enter_on_confirmation"] = True
+    return ManualConfirmRequest.model_validate(payload)
 
 
 def _snapshot_hash(snapshot: dict[str, Any]) -> str:

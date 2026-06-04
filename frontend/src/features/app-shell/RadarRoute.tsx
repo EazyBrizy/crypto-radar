@@ -1,16 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { RadarPage } from "@/features/app-shell/RadarPage";
 import { useAuthSessionQuery } from "@/auth/use-auth";
 import {
   useConfirmVirtualMutation,
+  useArmPendingEntryMutation,
   useHealthQuery,
   useHistoricalSignalsQuery,
+  useCancelPendingEntryMutation,
+  usePendingEntryQuery,
   useRadarQuery,
   useRadarStatusQuery,
+  useReconfirmPendingEntryMutation,
   useRejectSignalMutation,
   useSignalExecutionPreviewQuery
 } from "@/hooks/use-radar-queries";
@@ -18,7 +22,7 @@ import { canShowEnterButton, isMarketOpportunity } from "@/domain/signal-status"
 import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
-import type { RadarSignal, SignalStatus } from "@/types";
+import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
 import type { RadarDisplayMode } from "@/features/server-state/types";
 import { isOpenCandleActionableAllowed, isOpenFeedSignal, isSignalActionableForUi } from "@/utils";
 
@@ -33,6 +37,7 @@ export function RadarRoute() {
   const [signalView, setSignalView] = useState<"open" | "history">("open");
   const [radarDisplayMode, setRadarDisplayMode] = useState<RadarDisplayMode>("all_market_opportunities");
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const pendingArmInFlightRef = useRef(false);
   const tradingActionsDisabled = useTradingActionsDisabled();
   const signalIds = useSignalStore((state) => state.signalIds);
   const signalsById = useSignalStore((state) => state.signalsById);
@@ -45,6 +50,9 @@ export function RadarRoute() {
   const radarQuery = useRadarQuery(radarDisplayMode, userId);
   const historicalSignalsQuery = useHistoricalSignalsQuery();
   const confirmVirtualMutation = useConfirmVirtualMutation();
+  const armPendingEntryMutation = useArmPendingEntryMutation();
+  const cancelPendingEntryMutation = useCancelPendingEntryMutation();
+  const reconfirmPendingEntryMutation = useReconfirmPendingEntryMutation();
   const rejectSignalMutation = useRejectSignalMutation();
 
   useEffect(() => {
@@ -80,9 +88,21 @@ export function RadarRoute() {
   const executionPreviewQuery = useSignalExecutionPreviewQuery(selectedSignal?.id ?? null, {
     enabled: shouldRequestExecutionPreview(selectedSignal, signalView, tradingActionsDisabled)
   });
+  const pendingEntryQuery = usePendingEntryQuery(selectedSignal?.id ?? null, userId, {
+    enabled: selectedSignal != null && signalView === "open"
+  });
+  const selectedPendingEntry = useMemo(
+    () => (pendingEntryQuery.data ?? []).find(isActivePendingEntryIntent) ?? null,
+    [pendingEntryQuery.data]
+  );
   const loading = [healthQuery, radarStatusQuery, radarQuery].some((query) => query.isLoading)
     || (signalView === "history" && historicalSignalsQuery.isLoading);
-  const busy = confirmVirtualMutation.isPending || rejectSignalMutation.isPending || tradingActionsDisabled;
+  const busy = confirmVirtualMutation.isPending
+    || armPendingEntryMutation.isPending
+    || cancelPendingEntryMutation.isPending
+    || reconfirmPendingEntryMutation.isPending
+    || rejectSignalMutation.isPending
+    || tradingActionsDisabled;
 
   const refreshData = useCallback(async () => {
     await Promise.all([
@@ -119,6 +139,47 @@ export function RadarRoute() {
     }
   }
 
+  async function handleAcceptPendingEntry(signal: RadarSignal) {
+    if (pendingArmInFlightRef.current) return;
+    try {
+      if (tradingActionsDisabled) return;
+      if (!canArmAutoEntry(signal)) {
+        setActionError("This signal is not available for pending entry.");
+        return;
+      }
+      pendingArmInFlightRef.current = true;
+      setActionError(null);
+      await armPendingEntryMutation.mutateAsync({ signalId: signal.id, userId });
+      await refreshData();
+    } catch (exc) {
+      setActionError(errorMessage(exc, "Pending entry was rejected."));
+    } finally {
+      pendingArmInFlightRef.current = false;
+    }
+  }
+
+  async function handleCancelPendingEntry(intent: PendingEntryIntent) {
+    try {
+      if (tradingActionsDisabled) return;
+      setActionError(null);
+      await cancelPendingEntryMutation.mutateAsync({ intentId: intent.id, userId });
+      await refreshData();
+    } catch (exc) {
+      setActionError(errorMessage(exc, "Pending entry cancel failed."));
+    }
+  }
+
+  async function handleReconfirmPendingEntry(intent: PendingEntryIntent) {
+    try {
+      if (tradingActionsDisabled) return;
+      setActionError(null);
+      await reconfirmPendingEntryMutation.mutateAsync({ intentId: intent.id, userId });
+      await refreshData();
+    } catch (exc) {
+      setActionError(errorMessage(exc, "Pending entry reconfirmation failed."));
+    }
+  }
+
   async function handleReject(signal: RadarSignal) {
     try {
       if (tradingActionsDisabled) return;
@@ -143,6 +204,8 @@ export function RadarRoute() {
       executionPreview={executionPreviewQuery.data ?? null}
       executionPreviewError={executionPreviewQuery.error instanceof Error ? executionPreviewQuery.error.message : null}
       executionPreviewLoading={executionPreviewQuery.isFetching}
+      selectedPendingEntry={selectedPendingEntry}
+      pendingEntryLoading={pendingEntryQuery.isFetching}
       tradingActionsDisabled={tradingActionsDisabled}
       filter={filter}
       radarDisplayMode={radarDisplayMode}
@@ -154,6 +217,9 @@ export function RadarRoute() {
       onRefresh={() => void refreshData()}
       onSelectSignal={handleSelectSignal}
       onPaperTrade={handlePaperTrade}
+      onAcceptPendingEntry={handleAcceptPendingEntry}
+      onCancelPendingEntry={handleCancelPendingEntry}
+      onReconfirmPendingEntry={handleReconfirmPendingEntry}
       onReject={handleReject}
       selectedSignalId={selectedSignal?.id ?? null}
       signalIds={visibleSignalIds}
@@ -184,11 +250,26 @@ export function canSendPaperTrade(signal: RadarSignal | null): boolean {
 export function canArmAutoEntry(signal: RadarSignal | null): boolean {
   if (!signal) return false;
   if (canShowEnterButton(signal)) return false;
-  if (signal.auto_entry?.status === "pending") return false;
+  if (signal.auto_entry && isActivePendingEntryStatus(signal.auto_entry.status)) return false;
   if (signal.candle_state === "open" && !isOpenCandleActionableAllowed(signal)) return false;
-  return signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback";
+  return signal.status === "new"
+    || signal.status === "active"
+    || signal.status === "watchlist"
+    || signal.status === "ready"
+    || signal.status === "wait_for_pullback";
 }
 
 function errorMessage(exc: unknown, fallback: string): string {
   return exc instanceof Error && exc.message ? exc.message : fallback;
+}
+
+function isActivePendingEntryStatus(status: PendingEntryIntent["status"]): boolean {
+  return status === "pending"
+    || status === "triggered"
+    || status === "filling"
+    || status === "requires_reconfirmation";
+}
+
+function isActivePendingEntryIntent(intent: PendingEntryIntent): boolean {
+  return isActivePendingEntryStatus(intent.status);
 }

@@ -14,6 +14,15 @@ export type SignalStatus =
   | "closed"
   | "entry_touched";
 export type TradeMode = "virtual" | "real";
+export type PendingEntryIntentStatus =
+  | "pending"
+  | "triggered"
+  | "filling"
+  | "filled"
+  | "failed"
+  | "cancelled"
+  | "expired"
+  | "requires_reconfirmation";
 export type TradeSource = "virtual" | "real" | "backtest";
 export type TradeStatus = "open" | "closed" | "cancelled";
 export type TradeCloseReason =
@@ -256,7 +265,7 @@ export interface SignalExitPlanSnapshot {
 
 export interface SignalAutoEntrySnapshot {
   enabled: boolean;
-  status: "pending" | "triggered" | "failed" | "cancelled" | "requires_reconfirmation";
+  status: PendingEntryIntentStatus;
   mode: TradeMode;
   user_id: string;
   armed_at: string | null;
@@ -265,6 +274,38 @@ export interface SignalAutoEntrySnapshot {
   request: Record<string, unknown>;
   trade_id: string | null;
   real_execution: Record<string, unknown> | null;
+}
+
+export interface PendingEntryIntent {
+  id: string;
+  user_id: string;
+  signal_id: string;
+  strategy_id: string | null;
+  mode: TradeMode;
+  status: PendingEntryIntentStatus;
+  exchange: string;
+  symbol: string;
+  side: SignalDirection;
+  entry_min: number;
+  entry_max: number;
+  entry_price_policy: string;
+  stop_loss: number;
+  targets_snapshot: Record<string, unknown> | Array<Record<string, unknown>>;
+  accepted_trade_plan_snapshot: Record<string, unknown>;
+  accepted_trade_plan_hash: string;
+  accepted_signal_status: SignalStatus;
+  accepted_signal_version: string | null;
+  accepted_signal_fingerprint: string | null;
+  execution_profile_snapshot: Record<string, unknown>;
+  request_snapshot: Record<string, unknown>;
+  idempotency_key: string;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+  triggered_at: string | null;
+  filled_at: string | null;
+  filled_trade_id: string | null;
+  failure_reason: string | null;
 }
 
 export interface RadarSignal {

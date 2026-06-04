@@ -98,6 +98,12 @@ still must pass `RealExecutionReadinessService` before any adapter order.
 Manual confirm responses that arm a deferred entry include the created or
 idempotently reused `pending_entry_intent`; they do not create a virtual trade
 or send a real order while the entry zone has not been touched.
+The explicit pending-entry API follows the same rule:
+`POST /signals/{signal_id}/pending-entry` only arms or reuses an accepted
+intent, `GET /signals/{signal_id}/pending-entry` lists active intents for the
+signal/user, and `POST /pending-entry/{intent_id}/cancel` only transitions the
+stored intent to `cancelled`. These endpoints do not run an entry fill path and
+do not replace the fresh RiskGate/readiness checks required at trigger time.
 
 Tick-driven pending entry uses the following risk policy:
 

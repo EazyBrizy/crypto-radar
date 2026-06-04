@@ -17,7 +17,7 @@ import type {
   SubscriptionStatus,
   UserProfile
 } from "@/features/server-state/types";
-import type { HealthStatus, RadarResponse, RadarSignal, RadarStatus, RiskStateResponse, TradeJournalResponse } from "@/types";
+import type { HealthStatus, PendingEntryIntent, RadarResponse, RadarSignal, RadarStatus, RiskStateResponse, TradeJournalResponse } from "@/types";
 import { isOpenFeedSignal } from "@/utils";
 import {
   queryKeys,
@@ -76,6 +76,16 @@ export function useSignalExecutionPreviewQuery(signalId: string | null, options:
     queryKey: serverStateKeys.signals.executionPreview(signalId ?? "none"),
     queryFn: () => api.executionPreview(signalId as string),
     enabled: options.enabled ?? Boolean(signalId),
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
+export function usePendingEntryQuery(signalId: string | null, userId = "demo_user", options: PlannedQueryOptions = {}) {
+  return useQuery({
+    queryKey: serverStateKeys.signals.pendingEntry(signalId ?? "none", userId),
+    queryFn: () => api.pendingEntry(signalId as string, userId),
+    enabled: options.enabled ?? Boolean(signalId),
+    refetchInterval: options.refetchInterval,
     staleTime: serverStatePolicy.realtimeStaleTimeMs
   });
 }
@@ -535,6 +545,72 @@ export function useConfirmVirtualMutation() {
   });
 }
 
+export function useArmPendingEntryMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: api.armPendingEntry,
+    onSuccess: async (intent, variables) => {
+      queryClient.setQueryData(
+        serverStateKeys.signals.pendingEntry(intent.signal_id, intent.user_id),
+        [intent]
+      );
+      queryClient.setQueryData(
+        serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
+        [intent]
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.signals.all() })
+      ]);
+    }
+  });
+}
+
+export function useCancelPendingEntryMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: api.cancelPendingEntry,
+    onSuccess: async (intent, variables) => {
+      queryClient.setQueryData<PendingEntryIntent[]>(
+        serverStateKeys.signals.pendingEntry(intent.signal_id, intent.user_id),
+        (current) => (current ?? []).filter((item) => item.id !== intent.id && isActivePendingEntryIntent(item))
+      );
+      queryClient.setQueryData<PendingEntryIntent[]>(
+        serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
+        (current) => (current ?? []).filter((item) => item.id !== intent.id && isActivePendingEntryIntent(item))
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.signals.all() })
+      ]);
+    }
+  });
+}
+
+export function useReconfirmPendingEntryMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: api.reconfirmPendingEntry,
+    onSuccess: async (intent, variables) => {
+      queryClient.setQueryData(
+        serverStateKeys.signals.pendingEntry(intent.signal_id, intent.user_id),
+        [intent]
+      );
+      queryClient.setQueryData(
+        serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
+        [intent]
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.signals.all() })
+      ]);
+    }
+  });
+}
+
 export function useRejectSignalMutation() {
   const queryClient = useQueryClient();
 
@@ -627,4 +703,11 @@ function filterSignals(signals: RadarSignal[], filters?: SignalHistoryFilters): 
     const symbolMatches = !filters?.symbol || signal.symbol === filters.symbol;
     return statusMatches && symbolMatches;
   });
+}
+
+function isActivePendingEntryIntent(intent: PendingEntryIntent): boolean {
+  return intent.status === "pending"
+    || intent.status === "triggered"
+    || intent.status === "filling"
+    || intent.status === "requires_reconfirmation";
 }

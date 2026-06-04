@@ -493,6 +493,42 @@ pending-entry workflows. New services must create and transition
 `features_snapshot.auto_entry` only for compatibility. The mirror may expose
 `requires_reconfirmation` so the user can see that the accepted plan is stale.
 
+Pending entry API contract:
+
+```python
+PendingEntryIntentArmRequest = ManualConfirmRequest
+PendingEntryIntentActionRequest = {
+    "user_id": str,
+}
+
+POST /api/v1/signals/{signal_id}/pending-entry(
+    request: PendingEntryIntentArmRequest | None,
+) -> PendingEntryIntentRead
+
+GET /api/v1/signals/{signal_id}/pending-entry(
+    user_id: str,
+) -> list[PendingEntryIntentRead]
+
+POST /api/v1/pending-entry/{intent_id}/cancel(
+    request: PendingEntryIntentActionRequest | None,
+) -> PendingEntryIntentRead
+
+POST /api/v1/pending-entry/{intent_id}/reconfirm(
+    request: PendingEntryIntentArmRequest | None,
+) -> PendingEntryIntentRead
+```
+
+The arm endpoint accepts the current signal and stores an accepted snapshot; it
+must not create a virtual trade or send a real order. Duplicate arm requests for
+the same user, signal, mode, and accepted trade-plan hash must return the
+existing active `PendingEntryIntentRead` instead of creating a second intent.
+The list endpoint returns active workflow rows for the given signal/user. Cancel
+transitions an active intent to `cancelled` with an explicit reason. Reconfirm
+accepts the current signal/trade-plan/profile again when an old active intent is
+`requires_reconfirmation`; an implementation may update the stale intent in
+place or replace it with a newly accepted active intent, but the response must
+be the current accepted `PendingEntryIntentRead`.
+
 Radar `execution_ready` first applies `is_execution_candidate_status`, then
 uses a read-only RiskGate preview. Manual virtual/real confirmation must run
 RiskGate again on the current request. Real execution must run

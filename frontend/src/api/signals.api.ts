@@ -1,12 +1,19 @@
 import type { RadarDisplayMode } from "@/features/server-state/types";
-import type { RadarResponse, RadarSignal, VirtualExecutionReport } from "@/types";
-import { openApiClient, request } from "./client";
-import { normalizeRiskPreviewResponse, normalizeSignal, riskPreviewToExecutionReport } from "./mappers";
+import type { PendingEntryIntent, RadarResponse, RadarSignal, VirtualExecutionReport } from "@/types";
+import { openApiClient, request, requestJson } from "./client";
+import { normalizePendingEntryIntent, normalizeRiskPreviewResponse, normalizeSignal, riskPreviewToExecutionReport } from "./mappers";
 
 type RadarRequestOptions = {
   radarDisplayMode?: RadarDisplayMode | null;
   userId?: string;
 };
+
+type PendingEntryInput = {
+  signalId: string;
+  userId?: string;
+};
+
+type PendingEntryIntentDto = Record<string, unknown>;
 
 export const signalsApi = {
   async list(): Promise<RadarSignal[]> {
@@ -61,6 +68,43 @@ export const signalsApi = {
       })
     );
   },
+  async pendingEntry(signalId: string, userId = "demo_user"): Promise<PendingEntryIntent[]> {
+    const params = new URLSearchParams({ user_id: userId });
+    const response = await requestJson<PendingEntryIntentDto[]>(
+      `/api/v1/signals/${encodeURIComponent(signalId)}/pending-entry?${params.toString()}`
+    );
+    return response.map(normalizePendingEntryIntent);
+  },
+  async armPendingEntry(input: PendingEntryInput): Promise<PendingEntryIntent> {
+    const response = await requestJson<PendingEntryIntentDto>(
+      `/api/v1/signals/${encodeURIComponent(input.signalId)}/pending-entry`,
+      {
+        method: "POST",
+        body: JSON.stringify(pendingEntryRequest(input.userId))
+      }
+    );
+    return normalizePendingEntryIntent(response);
+  },
+  async cancelPendingEntry(input: { intentId: string; userId?: string }): Promise<PendingEntryIntent> {
+    const response = await requestJson<PendingEntryIntentDto>(
+      `/api/v1/pending-entry/${encodeURIComponent(input.intentId)}/cancel`,
+      {
+        method: "POST",
+        body: JSON.stringify({ user_id: input.userId ?? "demo_user" })
+      }
+    );
+    return normalizePendingEntryIntent(response);
+  },
+  async reconfirmPendingEntry(input: { intentId: string; userId?: string }): Promise<PendingEntryIntent> {
+    const response = await requestJson<PendingEntryIntentDto>(
+      `/api/v1/pending-entry/${encodeURIComponent(input.intentId)}/reconfirm`,
+      {
+        method: "POST",
+        body: JSON.stringify(pendingEntryRequest(input.userId))
+      }
+    );
+    return normalizePendingEntryIntent(response);
+  },
   async executionPreview(signalId: string): Promise<VirtualExecutionReport> {
     const response = await request(() =>
       openApiClient.POST("/api/v1/risk/preview", {
@@ -89,3 +133,20 @@ export const signalsApi = {
     );
   }
 };
+
+function pendingEntryRequest(userId = "demo_user") {
+  return {
+    mode: "virtual",
+    user_id: userId,
+    auto_enter_on_confirmation: true,
+    account_balance: 100,
+    leverage: 3,
+    fee_rate: 0,
+    slippage_bps: 0,
+    simulation_mode: "auto",
+    max_virtual_slippage_bps: 150,
+    allow_partial_fill: true,
+    min_fill_ratio: 0.25,
+    max_open_positions: 3
+  };
+}

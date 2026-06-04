@@ -49,8 +49,8 @@ Real trading:
   plan;
 - requires the live adapter to guarantee protective placement through
   exchange-native bracket/OCO support or an adapter-level protective guarantee;
-- for futures, requires a valid liquidation price or liquidation-buffer check
-  before entry can be treated as production-safe;
+- for futures, requires a valid live/provided/projected liquidation price and
+  liquidation-buffer check before entry can be treated as production-safe;
 - for spot, enforces the configured `spot_max_position_size_percent` cap.
 - blocks when the normalized trade-plan completeness assessment reports
   missing entry, structural stop, structural target, or another completeness
@@ -307,6 +307,103 @@ Strategy evaluation must not consume the resolved execution profile directly.
 RR/no-trade/execution policy checks, while `strategy.evaluate(...)` receives
 only market setup params and market context.
 
+## Projected Liquidation Guard
+
+RiskGate uses `LiquidationProjection` only for futures contexts:
+`instrument_type = "futures"` or effective `leverage > 1`. `mode = "virtual"`
+does not mean futures by itself. The helper consumes already-loaded service
+context only: entry, side, resolved quantity, leverage, margin mode, account
+snapshot, and exchange instrument rules. It must not query the exchange or DB.
+
+The effective liquidation price source is resolved in this order:
+
+```text
+live/provided liquidation price
+> projected liquidation from explicit exchange-rule formula/tier inputs
+> unavailable with explicit warning/block reason
+```
+
+Formula source policy:
+
+- The helper may calculate a projected price only when exchange rules provide an
+  explicit `liquidation_formula` plus `liquidation_formula_source` and the
+  required maintenance tier fields.
+- It must not guess an exchange formula from only `exchange="bybit"` or
+  `category="linear"`.
+- Supported formula ids are generic/configured inputs, for example
+  `linear_isolated_entry_price` and `bybit_usdt_usdc_isolated_2025`.
+- Sources used for the supported Bybit formulas:
+  [Bybit isolated UTA liquidation price](https://www.bybitglobal.com/en/help-center/article/Liquidation-Price-Calculation-under-Isolated-Mode-Unified-Trading-Account)
+  and
+  [Bybit margin calculation update](https://www.bybit.global/en/help-center/article/Understanding-the-Adjustment-and-Impact-of-the-New-Margin-Calculation).
+
+For linear isolated USDT/USDC style contracts using the entry-price formula:
+
+```text
+position_value = qty * entry
+initial_margin = position_value / leverage + estimated_close_fee
+maintenance_margin =
+  position_value * maintenance_margin_rate
+  - maintenance_margin_deduction
+  + estimated_close_fee
+
+long_liquidation =
+  entry - ((initial_margin - maintenance_margin) / qty) - extra_margin / qty
+
+short_liquidation =
+  entry + ((initial_margin - maintenance_margin) / qty) + extra_margin / qty
+```
+
+For the configured Bybit 2025 USDT/USDC isolated formula:
+
+```text
+long_liquidation =
+  (
+    entry * qty
+    - (entry * qty / leverage)
+    - (extra_margin / (1 - taker_fee_rate))
+    - maintenance_margin_deduction
+  )
+  / (qty - qty * maintenance_margin_rate)
+
+short_liquidation =
+  (
+    entry * qty
+    + (entry * qty / leverage)
+    + (extra_margin / (1 + taker_fee_rate))
+    + maintenance_margin_deduction
+  )
+  / (qty + qty * maintenance_margin_rate)
+```
+
+Required fields:
+
+- RiskGate context: entry price, stop price, side, resolved quantity, leverage,
+  instrument type, execution mode, and fee rate when the selected formula needs
+  taker fee.
+- Account snapshot: fresh status/source for real execution, account equity,
+  available balance, margin mode, wallet/margin balance when available, open
+  positions, and account-level initial/maintenance margin when supplied by the
+  exchange.
+- Exchange/instrument rules: formula id, formula source, maintenance margin
+  rate, maintenance margin deduction, max leverage, category/contract type, and
+  raw exchange payload for audit.
+
+Stop-vs-liquidation policy:
+
+- Long trades require `stop_loss_price > liquidation_price`.
+- Short trades require `stop_loss_price < liquidation_price`.
+- `distance_to_liquidation = abs(entry_price - liquidation_price)`.
+- `liquidation_buffer_percent = abs(stop_loss_price - liquidation_price) /
+  entry_price * 100` when the stop is on the safe side of liquidation.
+- If the stop is beyond liquidation, RiskGate blocks.
+- If `min_liquidation_buffer_percent` is enabled and the stop-to-liquidation
+  buffer is smaller than the setting, RiskGate blocks.
+- Real futures entries block when liquidation projection is required but margin
+  mode, formula/source, or maintenance tier fields are missing.
+- Virtual futures entries surface missing projection data as warnings/unknown
+  unless another documented hard blocker fails.
+
 ## Profiles
 
 - `conservative`: lower risk budget for beginners or larger deposits.
@@ -374,11 +471,10 @@ while the module is being built step by step.
   one-interval funding buffer when ticker context is available. It does not yet
   model holding horizon, funding schedule accrual, or realized funding
   debits/credits.
-- Calculate projected liquidation prices for new futures orders. The gate can
-  now consume live Bybit `liqPrice` for an already-open matching real futures
-  position, and it still accepts a caller-provided liquidation price, but it does
-  not yet calculate the exact post-order liquidation price by margin mode,
-  maintenance tier, wallet balance, and existing exposure.
+- Add normalized maintenance-tier sync beyond raw exchange payloads. RiskGate
+  can now project futures liquidation only when the caller/reference supplies an
+  explicit formula/source and maintenance margin fields; production sync still
+  needs first-class tier normalization.
 - Add production WebSocket observability for orderbook cache health. The risk
   gate now consumes the Redis hot L2 snapshot and can calculate level-by-level
   VWAP impact from the cached book, but production monitoring/alerts for stale
@@ -635,7 +731,8 @@ Current behavior:
 
 Still missing:
 
-- projected liquidation price for brand-new futures orders;
+- first-class exchange maintenance-tier normalization for every supported
+  futures venue;
 - actual reduce-only/protective-order placement in the future real exchange
   adapter.
 
@@ -805,8 +902,8 @@ Still missing for this point:
 
 - production WebSocket/orderbook cache observability and alerts for stale
   refresh cycles;
-- projected liquidation-price calculation for the new order before it reaches an
-  exchange adapter;
+- normalized maintenance-tier ingestion for projected liquidation formulas
+  beyond the raw instrument-rule payload;
 - per-symbol overrides for spread/liquidity/price-drift thresholds;
 - comparing level-by-level VWAP/impact with an explicit user limit price;
 - user-selectable instrument type/leverage in the pre-entry ticket instead of
@@ -873,8 +970,8 @@ The risk helper layer now also calculates:
   breakeven stop adjusted by `breakeven_offset_percent`;
 - `TrailingStopPlan`: trailing mode and initial trailing stop candidate for
   `atr`, `percent`, or `structure` modes;
-- `FuturesRiskPlan`: max leverage check and liquidation safety check when a
-  liquidation price is provided.
+- `FuturesRiskPlan`: max leverage check, projected/live liquidation price, and
+  stop-vs-liquidation safety policy.
 
 Current behavior:
 
@@ -890,11 +987,12 @@ Current behavior:
   previous stop, new stop, and reference price, and a trailing stop hit closes
   the remaining position with `close_reason = "trailing_stop"`;
 - `max_leverage` is enforced for virtual entries;
-- if `liquidation_price` is provided, the guard blocks trades where liquidation
-  can happen before stop-loss or where the stop-to-liquidation buffer is below
-  `min_liquidation_buffer_percent`;
-- if `liquidation_price` is unavailable, the futures guard status is `unknown`
-  and the exact liquidation check is not treated as passed.
+- if a live/provided/projected liquidation price is available, the guard blocks
+  trades where liquidation can happen before stop-loss or where the
+  stop-to-liquidation buffer is below `min_liquidation_buffer_percent`;
+- if liquidation projection inputs are unavailable, the futures guard status is
+  `unknown`; real futures blocks when the configured liquidation buffer is
+  required, while virtual futures records explicit warnings.
 
 Bybit fee-rate retrieval has an initial implementation through the private V5
 `GET /v5/account/fee-rate` endpoint. It returns maker/taker rates per category

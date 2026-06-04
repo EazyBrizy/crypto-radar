@@ -411,6 +411,7 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertEqual(decision.instrument_type, "futures")
         self.assertIsNotNone(decision.futures_risk_plan)
         self.assertEqual(decision.futures_risk_plan.status, "unknown")
+        self.assertTrue(decision.can_enter)
         self.assertIn(
             "Liquidation price is unavailable; exact futures liquidation risk is not checked.",
             decision.warnings,
@@ -452,7 +453,18 @@ class RiskGateServiceContractTest(unittest.TestCase):
 
         self.assertEqual(decision.status, "failed")
         self.assertFalse(decision.can_enter)
-        self.assertIn("Liquidation price is unavailable; exact futures liquidation risk is not checked.", decision.blockers)
+        self.assertIn(
+            "Liquidation price is unavailable; exact futures liquidation risk is not checked.",
+            decision.blockers,
+        )
+        self.assertIn(
+            "Liquidation projection requires margin_mode from account snapshot or execution profile.",
+            decision.blockers,
+        )
+        self.assertIn(
+            "Liquidation projection requires maintenance_margin_rate from account snapshot or instrument rules.",
+            decision.blockers,
+        )
 
     def test_real_futures_with_liquidation_price_still_runs_futures_guard(self) -> None:
         decision = RiskGateService().evaluate(
@@ -483,6 +495,73 @@ class RiskGateServiceContractTest(unittest.TestCase):
             "Liquidation price is unavailable; exact futures liquidation risk is not checked.",
             decision.blockers,
         )
+
+    def test_real_futures_stop_beyond_projected_liquidation_blocks(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=_real_context(
+                signal=_signal(stop_loss=88.0),
+                request=ManualConfirmRequest(leverage=10),
+                account_snapshot=_account_snapshot(1_000, margin_mode="isolated"),
+                entry_price=100,
+                instrument_type="futures",
+                stage="pre_execution",
+                instrument_rules=_liquidation_rules(),
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=100_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "max_leverage": 10,
+                    "futures_max_leverage": 10,
+                    "real_requires_positive_edge": False,
+                    "real_requires_fresh_market_data": False,
+                }
+            ),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        assert decision.futures_risk_plan is not None
+        self.assertEqual(decision.futures_risk_plan.status, "blocked")
+        self.assertAlmostEqual(decision.futures_risk_plan.projected_liquidation_price or 0, 90.5)
+        self.assertTrue(decision.futures_risk_plan.liquidation_before_stop)
+        self.assertIn("Trade is unsafe: liquidation may happen before stop-loss.", decision.blockers)
+
+    def test_real_futures_safe_projected_liquidation_distance_passes(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=_real_context(
+                signal=_signal(stop_loss=95.0),
+                request=ManualConfirmRequest(leverage=10),
+                account_snapshot=_account_snapshot(1_000, margin_mode="isolated"),
+                entry_price=100,
+                instrument_type="futures",
+                stage="pre_execution",
+                instrument_rules=_liquidation_rules(),
+                best_bid=99.95,
+                best_ask=100.05,
+                orderbook_depth_usd=100_000,
+                market_data_status="fresh",
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "max_leverage": 10,
+                    "futures_max_leverage": 10,
+                    "real_requires_positive_edge": False,
+                    "real_requires_fresh_market_data": False,
+                }
+            ),
+        )
+
+        self.assertEqual(decision.status, "passed")
+        self.assertTrue(decision.can_enter)
+        assert decision.futures_risk_plan is not None
+        self.assertEqual(decision.futures_risk_plan.status, "passed")
+        self.assertEqual(decision.futures_risk_plan.liquidation_price_source, "projected")
+        self.assertAlmostEqual(decision.futures_risk_plan.projected_liquidation_price or 0, 90.5)
+        self.assertAlmostEqual(decision.futures_risk_plan.distance_to_liquidation or 0, 9.5)
+        self.assertAlmostEqual(decision.futures_risk_plan.liquidation_buffer_percent or 0, 4.5)
 
     def test_market_spread_and_funding_are_included_in_effective_risk(self) -> None:
         decision = RiskGateService().evaluate(
@@ -1226,14 +1305,24 @@ def _real_context(**kwargs):
     return RiskContextService().build_real_context(**kwargs)
 
 
-def _account_snapshot(balance: float = 100.0) -> AccountRiskSnapshot:
+def _account_snapshot(balance: float = 100.0, *, margin_mode: str | None = None) -> AccountRiskSnapshot:
     return AccountRiskSnapshot(
         status="fresh",
         fetched_at=datetime.now(timezone.utc),
         account_equity=balance,
         available_balance=balance,
+        margin_mode=margin_mode,
         source="exchange",
     )
+
+
+def _liquidation_rules() -> dict[str, object]:
+    return {
+        "liquidation_formula": "linear_isolated_entry_price",
+        "liquidation_formula_source": "test_config",
+        "maintenance_margin_rate": 0.005,
+        "maintenance_margin_deduction": 0.0,
+    }
 
 
 def _risk_settings() -> RiskManagementSettings:

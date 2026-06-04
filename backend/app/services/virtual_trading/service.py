@@ -512,6 +512,11 @@ class VirtualTradingService:
                     if reference is not None
                     else None
                 ),
+                instrument_rules=(
+                    getattr(reference, "exchange_instrument_rules", None)
+                    if reference is not None
+                    else None
+                ),
                 **_market_context_kwargs(market_data),
                 **_fee_context_kwargs(fee_rate),
                 daily_loss_amount=reference.daily_loss_amount if reference is not None else 0.0,
@@ -612,6 +617,11 @@ class VirtualTradingService:
                 ),
                 exchange_rule_ttl_seconds=(
                     reference.exchange_rule_ttl_seconds
+                    if reference is not None
+                    else None
+                ),
+                instrument_rules=(
+                    getattr(reference, "exchange_instrument_rules", None)
                     if reference is not None
                     else None
                 ),
@@ -800,6 +810,11 @@ class VirtualTradingService:
                 ),
                 exchange_rule_ttl_seconds=(
                     reference.exchange_rule_ttl_seconds
+                    if reference is not None
+                    else None
+                ),
+                instrument_rules=(
+                    getattr(reference, "exchange_instrument_rules", None)
                     if reference is not None
                     else None
                 ),

@@ -80,6 +80,8 @@ class PositionRiskSummary(BaseModel):
     mark_price: Decimal | None = Field(default=None, gt=0)
     unrealized_pnl: Decimal | None = None
     risk_amount: Decimal | None = Field(default=None, ge=0)
+    initial_margin: Decimal | None = Field(default=None, ge=0)
+    maintenance_margin: Decimal | None = Field(default=None, ge=0)
     margin_mode: str | None = None
 
 
@@ -88,7 +90,11 @@ class AccountRiskSnapshot(BaseModel):
     fetched_at: datetime | None = None
     account_equity: Decimal | None = Field(default=None, gt=0)
     available_balance: Decimal | None = Field(default=None, ge=0)
+    wallet_balance: Decimal | None = Field(default=None, ge=0)
     margin_mode: str | None = None
+    total_initial_margin: Decimal | None = Field(default=None, ge=0)
+    total_maintenance_margin: Decimal | None = Field(default=None, ge=0)
+    maintenance_margin_rate: Decimal | None = Field(default=None, ge=0)
     positions: list[PositionRiskSummary] = Field(default_factory=list)
     open_risk_amount: Decimal = Field(default=Decimal("0"), ge=0)
     source: AccountRiskSnapshotSource
@@ -379,6 +385,20 @@ class TrailingStopPlan(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class LiquidationProjectionResult(BaseModel):
+    projected_liquidation_price: float | None = Field(default=None, gt=0)
+    distance_to_liquidation: float | None = Field(default=None, ge=0)
+    distance_to_liquidation_percent: float | None = Field(default=None, ge=0)
+    margin_mode: str | None = None
+    maintenance_margin_rate: float | None = Field(default=None, ge=0)
+    maintenance_margin_amount: float | None = Field(default=None, ge=0)
+    liquidation_price_source: str = "unavailable"
+    formula: str | None = None
+    formula_source: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+
+
 class FuturesRiskPlan(BaseModel):
     side: Literal["long", "short"]
     status: FuturesRiskStatus
@@ -389,10 +409,19 @@ class FuturesRiskPlan(BaseModel):
     leverage_allowed: bool
     liquidation_price: float | None = Field(default=None, gt=0)
     liquidation_buffer_percent: float | None = Field(default=None, ge=0)
+    projected_liquidation_price: float | None = Field(default=None, gt=0)
+    distance_to_liquidation: float | None = Field(default=None, ge=0)
+    distance_to_liquidation_percent: float | None = Field(default=None, ge=0)
+    liquidation_price_source: str = "unavailable"
+    margin_mode: str | None = None
+    maintenance_margin_rate: float | None = Field(default=None, ge=0)
+    maintenance_margin_amount: float | None = Field(default=None, ge=0)
+    liquidation_projection: LiquidationProjectionResult | None = None
     min_liquidation_buffer_percent: float = Field(..., ge=0)
     liquidation_before_stop: bool | None = None
     message: str
     warnings: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
 
 
 class RiskContext(BaseModel):
@@ -419,6 +448,7 @@ class RiskContext(BaseModel):
     account_snapshot_source: AccountRiskSnapshotSource | None = None
     account_snapshot_fetched_at: datetime | None = None
     account_margin_mode: str | None = None
+    account_snapshot: AccountRiskSnapshot | None = None
     account_snapshot_warnings: list[str] = Field(default_factory=list)
     entry_price: float = Field(..., gt=0)
     signal_entry_price: float | None = Field(default=None, gt=0)
@@ -457,6 +487,7 @@ class RiskContext(BaseModel):
     exchange_rule_status: ExchangeRuleStatus = "unknown"
     exchange_rule_age_seconds: float | None = Field(default=None, ge=0)
     exchange_rule_ttl_seconds: int | None = Field(default=None, ge=0)
+    instrument_rules: dict[str, Any] | None = None
     correlation_group: str | None = None
     protection_state: RiskProtectionMode = "normal"
     protection_reason: str | None = None

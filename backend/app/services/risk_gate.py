@@ -65,6 +65,8 @@ class RiskContextService:
         exchange_rule_status: str = "unknown",
         exchange_rule_age_seconds: float | None = None,
         exchange_rule_ttl_seconds: int | None = None,
+        instrument_rules: dict[str, Any] | None = None,
+        margin_mode: str | None = None,
         liquidation_price: float | None = None,
         funding_buffer_per_unit: float = 0.0,
         best_bid: float | None = None,
@@ -123,6 +125,8 @@ class RiskContextService:
             signal_score=float(signal.score),
             account_equity=account_equity,
             available_balance=account_equity,
+            account_margin_mode=margin_mode,
+            account_snapshot=None,
             entry_price=entry_price,
             signal_entry_price=_signal_entry_price(signal),
             signal_stop_loss_price=signal_stop_loss_price or signal.stop_loss,
@@ -159,6 +163,7 @@ class RiskContextService:
             exchange_rule_status=exchange_rule_status,
             exchange_rule_age_seconds=exchange_rule_age_seconds,
             exchange_rule_ttl_seconds=exchange_rule_ttl_seconds,
+            instrument_rules=instrument_rules,
             correlation_group=correlation_group,
             protection_state=protection_state,
             protection_reason=protection_reason,
@@ -192,6 +197,7 @@ class RiskContextService:
         exchange_rule_status: str = "unknown",
         exchange_rule_age_seconds: float | None = None,
         exchange_rule_ttl_seconds: int | None = None,
+        instrument_rules: dict[str, Any] | None = None,
         liquidation_price: float | None = None,
         funding_buffer_per_unit: float = 0.0,
         best_bid: float | None = None,
@@ -265,6 +271,7 @@ class RiskContextService:
             account_snapshot_source=snapshot.source,
             account_snapshot_fetched_at=snapshot.fetched_at,
             account_margin_mode=snapshot.margin_mode,
+            account_snapshot=snapshot,
             account_snapshot_warnings=snapshot_warnings,
             entry_price=entry_price,
             signal_entry_price=_signal_entry_price(signal),
@@ -302,6 +309,7 @@ class RiskContextService:
             exchange_rule_status=exchange_rule_status,
             exchange_rule_age_seconds=exchange_rule_age_seconds,
             exchange_rule_ttl_seconds=exchange_rule_ttl_seconds,
+            instrument_rules=instrument_rules,
             correlation_group=correlation_group,
             protection_state=protection_state,
             protection_reason=protection_reason,
@@ -352,17 +360,6 @@ class RiskGateService:
             risk_settings=risk_settings,
             atr_value=context.atr_value,
         )
-        futures_risk_plan = None
-        if context.instrument_type == "futures" or context.leverage > 1:
-            futures_risk_plan = calculate_futures_risk_plan(
-                entry_price=context.entry_price,
-                stop_loss_price=stop_loss_plan.stop_loss_price,
-                side=context.side,
-                leverage=context.leverage,
-                risk_settings=risk_settings,
-                liquidation_price=context.liquidation_price,
-            )
-
         risk_adjustment = calculate_trade_risk_adjustment(
             account_equity=context.account_equity,
             risk_settings=risk_settings,
@@ -396,6 +393,21 @@ class RiskGateService:
             if context.requested_notional is not None
             else position_sizing
         )
+        futures_risk_plan = None
+        if context.instrument_type == "futures" or context.leverage > 1:
+            futures_risk_plan = calculate_futures_risk_plan(
+                entry_price=context.entry_price,
+                stop_loss_price=stop_loss_plan.stop_loss_price,
+                side=context.side,
+                leverage=context.leverage,
+                risk_settings=risk_settings,
+                liquidation_price=context.liquidation_price,
+                quantity=checked_position_sizing.position_size_base,
+                margin_mode=context.account_margin_mode,
+                account_snapshot=context.account_snapshot,
+                instrument_rules=context.instrument_rules,
+                fee_rate=context.fee_rate,
+            )
         risk_check = calculate_risk_check_result(
             risk_settings=risk_settings,
             risk_adjustment=risk_adjustment,

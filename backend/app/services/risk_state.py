@@ -33,6 +33,7 @@ class RiskReferenceSnapshot:
     exchange_rule_status: str = "unknown"
     exchange_rule_age_seconds: float | None = None
     exchange_rule_ttl_seconds: int | None = None
+    exchange_instrument_rules: dict[str, object] | None = None
     correlation_group: str | None = None
     open_risk_amount: float = 0.0
     correlated_open_risk_amount: float = 0.0
@@ -267,6 +268,7 @@ def _reference_from_session(
         exchange_rule_status=rule_status,
         exchange_rule_age_seconds=rule_age_seconds,
         exchange_rule_ttl_seconds=app_settings.exchange_instrument_rules_ttl_seconds,
+        exchange_instrument_rules=_instrument_rule_snapshot(rule),
         correlation_group=correlation_group,
         open_risk_amount=float(open_risk),
         correlated_open_risk_amount=float(correlated_risk),
@@ -526,6 +528,26 @@ def _rule_freshness(
     return "fresh", age_seconds
 
 
+def _instrument_rule_snapshot(rule: ExchangeInstrumentRule | None) -> dict[str, object] | None:
+    if rule is None:
+        return None
+    return {
+        "symbol": rule.symbol,
+        "category": rule.category,
+        "min_order_size": _float_or_none(rule.min_order_size),
+        "max_order_size": _float_or_none(rule.max_order_size),
+        "min_notional": _float_or_none(rule.min_notional),
+        "qty_step": _float_or_none(rule.qty_step),
+        "tick_size": _float_or_none(rule.tick_size),
+        "max_leverage": rule.max_leverage,
+        "funding_interval_minutes": rule.funding_interval_minutes,
+        "source": rule.source,
+        "fetched_at": rule.fetched_at,
+        "updated_at": rule.updated_at,
+        "raw_payload": rule.raw_payload,
+    }
+
+
 def _primary_group(pair: MarketPair) -> str | None:
     return _primary_group_from_asset(pair.base_asset)
 
@@ -706,7 +728,19 @@ def _account_snapshot_from_reference(reference: object | None) -> AccountRiskSna
         fetched_at=fetched_at,
         account_equity=equity,
         available_balance=available,
+        wallet_balance=_positive_decimal(
+            _first_attr(reference, "real_wallet_balance", "wallet_balance")
+        ),
         margin_mode=_str_attr(reference, "real_margin_mode", "margin_mode"),
+        total_initial_margin=_non_negative_decimal(
+            _first_attr(reference, "real_total_initial_margin", "total_initial_margin")
+        ),
+        total_maintenance_margin=_non_negative_decimal(
+            _first_attr(reference, "real_total_maintenance_margin", "total_maintenance_margin")
+        ),
+        maintenance_margin_rate=_non_negative_decimal(
+            _first_attr(reference, "real_maintenance_margin_rate", "maintenance_margin_rate")
+        ),
         positions=_position_summaries(reference),
         open_risk_amount=_positive_decimal(
             _first_attr(reference, "real_open_risk_amount", "open_risk_amount")
@@ -738,6 +772,14 @@ def _positive_decimal(value: object) -> Decimal | None:
     except Exception:
         return None
     return parsed if parsed > 0 else None
+
+
+def _non_negative_decimal(value: object) -> Decimal | None:
+    try:
+        parsed = Decimal(str(value))
+    except Exception:
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _datetime_attr(reference: object, *names: str) -> datetime | None:

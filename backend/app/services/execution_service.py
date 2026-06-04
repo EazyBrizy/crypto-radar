@@ -234,6 +234,11 @@ class RealExecutionService:
                 exchange_rule_ttl_seconds=(
                     reference.exchange_rule_ttl_seconds if reference is not None else None
                 ),
+                instrument_rules=(
+                    getattr(reference, "exchange_instrument_rules", None)
+                    if reference is not None
+                    else None
+                ),
                 liquidation_price=market_data.liquidation_price if market_data is not None else None,
                 funding_buffer_per_unit=market_data.funding_buffer_per_unit if market_data is not None else 0.0,
                 best_bid=market_data.best_bid if market_data is not None else None,

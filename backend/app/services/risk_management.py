@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any, Mapping, cast
 
 from app.schemas.risk import (
+    AccountRiskSnapshot,
     BreakevenPlan,
     ExecutionMode,
     FuturesRiskPlan,
@@ -28,6 +29,7 @@ from app.schemas.market import OrderBookSnapshot
 from app.schemas.signal import SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan, TradePlanTarget
 from app.schemas.user import RRGuardMode, RiskManagementPatch, RiskManagementSettings, RiskProfileName
+from app.services.liquidation_projection import liquidation_projection_service
 from app.services.risk_reward_plan import risk_reward_plan_service
 
 RISK_PROFILE_PRESETS: dict[RiskProfileName, RiskManagementSettings] = {
@@ -968,6 +970,7 @@ def calculate_risk_check_result(
     if futures_risk_plan is not None:
         if futures_risk_plan.status == "blocked":
             blockers.append(futures_risk_plan.message)
+            blockers.extend(futures_risk_plan.blockers)
         elif futures_risk_plan.status == "unknown":
             if (
                 execution_mode == "real"
@@ -975,8 +978,10 @@ def calculate_risk_check_result(
                 and _futures_liquidation_buffer_required(settings)
             ):
                 blockers.append(futures_risk_plan.message)
+                blockers.extend(futures_risk_plan.blockers)
             else:
                 warnings.append(futures_risk_plan.message)
+                warnings.extend(futures_risk_plan.blockers)
 
     return RiskCheckResult(
         status="failed" if blockers else ("warning" if warnings else "passed"),
@@ -1448,6 +1453,11 @@ def calculate_futures_risk_plan(
     leverage: int,
     risk_settings: RiskManagementSettings | Mapping[str, Any],
     liquidation_price: float | None = None,
+    quantity: float | None = None,
+    margin_mode: str | None = None,
+    account_snapshot: AccountRiskSnapshot | Mapping[str, Any] | None = None,
+    instrument_rules: Mapping[str, Any] | object | None = None,
+    fee_rate: float | None = 0.0,
 ) -> FuturesRiskPlan:
     settings = _settings_model(risk_settings)
     _validate_side_and_entry(side, entry_price)
@@ -1472,13 +1482,39 @@ def calculate_futures_risk_plan(
             leverage_allowed=False,
             liquidation_price=liquidation_price,
             liquidation_buffer_percent=None,
+            projected_liquidation_price=liquidation_price,
+            distance_to_liquidation=(
+                abs(entry_price - liquidation_price)
+                if liquidation_price is not None
+                else None
+            ),
+            distance_to_liquidation_percent=(
+                abs(entry_price - liquidation_price) / entry_price * 100
+                if liquidation_price is not None
+                else None
+            ),
+            liquidation_price_source="provided" if liquidation_price is not None else "unavailable",
+            margin_mode=margin_mode,
             min_liquidation_buffer_percent=settings.min_liquidation_buffer_percent,
             liquidation_before_stop=None,
             message=f"Requested leverage {leverage}x exceeds max leverage {effective_max_leverage}x.",
             warnings=warnings,
         )
 
-    if liquidation_price is None:
+    projection = liquidation_projection_service.project(
+        entry_price=entry_price,
+        side=side,
+        quantity=quantity,
+        leverage=leverage,
+        margin_mode=margin_mode,
+        account_snapshot=account_snapshot,
+        instrument_rules=instrument_rules,
+        provided_liquidation_price=liquidation_price,
+        fee_rate=fee_rate,
+    )
+    warnings.extend(projection.warnings)
+    effective_liquidation_price = liquidation_price or projection.projected_liquidation_price
+    if effective_liquidation_price is None:
         return FuturesRiskPlan(
             side=side,
             status="unknown",
@@ -1489,18 +1525,27 @@ def calculate_futures_risk_plan(
             leverage_allowed=True,
             liquidation_price=None,
             liquidation_buffer_percent=None,
+            projected_liquidation_price=projection.projected_liquidation_price,
+            distance_to_liquidation=projection.distance_to_liquidation,
+            distance_to_liquidation_percent=projection.distance_to_liquidation_percent,
+            liquidation_price_source=projection.liquidation_price_source,
+            margin_mode=projection.margin_mode,
+            maintenance_margin_rate=projection.maintenance_margin_rate,
+            maintenance_margin_amount=projection.maintenance_margin_amount,
+            liquidation_projection=projection,
             min_liquidation_buffer_percent=settings.min_liquidation_buffer_percent,
             liquidation_before_stop=None,
             message="Liquidation price is unavailable; exact futures liquidation risk is not checked.",
-            warnings=["Liquidation price is unavailable."],
+            warnings=_dedupe(["Liquidation price is unavailable.", *warnings]),
+            blockers=projection.blockers,
         )
 
     if side == "long":
-        liquidation_before_stop = liquidation_price >= stop_loss_price
-        liquidation_buffer_percent = max(stop_loss_price - liquidation_price, 0.0) / entry_price * 100
+        liquidation_before_stop = effective_liquidation_price >= stop_loss_price
+        liquidation_buffer_percent = max(stop_loss_price - effective_liquidation_price, 0.0) / entry_price * 100
     else:
-        liquidation_before_stop = liquidation_price <= stop_loss_price
-        liquidation_buffer_percent = max(liquidation_price - stop_loss_price, 0.0) / entry_price * 100
+        liquidation_before_stop = effective_liquidation_price <= stop_loss_price
+        liquidation_buffer_percent = max(effective_liquidation_price - stop_loss_price, 0.0) / entry_price * 100
 
     if liquidation_before_stop:
         return FuturesRiskPlan(
@@ -1511,12 +1556,21 @@ def calculate_futures_risk_plan(
             leverage=leverage,
             max_leverage=effective_max_leverage,
             leverage_allowed=True,
-            liquidation_price=liquidation_price,
+            liquidation_price=effective_liquidation_price,
             liquidation_buffer_percent=liquidation_buffer_percent,
+            projected_liquidation_price=projection.projected_liquidation_price,
+            distance_to_liquidation=projection.distance_to_liquidation,
+            distance_to_liquidation_percent=projection.distance_to_liquidation_percent,
+            liquidation_price_source=projection.liquidation_price_source,
+            margin_mode=projection.margin_mode,
+            maintenance_margin_rate=projection.maintenance_margin_rate,
+            maintenance_margin_amount=projection.maintenance_margin_amount,
+            liquidation_projection=projection,
             min_liquidation_buffer_percent=settings.min_liquidation_buffer_percent,
             liquidation_before_stop=True,
             message="Trade is unsafe: liquidation may happen before stop-loss.",
             warnings=warnings,
+            blockers=projection.blockers,
         )
 
     if (
@@ -1531,12 +1585,21 @@ def calculate_futures_risk_plan(
             leverage=leverage,
             max_leverage=effective_max_leverage,
             leverage_allowed=True,
-            liquidation_price=liquidation_price,
+            liquidation_price=effective_liquidation_price,
             liquidation_buffer_percent=liquidation_buffer_percent,
+            projected_liquidation_price=projection.projected_liquidation_price,
+            distance_to_liquidation=projection.distance_to_liquidation,
+            distance_to_liquidation_percent=projection.distance_to_liquidation_percent,
+            liquidation_price_source=projection.liquidation_price_source,
+            margin_mode=projection.margin_mode,
+            maintenance_margin_rate=projection.maintenance_margin_rate,
+            maintenance_margin_amount=projection.maintenance_margin_amount,
+            liquidation_projection=projection,
             min_liquidation_buffer_percent=settings.min_liquidation_buffer_percent,
             liquidation_before_stop=False,
             message="Trade is unsafe: liquidation buffer is below the configured minimum.",
             warnings=warnings,
+            blockers=projection.blockers,
         )
 
     return FuturesRiskPlan(
@@ -1547,12 +1610,21 @@ def calculate_futures_risk_plan(
         leverage=leverage,
         max_leverage=effective_max_leverage,
         leverage_allowed=True,
-        liquidation_price=liquidation_price,
+        liquidation_price=effective_liquidation_price,
         liquidation_buffer_percent=liquidation_buffer_percent,
+        projected_liquidation_price=projection.projected_liquidation_price,
+        distance_to_liquidation=projection.distance_to_liquidation,
+        distance_to_liquidation_percent=projection.distance_to_liquidation_percent,
+        liquidation_price_source=projection.liquidation_price_source,
+        margin_mode=projection.margin_mode,
+        maintenance_margin_rate=projection.maintenance_margin_rate,
+        maintenance_margin_amount=projection.maintenance_margin_amount,
+        liquidation_projection=projection,
         min_liquidation_buffer_percent=settings.min_liquidation_buffer_percent,
         liquidation_before_stop=False,
         message="Futures leverage and liquidation buffer checks passed.",
         warnings=warnings,
+        blockers=projection.blockers,
     )
 
 

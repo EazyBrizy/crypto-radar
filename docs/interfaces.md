@@ -696,6 +696,8 @@ PositionRiskSummary = {
     "mark_price": Decimal | None,
     "unrealized_pnl": Decimal | None,
     "risk_amount": Decimal | None,
+    "initial_margin": Decimal | None,
+    "maintenance_margin": Decimal | None,
     "margin_mode": str | None,
 }
 
@@ -704,7 +706,11 @@ AccountRiskSnapshot = {
     "fetched_at": datetime | None,
     "account_equity": Decimal | None,
     "available_balance": Decimal | None,
+    "wallet_balance": Decimal | None,
     "margin_mode": str | None,
+    "total_initial_margin": Decimal | None,
+    "total_maintenance_margin": Decimal | None,
+    "maintenance_margin_rate": Decimal | None,
     "positions": list[PositionRiskSummary],
     "open_risk_amount": Decimal,
     "source": AccountRiskSnapshotSource,
@@ -718,6 +724,14 @@ contract. For dry-run real execution, the provider may construct an explicit
 must include a warning/source marker. For a non-dry-run live adapter, missing or
 stale account snapshots block before adapter placement and RiskGate sizing must
 not use request/demo balance.
+
+`RiskReferenceSnapshot.exchange_instrument_rules` is the service-layer carrier
+for exchange rule details that are not normalized into first-class columns yet.
+RiskGate may consume this read-only snapshot, including `raw_payload`, to
+resolve liquidation formula inputs. It must not fetch exchange rules directly.
+Projected liquidation requires an explicit formula id/source and maintenance
+margin tier fields; missing fields must produce explicit warnings or blockers
+instead of silently falling back to a guessed exchange formula.
 
 RiskGate risk-budget and sizing snapshots are additive and backward compatible.
 Legacy fields stay present, while the resolved amount source is explicit:
@@ -756,6 +770,50 @@ profile before risk caps and multipliers. `effective_risk_amount` on
 amount used for quantity calculation. When a fixed risk amount is reduced by a
 configured risk cap, RiskGate must surface an explicit warning and set
 `risk_amount_capped = true`.
+
+Futures liquidation checks are additive to the existing RiskDecision contract:
+
+```python
+LiquidationProjectionResult = {
+    "projected_liquidation_price": float | None,
+    "distance_to_liquidation": float | None,
+    "distance_to_liquidation_percent": float | None,
+    "margin_mode": str | None,
+    "maintenance_margin_rate": float | None,
+    "maintenance_margin_amount": float | None,
+    "liquidation_price_source": str,
+    "formula": str | None,
+    "formula_source": str | None,
+    "warnings": list[str],
+    "blockers": list[str],
+}
+
+FuturesRiskPlan = {
+    # existing fields remain unchanged
+    "liquidation_price": float | None,
+    "liquidation_buffer_percent": float | None,
+    "liquidation_before_stop": bool | None,
+
+    # additive projected-liquidation fields
+    "projected_liquidation_price": float | None,
+    "distance_to_liquidation": float | None,
+    "distance_to_liquidation_percent": float | None,
+    "liquidation_price_source": str,
+    "margin_mode": str | None,
+    "maintenance_margin_rate": float | None,
+    "maintenance_margin_amount": float | None,
+    "liquidation_projection": LiquidationProjectionResult | None,
+    "blockers": list[str],
+}
+```
+
+`liquidation_price` remains the effective liquidation price used by the guard.
+When a live/provided liquidation price is available, it may be mirrored into
+the projected fields with `liquidation_price_source = "provided"`. When no live
+price is available, RiskGate may calculate a projected price only from the
+resolved position size, leverage, margin mode, fresh account snapshot, and
+explicit exchange rule formula/tier fields. Futures-only checks still run only
+when `instrument_type == "futures"` or effective leverage is greater than 1.
 
 ## Pipeline Layer Services v1
 

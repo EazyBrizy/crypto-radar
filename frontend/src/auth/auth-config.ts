@@ -23,7 +23,7 @@ export const demoAuthSession = {
   refreshCookieMode: "http-only",
   user: {
     email: "demo@crypto-radar.local",
-    id: "usr_demo",
+    id: "demo_user",
     name: "Demo Trader",
     roles: ["owner"]
   }

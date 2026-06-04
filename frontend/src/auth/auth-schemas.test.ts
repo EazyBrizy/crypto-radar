@@ -5,7 +5,7 @@ import { demoAuthSession } from "./auth-config";
 
 describe("auth schemas", () => {
   it("accepts the demo session contract", () => {
-    expect(AuthSessionSchema.parse(demoAuthSession).user.id).toBe("usr_demo");
+    expect(AuthSessionSchema.parse(demoAuthSession).user.id).toBe("demo_user");
   });
 
   it("rejects weak login credentials", () => {

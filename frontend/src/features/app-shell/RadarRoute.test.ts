@@ -1,12 +1,100 @@
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createElement } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
-import { canArmAutoEntry, canSendPaperTrade, selectPendingEntryForDetails, selectRealTradeConnection, shouldRequestExecutionPreview } from "./RadarRoute";
+import { useSignalStore } from "@/stores/signal-store";
+import { useUiStore } from "@/stores/ui-store";
+import {
+  canArmAutoEntry,
+  canSendPaperTrade,
+  RadarRoute,
+  selectPendingEntryForDetails,
+  selectRealTradeConnection,
+  shouldRequestExecutionPreview
+} from "./RadarRoute";
 import type { ExchangeConnection } from "@/features/server-state/types";
+
+const radarRouteMockState = vi.hoisted(() => ({
+  radarResponse: { signals: [] as unknown[] },
+  refetch: vi.fn(),
+  mutateAsync: vi.fn()
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() })
 }));
+
+vi.mock("@/auth/use-auth", () => ({
+  useAuthSessionQuery: () => ({ data: { user: { id: "demo_user" } } })
+}));
+
+vi.mock("@/hooks/use-radar-queries", () => {
+  const query = (data: unknown = null) => ({
+    data,
+    error: null,
+    isFetching: false,
+    isLoading: false,
+    refetch: radarRouteMockState.refetch
+  });
+  const mutation = () => ({
+    isPending: false,
+    mutateAsync: radarRouteMockState.mutateAsync
+  });
+
+  return {
+    useArmPendingEntryMutation: mutation,
+    useCancelPendingEntryMutation: mutation,
+    useConfirmRealMutation: mutation,
+    useConfirmVirtualMutation: mutation,
+    useExchangeConnectionAccountSnapshotsQuery: () => ({
+      dataByConnectionId: {},
+      pendingByConnectionId: {}
+    }),
+    useExchangeConnectionsQuery: () => query([]),
+    useHealthQuery: () => query(null),
+    useHistoricalSignalsQuery: () => query([]),
+    usePendingEntryHistoryQuery: () => query([]),
+    usePendingEntryQuery: () => query(null),
+    useRadarQuery: () => query(radarRouteMockState.radarResponse),
+    useRadarStatusQuery: () => query(null),
+    useReconfirmPendingEntryMutation: mutation,
+    useRejectSignalMutation: mutation,
+    useRiskStateQuery: () => query(null),
+    useSignalExecutionPreviewQuery: () => query(null),
+    useUserProfileQuery: () => query(null)
+  };
+});
+
+vi.mock("./RadarPage", async () => {
+  const React = await vi.importActual<typeof import("react")>("react");
+
+  return {
+    RadarPage: (props: {
+      filter: "all" | "long" | "short";
+      onFilterChange: (filter: "all" | "long" | "short") => void;
+      onSelectSignal: (signal: RadarSignal) => void;
+      selectedSignal: RadarSignal | null;
+      selectedSignalId: string | null;
+      signalIds: string[];
+      signals: RadarSignal[];
+    }) => React.createElement(
+      "section",
+      { "data-testid": "radar-page" },
+      React.createElement("div", { "data-testid": "selected-signal" }, props.selectedSignal?.id ?? "none"),
+      React.createElement("div", { "data-testid": "selected-card" }, props.selectedSignalId ?? "none"),
+      React.createElement("div", { "data-testid": "signal-ids" }, props.signalIds.join(",")),
+      React.createElement("div", { "data-testid": "active-filter" }, props.filter),
+      React.createElement("button", { onClick: () => props.onFilterChange("short"), type: "button" }, "filter short"),
+      React.createElement("button", { onClick: () => props.onFilterChange("all"), type: "button" }, "filter all"),
+      ...props.signals.map((signal) => React.createElement(
+        "button",
+        { key: signal.id, onClick: () => props.onSelectSignal(signal), type: "button" },
+        `select ${signal.id}`
+      ))
+    )
+  };
+});
 
 const baseSignal: RadarSignal = {
   id: "sig_1",
@@ -56,9 +144,61 @@ const baseSignal: RadarSignal = {
   expires_at: "2026-05-31T08:00:00.000Z"
 };
 
+beforeEach(() => {
+  radarRouteMockState.radarResponse = { signals: [] };
+  radarRouteMockState.refetch.mockResolvedValue(null);
+  radarRouteMockState.mutateAsync.mockResolvedValue(null);
+  useSignalStore.getState().clearSignals();
+  useUiStore.setState({ selectedSignalId: null, signalFilter: "all" });
+});
+
 function signalWithStatus(status: SignalStatus): RadarSignal {
   return { ...baseSignal, status };
 }
+
+function routeSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {
+  return {
+    ...baseSignal,
+    created_at: "2026-06-04T07:00:00.000Z",
+    updated_at: "2026-06-04T07:00:00.000Z",
+    expires_at: "2026-12-31T08:00:00.000Z",
+    ...overrides
+  };
+}
+
+describe("RadarRoute selection", () => {
+  it("keeps details aligned to the visible selected signal when filters and list data change", async () => {
+    const signalA = routeSignal({ id: "sig_a", direction: "long", symbol: "AAAUSDT" });
+    const signalB = routeSignal({ id: "sig_b", direction: "short", symbol: "BBBUSDT" });
+    radarRouteMockState.radarResponse = { signals: [signalA, signalB] };
+
+    const { rerender } = render(createElement(RadarRoute));
+
+    fireEvent.click(await screen.findByRole("button", { name: "select sig_a" }));
+
+    expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_a");
+    expect(screen.getByTestId("selected-card")).toHaveTextContent("sig_a");
+    expect(useUiStore.getState().selectedSignalId).toBe("sig_a");
+
+    fireEvent.click(screen.getByRole("button", { name: "filter short" }));
+
+    await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_b"));
+    expect(screen.getByTestId("selected-card")).toHaveTextContent("sig_b");
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_b");
+    expect(screen.queryByRole("button", { name: "select sig_a" })).not.toBeInTheDocument();
+    await waitFor(() => expect(useUiStore.getState().selectedSignalId).toBe("sig_b"));
+
+    radarRouteMockState.radarResponse = { signals: [] };
+    await act(async () => {
+      rerender(createElement(RadarRoute));
+    });
+
+    await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("none"));
+    expect(screen.getByTestId("selected-card")).toHaveTextContent("none");
+    expect(screen.getByTestId("signal-ids").textContent).toBe("");
+    expect(useUiStore.getState().selectedSignalId).toBeNull();
+  });
+});
 
 describe("shouldRequestExecutionPreview", () => {
   it("keeps Reality Check populated for armed and pending Trend Pullback statuses", () => {

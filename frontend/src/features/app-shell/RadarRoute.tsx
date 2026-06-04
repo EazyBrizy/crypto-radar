@@ -98,9 +98,15 @@ export function RadarRoute() {
     });
   }, [filter, sourceSignals, statusFilter]);
   const visibleSignalIds = useMemo(() => visibleSignals.map((signal) => signal.id), [visibleSignals]);
+  useEffect(() => {
+    const nextSelectedSignalId = visibleSignalIds.includes(selectedSignalId ?? "")
+      ? selectedSignalId
+      : visibleSignalIds[0] ?? null;
+    if (selectedSignalId !== nextSelectedSignalId) setSelectedSignalId(nextSelectedSignalId);
+  }, [selectedSignalId, setSelectedSignalId, visibleSignalIds]);
   const selectedSignal = useMemo(
-    () => sourceSignals.find((signal) => signal.id === selectedSignalId) ?? visibleSignals[0] ?? null,
-    [selectedSignalId, sourceSignals, visibleSignals]
+    () => visibleSignals.find((signal) => signal.id === selectedSignalId) ?? visibleSignals[0] ?? null,
+    [selectedSignalId, visibleSignals]
   );
   const selectedRealConnection = useMemo(
     () => selectRealTradeConnection(exchangeConnectionsQuery.data ?? [], selectedSignal),

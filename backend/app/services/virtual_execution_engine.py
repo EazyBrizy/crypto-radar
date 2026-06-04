@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 import math
-from typing import Iterable
+from typing import Any, Iterable
 
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
@@ -11,6 +12,7 @@ from app.schemas.trade import (
     LiquidityMetrics,
     ManualConfirmRequest,
     OrderBookLevel,
+    VirtualFillResult,
     VirtualImpactCandle,
     VirtualImpactPathPoint,
     VirtualExecutionReport,
@@ -55,6 +57,15 @@ class VirtualExecutionEngine:
         request: ManualConfirmRequest,
         reference_price: float,
         requested_size_usd: float,
+        market_data_status: str = "unknown",
+        market_data_source: str | None = None,
+        market_data_warnings: Iterable[str] = (),
+        market_spread_bps: float | None = None,
+        orderbook_depth_usd: float | None = None,
+        execution_profile: Any | None = None,
+        entry_spread_limit_bps: float | None = None,
+        allow_low_liquidity: bool | None = None,
+        enforce_conservative_rules: bool = True,
     ) -> VirtualExecutionReport:
         snapshot = request.market_snapshot
         metrics = self._liquidity_metrics(
@@ -62,6 +73,8 @@ class VirtualExecutionEngine:
             signal=signal,
             reference_price=reference_price,
             requested_size_usd=requested_size_usd,
+            market_spread_bps=market_spread_bps,
+            orderbook_depth_usd=orderbook_depth_usd,
         )
         mode = self._choose_mode(
             request=request,
@@ -70,6 +83,37 @@ class VirtualExecutionEngine:
             metrics=metrics,
             requested_size_usd=requested_size_usd,
         )
+        raw_inputs_snapshot = _raw_inputs_snapshot(
+            signal=signal,
+            request=request,
+            snapshot=snapshot,
+            metrics=metrics,
+            reference_price=reference_price,
+            requested_size_usd=requested_size_usd,
+            market_data_status=market_data_status,
+            market_data_source=market_data_source,
+            market_data_warnings=market_data_warnings,
+            market_spread_bps=market_spread_bps,
+            orderbook_depth_usd=orderbook_depth_usd,
+            execution_profile=execution_profile,
+            entry_spread_limit_bps=entry_spread_limit_bps,
+            allow_low_liquidity=allow_low_liquidity,
+            enforce_conservative_rules=enforce_conservative_rules,
+        )
+        if enforce_conservative_rules:
+            preflight = self._preflight_conservative_block(
+                mode=mode,
+                request=request,
+                signal=signal,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=requested_size_usd,
+                market_data_status=market_data_status,
+                entry_spread_limit_bps=entry_spread_limit_bps,
+                allow_low_liquidity=allow_low_liquidity,
+            )
+            if preflight is not None:
+                return _finalize_report(preflight, raw_inputs_snapshot=raw_inputs_snapshot)
         if mode == "passive":
             report = self._simulate_passive(
                 request=request,
@@ -88,7 +132,18 @@ class VirtualExecutionEngine:
                 requested_size_usd=requested_size_usd,
                 buy_side=signal.direction == "long",
             )
-        return self._apply_quality_gate(report)
+        report = self._apply_quality_gate(report)
+        if enforce_conservative_rules:
+            report = self._apply_conservative_fill_policy(
+                report,
+                request=request,
+                snapshot=snapshot,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=requested_size_usd,
+                buy_side=signal.direction == "long",
+            )
+        return _finalize_report(report, raw_inputs_snapshot=raw_inputs_snapshot)
 
     def _simulate_passive(
         self,
@@ -373,6 +428,125 @@ class VirtualExecutionEngine:
             }
         )
 
+    def _preflight_conservative_block(
+        self,
+        *,
+        mode: VirtualSimulationMode,
+        request: ManualConfirmRequest,
+        signal: RadarSignal,
+        metrics: LiquidityMetrics,
+        reference_price: float,
+        requested_size_usd: float,
+        market_data_status: str,
+        entry_spread_limit_bps: float | None,
+        allow_low_liquidity: bool | None,
+    ) -> VirtualExecutionReport | None:
+        normalized_market_status = _normalized_market_data_status(market_data_status)
+        if normalized_market_status in {"missing", "stale"}:
+            return self._rejected_report(
+                mode=mode,
+                request=request,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=requested_size_usd,
+                best_bid=_best_prices(request.market_snapshot)[0],
+                best_ask=_best_prices(request.market_snapshot)[1],
+                reason=f"market_data_{normalized_market_status}",
+            )
+
+        spread_limit = _positive_float(entry_spread_limit_bps)
+        spread_bps = metrics.spread_percent * 100
+        if spread_limit is not None and spread_bps > spread_limit:
+            return self._rejected_report(
+                mode=mode,
+                request=request,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=requested_size_usd,
+                best_bid=_best_prices(request.market_snapshot)[0],
+                best_ask=_best_prices(request.market_snapshot)[1],
+                reason="spread_above_entry_limit",
+            )
+
+        if _liquidity_tier(signal) == "low_liquidity" and allow_low_liquidity is False:
+            return self._rejected_report(
+                mode=mode,
+                request=request,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=requested_size_usd,
+                best_bid=_best_prices(request.market_snapshot)[0],
+                best_ask=_best_prices(request.market_snapshot)[1],
+                reason="low_liquidity_not_allowed",
+            )
+        return None
+
+    def _apply_conservative_fill_policy(
+        self,
+        report: VirtualExecutionReport,
+        *,
+        request: ManualConfirmRequest,
+        snapshot: VirtualMarketSnapshot | None,
+        metrics: LiquidityMetrics,
+        reference_price: float,
+        requested_size_usd: float,
+        buy_side: bool,
+    ) -> VirtualExecutionReport:
+        if report.status == "rejected_virtual_execution" or report.quality_gate.status != "blocked":
+            return report
+        blockers = set(report.quality_gate.blockers)
+        if not blockers or blockers - _SIZE_OR_IMPACT_BLOCKERS:
+            return _rejected_from_blocked_report(report)
+
+        safe_size_usd = _suggested_max_size(report)
+        if safe_size_usd is None or safe_size_usd <= 0:
+            return _rejected_from_blocked_report(report)
+        safe_size_usd = min(safe_size_usd, requested_size_usd)
+        fill_ratio = safe_size_usd / requested_size_usd if requested_size_usd > 0 else 0.0
+        if not request.allow_partial_fill or fill_ratio < request.min_fill_ratio:
+            return _rejected_from_blocked_report(report)
+
+        if report.mode == "passive":
+            capped = self._simulate_passive(
+                request=request,
+                snapshot=snapshot,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=safe_size_usd,
+                buy_side=buy_side,
+            )
+        else:
+            capped = self._simulate_impact_aware(
+                request=request,
+                snapshot=snapshot,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=safe_size_usd,
+                buy_side=buy_side,
+            )
+        capped = self._apply_quality_gate(capped)
+        if capped.average_price is None or capped.filled_size_usd <= 0:
+            return _rejected_from_blocked_report(report)
+
+        filled_size_usd = min(capped.filled_size_usd, safe_size_usd)
+        fill_ratio = min(filled_size_usd / requested_size_usd, 1.0) if requested_size_usd > 0 else 0.0
+        notes = _dedupe_strings([
+            *capped.notes,
+            "Requested notional exceeds conservative safe size; virtual fill was capped.",
+            *report.quality_gate.blockers,
+        ])
+        capped = capped.model_copy(
+            update={
+                "status": "partially_filled",
+                "requested_size_usd": requested_size_usd,
+                "filled_size_usd": filled_size_usd,
+                "unfilled_size_usd": max(requested_size_usd - filled_size_usd, 0.0),
+                "fill_ratio": fill_ratio,
+                "notes": notes,
+            }
+        )
+        return capped
+
     def _choose_mode(
         self,
         *,
@@ -414,16 +588,27 @@ class VirtualExecutionEngine:
         signal: RadarSignal,
         reference_price: float,
         requested_size_usd: float,
+        market_spread_bps: float | None = None,
+        orderbook_depth_usd: float | None = None,
     ) -> LiquidityMetrics:
         best_bid, best_ask = _best_prices(snapshot)
         spread_percent = 0.0
-        if best_bid and best_ask and best_ask >= best_bid:
+        explicit_spread_bps = _positive_float(market_spread_bps)
+        if explicit_spread_bps is not None:
+            spread_percent = explicit_spread_bps / 100
+        elif best_bid and best_ask and best_ask >= best_bid:
             mid = (best_bid + best_ask) / 2
             spread_percent = (best_ask - best_bid) / mid * 100 if mid > 0 else 0.0
 
         depth_0_1 = _depth_within_percent(snapshot, reference_price, 0.1)
         depth_0_5 = _depth_within_percent(snapshot, reference_price, 0.5)
         depth_1 = _depth_within_percent(snapshot, reference_price, 1.0)
+        explicit_depth = _positive_float(orderbook_depth_usd)
+        if explicit_depth is not None:
+            if depth_0_5 <= 0:
+                depth_0_5 = explicit_depth
+            if depth_1 <= 0:
+                depth_1 = explicit_depth
         volume_1m = float(snapshot.volume_1m_usd or 0.0) if snapshot else 0.0
         volume_5m = float(snapshot.volume_5m_usd or 0.0) if snapshot else 0.0
         volume_15m = float(snapshot.volume_15m_usd or 0.0) if snapshot else 0.0
@@ -461,11 +646,205 @@ class VirtualExecutionEngine:
         )
 
 
+_SIZE_OR_IMPACT_BLOCKERS = {
+    "position_above_50_percent_depth_1",
+    "position_above_30_percent_volume_5m",
+    "expected_slippage_above_1_5_percent",
+}
+
+
 def _execution_levels(snapshot: VirtualMarketSnapshot | None, buy_side: bool) -> list[OrderBookLevel]:
     if snapshot is None:
         return []
     levels = snapshot.asks if buy_side else snapshot.bids
     return sorted(levels, key=lambda level: level.price, reverse=not buy_side)
+
+
+def _finalize_report(
+    report: VirtualExecutionReport,
+    *,
+    raw_inputs_snapshot: dict[str, Any],
+) -> VirtualExecutionReport:
+    fill_result = _fill_result(report, raw_inputs_snapshot=raw_inputs_snapshot)
+    return report.model_copy(
+        update={
+            "fill_result": fill_result,
+            "raw_inputs_snapshot": raw_inputs_snapshot,
+        }
+    )
+
+
+def _fill_result(
+    report: VirtualExecutionReport,
+    *,
+    raw_inputs_snapshot: dict[str, Any],
+) -> VirtualFillResult:
+    reason = _fill_reason(report)
+    return VirtualFillResult(
+        status=_fill_status(report),
+        requested_notional=report.requested_size_usd,
+        filled_notional=report.filled_size_usd,
+        avg_fill_price=report.average_price,
+        estimated_slippage_bps=report.entry_slippage_bps,
+        spread_bps=report.liquidity.spread_percent * 100,
+        market_impact_bps=report.market_impact_percent * 100,
+        reason=reason,
+        warnings=_fill_warnings(report),
+        raw_inputs_snapshot=raw_inputs_snapshot,
+    )
+
+
+def _fill_status(report: VirtualExecutionReport) -> str:
+    if report.status == "rejected_virtual_execution":
+        return "blocked" if report.quality_gate.status == "blocked" else "rejected"
+    if report.status == "partially_filled":
+        return "partial_filled"
+    if report.quality_gate.status == "blocked":
+        return "blocked"
+    return "filled"
+
+
+def _fill_reason(report: VirtualExecutionReport) -> str | None:
+    if report.rejected_reason is not None:
+        return report.rejected_reason
+    if any("safe size" in note for note in report.notes):
+        return "requested_notional_above_safe_size"
+    if report.quality_gate.blockers:
+        return ";".join(report.quality_gate.blockers)
+    return None
+
+
+def _fill_warnings(report: VirtualExecutionReport) -> list[str]:
+    return _dedupe_strings([
+        *report.quality_gate.warnings,
+        *report.quality_gate.high_impact_reasons,
+        *report.notes,
+    ])
+
+
+def _raw_inputs_snapshot(
+    *,
+    signal: RadarSignal,
+    request: ManualConfirmRequest,
+    snapshot: VirtualMarketSnapshot | None,
+    metrics: LiquidityMetrics,
+    reference_price: float,
+    requested_size_usd: float,
+    market_data_status: str,
+    market_data_source: str | None,
+    market_data_warnings: Iterable[str],
+    market_spread_bps: float | None,
+    orderbook_depth_usd: float | None,
+    execution_profile: Any | None,
+    entry_spread_limit_bps: float | None,
+    allow_low_liquidity: bool | None,
+    enforce_conservative_rules: bool,
+) -> dict[str, Any]:
+    best_bid, best_ask = _best_prices(snapshot)
+    return {
+        "side": signal.direction,
+        "symbol": signal.symbol,
+        "exchange": signal.exchange,
+        "entry_plan": _entry_plan_snapshot(signal),
+        "requested_notional": requested_size_usd,
+        "market_price": reference_price,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "orderbook_depth": {
+            "depth_0_1_percent_usd": metrics.orderbook_depth_0_1_percent_usd,
+            "depth_0_5_percent_usd": metrics.orderbook_depth_0_5_percent_usd,
+            "depth_1_percent_usd": metrics.orderbook_depth_1_percent_usd,
+            "visible_entry_side_depth_usd": orderbook_depth_usd,
+            "bid_levels": len(snapshot.bids) if snapshot is not None else 0,
+            "ask_levels": len(snapshot.asks) if snapshot is not None else 0,
+        },
+        "spread_bps": metrics.spread_percent * 100,
+        "market_spread_bps": market_spread_bps,
+        "execution_profile": _jsonable_model(execution_profile),
+        "request_execution_profile": _jsonable_model(request.execution_profile),
+        "low_liquidity_tier": _liquidity_tier(signal),
+        "allow_low_liquidity": allow_low_liquidity,
+        "slippage_settings": {
+            "manual_slippage_bps": request.slippage_bps,
+            "max_virtual_slippage_bps": request.max_virtual_slippage_bps,
+            "allow_partial_fill": request.allow_partial_fill,
+            "min_fill_ratio": request.min_fill_ratio,
+        },
+        "entry_spread_limit_bps": entry_spread_limit_bps,
+        "market_data_status": _normalized_market_data_status(market_data_status),
+        "market_data_source": market_data_source,
+        "market_data_warnings": list(market_data_warnings),
+        "simulation_mode": request.simulation_mode,
+        "enforce_conservative_rules": enforce_conservative_rules,
+    }
+
+
+def _entry_plan_snapshot(signal: RadarSignal) -> dict[str, Any]:
+    trade_plan = getattr(signal, "trade_plan", None)
+    if trade_plan is not None:
+        return _jsonable_model(trade_plan)
+    return {
+        "entry_min": signal.entry_min,
+        "entry_max": signal.entry_max,
+        "stop_loss": signal.stop_loss,
+        "take_profit_1": signal.take_profit_1,
+        "take_profit_2": signal.take_profit_2,
+    }
+
+
+def _jsonable_model(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return dict(value)
+    return value
+
+
+def _liquidity_tier(signal: RadarSignal) -> str:
+    quality = getattr(signal, "quality", None)
+    tier = getattr(quality, "tier", None)
+    return str(tier or "unknown")
+
+
+def _normalized_market_data_status(value: str | None) -> str:
+    normalized = str(value or "unknown").strip().lower()
+    if normalized in {"fresh", "partial", "missing", "stale"}:
+        return normalized
+    return "unknown"
+
+
+def _positive_float(value: float | int | Decimal | str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if number <= 0:
+        return None
+    return float(number)
+
+
+def _rejected_from_blocked_report(report: VirtualExecutionReport) -> VirtualExecutionReport:
+    blockers = list(report.quality_gate.blockers)
+    reason = blockers[0] if blockers else "execution_quality_blocked"
+    notes = _dedupe_strings([
+        *report.notes,
+        "Virtual execution blocked by conservative fill policy.",
+    ])
+    return report.model_copy(
+        update={
+            "status": "rejected_virtual_execution",
+            "filled_size_usd": 0.0,
+            "unfilled_size_usd": report.requested_size_usd,
+            "fill_ratio": 0.0,
+            "average_price": None,
+            "rejected_reason": reason,
+            "notes": notes,
+        }
+    )
 
 
 def _with_simulation_capabilities(report: VirtualExecutionReport) -> VirtualExecutionReport:
@@ -871,3 +1250,17 @@ def _impact_decay_lambda(metrics: LiquidityMetrics) -> float:
     if metrics.impact_risk == "medium":
         return 0.04
     return 0.09
+
+
+def _dedupe_strings(values: Iterable[str | None]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result

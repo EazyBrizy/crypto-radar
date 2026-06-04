@@ -45,6 +45,7 @@ import type {
   VirtualAccount,
   VirtualExecutionReport,
   VirtualExecutionStatus,
+  VirtualFillStatus,
   BreakevenPlan,
   FuturesRiskPlan,
   PositionSizingResult,
@@ -525,8 +526,26 @@ export function normalizeExecutionReport(value: unknown): VirtualExecutionReport
     trailing_stop_plan: normalizeTrailingStopPlan(value.trailing_stop_plan),
     futures_risk_plan: normalizeFuturesRiskPlan(value.futures_risk_plan),
     simulated_path: normalizeSimulatedPath(value.simulated_path),
+    fill_result: normalizeFillResult(value.fill_result),
+    raw_inputs_snapshot: normalizeMetadata(value.raw_inputs_snapshot),
     rejected_reason: value.rejected_reason == null ? null : String(value.rejected_reason),
     notes: Array.isArray(value.notes) ? value.notes.map(String) : []
+  };
+}
+
+function normalizeFillResult(value: unknown): VirtualExecutionReport["fill_result"] {
+  if (!isRecord(value)) return null;
+  return {
+    status: normalizeFillStatus(value.status),
+    requested_notional: Number(value.requested_notional ?? 0),
+    filled_notional: Number(value.filled_notional ?? 0),
+    avg_fill_price: value.avg_fill_price == null ? null : Number(value.avg_fill_price),
+    estimated_slippage_bps: Number(value.estimated_slippage_bps ?? 0),
+    spread_bps: Number(value.spread_bps ?? 0),
+    market_impact_bps: Number(value.market_impact_bps ?? 0),
+    reason: value.reason == null ? null : String(value.reason),
+    warnings: Array.isArray(value.warnings) ? value.warnings.map(String) : [],
+    raw_inputs_snapshot: normalizeMetadata(value.raw_inputs_snapshot)
   };
 }
 
@@ -814,6 +833,33 @@ export function riskPreviewToExecutionReport(preview: RiskPreviewResponse): Virt
     trailing_stop_plan: decision.trailing_stop_plan,
     futures_risk_plan: decision.futures_risk_plan,
     simulated_path: null,
+    fill_result: {
+      status: status === "blocked" ? "blocked" : "filled",
+      requested_notional: decision.requested_notional ?? sizing.notional,
+      filled_notional: status === "blocked" ? 0 : sizing.notional,
+      avg_fill_price: status === "blocked" ? null : sizing.entry_price,
+      estimated_slippage_bps: sizing.slippage_bps,
+      spread_bps: decision.risk_check.spread_bps ?? 0,
+      market_impact_bps: decision.risk_check.orderbook_vwap_impact_bps ?? 0,
+      reason: decision.status === "failed" ? decision.blockers.join("; ") : null,
+      warnings: decision.warnings,
+      raw_inputs_snapshot: {
+        side: sizing.side,
+        symbol: decision.symbol,
+        exchange: decision.exchange,
+        requested_notional: decision.requested_notional ?? sizing.notional,
+        market_data_status: decision.risk_check.market_data_status,
+        spread_bps: decision.risk_check.spread_bps ?? 0
+      }
+    },
+    raw_inputs_snapshot: {
+      side: sizing.side,
+      symbol: decision.symbol,
+      exchange: decision.exchange,
+      requested_notional: decision.requested_notional ?? sizing.notional,
+      market_data_status: decision.risk_check.market_data_status,
+      spread_bps: decision.risk_check.spread_bps ?? 0
+    },
     rejected_reason: decision.status === "failed" ? decision.blockers.join("; ") : null,
     notes: [
       ...decision.notes,
@@ -991,6 +1037,11 @@ function normalizeSimulationTier(value: unknown): VirtualSimulationTier {
 
 function normalizeExecutionStatus(value: unknown): VirtualExecutionStatus {
   if (value === "partially_filled" || value === "rejected_virtual_execution") return value;
+  return "filled";
+}
+
+function normalizeFillStatus(value: unknown): VirtualFillStatus {
+  if (value === "partial_filled" || value === "blocked" || value === "rejected") return value;
   return "filled";
 }
 

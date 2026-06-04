@@ -42,6 +42,7 @@ export type TradeInvalidationUserAction = "close_market" | "keep_stop_loss" | "d
 export type VirtualSimulationMode = "passive" | "impact_aware";
 export type VirtualSimulationTier = "mvp" | "advanced" | "pro";
 export type VirtualExecutionStatus = "filled" | "partially_filled" | "rejected_virtual_execution";
+export type VirtualFillStatus = "filled" | "partial_filled" | "blocked" | "rejected";
 export type ImpactRisk = "low" | "medium" | "high";
 export type ExecutionGateStatus = "passed" | "warning" | "blocked";
 export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
@@ -709,8 +710,23 @@ export interface VirtualExecutionReport {
   trailing_stop_plan: TrailingStopPlan | null;
   futures_risk_plan: FuturesRiskPlan | null;
   simulated_path: VirtualSimulatedPositionPath | null;
+  fill_result: VirtualFillResult | null;
+  raw_inputs_snapshot: Record<string, unknown>;
   rejected_reason: string | null;
   notes: string[];
+}
+
+export interface VirtualFillResult {
+  status: VirtualFillStatus;
+  requested_notional: number;
+  filled_notional: number;
+  avg_fill_price: number | null;
+  estimated_slippage_bps: number;
+  spread_bps: number;
+  market_impact_bps: number;
+  reason: string | null;
+  warnings: string[];
+  raw_inputs_snapshot: Record<string, unknown>;
 }
 
 export interface VirtualTradeTargetState {

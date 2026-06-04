@@ -231,41 +231,30 @@ class VirtualTradingServiceBoundaryTest(unittest.TestCase):
         self.assertIsNone(exc.exception.report.average_price)
         self.assertEqual(repository.list_virtual_trades(), [])
 
-    def test_quality_gate_blocked_with_fill_creates_trade_with_quality_warning(self) -> None:
+    def test_execution_quality_block_prevents_virtual_trade_creation(self) -> None:
         repository = _EphemeralTradeRepository()
         service = _service(
             RiskManagementSettings(max_price_deviation_bps=0),
             repository=repository,
         )
 
-        trade = service.open_virtual_trade(
-            _signal("sig_quality_gate_warn_only"),
-            ManualConfirmRequest(
-                simulation_mode="impact_aware",
-                size_usd=1_000.0,
-                market_snapshot=_thin_snapshot(),
-                max_virtual_slippage_bps=300,
-            ),
-        )
+        with self.assertRaises(VirtualExecutionRejected) as exc:
+            service.open_virtual_trade(
+                _signal("sig_quality_gate_block"),
+                ManualConfirmRequest(
+                    simulation_mode="impact_aware",
+                    size_usd=1_000.0,
+                    market_snapshot=_thin_snapshot(),
+                    max_virtual_slippage_bps=300,
+                ),
+            )
 
-        self.assertEqual(repository.list_virtual_trades(), [trade])
-        self.assertEqual(trade.status, "open")
-        self.assertIsNotNone(trade.execution)
-        assert trade.execution is not None
-        self.assertEqual(trade.execution.status, "filled")
-        self.assertIsNotNone(trade.execution.average_price)
-        self.assertEqual(trade.execution.quality_gate.status, "blocked")
-        self.assertIsNotNone(trade.execution.risk_decision)
-        assert trade.execution.risk_decision is not None
-        self.assertTrue(trade.execution.risk_decision.can_enter)
-        self.assertEqual(trade.execution.risk_decision.blockers, [])
+        self.assertEqual(repository.list_virtual_trades(), [])
+        self.assertEqual(exc.exception.report.status, "rejected_virtual_execution")
+        self.assertEqual(exc.exception.report.fill_result.status if exc.exception.report.fill_result else None, "blocked")
         self.assertIn(
-            "Virtual execution quality warning: quality_gate blocked is a simulation realism warning; entry permission remains RiskGate.",
-            trade.execution.notes,
-        )
-        self.assertEqual(
-            trade.model_dump(mode="json")["execution"]["quality_gate"]["status"],
-            "blocked",
+            exc.exception.report.rejected_reason,
+            {"spread_above_entry_limit", "position_above_50_percent_depth_1"},
         )
 
     def test_no_trade_signal_blocks_virtual_confirm_and_open(self) -> None:

@@ -279,15 +279,27 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(current.status if current else None, "requires_reconfirmation")
         self.assertEqual(self.virtual.calls, [])
 
-    def test_riskgate_failure_creates_no_trade_and_keeps_pending_for_temporary_reason(self) -> None:
+    def test_riskgate_failure_creates_no_trade_and_keeps_pending_for_stale_market_data(self) -> None:
         created = self.repository.create_intent(_intent_create(side="long"))
-        self.virtual.failure = ValueError("Spread too wide for entry right now.")
+        self.virtual.failure = ValueError("Bybit market data is stale.")
 
         results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
         current = self.repository.get_by_id(created.id)
 
         self.assertEqual(results[0].status, "pending")
         self.assertEqual(current.status if current else None, "pending")
+        self.assertIn("market data is stale", current.failure_reason if current else "")
+        self.assertEqual(len(self.virtual.calls), 1)
+
+    def test_riskgate_spread_failure_fails_pending_intent(self) -> None:
+        created = self.repository.create_intent(_intent_create(side="long"))
+        self.virtual.failure = ValueError("Spread too wide for entry right now.")
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results[0].status, "failed")
+        self.assertEqual(current.status if current else None, "failed")
         self.assertIn("Spread too wide", current.failure_reason if current else "")
         self.assertEqual(len(self.virtual.calls), 1)
 

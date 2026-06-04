@@ -564,6 +564,15 @@ class VirtualTradingService:
             request=gate_request,
             reference_price=market_data.entry_price,
             requested_size_usd=requested_size_usd,
+            market_data_status=market_data.market_data_status,
+            market_data_source=market_data.market_data_source,
+            market_data_warnings=market_data.warnings,
+            market_spread_bps=market_data.spread_bps,
+            orderbook_depth_usd=market_data.orderbook_depth_usd,
+            execution_profile=execution_profile,
+            entry_spread_limit_bps=_entry_spread_limit_bps(risk_settings),
+            allow_low_liquidity=_strategy_allows_low_liquidity(signal, user_id=gate_request.user_id),
+            enforce_conservative_rules=risk_settings.virtual_trading_uses_realistic_execution,
         )
         execution = self._execution_with_risk_decision(
             execution,
@@ -873,6 +882,15 @@ class VirtualTradingService:
             request=gate_request,
             reference_price=market_data.entry_price,
             requested_size_usd=requested_size_usd,
+            market_data_status=market_data.market_data_status,
+            market_data_source=market_data.market_data_source,
+            market_data_warnings=market_data.warnings,
+            market_spread_bps=market_data.spread_bps,
+            orderbook_depth_usd=market_data.orderbook_depth_usd,
+            execution_profile=execution_profile,
+            entry_spread_limit_bps=_entry_spread_limit_bps(risk_settings),
+            allow_low_liquidity=_strategy_allows_low_liquidity(signal, user_id=gate_request.user_id),
+            enforce_conservative_rules=risk_settings.virtual_trading_uses_realistic_execution,
         )
         execution = self._execution_with_risk_decision(
             execution,
@@ -1326,6 +1344,39 @@ def _market_context_kwargs(market_data: RiskMarketDataSnapshot) -> dict[str, Any
         "market_data_source": market_data.market_data_source,
         "market_data_warnings": list(market_data.warnings),
     }
+
+
+def _entry_spread_limit_bps(risk_settings: RiskManagementSettings) -> float | None:
+    if risk_settings.max_spread_bps_for_entry > 0:
+        return risk_settings.max_spread_bps_for_entry
+    if risk_settings.max_spread_bps > 0:
+        return risk_settings.max_spread_bps
+    return None
+
+
+def _strategy_allows_low_liquidity(signal: RadarSignal, *, user_id: str) -> bool | None:
+    try:
+        configs = strategy_config_service.list_configs(user_id=user_id)
+    except Exception:
+        return None
+    signal_exchange = signal.exchange.strip().lower()
+    signal_symbol = signal.symbol.strip().upper()
+    for config in configs:
+        if config.strategy_code != signal.strategy:
+            continue
+        if config.timeframes and signal.timeframe not in config.timeframes:
+            continue
+        if config.pairs:
+            pairs = {
+                (pair.exchange.strip().lower(), pair.symbol.strip().upper())
+                for pair in config.pairs
+            }
+            if (signal_exchange, signal_symbol) not in pairs:
+                continue
+        elif config.exchanges and signal_exchange not in {exchange.strip().lower() for exchange in config.exchanges}:
+            continue
+        return bool((config.params or {}).get("allow_low_liquidity", False))
+    return False
 
 
 def _ensure_signal_execution_candidate(signal: RadarSignal) -> None:

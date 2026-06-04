@@ -32,6 +32,7 @@ export const TradeCloseReasonSchema = z.enum([
 export const VirtualSimulationModeSchema = z.enum(["passive", "impact_aware"]);
 export const VirtualSimulationTierSchema = z.enum(["mvp", "advanced", "pro"]);
 export const VirtualExecutionStatusSchema = z.enum(["filled", "partially_filled", "rejected_virtual_execution"]);
+export const VirtualFillStatusSchema = z.enum(["filled", "partial_filled", "blocked", "rejected"]);
 export const ImpactRiskSchema = z.enum(["low", "medium", "high"]);
 export const ExecutionGateStatusSchema = z.enum(["passed", "warning", "blocked"]);
 export const RadarRiskRewardStatusSchema = z.enum(["passed", "warning", "failed", "skipped", "unknown"]);
@@ -322,6 +323,19 @@ export const VirtualExecutionReportSchema = z.object({
       close: z.number()
     })
   }).nullable().optional(),
+  fill_result: z.object({
+    status: VirtualFillStatusSchema,
+    requested_notional: z.number().default(0),
+    filled_notional: z.number().default(0),
+    avg_fill_price: z.number().nullable().optional(),
+    estimated_slippage_bps: z.number().default(0),
+    spread_bps: z.number().default(0),
+    market_impact_bps: z.number().default(0),
+    reason: z.string().nullable().optional(),
+    warnings: z.array(z.string()).default([]),
+    raw_inputs_snapshot: z.record(z.string(), z.unknown()).default({})
+  }).nullable().optional(),
+  raw_inputs_snapshot: z.record(z.string(), z.unknown()).default({}),
   rejected_reason: z.string().nullable().optional(),
   notes: z.array(z.string()).default([])
 });

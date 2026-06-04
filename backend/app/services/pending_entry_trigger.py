@@ -30,18 +30,11 @@ from app.services.virtual_trading import VirtualExecutionRejected, virtual_tradi
 logger = logging.getLogger(__name__)
 
 TEMPORARY_RISKGATE_REASON_MARKERS: tuple[str, ...] = (
-    "balance",
-    "spread",
-    "slippage",
     "stale",
-    "orderbook",
-    "order book",
     "market data",
-    "depth",
-    "liquidity",
-    "fee",
-    "funding",
-    "maximum open virtual positions",
+    "ticker",
+    "bybit market data is unavailable",
+    "bybit market data is stale",
 )
 
 
@@ -286,7 +279,9 @@ class PendingEntryTriggerService:
             return self._finish_structural_failure(intent, exc.reason, touch)
         except VirtualExecutionRejected as exc:
             reason = str(exc)
-            return self._finish_temporary_failure(intent, reason, touch)
+            if _is_temporary_virtual_execution_rejection(exc):
+                return self._finish_temporary_failure(intent, reason, touch)
+            return self._finish_structural_failure(intent, reason, touch)
         except ValueError as exc:
             reason = str(exc) or exc.__class__.__name__
             if _is_temporary_riskgate_failure(reason):
@@ -713,6 +708,19 @@ def _decimal(value: Decimal | float | str, field_name: str) -> Decimal:
 def _is_temporary_riskgate_failure(reason: str) -> bool:
     normalized = reason.lower()
     return any(marker in normalized for marker in TEMPORARY_RISKGATE_REASON_MARKERS)
+
+
+def _is_temporary_virtual_execution_rejection(exc: VirtualExecutionRejected) -> bool:
+    report = exc.report
+    values = [
+        report.rejected_reason,
+        report.fill_result.reason if report.fill_result is not None else None,
+        *(report.quality_gate.blockers or []),
+        *(report.notes or []),
+        str(exc),
+    ]
+    normalized = " ".join(str(value).lower() for value in values if value)
+    return "market_data_stale" in normalized or "market_data_missing" in normalized or _is_temporary_riskgate_failure(normalized)
 
 
 def _intent_lifecycle_trace(intent: PendingEntryIntentRead) -> LifecycleTrace:

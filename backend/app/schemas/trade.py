@@ -46,6 +46,7 @@ VirtualSimulationMode = Literal["passive", "impact_aware"]
 VirtualSimulationTier = Literal["mvp", "advanced", "pro"]
 VirtualSimulationCapabilityStatus = Literal["active", "planned", "stub"]
 VirtualExecutionStatus = Literal["filled", "partially_filled", "rejected_virtual_execution"]
+VirtualFillStatus = Literal["filled", "partial_filled", "blocked", "rejected"]
 ImpactRisk = Literal["low", "medium", "high"]
 ExecutionGateStatus = Literal["passed", "warning", "blocked"]
 ExecutionOrderRole = Literal["entry", "protective_stop", "take_profit"]
@@ -225,6 +226,19 @@ class VirtualSimulatedPositionPath(BaseModel):
     simulated_candle: VirtualImpactCandle
 
 
+class VirtualFillResult(BaseModel):
+    status: VirtualFillStatus
+    requested_notional: float = Field(default=0.0, ge=0)
+    filled_notional: float = Field(default=0.0, ge=0)
+    avg_fill_price: Optional[float] = Field(default=None, gt=0)
+    estimated_slippage_bps: float = Field(default=0.0, ge=0)
+    spread_bps: float = Field(default=0.0, ge=0)
+    market_impact_bps: float = Field(default=0.0, ge=0)
+    reason: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
+    raw_inputs_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
 class VirtualExecutionReport(BaseModel):
     mode: VirtualSimulationMode = "passive"
     simulation_tier: VirtualSimulationTier = "mvp"
@@ -256,6 +270,8 @@ class VirtualExecutionReport(BaseModel):
     futures_risk_plan: Optional[FuturesRiskPlan] = None
     lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
     simulated_path: Optional[VirtualSimulatedPositionPath] = None
+    fill_result: Optional[VirtualFillResult] = None
+    raw_inputs_snapshot: dict[str, Any] = Field(default_factory=dict)
     rejected_reason: Optional[str] = None
     notes: list[str] = Field(default_factory=list)
 

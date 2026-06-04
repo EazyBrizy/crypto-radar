@@ -109,7 +109,12 @@ class StableMarketDataService:
             category=None,
             entry_price=fallback_entry_price,
             slippage_bps=manual_slippage_bps,
-            market_data_status="missing",
+            best_bid=fallback_entry_price,
+            best_ask=fallback_entry_price,
+            spread_percent=0.0,
+            spread_bps=0.0,
+            orderbook_depth_usd=1_000_000.0,
+            market_data_status="fresh",
             market_data_source="test",
         )
 

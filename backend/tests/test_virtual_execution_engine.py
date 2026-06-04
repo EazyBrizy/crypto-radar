@@ -166,7 +166,7 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertEqual(report.rejected_reason, "insufficient_liquidity")
         self.assertEqual(report.quality_gate.status, "blocked")
 
-    def test_quality_gate_flags_trade_and_suggests_realistic_max_size(self) -> None:
+    def test_quality_gate_block_rejects_when_safe_size_is_below_min_fill_ratio(self) -> None:
         report = VirtualExecutionEngine().simulate_entry(
             signal=_signal(),
             request=ManualConfirmRequest(
@@ -178,8 +178,14 @@ class VirtualExecutionEngineTest(unittest.TestCase):
             requested_size_usd=2_000.0,
         )
 
-        self.assertEqual(report.status, "filled")
-        self.assertIsNone(report.rejected_reason)
+        self.assertEqual(report.status, "rejected_virtual_execution")
+        self.assertEqual(report.rejected_reason, "position_above_50_percent_depth_1")
+        self.assertIsNotNone(report.fill_result)
+        assert report.fill_result is not None
+        self.assertEqual(report.fill_result.status, "blocked")
+        self.assertEqual(report.fill_result.requested_notional, 2_000.0)
+        self.assertEqual(report.fill_result.filled_notional, 0.0)
+        self.assertEqual(report.fill_result.reason, "position_above_50_percent_depth_1")
         self.assertEqual(report.quality_gate.status, "blocked")
         self.assertIn("position_above_50_percent_depth_1", report.quality_gate.blockers)
         self.assertIn("position_above_30_percent_volume_5m", report.quality_gate.blockers)
@@ -189,10 +195,88 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertIn("$2,000.00", report.quality_gate.message or "")
         self.assertIn("$450.00", report.quality_gate.message or "")
 
-    def test_trade_service_opens_trade_when_quality_gate_flags_simulation(self) -> None:
+    def test_high_spread_blocks_virtual_fill_before_trade_creation(self) -> None:
+        report = VirtualExecutionEngine().simulate_entry(
+            signal=_signal(),
+            request=ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                market_snapshot=_wide_spread_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+            reference_price=100.0,
+            requested_size_usd=100.0,
+            entry_spread_limit_bps=50.0,
+        )
+
+        self.assertEqual(report.status, "rejected_virtual_execution")
+        self.assertEqual(report.rejected_reason, "spread_above_entry_limit")
+        self.assertIsNotNone(report.fill_result)
+        assert report.fill_result is not None
+        self.assertEqual(report.fill_result.status, "blocked")
+        self.assertGreater(report.fill_result.spread_bps, 50.0)
+
+    def test_missing_orderbook_uses_conservative_fallback_warning(self) -> None:
+        report = VirtualExecutionEngine().simulate_entry(
+            signal=_signal(),
+            request=ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                market_snapshot=_snapshot_without_book_levels(),
+                max_virtual_slippage_bps=300,
+            ),
+            reference_price=100.0,
+            requested_size_usd=100.0,
+            market_data_status="fresh",
+        )
+
+        self.assertEqual(report.status, "filled")
+        self.assertIsNotNone(report.fill_result)
+        assert report.fill_result is not None
+        self.assertEqual(report.fill_result.status, "filled")
+        self.assertTrue(any("no book levels" in warning for warning in report.fill_result.warnings))
+        self.assertEqual(report.raw_inputs_snapshot["orderbook_depth"]["bid_levels"], 0)
+
+    def test_long_entry_uses_ask_side_worse_fill(self) -> None:
+        report = VirtualExecutionEngine().simulate_entry(
+            signal=_signal(direction="long"),
+            request=ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                market_snapshot=_side_price_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+            reference_price=100.0,
+            requested_size_usd=100.0,
+        )
+
+        self.assertEqual(report.status, "filled")
+        self.assertIsNotNone(report.average_price)
+        assert report.average_price is not None
+        self.assertGreaterEqual(report.average_price, 100.1)
+        self.assertGreater(report.entry_slippage_bps, 0)
+
+    def test_short_entry_uses_bid_side_worse_fill(self) -> None:
+        report = VirtualExecutionEngine().simulate_entry(
+            signal=_signal(direction="short"),
+            request=ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                market_snapshot=_side_price_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+            reference_price=100.0,
+            requested_size_usd=100.0,
+        )
+
+        self.assertEqual(report.status, "filled")
+        self.assertIsNotNone(report.average_price)
+        assert report.average_price is not None
+        self.assertLess(report.average_price, 100.0)
+        self.assertGreater(report.entry_slippage_bps, 0)
+
+    def test_trade_service_caps_quality_gate_size_as_partial_fill(self) -> None:
         service = TradeService(
             repository=EphemeralTradeRepository(),
-            risk_settings_provider=_loose_virtual_risk_settings,
+            risk_settings_provider=_loose_virtual_risk_settings_without_spread_cap,
+            market_data_service=CapturingMarketDataService(),
+            fee_rate_service=ZeroFeeRateService(),
         )
 
         trade = service.open_virtual_trade(
@@ -207,13 +291,15 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         )
 
         self.assertEqual(trade.status, "open")
-        self.assertEqual(trade.execution_status, "filled")
+        self.assertEqual(trade.execution_status, "partially_filled")
         self.assertIsNotNone(trade.execution)
         assert trade.execution is not None
-        self.assertEqual(trade.execution.quality_gate.status, "blocked")
-        self.assertIn("position_above_50_percent_depth_1", trade.execution.quality_gate.blockers)
+        self.assertLess(trade.filled_size_usd or 0.0, trade.requested_size_usd or 0.0)
+        self.assertIsNotNone(trade.execution.fill_result)
+        assert trade.execution.fill_result is not None
+        self.assertEqual(trade.execution.fill_result.status, "partial_filled")
         self.assertIn(
-            "Execution Quality Gate flagged severe simulated execution risk.",
+            "Requested notional exceeds conservative safe size; virtual fill was capped.",
             trade.execution.notes,
         )
 
@@ -232,6 +318,8 @@ class VirtualExecutionEngineTest(unittest.TestCase):
                 max_leverage=10,
                 futures_max_leverage=10,
             ),
+            market_data_service=CapturingMarketDataService(),
+            fee_rate_service=ZeroFeeRateService(),
         )
         trade = service.open_virtual_trade(
             _signal(),
@@ -257,6 +345,8 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         service = TradeService(
             repository=repository,
             risk_settings_provider=_loose_virtual_risk_settings,
+            market_data_service=CapturingMarketDataService(),
+            fee_rate_service=ZeroFeeRateService(),
         )
         trade = service.open_virtual_trade(
             _signal(),
@@ -285,7 +375,11 @@ class VirtualExecutionEngineTest(unittest.TestCase):
 
     def test_trade_service_previews_execution_without_persisting_trade(self) -> None:
         repository = EphemeralTradeRepository()
-        service = TradeService(repository=repository)
+        service = TradeService(
+            repository=repository,
+            market_data_service=CapturingMarketDataService(),
+            fee_rate_service=ZeroFeeRateService(),
+        )
 
         report = service.preview_virtual_execution(
             _signal(),
@@ -319,9 +413,11 @@ class VirtualExecutionEngineTest(unittest.TestCase):
             ),
         )
 
-        self.assertAlmostEqual(market_data.manual_entry_price or 0.0, 99.975)
-        self.assertAlmostEqual(report.reference_price, 99.975)
-        self.assertIsNotNone(report.simulated_path)
+        self.assertAlmostEqual(market_data.manual_entry_price or 0.0, 100.0)
+        self.assertAlmostEqual(report.reference_price, 100.0)
+        self.assertIsNotNone(report.fill_result)
+        assert report.fill_result is not None
+        self.assertEqual(report.fill_result.raw_inputs_snapshot["best_ask"], 100.0)
 
     def test_trade_service_open_virtual_trade_allows_low_rr_signal_in_soft_virtual_mode(self) -> None:
         service = TradeService(
@@ -368,6 +464,8 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         service = TradeService(
             repository=EphemeralTradeRepository(),
             risk_settings_provider=_loose_virtual_risk_settings,
+            market_data_service=CapturingMarketDataService(),
+            fee_rate_service=ZeroFeeRateService(),
         )
         trade = service.open_virtual_trade(
             _signal(stop_loss=95.0),
@@ -394,6 +492,8 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         service = TradeService(
             repository=EphemeralTradeRepository(),
             risk_settings_provider=_loose_virtual_risk_settings,
+            market_data_service=CapturingMarketDataService(),
+            fee_rate_service=ZeroFeeRateService(),
         )
 
         trade = service.open_virtual_trade(
@@ -441,6 +541,7 @@ class VirtualExecutionEngineTest(unittest.TestCase):
 def _signal(
     stop_loss: float = 90.0,
     trade_plan: TradePlan | None = None,
+    direction: str = "long",
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
@@ -448,7 +549,7 @@ def _signal(
         symbol="LOWCAPUSDT",
         exchange="bybit",
         strategy="liquidity_sweep_reversal",
-        direction="long",
+        direction=direction,
         confidence=0.8,
         risk_reward=3.0,
         status="entry_touched",
@@ -493,6 +594,15 @@ def _loose_virtual_risk_settings(_user_id: str) -> RiskManagementSettings:
     )
 
 
+def _loose_virtual_risk_settings_without_spread_cap(_user_id: str) -> RiskManagementSettings:
+    return _loose_virtual_risk_settings(_user_id).model_copy(
+        update={
+            "max_spread_bps": 1_000.0,
+            "max_spread_bps_for_entry": 1_000.0,
+        }
+    )
+
+
 def _snapshot() -> VirtualMarketSnapshot:
     return VirtualMarketSnapshot(
         best_bid=99.95,
@@ -533,6 +643,46 @@ def _thin_snapshot() -> VirtualMarketSnapshot:
         volume_15m_usd=12_000,
         average_trade_size_usd=120,
         volatility_1m_percent=1.8,
+    )
+
+
+def _wide_spread_snapshot() -> VirtualMarketSnapshot:
+    return VirtualMarketSnapshot(
+        best_bid=99.0,
+        best_ask=101.0,
+        bids=[OrderBookLevel(price=99.0, notional_usd=5_000)],
+        asks=[OrderBookLevel(price=101.0, notional_usd=5_000)],
+        volume_1m_usd=20_000,
+        volume_5m_usd=100_000,
+        volume_15m_usd=250_000,
+        average_trade_size_usd=500,
+        volatility_1m_percent=0.2,
+    )
+
+
+def _snapshot_without_book_levels() -> VirtualMarketSnapshot:
+    return VirtualMarketSnapshot(
+        best_bid=99.95,
+        best_ask=100.0,
+        volume_1m_usd=20_000,
+        volume_5m_usd=100_000,
+        volume_15m_usd=250_000,
+        average_trade_size_usd=500,
+        volatility_1m_percent=0.2,
+    )
+
+
+def _side_price_snapshot() -> VirtualMarketSnapshot:
+    return VirtualMarketSnapshot(
+        best_bid=99.9,
+        best_ask=100.1,
+        bids=[OrderBookLevel(price=99.9, notional_usd=5_000)],
+        asks=[OrderBookLevel(price=100.1, notional_usd=5_000)],
+        volume_1m_usd=20_000,
+        volume_5m_usd=100_000,
+        volume_15m_usd=250_000,
+        average_trade_size_usd=500,
+        volatility_1m_percent=0.2,
     )
 
 

@@ -6,6 +6,7 @@ from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualTrade
 from app.schemas.user import RiskManagementSettings
+from app.services.risk_market_data import RiskMarketDataSnapshot
 from app.services.trade_repository import (
     VirtualTradeConfirmationResult,
     VirtualTradePersistenceEvent,
@@ -91,6 +92,32 @@ class FakeSignalHotStore:
         self.results.append(result)
 
 
+class StableMarketDataService:
+    def build_snapshot(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        fallback_entry_price: float,
+        manual_slippage_bps: float = 0.0,
+        **_kwargs,
+    ) -> RiskMarketDataSnapshot:
+        return RiskMarketDataSnapshot(
+            exchange=exchange,
+            symbol=symbol,
+            category=None,
+            entry_price=fallback_entry_price,
+            slippage_bps=manual_slippage_bps,
+            best_bid=fallback_entry_price,
+            best_ask=fallback_entry_price,
+            spread_percent=0.0,
+            spread_bps=0.0,
+            orderbook_depth_usd=1_000_000.0,
+            market_data_status="fresh",
+            market_data_source="test",
+        )
+
+
 class VirtualTradeConfirmationContractTest(unittest.TestCase):
     def test_confirm_signal_uses_repository_boundary_and_signal_side_effects(self) -> None:
         repository = FakeConfirmRepository()
@@ -101,6 +128,7 @@ class VirtualTradeConfirmationContractTest(unittest.TestCase):
             signal_analytics_writer=analytics,
             signal_hot_store=hot_store,
             risk_settings_provider=lambda _user_id: RiskManagementSettings(max_price_deviation_bps=0),
+            market_data_service=StableMarketDataService(),
         )
 
         signal, trade = service.confirm_signal(_signal(), ManualConfirmRequest())
@@ -117,6 +145,7 @@ class VirtualTradeConfirmationContractTest(unittest.TestCase):
         service = TradeService(
             repository=repository,
             risk_settings_provider=lambda _user_id: RiskManagementSettings(max_price_deviation_bps=0),
+            market_data_service=StableMarketDataService(),
         )
 
         with self.assertRaises(ValueError) as exc:
@@ -130,6 +159,7 @@ class VirtualTradeConfirmationContractTest(unittest.TestCase):
         service = TradeService(
             repository=repository,
             risk_settings_provider=lambda _user_id: RiskManagementSettings(max_price_deviation_bps=0),
+            market_data_service=StableMarketDataService(),
         )
 
         signal, trade = service.confirm_signal(_rr_failed_signal(), ManualConfirmRequest())
@@ -146,6 +176,7 @@ class VirtualTradeConfirmationContractTest(unittest.TestCase):
                 virtual_rr_guard_mode="hard",
                 max_price_deviation_bps=0,
             ),
+            market_data_service=StableMarketDataService(),
         )
 
         with self.assertRaises(StrategyRiskRewardBlocked) as exc:

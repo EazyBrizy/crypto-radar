@@ -252,6 +252,23 @@ def _create_sqlite_tables(engine: Any) -> None:
         connection.execute(
             text(
                 """
+                CREATE TABLE user_auth_identities (
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_subject TEXT NOT NULL,
+                    email TEXT,
+                    created_at DATETIME,
+                    updated_at DATETIME,
+                    FOREIGN KEY(user_id) REFERENCES app_users(id),
+                    UNIQUE(provider, provider_subject)
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
                 CREATE TABLE strategy_test_runs (
                     id UUID PRIMARY KEY,
                     user_id UUID NOT NULL,

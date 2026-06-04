@@ -14,7 +14,7 @@ from app.models.signal import SignalOutcome, TradingSignal, TradingSignalEvent
 from app.models.strategy import StrategyTemplate, StrategyVersion, UserStrategyConfig
 from app.models.strategy_testing import StrategyTestRun
 from app.models.trade_invalidation import TradeInvalidationAction
-from app.models.user import AppUser, SubscriptionPlan, UserProfile, UserSubscription
+from app.models.user import AppUser, SubscriptionPlan, UserAuthIdentity, UserProfile, UserSubscription
 from app.models.watchlist import UserAlertRule, UserWatchlist, UserWatchlistPair
 
 __all__ = [
@@ -51,6 +51,7 @@ __all__ = [
     "TradingSignalEvent",
     "TradeInvalidationAction",
     "UserExchangeConnection",
+    "UserAuthIdentity",
     "UserProfile",
     "UserSubscription",
     "UserStrategyConfig",

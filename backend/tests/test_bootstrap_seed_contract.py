@@ -2,6 +2,8 @@ import unittest
 
 from app.services.bootstrap_service import (
     DEFAULT_WATCHLIST_NAME,
+    DEMO_AUTH_PROVIDER,
+    DEMO_AUTH_PROVIDER_SUBJECT,
     DEMO_USER_EMAIL,
     INITIAL_VIRTUAL_BALANCE,
     SEED_ASSET_RISK_GROUPS,
@@ -68,6 +70,8 @@ class BootstrapSeedContractTest(unittest.TestCase):
 
     def test_demo_state_constants_are_defined(self) -> None:
         self.assertEqual(DEMO_USER_EMAIL, "demo@crypto-radar.local")
+        self.assertEqual(DEMO_AUTH_PROVIDER, "demo")
+        self.assertEqual(DEMO_AUTH_PROVIDER_SUBJECT, "usr_demo")
         self.assertEqual(DEFAULT_WATCHLIST_NAME, "Default")
         self.assertGreater(INITIAL_VIRTUAL_BALANCE, 0)
 

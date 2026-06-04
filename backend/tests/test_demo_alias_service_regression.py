@@ -109,6 +109,19 @@ _SQLITE_DDL = [
     )
     """,
     """
+    CREATE TABLE user_auth_identities (
+        id UUID PRIMARY KEY,
+        user_id UUID NOT NULL,
+        provider TEXT NOT NULL,
+        provider_subject TEXT NOT NULL,
+        email TEXT,
+        created_at DATETIME,
+        updated_at DATETIME,
+        FOREIGN KEY(user_id) REFERENCES app_users(id),
+        UNIQUE(provider, provider_subject)
+    )
+    """,
+    """
     CREATE TABLE portfolios (
         id UUID PRIMARY KEY,
         user_id UUID,

@@ -14,12 +14,14 @@ from app.models.market import MarketAsset, MarketExchange, MarketPair
 from app.models.portfolio import Portfolio, PortfolioBalance, PortfolioBalanceLedger
 from app.models.risk import AssetRiskGroup
 from app.models.strategy import StrategyTemplate, StrategyVersion
-from app.models.user import AppUser, SubscriptionPlan, UserProfile, UserSubscription
+from app.models.user import AppUser, SubscriptionPlan, UserAuthIdentity, UserProfile, UserSubscription
 from app.models.watchlist import UserWatchlist, UserWatchlistPair
 from app.schemas.user import DEFAULT_STRATEGY_RISK_MULTIPLIERS
 
 DEMO_USER_EMAIL = "demo@crypto-radar.local"
 DEMO_USERNAME = "demo"
+DEMO_AUTH_PROVIDER = "demo"
+DEMO_AUTH_PROVIDER_SUBJECT = "usr_demo"
 DEMO_PORTFOLIO_NAME = "Demo Virtual Portfolio"
 DEFAULT_WATCHLIST_NAME = "Default"
 BOOTSTRAP_EXTERNAL_PROVIDER = "bootstrap"
@@ -459,6 +461,7 @@ def bootstrap_postgres_seed(session: Session) -> SeedSummary:
     strategies = _seed_strategy_templates(session, tracker)
     _seed_strategy_versions(session, tracker, strategies)
     demo_user = _seed_demo_user(session, tracker)
+    _seed_demo_auth_identity(session, tracker, demo_user)
     _seed_demo_profile(session, tracker, demo_user)
     _seed_demo_subscription(session, tracker, demo_user, plans["pro"])
     portfolio = _seed_demo_portfolio(session, tracker, demo_user)
@@ -687,6 +690,26 @@ def _seed_demo_user(session: Session, tracker: _SeedTracker) -> AppUser:
         AppUser,
         "app_users",
         (AppUser.email == DEMO_USER_EMAIL,),
+        values,
+        tracker,
+    )
+
+
+def _seed_demo_auth_identity(session: Session, tracker: _SeedTracker, user: AppUser) -> UserAuthIdentity:
+    values = {
+        "user_id": user.id,
+        "provider": DEMO_AUTH_PROVIDER,
+        "provider_subject": DEMO_AUTH_PROVIDER_SUBJECT,
+        "email": DEMO_USER_EMAIL,
+    }
+    return _upsert_one(
+        session,
+        UserAuthIdentity,
+        "user_auth_identities",
+        (
+            UserAuthIdentity.provider == DEMO_AUTH_PROVIDER,
+            UserAuthIdentity.provider_subject == DEMO_AUTH_PROVIDER_SUBJECT,
+        ),
         values,
         tracker,
     )

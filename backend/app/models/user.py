@@ -1,9 +1,9 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Numeric, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Numeric, Text
 from sqlalchemy import UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -70,6 +70,50 @@ class AppUser(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    auth_identities: Mapped[list["UserAuthIdentity"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class UserAuthIdentity(Base):
+    __tablename__ = "user_auth_identities"
+    __table_args__ = (
+        CheckConstraint("length(trim(provider)) > 0", name="ck_user_auth_identities_provider_not_blank"),
+        CheckConstraint(
+            "length(trim(provider_subject)) > 0",
+            name="ck_user_auth_identities_provider_subject_not_blank",
+        ),
+        UniqueConstraint("provider", "provider_subject", name="uq_user_auth_identities_provider_subject"),
+        Index("ix_user_auth_identities_provider_subject", "provider_subject"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("app_users.id", name="fk_user_auth_identities_user_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_subject: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str | None] = mapped_column(CITEXT, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+    user: Mapped[AppUser] = relationship(back_populates="auth_identities")
 
 
 class UserProfile(Base):

@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.user import AppUser
+from app.models.user import AppUser, UserAuthIdentity
 from app.services.bootstrap_service import DEMO_USERNAME
 
 DEMO_USER_ALIASES = {"demo_user", "usr_demo", "demo", "demo@crypto-radar.local"}
@@ -24,6 +24,18 @@ def resolve_app_user(session: Session, user_ref: str | UUID) -> AppUser:
         return user
 
     user = session.scalars(select(AppUser).where(AppUser.email == user_key)).one_or_none()
+    if user is not None:
+        return user
+
+    user = (
+        session.scalars(
+            select(AppUser)
+            .join(UserAuthIdentity)
+            .where(UserAuthIdentity.provider_subject == user_key)
+        )
+        .unique()
+        .one_or_none()
+    )
     if user is not None:
         return user
 

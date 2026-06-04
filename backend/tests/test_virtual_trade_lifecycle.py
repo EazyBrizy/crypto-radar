@@ -173,6 +173,33 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertAlmostEqual(account.realized_pnl, expected_pnl)
         self.assertEqual(account.wins, 1)
 
+    def test_short_final_take_profit_closes_remaining_position_and_updates_account(self) -> None:
+        service = self._service()
+        trade = service.open_virtual_trade(
+            self._signal(direction="short", stop_loss=110.0),
+            ManualConfirmRequest(),
+        )
+
+        self.assertEqual(trade.take_profit, [90.0, 80.0, 70.0])
+
+        updated = service.update_market_price("bybit", "BTCUSDT", 70.0)[0]
+
+        self.assertEqual(updated.status, "closed")
+        self.assertEqual(updated.close_reason, "take_profit")
+        expected_pnl = sum(
+            event.realized_pnl or 0.0
+            for event in updated.lifecycle_events
+            if event.reason in {"partial_take_profit", "take_profit"}
+        )
+        self.assertAlmostEqual(updated.pnl or 0.0, expected_pnl)
+        self.assertAlmostEqual(updated.remaining_quantity or 0.0, 0.0)
+        self.assertTrue(all(target.hit for target in updated.target_states))
+
+        account = service.get_virtual_account()
+        self.assertAlmostEqual(account.balance, 100 + expected_pnl)
+        self.assertAlmostEqual(account.realized_pnl, expected_pnl)
+        self.assertEqual(account.wins, 1)
+
     def test_tp1_partially_closes_position(self) -> None:
         service = self._service()
         trade = service.open_virtual_trade(
@@ -195,6 +222,66 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         account = service.get_virtual_account()
         self.assertAlmostEqual(account.realized_pnl, updated.realized_pnl)
         self.assertAlmostEqual(account.equity, 100 + updated.realized_pnl + updated.unrealized_pnl)
+
+    def test_realized_pnl_updates_after_partial_take_profit(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="long",
+            quantity=2.0,
+            size_usd=200.0,
+            stop_loss=90.0,
+            now=now,
+            target_states=[
+                VirtualTradeTargetState(
+                    label="TP1",
+                    price=110.0,
+                    close_percent=50.0,
+                    action="move_stop_to_breakeven",
+                )
+            ],
+        )
+
+        updated = apply_virtual_trade_market_price(trade, 110.0, now).trade
+
+        partial_events = [
+            event
+            for event in updated.lifecycle_events
+            if event.reason == "partial_take_profit"
+        ]
+        self.assertEqual(updated.status, "open")
+        self.assertEqual(len(partial_events), 1)
+        self.assertAlmostEqual(updated.realized_pnl, 10.0)
+        self.assertAlmostEqual(updated.target_states[0].realized_pnl, 10.0)
+        self.assertAlmostEqual(partial_events[0].realized_pnl or 0.0, 10.0)
+        self.assertAlmostEqual(updated.unrealized_pnl, 10.0)
+        self.assertAlmostEqual(updated.remaining_quantity or 0.0, 1.0)
+
+    def test_mark_price_updates_unrealized_pnl_for_long_and_short(self) -> None:
+        long_service = self._service()
+        long_trade = long_service.open_virtual_trade(
+            self._signal(direction="long", stop_loss=90.0),
+            ManualConfirmRequest(),
+        )
+        marked_long = long_service.update_market_price("bybit", "BTCUSDT", 105.0)[0]
+
+        self.assertEqual(marked_long.status, "open")
+        self.assertAlmostEqual(
+            marked_long.unrealized_pnl,
+            (105.0 - long_trade.entry_price) * (long_trade.initial_quantity or long_trade.quantity),
+        )
+
+        short_service = self._service()
+        short_trade = short_service.open_virtual_trade(
+            self._signal(direction="short", stop_loss=110.0),
+            ManualConfirmRequest(),
+        )
+        marked_short = short_service.update_market_price("bybit", "BTCUSDT", 95.0)[0]
+
+        self.assertEqual(marked_short.status, "open")
+        self.assertAlmostEqual(
+            marked_short.unrealized_pnl,
+            (short_trade.entry_price - 95.0) * (short_trade.initial_quantity or short_trade.quantity),
+        )
 
     def test_tp1_moves_stop_to_breakeven_when_target_action_says_so(self) -> None:
         service = self._service()
@@ -236,6 +323,34 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertAlmostEqual(updated.remaining_quantity or 0.0, 0.0)
         self.assertGreater(updated.realized_pnl, 0.0)
 
+    def test_short_breakeven_stop_after_tp_action_closes_remaining_position(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="short",
+            quantity=2.0,
+            size_usd=200.0,
+            stop_loss=110.0,
+            now=now,
+            target_states=[
+                VirtualTradeTargetState(
+                    label="TP1",
+                    price=90.0,
+                    close_percent=50.0,
+                    action="move_stop_to_breakeven",
+                )
+            ],
+        )
+
+        after_tp = apply_virtual_trade_market_price(trade, 90.0, now).trade
+        closed = apply_virtual_trade_market_price(after_tp, 100.0, now).trade
+
+        self.assertTrue(after_tp.stop_moved_to_breakeven)
+        self.assertAlmostEqual(after_tp.current_stop_loss or 0.0, 100.0)
+        self.assertEqual(closed.status, "closed")
+        self.assertEqual(closed.close_reason, "breakeven_stop")
+        self.assertAlmostEqual(closed.remaining_quantity or 0.0, 0.0)
+        self.assertAlmostEqual(closed.realized_pnl, 10.0)
+
     def test_partial_fees_are_accounted(self) -> None:
         service = self._service()
         trade = service.open_virtual_trade(
@@ -258,6 +373,38 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertAlmostEqual(updated.fees, trade.fees + expected_exit_fee)
         self.assertAlmostEqual(updated.realized_pnl, expected_realized)
 
+    def test_full_close_fees_include_allocated_entry_and_exit_fees(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="long",
+            quantity=2.0,
+            size_usd=200.0,
+            stop_loss=90.0,
+            now=now,
+            fees=0.2,
+            target_states=[
+                VirtualTradeTargetState(
+                    label="TP1",
+                    price=110.0,
+                    close_percent=100.0,
+                    action="full_close",
+                )
+            ],
+        )
+
+        updated = apply_virtual_trade_market_price(trade, 110.0, now).trade
+
+        self.assertEqual(updated.status, "closed")
+        self.assertEqual(updated.close_reason, "take_profit")
+        self.assertAlmostEqual(updated.exit_fees, 0.22)
+        self.assertAlmostEqual(updated.fees, 0.42)
+        self.assertAlmostEqual(updated.realized_pnl, 19.58)
+        self.assertAlmostEqual(updated.pnl or 0.0, 19.58)
+        self.assertAlmostEqual(
+            updated.lifecycle_events[-1].metadata["allocated_entry_fee"],
+            0.2,
+        )
+
     def test_long_position_closes_on_stop_loss_and_updates_account(self) -> None:
         service = self._service()
         service.open_virtual_trade(
@@ -270,6 +417,26 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertEqual(updated[0].status, "closed")
         self.assertEqual(updated[0].close_reason, "stop_loss")
         self.assertAlmostEqual(updated[0].pnl or 0.0, -7.5)
+
+        account = service.get_virtual_account()
+        self.assertAlmostEqual(account.balance, 92.5)
+        self.assertAlmostEqual(account.realized_pnl, -7.5)
+        self.assertEqual(account.losses, 1)
+
+    def test_short_position_closes_on_stop_loss_and_updates_account(self) -> None:
+        service = self._service()
+        service.open_virtual_trade(
+            self._signal(direction="short", stop_loss=110.0),
+            ManualConfirmRequest(),
+        )
+
+        updated = service.update_market_price("bybit", "BTCUSDT", 110.0)[0]
+
+        self.assertEqual(updated.status, "closed")
+        self.assertEqual(updated.close_reason, "stop_loss")
+        self.assertEqual(updated.result, "loss")
+        self.assertAlmostEqual(updated.remaining_quantity or 0.0, 0.0)
+        self.assertAlmostEqual(updated.pnl or 0.0, -7.5)
 
         account = service.get_virtual_account()
         self.assertAlmostEqual(account.balance, 92.5)
@@ -576,6 +743,38 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertAlmostEqual(after_trailing_update.closed_quantity, 1.0)
         self.assertAlmostEqual(after_trailing_update.current_stop_loss or 0.0, 107.0)
 
+    def test_short_trailing_stop_after_tp_action_closes_remaining_position(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="short",
+            quantity=2.0,
+            size_usd=200.0,
+            stop_loss=110.0,
+            current_stop_loss=110.0,
+            trailing_distance=5.0,
+            now=now,
+            target_states=[
+                VirtualTradeTargetState(
+                    label="TP1",
+                    price=90.0,
+                    close_percent=50.0,
+                    action="trailing_stop",
+                )
+            ],
+        )
+
+        after_target = apply_virtual_trade_market_price(trade, 90.0, now).trade
+        closed = apply_virtual_trade_market_price(after_target, 96.0, now).trade
+
+        self.assertTrue(after_target.trailing_active)
+        self.assertAlmostEqual(after_target.current_stop_loss or 0.0, 95.0)
+        self.assertAlmostEqual(after_target.remaining_quantity or 0.0, 1.0)
+        self.assertEqual(closed.status, "closed")
+        self.assertEqual(closed.close_reason, "trailing_stop")
+        self.assertAlmostEqual(closed.exit_price or 0.0, 96.0)
+        self.assertAlmostEqual(closed.remaining_quantity or 0.0, 0.0)
+        self.assertAlmostEqual(closed.realized_pnl, 14.0)
+
     def test_long_ambiguous_candle_default_stop_first_closes_loss(self) -> None:
         now = datetime.now(timezone.utc)
         trade = self._lifecycle_trade(
@@ -752,6 +951,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         highest_price_after_trailing: float | None = None,
         lowest_price_after_trailing: float | None = None,
         target_states: list[VirtualTradeTargetState] | None = None,
+        fees: float = 0.0,
     ) -> VirtualTrade:
         return VirtualTrade(
             id=f"lifecycle_{side}",
@@ -776,6 +976,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
             highest_price_after_trailing=highest_price_after_trailing,
             lowest_price_after_trailing=lowest_price_after_trailing,
             take_profit=[],
+            fees=fees,
             status="open",
             opened_at=now,
             updated_at=now,

@@ -19,6 +19,7 @@ from app.services.realtime_gateway import realtime_gateway
 from app.workers.derivative_snapshot_worker import DerivativeSnapshotSyncRunner
 from app.workers.exchange_instrument_worker import ExchangeInstrumentRuleSyncRunner
 from app.workers.orderbook_snapshot_worker import OrderbookSnapshotWorker
+from app.workers.real_position_sync_worker import BybitRealPositionSyncClient, RealPositionSyncWorker
 from app.workers.signal_worker import ScannerRunner
 
 load_dotenv()
@@ -45,24 +46,35 @@ def _orderbook_snapshot_sync_enabled() -> bool:
     return settings.orderbook_snapshot_sync_enabled
 
 
+def _real_position_sync_enabled() -> bool:
+    return settings.real_position_sync_enabled
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     runner = ScannerRunner()
     instrument_rule_runner = ExchangeInstrumentRuleSyncRunner()
     derivative_snapshot_runner = DerivativeSnapshotSyncRunner()
     orderbook_snapshot_worker = OrderbookSnapshotWorker()
+    real_position_sync_worker = RealPositionSyncWorker(
+        client=BybitRealPositionSyncClient(),
+        interval_seconds=settings.real_position_sync_interval_seconds,
+    )
     scanner_autostart_enabled = _scanner_enabled()
     instrument_rule_sync_enabled = _instrument_rule_sync_enabled()
     derivative_snapshot_sync_enabled = _derivative_snapshot_sync_enabled()
     orderbook_snapshot_sync_enabled = _orderbook_snapshot_sync_enabled()
+    real_position_sync_enabled = _real_position_sync_enabled()
     app.state.scanner_runner = runner
     app.state.exchange_instrument_rule_sync_runner = instrument_rule_runner
     app.state.derivative_snapshot_sync_runner = derivative_snapshot_runner
     app.state.orderbook_snapshot_worker = orderbook_snapshot_worker
+    app.state.real_position_sync_worker = real_position_sync_worker
     app.state.scanner_autostart_enabled = scanner_autostart_enabled
     app.state.exchange_instrument_rule_sync_enabled = instrument_rule_sync_enabled
     app.state.derivative_snapshot_sync_enabled = derivative_snapshot_sync_enabled
     app.state.orderbook_snapshot_sync_enabled = orderbook_snapshot_sync_enabled
+    app.state.real_position_sync_enabled = real_position_sync_enabled
 
     realtime_gateway.start_broker_bridge()
 
@@ -81,6 +93,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         logging.info("Orderbook snapshot sync disabled by settings")
 
+    if real_position_sync_enabled:
+        real_position_sync_worker.start()
+    else:
+        logging.info("Real position sync disabled by settings")
+
     if scanner_autostart_enabled:
         runner.start()
     else:
@@ -90,6 +107,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await orderbook_snapshot_worker.stop()
+        await real_position_sync_worker.stop()
         await derivative_snapshot_runner.stop()
         await instrument_rule_runner.stop()
         await runner.stop()
@@ -125,6 +143,7 @@ async def health() -> dict[str, object]:
     instrument_rule_runner = getattr(app.state, "exchange_instrument_rule_sync_runner", None)
     derivative_snapshot_runner = getattr(app.state, "derivative_snapshot_sync_runner", None)
     orderbook_snapshot_worker = getattr(app.state, "orderbook_snapshot_worker", None)
+    real_position_sync_worker = getattr(app.state, "real_position_sync_worker", None)
     scanner_status = runner.scanner_status if runner else {}
     storage_health = await asyncio.to_thread(get_storage_health)
     return {
@@ -163,6 +182,17 @@ async def health() -> dict[str, object]:
         "orderbook_snapshot_sync_last_result": (
             orderbook_snapshot_worker.last_result
             if orderbook_snapshot_worker is not None
+            else {}
+        ),
+        "real_position_sync_enabled": bool(
+            getattr(app.state, "real_position_sync_enabled", False)
+        ),
+        "real_position_sync_running": bool(
+            real_position_sync_worker and real_position_sync_worker.is_running
+        ),
+        "real_position_sync_last_result": (
+            real_position_sync_worker.last_result
+            if real_position_sync_worker is not None
             else {}
         ),
         "processed_signals": runner.processed_signals if runner else 0,

@@ -119,6 +119,22 @@ class RealPositionSyncWorkerTest(unittest.IsolatedAsyncioTestCase):
             any(event["action"] == "real_position_sync.manual_exchange_position_flagged" for event in repository.audit_events)
         )
 
+    async def test_exchange_error_marks_snapshot_stale_without_corrupting_positions(self) -> None:
+        repository = FakeWorkerRepository()
+        client = FailingSyncClient()
+        worker = RealPositionSyncWorker(
+            service=RealTradeImportService(repository=repository),
+            client=client,
+        )
+
+        result = await worker.sync_once()
+
+        self.assertEqual(repository.positions[POSITION_ID]["status"], "open")
+        self.assertEqual(repository.positions[POSITION_ID]["quantity"], Decimal("1"))
+        self.assertEqual(repository.stale_error, "exchange timeout")
+        self.assertEqual(result["synced"], 0)
+        self.assertEqual(len(result["errors"]), 1)
+
 
 class FakeSyncClient:
     def __init__(
@@ -142,6 +158,17 @@ class FakeSyncClient:
     async def get_order(self, *, connection, exchange, symbol, client_order_id):
         self.get_order_calls.append(client_order_id)
         return self.terminal_orders.get(client_order_id)
+
+
+class FailingSyncClient:
+    async def fetch_open_orders(self, _connection):
+        raise RuntimeError("exchange timeout")
+
+    async def fetch_positions(self, _connection):
+        raise AssertionError("positions should not be fetched after order failure")
+
+    async def get_order(self, *, connection, exchange, symbol, client_order_id):
+        raise AssertionError("terminal lookup should not run after order failure")
 
 
 class FakeWorkerRepository:
@@ -186,7 +213,11 @@ class FakeWorkerRepository:
                 "stop_loss": Decimal("95"),
             }
         self.external_orders: dict[tuple[UUID, str], dict] = {}
+        self.external_trades: dict[tuple[UUID, str], dict] = {}
+        self.order_fills: dict[tuple[UUID, str], dict] = {}
         self.audit_events: list[dict] = []
+        self.stale_error: str | None = None
+        self.live_entry_blocked = False
 
     def list_active_connections(self):
         return [self.connection]
@@ -213,6 +244,19 @@ class FakeWorkerRepository:
         self.external_orders[key] = {"order": order, "imported_at": imported_at}
         return created
 
+    def upsert_external_trade(self, *, connection, execution, imported_at):
+        key = (connection.id, execution.exchange_execution_id)
+        created = key not in self.external_trades
+        self.external_trades[key] = {"execution": execution, "imported_at": imported_at}
+        return created
+
+    def insert_order_fill_from_execution(self, *, order_ref, execution, imported_at):
+        key = (order_ref.id, f"{execution.exchange}:{execution.exchange_execution_id}")
+        if key in self.order_fills:
+            return False
+        self.order_fills[key] = {"execution": execution, "imported_at": imported_at}
+        return True
+
     def update_local_order_from_exchange(self, *, order_ref, exchange_order, imported_at):
         order = self.orders[order_ref.id]
         if exchange_order.status == "filled":
@@ -228,6 +272,14 @@ class FakeWorkerRepository:
         changed = order["status"] != status
         order["status"] = status
         order["metadata"]["filled_quantity"] = exchange_order.filled_quantity
+        return changed
+
+    def mark_order_needs_manual_review(self, *, order_ref, imported_at, reason):
+        order = self.orders[order_ref.id]
+        changed = order["status"] != "needs_manual_review"
+        order["status"] = "needs_manual_review"
+        order["metadata"]["reconciliation_status"] = "needs_manual_review"
+        order["metadata"]["reconciliation_reason"] = reason
         return changed
 
     def update_local_position_from_exchange(self, *, position_ref, exchange_position, status, imported_at, exit_price=None):
@@ -257,6 +309,15 @@ class FakeWorkerRepository:
 
     def mark_connection_synced(self, _connection, _synced_at):
         return None
+
+    def mark_connection_stale(self, _connection, *, error, stale_at):
+        self.stale_error = error
+        self.stale_at = stale_at
+
+    def set_live_entry_blocker(self, *, connection, blocked, reason, metadata, updated_at):
+        before = self.live_entry_blocked
+        self.live_entry_blocked = blocked
+        return before != blocked
 
     def open_risk_quantity(self) -> Decimal:
         return sum(

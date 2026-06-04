@@ -8,11 +8,15 @@ from decimal import Decimal
 from app.core.config import Settings
 from app.exchanges.base import DryRunExecutionAdapter, exchange_execution_capabilities
 from app.exchanges.bybit import (
+    BYBIT_EXECUTION_LIST_PATH,
     BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON,
     BYBIT_ORDER_CREATE_PATH,
+    BYBIT_ORDER_REALTIME_PATH,
     BYBIT_TRADING_STOP_PATH,
     LIVE_ORDER_PLACEMENT_DISABLED_REASON,
     BybitRealExecutionAdapter,
+    fetch_bybit_executions,
+    fetch_bybit_orders,
 )
 from app.schemas.trade import ExecutionPlannedOrder
 
@@ -357,6 +361,128 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(placed.status, "submitted")
         self.assertIn("bybit_trading_stop_ack", placed.metadata)
+
+    async def test_bybit_order_realtime_fetches_by_order_link_id(self) -> None:
+        captured = {}
+
+        def fake_urlopen(request, timeout: int):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return _Response(
+                {
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {
+                        "list": [
+                            {
+                                "symbol": "BTCUSDT",
+                                "side": "Buy",
+                                "orderStatus": "PartiallyFilled",
+                                "orderId": "bybit-order-1",
+                                "orderLinkId": "entry-3",
+                                "orderType": "Market",
+                                "qty": "1",
+                                "cumExecQty": "0.4",
+                                "avgPrice": "101",
+                                "reduceOnly": False,
+                                "updatedTime": "1676360412362",
+                            }
+                        ]
+                    },
+                }
+            )
+
+        orders = fetch_bybit_orders(
+            api_key="api_key",
+            api_secret="api_secret",
+            category="linear",
+            symbol="BTCUSDT",
+            order_link_id="entry-3",
+            base_url="https://api-testnet.bybit.com",
+            timestamp_ms=1_676_360_412_362,
+            urlopen=fake_urlopen,
+        )
+
+        request = captured["request"]
+        self.assertIn(BYBIT_ORDER_REALTIME_PATH, request.full_url)
+        self.assertIn("orderLinkId=entry-3", request.full_url)
+        self.assertEqual(captured["timeout"], 10)
+        self.assertEqual(orders[0].cum_exec_qty, Decimal("0.4"))
+        self.assertEqual(orders[0].avg_price, Decimal("101"))
+
+    async def test_bybit_execution_list_uses_cursor_pagination(self) -> None:
+        requests = []
+        payloads = [
+            {
+                "retCode": 0,
+                "retMsg": "OK",
+                "result": {
+                    "nextPageCursor": "next-cursor",
+                    "list": [
+                        {
+                            "symbol": "BTCUSDT",
+                            "side": "Buy",
+                            "execId": "exec-1",
+                            "orderId": "order-1",
+                            "orderLinkId": "entry-3",
+                            "execPrice": "100",
+                            "execQty": "0.25",
+                            "execFee": "0.01",
+                            "feeCurrency": "USDT",
+                            "isMaker": False,
+                            "orderType": "Market",
+                            "execTime": "1676360412362",
+                        }
+                    ],
+                },
+            },
+            {
+                "retCode": 0,
+                "retMsg": "OK",
+                "result": {
+                    "nextPageCursor": "",
+                    "list": [
+                        {
+                            "symbol": "BTCUSDT",
+                            "side": "Buy",
+                            "execId": "exec-2",
+                            "orderId": "order-1",
+                            "orderLinkId": "entry-3",
+                            "execPrice": "103.25",
+                            "execQty": "0.35",
+                            "execFee": "0.02",
+                            "feeCurrency": "USDT",
+                            "isMaker": True,
+                            "orderType": "Market",
+                            "execTime": "1676360412363",
+                        }
+                    ],
+                },
+            },
+        ]
+
+        def fake_urlopen(request, timeout: int):
+            requests.append(request)
+            return _Response(payloads[len(requests) - 1])
+
+        executions = fetch_bybit_executions(
+            api_key="api_key",
+            api_secret="api_secret",
+            category="linear",
+            symbol="BTCUSDT",
+            order_link_id="entry-3",
+            base_url="https://api-testnet.bybit.com",
+            timestamp_ms=1_676_360_412_362,
+            urlopen=fake_urlopen,
+        )
+
+        self.assertEqual(len(requests), 2)
+        self.assertIn(BYBIT_EXECUTION_LIST_PATH, requests[0].full_url)
+        self.assertIn("orderLinkId=entry-3", requests[0].full_url)
+        self.assertIn("cursor=next-cursor", requests[1].full_url)
+        self.assertEqual([execution.exec_id for execution in executions], ["exec-1", "exec-2"])
+        self.assertEqual(executions[1].exec_qty, Decimal("0.35"))
+        self.assertTrue(executions[1].is_maker)
 
 
 @dataclass(frozen=True)

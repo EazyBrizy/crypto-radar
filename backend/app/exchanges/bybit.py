@@ -31,6 +31,7 @@ BYBIT_TICKERS_PATH = "/v5/market/tickers"
 BYBIT_ORDERBOOK_PATH = "/v5/market/orderbook"
 BYBIT_POSITION_LIST_PATH = "/v5/position/list"
 BYBIT_ORDER_CREATE_PATH = "/v5/order/create"
+BYBIT_ORDER_REALTIME_PATH = "/v5/order/realtime"
 BYBIT_TRADING_STOP_PATH = "/v5/position/trading-stop"
 BYBIT_EXECUTION_LIST_PATH = "/v5/execution/list"
 LIVE_ORDER_PLACEMENT_DISABLED_REASON = "Live order placement is disabled by backend configuration."
@@ -149,8 +150,52 @@ class BybitPositionInfo:
     category: str
     symbol: str
     side: str | None
-    size: float | None
-    liquidation_price: float | None
+    size: Decimal | None
+    raw_payload: dict
+    entry_price: Decimal | None = None
+    mark_price: Decimal | None = None
+    liquidation_price: Decimal | None = None
+    unrealized_pnl: Decimal | None = None
+    stop_loss: Decimal | None = None
+    take_profit: Decimal | None = None
+    updated_time: int | None = None
+
+
+@dataclass(frozen=True)
+class BybitOrderInfo:
+    category: str
+    symbol: str
+    side: str
+    order_status: str
+    order_id: str | None
+    order_link_id: str | None
+    order_type: str | None
+    qty: Decimal | None
+    cum_exec_qty: Decimal | None
+    price: Decimal | None
+    avg_price: Decimal | None
+    trigger_price: Decimal | None
+    reduce_only: bool
+    created_time: int | None
+    updated_time: int | None
+    raw_payload: dict
+
+
+@dataclass(frozen=True)
+class BybitExecutionInfo:
+    category: str
+    symbol: str
+    side: str
+    exec_id: str
+    order_id: str | None
+    order_link_id: str | None
+    exec_price: Decimal
+    exec_qty: Decimal
+    exec_fee: Decimal | None
+    fee_currency: str | None
+    is_maker: bool | None
+    order_type: str | None
+    exec_time: int | None
     raw_payload: dict
 
 
@@ -570,6 +615,137 @@ def set_bybit_trading_stop(
     )
 
 
+def fetch_bybit_orders(
+    *,
+    api_key: str,
+    api_secret: str,
+    category: str = "linear",
+    symbol: str | None = None,
+    order_id: str | None = None,
+    order_link_id: str | None = None,
+    open_only: int | None = None,
+    base_url: str = BYBIT_API_URL,
+    recv_window: int = 5_000,
+    timestamp_ms: int | None = None,
+    urlopen=urllib.request.urlopen,
+) -> list[BybitOrderInfo]:
+    normalized_category = _normalize_public_category(category)
+    params = {"category": normalized_category, "limit": "50"}
+    if symbol:
+        params["symbol"] = _normalize_symbol(symbol)
+    if order_id:
+        params["orderId"] = order_id.strip()
+    if order_link_id:
+        params["orderLinkId"] = order_link_id.strip()
+    if open_only is not None:
+        params["openOnly"] = str(int(open_only))
+
+    rows = _fetch_private_cursor_rows(
+        api_key=api_key,
+        api_secret=api_secret,
+        base_url=base_url,
+        path=BYBIT_ORDER_REALTIME_PATH,
+        params=params,
+        recv_window=recv_window,
+        timestamp_ms=timestamp_ms,
+        urlopen=urlopen,
+        label="order-realtime",
+        stop_after_first_page=bool(order_id or order_link_id),
+    )
+    return [_parse_bybit_order(normalized_category, row) for row in rows if isinstance(row, dict)]
+
+
+def fetch_bybit_open_orders(
+    *,
+    api_key: str,
+    api_secret: str,
+    category: str = "linear",
+    symbol: str | None = None,
+    base_url: str = BYBIT_API_URL,
+    recv_window: int = 5_000,
+    timestamp_ms: int | None = None,
+    urlopen=urllib.request.urlopen,
+) -> list[BybitOrderInfo]:
+    return fetch_bybit_orders(
+        api_key=api_key,
+        api_secret=api_secret,
+        category=category,
+        symbol=symbol,
+        open_only=0,
+        base_url=base_url,
+        recv_window=recv_window,
+        timestamp_ms=timestamp_ms,
+        urlopen=urlopen,
+    )
+
+
+def fetch_bybit_closed_orders(
+    *,
+    api_key: str,
+    api_secret: str,
+    category: str = "linear",
+    symbol: str | None = None,
+    base_url: str = BYBIT_API_URL,
+    recv_window: int = 5_000,
+    timestamp_ms: int | None = None,
+    urlopen=urllib.request.urlopen,
+) -> list[BybitOrderInfo]:
+    return fetch_bybit_orders(
+        api_key=api_key,
+        api_secret=api_secret,
+        category=category,
+        symbol=symbol,
+        open_only=1,
+        base_url=base_url,
+        recv_window=recv_window,
+        timestamp_ms=timestamp_ms,
+        urlopen=urlopen,
+    )
+
+
+def fetch_bybit_executions(
+    *,
+    api_key: str,
+    api_secret: str,
+    category: str = "linear",
+    symbol: str | None = None,
+    order_id: str | None = None,
+    order_link_id: str | None = None,
+    base_url: str = BYBIT_API_URL,
+    recv_window: int = 5_000,
+    timestamp_ms: int | None = None,
+    urlopen=urllib.request.urlopen,
+) -> list[BybitExecutionInfo]:
+    normalized_category = _normalize_public_category(category)
+    params = {"category": normalized_category, "limit": "50"}
+    if symbol:
+        params["symbol"] = _normalize_symbol(symbol)
+    if order_id:
+        params["orderId"] = order_id.strip()
+    if order_link_id:
+        params["orderLinkId"] = order_link_id.strip()
+
+    rows = _fetch_private_cursor_rows(
+        api_key=api_key,
+        api_secret=api_secret,
+        base_url=base_url,
+        path=BYBIT_EXECUTION_LIST_PATH,
+        params=params,
+        recv_window=recv_window,
+        timestamp_ms=timestamp_ms,
+        urlopen=urlopen,
+        label="execution-list",
+    )
+    executions: list[BybitExecutionInfo] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        parsed = _parse_bybit_execution(normalized_category, row)
+        if parsed is not None:
+            executions.append(parsed)
+    return executions
+
+
 def fetch_bybit_fee_rates(
     *,
     api_key: str,
@@ -872,9 +1048,15 @@ def fetch_bybit_positions(
                 category=normalized_category,
                 symbol=row_symbol,
                 side=str(row["side"]) if row.get("side") else None,
-                size=_float_or_none(row.get("size")),
-                liquidation_price=_float_or_none(row.get("liqPrice")),
+                size=_decimal_or_none(row.get("size")),
                 raw_payload=row,
+                entry_price=_decimal_or_none(row.get("avgPrice")),
+                mark_price=_decimal_or_none(row.get("markPrice")),
+                liquidation_price=_decimal_or_none(row.get("liqPrice")),
+                unrealized_pnl=_decimal_or_none(row.get("unrealisedPnl")),
+                stop_loss=_decimal_or_none(row.get("stopLoss")),
+                take_profit=_decimal_or_none(row.get("takeProfit")),
+                updated_time=_int_or_none(row.get("updatedTime")),
             )
         )
     return positions
@@ -982,6 +1164,93 @@ def _normalize_public_category(category: str) -> str:
 def _normalize_symbol(symbol: str) -> str:
     value = symbol.strip().upper()
     return LINEAR_SYMBOL_ALIASES.get(value, value)
+
+
+def _fetch_private_cursor_rows(
+    *,
+    api_key: str,
+    api_secret: str,
+    base_url: str,
+    path: str,
+    params: dict[str, str],
+    recv_window: int,
+    timestamp_ms: int | None,
+    urlopen,
+    label: str,
+    stop_after_first_page: bool = False,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    cursor = ""
+    while True:
+        request_params = dict(params)
+        if cursor:
+            request_params["cursor"] = cursor
+        payload = _get_private_json(
+            api_key=api_key,
+            api_secret=api_secret,
+            base_url=base_url,
+            path=path,
+            params=request_params,
+            recv_window=recv_window,
+            timestamp_ms=timestamp_ms,
+            urlopen=urlopen,
+            label=label,
+        )
+        result = payload.get("result", {})
+        if not isinstance(result, dict):
+            break
+        page_rows = result.get("list", [])
+        if isinstance(page_rows, list):
+            rows.extend(row for row in page_rows if isinstance(row, dict))
+        cursor = str(result.get("nextPageCursor") or "")
+        if stop_after_first_page or not cursor:
+            break
+    return rows
+
+
+def _parse_bybit_order(category: str, row: dict[str, Any]) -> BybitOrderInfo:
+    return BybitOrderInfo(
+        category=str(row.get("category") or category),
+        symbol=str(row.get("symbol") or ""),
+        side=str(row.get("side") or ""),
+        order_status=str(row.get("orderStatus") or ""),
+        order_id=_text_or_none(row.get("orderId")),
+        order_link_id=_text_or_none(row.get("orderLinkId")),
+        order_type=_text_or_none(row.get("orderType")),
+        qty=_decimal_or_none(row.get("qty")),
+        cum_exec_qty=_decimal_or_none(row.get("cumExecQty")),
+        price=_decimal_or_none(row.get("price")),
+        avg_price=_decimal_or_none(row.get("avgPrice")),
+        trigger_price=_decimal_or_none(row.get("triggerPrice")),
+        reduce_only=_truthy_metadata_value(row.get("reduceOnly")),
+        created_time=_int_or_none(row.get("createdTime")),
+        updated_time=_int_or_none(row.get("updatedTime")),
+        raw_payload=row,
+    )
+
+
+def _parse_bybit_execution(category: str, row: dict[str, Any]) -> BybitExecutionInfo | None:
+    exec_id = _text_or_none(row.get("execId"))
+    price = _decimal_or_none(row.get("execPrice"))
+    quantity = _decimal_or_none(row.get("execQty"))
+    if exec_id is None or price is None or quantity is None:
+        return None
+    return BybitExecutionInfo(
+        category=str(row.get("category") or category),
+        symbol=str(row.get("symbol") or ""),
+        side=str(row.get("side") or ""),
+        exec_id=exec_id,
+        order_id=_text_or_none(row.get("orderId")),
+        order_link_id=_text_or_none(row.get("orderLinkId")),
+        exec_price=price,
+        exec_qty=quantity,
+        exec_fee=_decimal_or_none(row.get("execFee")),
+        fee_currency=_text_or_none(row.get("feeCurrency")),
+        is_maker=_bool_or_none(row.get("isMaker")),
+        order_type=_text_or_none(row.get("orderType")),
+        exec_time=_int_or_none(row.get("execTime")),
+        raw_payload=row,
+    )
 
 
 def _get_public_json(
@@ -1336,6 +1605,27 @@ def _decimal_or_none(value: Any) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return None
+
+
+def _text_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _bool_or_none(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    return None
 
 
 def _int_or_none(value: object) -> int | None:

@@ -117,7 +117,7 @@ class Order(Base):
         CheckConstraint("side IN ('buy', 'sell')", name="ck_orders_side"),
         CheckConstraint("order_type IN ('market', 'limit', 'stop', 'take_profit')", name="ck_orders_order_type"),
         CheckConstraint(
-            "status IN ('created', 'submitted', 'partially_filled', 'filled', 'cancelled', 'rejected')",
+            "status IN ('created', 'submitted', 'partially_filled', 'filled', 'cancelled', 'rejected', 'needs_manual_review')",
             name="ck_orders_status",
         ),
         CheckConstraint("quantity > 0", name="ck_orders_quantity_positive"),

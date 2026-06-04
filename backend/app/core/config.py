@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     orderbook_snapshot_ttl_seconds: int = 15
     bybit_orderbook_snapshot_categories: str = "linear"
     bybit_orderbook_snapshot_limit: int = 50
+    real_position_sync_enabled: bool = False
+    real_position_sync_interval_seconds: int = 30
+    real_order_missing_exchange_timeout_seconds: int = 300
     exchange_account_snapshot_ttl_seconds: int = 15
     signal_active_ttl_seconds: int = 3_600
     signal_outcome_tracking_min_score: int = 70

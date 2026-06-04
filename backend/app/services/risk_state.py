@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from app.core.config import settings as app_settings
 from app.core.database import SessionLocal
+from app.models.exchange_connection import UserExchangeConnection
 from app.models.market import MarketAsset, MarketExchange, MarketPair
 from app.models.portfolio import Portfolio, Position
 from app.models.risk import AssetRiskGroup, ExchangeInstrumentRule, RiskProtectionState
@@ -246,12 +247,20 @@ def _reference_from_session(
     account_drawdown_percent = _account_drawdown_percent(state)
     open_risk_percent = _percent(open_risk, equity)
     correlated_risk_percent = _percent(correlated_risk, equity)
-    flags = _protection_flags(state.state)
+    reconciliation_blocker = _live_reconciliation_blocker(
+        session=session,
+        user=user,
+        mode=mode,
+        exchange=exchange,
+    )
+    protection_state = "blocked" if reconciliation_blocker else state.state
+    protection_reason = reconciliation_blocker or state.reason
+    flags = _protection_flags(protection_state)
     response = RiskStateResponse(
         user_id=user.username or str(user.id),
         mode=mode if mode in {"virtual", "real"} else None,
-        protection_state=state.state,
-        protection_reason=state.reason,
+        protection_state=protection_state,
+        protection_reason=protection_reason,
         close_only=flags["close_only"],
         real_entries_allowed=flags["real_entries_allowed"],
         virtual_entries_allowed=flags["virtual_entries_allowed"],
@@ -298,8 +307,8 @@ def _reference_from_session(
         correlated_open_risk_amount=float(correlated_risk),
         daily_loss_amount=float(state.daily_loss_amount),
         user_mode_multiplier=float(state.adaptive_multiplier),
-        protection_state=state.state,
-        protection_reason=state.reason,
+        protection_state=protection_state,
+        protection_reason=protection_reason,
         account_drawdown_percent=account_drawdown_percent,
         max_account_drawdown_percent=settings.max_account_drawdown_percent,
     )
@@ -432,6 +441,34 @@ def _protection_flags(state: str) -> dict[str, bool]:
         "reduce_only_allowed": True,
         "protective_orders_allowed": True,
     }
+
+
+def _live_reconciliation_blocker(
+    *,
+    session: Session,
+    user: AppUser,
+    mode: str | None,
+    exchange: str | None,
+) -> str | None:
+    if mode != "real" or exchange is None:
+        return None
+    connection = session.scalars(
+        select(UserExchangeConnection)
+        .where(UserExchangeConnection.user_id == user.id)
+        .where(UserExchangeConnection.status == "active")
+        .where(UserExchangeConnection.exchange.has(MarketExchange.code == exchange.strip().lower()))
+        .order_by(UserExchangeConnection.created_at.desc())
+        .limit(1)
+    ).one_or_none()
+    if connection is None:
+        return None
+    sync_state = (connection.metadata_ or {}).get("real_position_sync")
+    if not isinstance(sync_state, dict) or not sync_state.get("live_entry_blocked"):
+        return None
+    reason = sync_state.get("live_entry_block_reason")
+    if isinstance(reason, str) and reason.strip():
+        return f"Live entries blocked by exchange reconciliation: {reason.strip()}."
+    return "Live entries blocked by exchange reconciliation."
 
 
 def _limit_enabled(value: float | int | Decimal | None) -> bool:

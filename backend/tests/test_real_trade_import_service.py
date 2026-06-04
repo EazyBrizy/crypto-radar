@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 from app.services.real_trade_import_service import (
+    ExchangeExecutionSnapshot,
     ExchangeOrderSnapshot,
     ExchangePositionSnapshot,
     LocalOrderRef,
@@ -25,6 +26,122 @@ SIGNAL_ID = "10000000-0000-0000-0000-000000000006"
 
 
 class RealTradeImportReconciliationTest(unittest.TestCase):
+    def test_multiple_executions_update_cumulative_fill(self) -> None:
+        repository = FakeReconciliationRepository()
+        service = RealTradeImportService(repository=repository)
+
+        result = service.reconcile_connection(
+            connection=repository.connection,
+            exchange_orders=[
+                ExchangeOrderSnapshot(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="buy",
+                    status="submitted",
+                    exchange_order_id="ex-entry-1",
+                    client_order_id="client-entry-1",
+                    role="entry",
+                    quantity=Decimal("1"),
+                    signal_id=SIGNAL_ID,
+                    position_id=str(POSITION_ID),
+                )
+            ],
+            exchange_positions=[
+                ExchangePositionSnapshot(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="long",
+                    quantity=Decimal("0.6"),
+                    entry_avg_price=Decimal("102"),
+                    stop_loss=Decimal("95"),
+                    signal_id=SIGNAL_ID,
+                    position_id=str(POSITION_ID),
+                )
+            ],
+            exchange_executions=[
+                ExchangeExecutionSnapshot(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="buy",
+                    exchange_execution_id="exec-1",
+                    exchange_order_id="ex-entry-1",
+                    client_order_id="client-entry-1",
+                    price=Decimal("100"),
+                    quantity=Decimal("0.25"),
+                    fee_amount=Decimal("0.01"),
+                    fee_asset_symbol="USDT",
+                ),
+                ExchangeExecutionSnapshot(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="buy",
+                    exchange_execution_id="exec-2",
+                    exchange_order_id="ex-entry-1",
+                    client_order_id="client-entry-1",
+                    price=Decimal("103.25"),
+                    quantity=Decimal("0.35"),
+                    fee_amount=Decimal("0.02"),
+                    fee_asset_symbol="USDT",
+                ),
+            ],
+        )
+
+        self.assertEqual(repository.orders[ORDER_ID]["status"], "partially_filled")
+        self.assertEqual(repository.orders[ORDER_ID]["metadata"]["filled_quantity"], Decimal("0.60"))
+        self.assertEqual(len(repository.order_fills), 2)
+        self.assertEqual(len(repository.external_trades), 2)
+        self.assertEqual(result.executions_seen, 2)
+        self.assertEqual(result.local_fills_written, 2)
+
+    def test_duplicate_execution_response_does_not_double_count(self) -> None:
+        repository = FakeReconciliationRepository()
+        service = RealTradeImportService(repository=repository)
+        execution = ExchangeExecutionSnapshot(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            side="buy",
+            exchange_execution_id="exec-dup",
+            exchange_order_id="ex-entry-1",
+            client_order_id="client-entry-1",
+            price=Decimal("100"),
+            quantity=Decimal("0.25"),
+        )
+
+        service.reconcile_connection(
+            connection=repository.connection,
+            exchange_orders=[
+                ExchangeOrderSnapshot(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="buy",
+                    status="submitted",
+                    exchange_order_id="ex-entry-1",
+                    client_order_id="client-entry-1",
+                    role="entry",
+                    quantity=Decimal("1"),
+                    signal_id=SIGNAL_ID,
+                    position_id=str(POSITION_ID),
+                )
+            ],
+            exchange_positions=[
+                ExchangePositionSnapshot(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="long",
+                    quantity=Decimal("0.25"),
+                    entry_avg_price=Decimal("100"),
+                    stop_loss=Decimal("95"),
+                    signal_id=SIGNAL_ID,
+                    position_id=str(POSITION_ID),
+                )
+            ],
+            exchange_executions=[execution, execution],
+        )
+
+        self.assertEqual(repository.orders[ORDER_ID]["metadata"]["filled_quantity"], Decimal("0.25"))
+        self.assertEqual(len(repository.order_fills), 1)
+        self.assertEqual(len(repository.external_trades), 1)
+
     def test_partial_fill_updates_local_position(self) -> None:
         repository = FakeReconciliationRepository()
         service = RealTradeImportService(repository=repository)
@@ -178,6 +295,57 @@ class RealTradeImportReconciliationTest(unittest.TestCase):
             any(event["action"] == "real_position_sync.manual_exchange_position_flagged" for event in repository.audit_events)
         )
 
+    def test_missing_protective_stop_creates_blocker_alert(self) -> None:
+        repository = FakeReconciliationRepository()
+        service = RealTradeImportService(repository=repository)
+
+        result = service.reconcile_connection(
+            connection=repository.connection,
+            exchange_orders=[],
+            exchange_positions=[
+                ExchangePositionSnapshot(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="long",
+                    quantity=Decimal("1"),
+                    entry_avg_price=Decimal("100"),
+                    stop_loss=None,
+                    signal_id=SIGNAL_ID,
+                    position_id=str(POSITION_ID),
+                )
+            ],
+        )
+
+        self.assertTrue(repository.live_entry_blocked)
+        self.assertIn("critical_alert", [change.action for change in result.changes])
+        self.assertTrue(
+            any(event["action"] == "real_position_sync.critical_alert" for event in repository.audit_events)
+        )
+
+    def test_missing_exchange_order_after_timeout_needs_manual_review(self) -> None:
+        repository = FakeReconciliationRepository()
+        service = RealTradeImportService(repository=repository, missing_order_timeout_seconds=0)
+
+        result = service.reconcile_connection(
+            connection=repository.connection,
+            exchange_orders=[],
+            exchange_positions=[
+                ExchangePositionSnapshot(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    side="long",
+                    quantity=Decimal("1"),
+                    entry_avg_price=Decimal("100"),
+                    stop_loss=Decimal("95"),
+                    signal_id=SIGNAL_ID,
+                    position_id=str(POSITION_ID),
+                )
+            ],
+        )
+
+        self.assertEqual(repository.orders[ORDER_ID]["status"], "needs_manual_review")
+        self.assertIn("order_needs_manual_review", [change.action for change in result.changes])
+
 
 class FakeReconciliationRepository:
     def __init__(self, *, include_local_position: bool = True) -> None:
@@ -239,8 +407,11 @@ class FakeReconciliationRepository:
                 "exit_avg_price": None,
             }
         self.external_orders: dict[tuple[UUID, str], dict] = {}
+        self.external_trades: dict[tuple[UUID, str], dict] = {}
+        self.order_fills: dict[tuple[UUID, str], dict] = {}
         self.audit_events: list[dict] = []
         self.synced_at: datetime | None = None
+        self.live_entry_blocked = False
 
     def list_active_connections(self):
         return [self.connection]
@@ -283,6 +454,19 @@ class FakeReconciliationRepository:
         self.external_orders[key] = {"order": order, "imported_at": imported_at}
         return created
 
+    def upsert_external_trade(self, *, connection, execution, imported_at):
+        key = (connection.id, execution.exchange_execution_id)
+        created = key not in self.external_trades
+        self.external_trades[key] = {"execution": execution, "imported_at": imported_at}
+        return created
+
+    def insert_order_fill_from_execution(self, *, order_ref, execution, imported_at):
+        key = (order_ref.id, f"{execution.exchange}:{execution.exchange_execution_id}")
+        if key in self.order_fills:
+            return False
+        self.order_fills[key] = {"execution": execution, "imported_at": imported_at}
+        return True
+
     def update_local_order_from_exchange(self, *, order_ref, exchange_order, imported_at):
         order = self.orders[order_ref.id]
         new_status = exchange_order.status
@@ -301,6 +485,15 @@ class FakeReconciliationRepository:
         order["metadata"]["exchange_order_id"] = exchange_order.exchange_order_id
         order["metadata"]["client_order_id"] = exchange_order.client_order_id
         order["metadata"]["filled_quantity"] = exchange_order.filled_quantity
+        order["metadata"]["last_exchange_sync_at"] = imported_at.isoformat()
+        return changed
+
+    def mark_order_needs_manual_review(self, *, order_ref, imported_at, reason):
+        order = self.orders[order_ref.id]
+        changed = order["status"] != "needs_manual_review"
+        order["status"] = "needs_manual_review"
+        order["metadata"]["reconciliation_status"] = "needs_manual_review"
+        order["metadata"]["reconciliation_reason"] = reason
         order["metadata"]["last_exchange_sync_at"] = imported_at.isoformat()
         return changed
 
@@ -332,6 +525,18 @@ class FakeReconciliationRepository:
 
     def mark_connection_synced(self, _connection, synced_at):
         self.synced_at = synced_at
+
+    def mark_connection_stale(self, _connection, *, error, stale_at):
+        self.stale_error = error
+        self.stale_at = stale_at
+
+    def set_live_entry_blocker(self, *, connection, blocked, reason, metadata, updated_at):
+        before = self.live_entry_blocked
+        self.live_entry_blocked = blocked
+        self.live_entry_block_reason = reason
+        self.live_entry_block_metadata = metadata
+        self.live_entry_blocked_at = updated_at
+        return before != blocked
 
     def open_risk_quantity(self) -> Decimal:
         return sum(

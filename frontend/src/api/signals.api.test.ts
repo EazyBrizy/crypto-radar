@@ -39,8 +39,9 @@ describe("signalsApi.armPendingEntry", () => {
   });
 
   it("uses demo_user for demo pending-entry requests", async () => {
-    const fetchSpy = vi.fn(async () =>
-      new Response(JSON.stringify({
+    const fetchSpy = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      void args;
+      return new Response(JSON.stringify({
         id: "intent_1",
         user_id: "demo_user",
         signal_id: "sig_1",
@@ -48,8 +49,8 @@ describe("signalsApi.armPendingEntry", () => {
       }), {
         headers: { "Content-Type": "application/json" },
         status: 200
-      })
-    );
+      });
+    });
     vi.stubGlobal("fetch", fetchSpy);
 
     await signalsApi.armPendingEntry({ signalId: "sig_1" });
@@ -66,12 +67,13 @@ describe("signalsApi.confirmReal", () => {
   });
 
   it("sends an explicit real confirmation without account balance override", async () => {
-    const fetchSpy = vi.fn(async () =>
-      new Response(JSON.stringify({ message: "ok" }), {
+    const fetchSpy = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      void args;
+      return new Response(JSON.stringify({ message: "ok" }), {
         headers: { "Content-Type": "application/json" },
         status: 200
-      })
-    );
+      });
+    });
     vi.stubGlobal("fetch", fetchSpy);
 
     await signalsApi.confirmReal({
@@ -101,12 +103,13 @@ describe("signalsApi.pendingEntry", () => {
   });
 
   it("returns null when the active pending-entry endpoint has no active intent", async () => {
-    const fetchSpy = vi.fn(async () =>
-      new Response("null", {
+    const fetchSpy = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      void args;
+      return new Response("null", {
         headers: { "Content-Type": "application/json" },
         status: 200
-      })
-    );
+      });
+    });
     vi.stubGlobal("fetch", fetchSpy);
 
     const result = await signalsApi.pendingEntry("sig_1", "usr_demo");
@@ -123,8 +126,9 @@ describe("signalsApi.pendingEntryHistory", () => {
   });
 
   it("loads terminal pending-entry history records from the history endpoint", async () => {
-    const fetchSpy = vi.fn(async () =>
-      new Response(JSON.stringify([
+    const fetchSpy = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      void args;
+      return new Response(JSON.stringify([
         {
           id: "intent_cancelled",
           user_id: "demo_user",
@@ -135,8 +139,8 @@ describe("signalsApi.pendingEntryHistory", () => {
       ]), {
         headers: { "Content-Type": "application/json" },
         status: 200
-      })
-    );
+      });
+    });
     vi.stubGlobal("fetch", fetchSpy);
 
     const result = await signalsApi.pendingEntryHistory("sig_1");

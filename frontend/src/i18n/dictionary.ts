@@ -2,7 +2,7 @@ import type { Locale } from "./locale";
 
 type TranslationMap = Partial<Record<Locale, string>>;
 
-const phrases: Record<string, TranslationMap> = {
+const phrases: Record<string, TranslationMap> = Object.assign({
   "Account access": { ru: "Доступ к аккаунту", zh: "账户访问" },
   "Account drawdown": { ru: "Просадка аккаунта", zh: "账户回撤" },
   "Actions": { ru: "Действия", zh: "操作" },
@@ -431,6 +431,7 @@ const phrases: Record<string, TranslationMap> = {
   "Weekly": { ru: "Неделя", zh: "周" },
   "Why this signal?": { ru: "Почему этот сигнал?", zh: "为什么是这个信号？" },
   "Win Rate": { ru: "Win Rate", zh: "胜率" },
+}, {
   "Actionable entry follows the current strategy status; retest is the conservative alternative.": {
     ru: "Вход зависит от текущего статуса стратегии; ретест остается консервативной альтернативой.",
     zh: "入场跟随当前策略状态；回测区是保守替代方案。"
@@ -541,7 +542,7 @@ const phrases: Record<string, TranslationMap> = {
   "warning": { ru: "предупреждение", zh: "警告" },
   "no": { ru: "нет", zh: "否" },
   "yes": { ru: "да", zh: "是" }
-};
+});
 
 export function translatePhrase(value: string, locale: Locale): string {
   if (locale === "en") return phrases[value]?.en ?? value;

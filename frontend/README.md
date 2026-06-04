@@ -98,9 +98,10 @@ The frontend client is generated from FastAPI OpenAPI:
 
 ```text
 FastAPI /openapi.json
-  -> src/generated/openapi.json
-  -> src/generated/openapi-types.ts
-  -> src/api.ts
+  -> src/api/generated/openapi.json
+  -> src/api/generated/openapi-types.ts
+  -> src/api/generated/schemas.ts
+  -> src/api/client.ts
   -> src/hooks/use-radar-queries.ts
 ```
 

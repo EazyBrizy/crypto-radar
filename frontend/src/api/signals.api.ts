@@ -1,6 +1,7 @@
 import type { RadarDisplayMode } from "@/features/server-state/types";
 import type { PendingEntryIntent, RadarResponse, RadarSignal, VirtualExecutionReport } from "@/types";
 import { openApiClient, request, requestJson } from "./client";
+import type { PendingEntryIntentReadDto } from "./generated/schemas";
 import { normalizePendingEntryIntent, normalizeRiskPreviewResponse, normalizeSignal, riskPreviewToExecutionReport } from "./mappers";
 
 type RadarRequestOptions = {
@@ -19,8 +20,6 @@ type RealConfirmInput = {
   connectionId?: string | null;
   waitForConfirmation?: boolean;
 };
-
-type PendingEntryIntentDto = Record<string, unknown>;
 
 export const signalsApi = {
   async list(): Promise<RadarSignal[]> {
@@ -98,20 +97,20 @@ export const signalsApi = {
   },
   async pendingEntry(signalId: string, userId = "demo_user"): Promise<PendingEntryIntent | null> {
     const params = new URLSearchParams({ user_id: userId });
-    const response = await requestJson<PendingEntryIntentDto | null>(
+    const response = await requestJson<PendingEntryIntentReadDto | null>(
       `/api/v1/signals/${encodeURIComponent(signalId)}/pending-entry?${params.toString()}`
     );
     return response ? normalizePendingEntryIntent(response) : null;
   },
   async pendingEntryHistory(signalId: string, userId = "demo_user"): Promise<PendingEntryIntent[]> {
     const params = new URLSearchParams({ user_id: userId });
-    const response = await requestJson<PendingEntryIntentDto[]>(
+    const response = await requestJson<PendingEntryIntentReadDto[]>(
       `/api/v1/signals/${encodeURIComponent(signalId)}/pending-entry/history?${params.toString()}`
     );
     return response.map(normalizePendingEntryIntent);
   },
   async armPendingEntry(input: PendingEntryInput): Promise<PendingEntryIntent> {
-    const response = await requestJson<PendingEntryIntentDto>(
+    const response = await requestJson<PendingEntryIntentReadDto>(
       `/api/v1/signals/${encodeURIComponent(input.signalId)}/pending-entry`,
       {
         method: "POST",
@@ -121,7 +120,7 @@ export const signalsApi = {
     return normalizePendingEntryIntent(response);
   },
   async cancelPendingEntry(input: { intentId: string; userId?: string }): Promise<PendingEntryIntent> {
-    const response = await requestJson<PendingEntryIntentDto>(
+    const response = await requestJson<PendingEntryIntentReadDto>(
       `/api/v1/pending-entry/${encodeURIComponent(input.intentId)}/cancel`,
       {
         method: "POST",
@@ -131,7 +130,7 @@ export const signalsApi = {
     return normalizePendingEntryIntent(response);
   },
   async reconfirmPendingEntry(input: { intentId: string; userId?: string }): Promise<PendingEntryIntent> {
-    const response = await requestJson<PendingEntryIntentDto>(
+    const response = await requestJson<PendingEntryIntentReadDto>(
       `/api/v1/pending-entry/${encodeURIComponent(input.intentId)}/reconfirm`,
       {
         method: "POST",

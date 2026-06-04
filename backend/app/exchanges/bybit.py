@@ -8,7 +8,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any, List, Optional
 
@@ -120,6 +120,22 @@ class BybitInstrumentRule:
 
 
 @dataclass(frozen=True)
+class BybitInstrumentInfo:
+    symbol: str
+    category: str
+    status: str | None
+    base_coin: str | None
+    quote_coin: str | None
+    contract_type: str | None
+    launch_time: int | None
+    delivery_time: int | None
+    price_filter: dict[str, Any]
+    lot_size_filter: dict[str, Any]
+    leverage_filter: dict[str, Any]
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class BybitTicker:
     category: str
     symbol: str
@@ -132,6 +148,29 @@ class BybitTicker:
     raw_payload: dict
     open_interest: float | None = None
     open_interest_value: float | None = None
+
+
+@dataclass(frozen=True)
+class BybitUniverseInstrument:
+    instrument: BybitInstrumentInfo
+    ticker: BybitTicker | None
+    symbol: str
+    category: str
+    status: str | None
+    base_coin: str | None
+    quote_coin: str | None
+    contract_type: str | None
+    launch_time: int | None
+    delivery_time: int | None
+    turnover_24h: Decimal | None
+    volume_24h: Decimal | None
+    last_price: Decimal | None
+    mark_price: Decimal | None
+    bid1_price: Decimal | None
+    ask1_price: Decimal | None
+    spread_bps: Decimal | None
+    funding_rate: Decimal | None
+    turnover_rank: int | None = None
 
 
 @dataclass(frozen=True)
@@ -927,6 +966,110 @@ def fetch_bybit_instrument_rules(
     return rules
 
 
+def fetch_bybit_instruments_info(
+    *,
+    category: str = "linear",
+    quote_coin: str | None = "USDT",
+    status: str | None = "Trading",
+    base_url: str = BYBIT_API_URL,
+    limit: int = 1000,
+    urlopen=urllib.request.urlopen,
+) -> tuple[BybitInstrumentInfo, ...]:
+    normalized_category = _normalize_public_category(category)
+    if limit <= 0:
+        raise ValueError("Bybit instruments-info limit must be positive")
+    params = {"category": normalized_category, "limit": str(limit)}
+    quote_filter = quote_coin.strip().upper() if quote_coin is not None else None
+    status_filter = status.strip().lower() if status is not None else None
+
+    instruments: list[BybitInstrumentInfo] = []
+    cursor = ""
+    while True:
+        request_params = dict(params)
+        if cursor:
+            request_params["cursor"] = cursor
+        payload = _get_public_json(
+            base_url=base_url,
+            path="/v5/market/instruments-info",
+            params=request_params,
+            urlopen=urlopen,
+            label="instruments-info",
+        )
+        result = payload.get("result", {})
+        if not isinstance(result, dict):
+            break
+        rows = result.get("list", [])
+        if not isinstance(rows, list):
+            break
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            parsed = _parse_instrument_info(normalized_category, row)
+            if parsed is None:
+                continue
+            if quote_filter is not None and (parsed.quote_coin or "").upper() != quote_filter:
+                continue
+            if status_filter is not None and (parsed.status or "").lower() != status_filter:
+                continue
+            instruments.append(parsed)
+        cursor = result.get("nextPageCursor") or ""
+        if not cursor:
+            break
+    return tuple(instruments)
+
+
+def fetch_bybit_market_universe(
+    *,
+    category: str = "linear",
+    quote_coin: str = "USDT",
+    base_url: str = BYBIT_API_URL,
+    urlopen=urllib.request.urlopen,
+) -> tuple[BybitUniverseInstrument, ...]:
+    normalized_category = _normalize_public_category(category)
+    instruments = fetch_bybit_instruments_info(
+        category=normalized_category,
+        quote_coin=quote_coin,
+        status="Trading",
+        base_url=base_url,
+        urlopen=urlopen,
+    )
+    tickers = fetch_bybit_tickers(
+        category=normalized_category,
+        base_url=base_url,
+        urlopen=urlopen,
+    )
+    tickers_by_symbol = {ticker.symbol.upper(): ticker for ticker in tickers}
+
+    universe: list[BybitUniverseInstrument] = []
+    for instrument in instruments:
+        ticker = tickers_by_symbol.get(instrument.symbol.upper())
+        bid1_price = _ticker_decimal(ticker, "bid1Price", attr="bid1_price")
+        ask1_price = _ticker_decimal(ticker, "ask1Price", attr="ask1_price")
+        universe.append(
+            BybitUniverseInstrument(
+                instrument=instrument,
+                ticker=ticker,
+                symbol=instrument.symbol,
+                category=instrument.category,
+                status=instrument.status,
+                base_coin=instrument.base_coin,
+                quote_coin=instrument.quote_coin,
+                contract_type=instrument.contract_type,
+                launch_time=instrument.launch_time,
+                delivery_time=instrument.delivery_time,
+                turnover_24h=_ticker_decimal(ticker, "turnover24h", attr="turnover_24h"),
+                volume_24h=_ticker_decimal(ticker, "volume24h", attr="volume_24h"),
+                last_price=_ticker_decimal(ticker, "lastPrice"),
+                mark_price=_ticker_decimal(ticker, "markPrice", attr="mark_price"),
+                bid1_price=bid1_price,
+                ask1_price=ask1_price,
+                spread_bps=_spread_bps_decimal(bid1_price, ask1_price),
+                funding_rate=_ticker_decimal(ticker, "fundingRate", attr="funding_rate"),
+            )
+        )
+    return tuple(_rank_universe_by_turnover(universe))
+
+
 def fetch_bybit_tickers(
     *,
     category: str = "linear",
@@ -1499,6 +1642,32 @@ def _planned_order_key(order: ExecutionPlannedOrder) -> tuple[str, str, str]:
     )
 
 
+def _parse_instrument_info(
+    category: str,
+    row: dict[str, Any],
+) -> BybitInstrumentInfo | None:
+    symbol = row.get("symbol")
+    if not isinstance(symbol, str) or not symbol:
+        return None
+    price_filter = row.get("priceFilter")
+    lot_size_filter = row.get("lotSizeFilter")
+    leverage_filter = row.get("leverageFilter")
+    return BybitInstrumentInfo(
+        category=category,
+        symbol=symbol,
+        status=_text_or_none(row.get("status")),
+        base_coin=_text_or_none(row.get("baseCoin")),
+        quote_coin=_text_or_none(row.get("quoteCoin")),
+        contract_type=_text_or_none(row.get("contractType")),
+        launch_time=_int_or_none(row.get("launchTime")),
+        delivery_time=_int_or_none(row.get("deliveryTime")),
+        price_filter=dict(price_filter) if isinstance(price_filter, dict) else {},
+        lot_size_filter=dict(lot_size_filter) if isinstance(lot_size_filter, dict) else {},
+        leverage_filter=dict(leverage_filter) if isinstance(leverage_filter, dict) else {},
+        raw_payload=row,
+    )
+
+
 def _parse_instrument_rule(
     category: str,
     row: dict,
@@ -1551,6 +1720,60 @@ def _parse_book_side(value: object) -> list[tuple[float, float]]:
         if price is not None and size is not None:
             levels.append((price, size))
     return levels
+
+
+def _ticker_decimal(
+    ticker: BybitTicker | None,
+    raw_key: str,
+    *,
+    attr: str | None = None,
+) -> Decimal | None:
+    if ticker is None:
+        return None
+    parsed = _decimal_or_none(ticker.raw_payload.get(raw_key))
+    if parsed is not None or attr is None:
+        return parsed
+    return _decimal_or_none(getattr(ticker, attr, None))
+
+
+def _spread_bps_decimal(
+    bid1_price: Decimal | None,
+    ask1_price: Decimal | None,
+) -> Decimal | None:
+    if (
+        bid1_price is None
+        or ask1_price is None
+        or bid1_price <= 0
+        or ask1_price <= 0
+        or ask1_price < bid1_price
+    ):
+        return None
+    mid = (ask1_price + bid1_price) / Decimal("2")
+    if mid <= 0:
+        return None
+    return (ask1_price - bid1_price) / mid * Decimal("10000")
+
+
+def _rank_universe_by_turnover(
+    universe: list[BybitUniverseInstrument],
+) -> list[BybitUniverseInstrument]:
+    ordered = sorted(universe, key=_universe_turnover_sort_key)
+    ranked: list[BybitUniverseInstrument] = []
+    rank = 1
+    for instrument in ordered:
+        if instrument.turnover_24h is None:
+            ranked.append(instrument)
+            continue
+        ranked.append(replace(instrument, turnover_rank=rank))
+        rank += 1
+    return ranked
+
+
+def _universe_turnover_sort_key(
+    instrument: BybitUniverseInstrument,
+) -> tuple[bool, Decimal, str]:
+    turnover = instrument.turnover_24h
+    return (turnover is None, -(turnover or Decimal("0")), instrument.symbol)
 
 
 def _parse_coin_balance(row: Mapping[str, Any]) -> BybitCoinBalance | None:

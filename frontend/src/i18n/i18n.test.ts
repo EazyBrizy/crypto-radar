@@ -21,6 +21,18 @@ describe("i18n locale helpers", () => {
     expect(translateText("Signals found: 12", "zh")).toBe("发现信号: 12");
   });
 
+  it("normalizes Radar details labels in Russian", () => {
+    expect(translateText("Waiting Entry", "ru")).toBe("Ждём вход");
+    expect(translateText("Cancel waiting", "ru")).toBe("Отменить ожидание");
+    expect(translateText("Paper Trade", "ru")).toBe("Виртуальная сделка");
+    expect(translateText("Open exchange", "ru")).toBe("Открыть биржу");
+    expect(translateText("Risk blockers / warnings", "ru")).toBe("Блокеры и предупреждения");
+    expect(translateText("Decision Snapshot", "ru")).toBe("Диагностика решения");
+    expect(translateText("Edge Snapshot", "ru")).toBe("Статистика преимущества");
+    expect(translateText("Trade Plan", "ru")).toBe("План сделки");
+    expect(translateText("Risk / Reward Guard", "ru")).toBe("Проверка RR");
+  });
+
   it("keeps common tech status terms in Russian UI", () => {
     expect(translateText("Online", "ru")).toBe("Online");
     expect(translateText("Offline", "ru")).toBe("Offline");

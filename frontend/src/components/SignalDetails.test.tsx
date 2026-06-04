@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { I18nProvider } from "@/i18n";
+import { LOCALE_STORAGE_KEY } from "@/i18n/locale";
 import type { PendingEntryIntent, RadarSignal } from "@/types";
 import { SignalDetails, type RealTradeContext } from "./SignalDetails";
 
@@ -338,6 +340,34 @@ describe("SignalDetails", () => {
     fireEvent.click(screen.getByRole("button", { name: /Virtual entry now/u }));
 
     expect(onPaperTrade).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders core action buttons with Russian labels in RU mode", async () => {
+    const onCancelPendingEntry = vi.fn();
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, "ru");
+
+    render(
+      <I18nProvider>
+        <SignalDetails
+          busy={false}
+          executionPreview={null}
+          onCancelPendingEntry={onCancelPendingEntry}
+          onPaperTrade={vi.fn()}
+          onReject={vi.fn()}
+          pendingEntry={pendingIntent()}
+          signal={{ ...signal, can_enter: true, no_trade_filter: null }}
+        />
+      </I18nProvider>
+    );
+
+    expect(await screen.findByRole("button", { name: /Ждать вход виртуально/u })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Виртуальная сделка/u })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Открыть биржу/u })).toBeDisabled();
+    expect(screen.getAllByText("Ждём вход").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /Отменить ожидание/u }));
+
+    expect(onCancelPendingEntry).toHaveBeenCalledTimes(1);
   });
 
   it("does not render decision snapshot by default and shows it in diagnostics", () => {

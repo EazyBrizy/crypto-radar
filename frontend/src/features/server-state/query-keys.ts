@@ -145,6 +145,7 @@ export const serverStateKeys = {
     active: () => [...serverStateKeys.signals.all(), "active"] as const,
     open: () => [...serverStateKeys.signals.all(), "open"] as const,
     pendingEntry: (signalId: string, userId = "demo_user") => [...serverStateKeys.signals.all(), "pending-entry", signalId, userId] as const,
+    pendingEntryHistory: (signalId: string, userId = "demo_user") => [...serverStateKeys.signals.all(), "pending-entry-history", signalId, userId] as const,
     executionPreview: (signalId: string) => [...serverStateKeys.signals.all(), "execution-preview", signalId] as const
   },
   journal: {

@@ -34,6 +34,7 @@ export const api = {
   historicalSignals: signalsApi.historical,
   confirmVirtual: signalsApi.confirmVirtual,
   pendingEntry: signalsApi.pendingEntry,
+  pendingEntryHistory: signalsApi.pendingEntryHistory,
   armPendingEntry: signalsApi.armPendingEntry,
   cancelPendingEntry: signalsApi.cancelPendingEntry,
   reconfirmPendingEntry: signalsApi.reconfirmPendingEntry,

@@ -11,6 +11,7 @@ import {
   useHealthQuery,
   useHistoricalSignalsQuery,
   useCancelPendingEntryMutation,
+  usePendingEntryHistoryQuery,
   usePendingEntryQuery,
   useRadarQuery,
   useRadarStatusQuery,
@@ -98,9 +99,12 @@ export function RadarRoute() {
   const pendingEntryQuery = usePendingEntryQuery(selectedSignal?.id ?? null, userId, {
     enabled: selectedSignal != null && signalView === "open"
   });
+  const pendingEntryHistoryQuery = usePendingEntryHistoryQuery(selectedSignal?.id ?? null, userId, {
+    enabled: selectedSignal != null && signalView === "open"
+  });
   const selectedPendingEntry = useMemo(
-    () => selectPendingEntryForDetails(pendingEntryQuery.data ?? []),
-    [pendingEntryQuery.data]
+    () => selectPendingEntryForDetails(pendingEntryQuery.data ?? null, pendingEntryHistoryQuery.data ?? []),
+    [pendingEntryHistoryQuery.data, pendingEntryQuery.data]
   );
   const loading = [healthQuery, radarStatusQuery, radarQuery].some((query) => query.isLoading)
     || (signalView === "history" && historicalSignalsQuery.isLoading);
@@ -212,7 +216,7 @@ export function RadarRoute() {
       executionPreviewError={executionPreviewQuery.error instanceof Error ? executionPreviewQuery.error.message : null}
       executionPreviewLoading={executionPreviewQuery.isFetching}
       selectedPendingEntry={selectedPendingEntry}
-      pendingEntryLoading={pendingEntryQuery.isFetching}
+      pendingEntryLoading={pendingEntryQuery.isFetching || pendingEntryHistoryQuery.isFetching}
       tradingActionsDisabled={tradingActionsDisabled}
       filter={filter}
       radarDisplayMode={radarDisplayMode}
@@ -262,10 +266,12 @@ export function canArmAutoEntry(signal: RadarSignal | null): boolean {
   return isWaitingEntry(signal.status);
 }
 
-export function selectPendingEntryForDetails(intents: PendingEntryIntent[]): PendingEntryIntent | null {
-  const activeIntent = intents.find(isActivePendingEntryIntent);
-  if (activeIntent) return activeIntent;
-  return latestTerminalPendingEntryIntent(intents);
+export function selectPendingEntryForDetails(
+  activeIntent: PendingEntryIntent | null,
+  historyIntents: PendingEntryIntent[] = []
+): PendingEntryIntent | null {
+  if (activeIntent && isActivePendingEntryIntent(activeIntent)) return activeIntent;
+  return latestTerminalPendingEntryIntent(historyIntents);
 }
 
 function errorMessage(exc: unknown, fallback: string): string {

@@ -256,6 +256,47 @@ class PendingEntryServiceTest(unittest.TestCase):
 
         self.assertEqual(reconfirmed.id, created.id)
 
+    def test_cancelled_intent_is_history_not_active_and_can_rearm(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = self._service(repository)
+        created = service.arm_from_signal(
+            user_id="demo_user",
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id="demo_user", auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+
+        cancelled = service.cancel_intent(created.id, user_id="demo_user")
+
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertIsNone(
+            service.get_active_for_signal(
+                signal_id=SIGNAL_ID,
+                user_id="usr_demo",
+                mode="virtual",
+            )
+        )
+        history = service.list_history_for_signal(
+            signal_id=SIGNAL_ID,
+            user_id="usr_demo",
+            mode="virtual",
+        )
+        self.assertEqual([intent.id for intent in history], [created.id])
+
+        rearmed = service.arm_from_signal(
+            user_id="demo_user",
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id="demo_user", auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+
+        self.assertEqual(rearmed.status, "pending")
+        self.assertNotEqual(rearmed.id, created.id)
+        self.assertEqual(repository.create_calls, 2)
+        self.assertNotEqual(repository.idempotency_keys[0], repository.idempotency_keys[1])
+
     def _service(
         self,
         repository: "_FakePendingEntryRepository",
@@ -274,6 +315,8 @@ class _FakePendingEntryRepository:
     def __init__(self) -> None:
         self.create_calls = 0
         self.active: PendingEntryIntentRead | None = None
+        self.records: list[PendingEntryIntentRead] = []
+        self.idempotency_keys: list[str] = []
         self.transitions: list[tuple[UUID, str, str | None]] = []
 
     def get_active_for_user_signal_mode(
@@ -283,36 +326,57 @@ class _FakePendingEntryRepository:
         signal_id: UUID,
         mode: str,
     ) -> PendingEntryIntentRead | None:
-        if self.active is None:
-            return None
-        if self.active.status not in {"pending", "triggered", "requires_reconfirmation"}:
-            return None
-        if self.active.user_id != user_id or self.active.signal_id != signal_id or self.active.mode != mode:
-            return None
-        return self.active
+        return next(
+            (
+                intent
+                for intent in self.records
+                if intent.status in {"pending", "triggered", "filling", "requires_reconfirmation"}
+                and intent.user_id == user_id
+                and intent.signal_id == signal_id
+                and intent.mode == mode
+            ),
+            None,
+        )
 
     def create_intent(self, intent: PendingEntryIntentCreate) -> PendingEntryIntentRead:
         self.create_calls += 1
+        self.idempotency_keys.append(intent.idempotency_key)
         now = datetime.now(timezone.utc)
         self.active = PendingEntryIntentRead(
             **intent.model_dump(),
-            id=UUID("ba520631-d035-4f95-a4c0-3b40553dd530"),
+            id=UUID(f"ba520631-d035-4f95-a4c0-3b40553dd5{29 + self.create_calls:02d}"),
             created_at=now,
             updated_at=now,
         )
+        self.records.append(self.active)
         return self.active
 
     def get_by_id(self, intent_id: UUID) -> PendingEntryIntentRead | None:
-        if self.active is None or str(self.active.id) != str(intent_id):
-            return None
-        return self.active
+        return next((intent for intent in self.records if str(intent.id) == str(intent_id)), None)
 
     def list_active_for_signal(self, signal_id: str) -> list[PendingEntryIntentRead]:
-        if self.active is None or str(self.active.signal_id) != str(signal_id):
-            return []
-        if self.active.status not in {"pending", "triggered", "requires_reconfirmation"}:
-            return []
-        return [self.active]
+        return [
+            intent
+            for intent in self.records
+            if str(intent.signal_id) == str(signal_id)
+            and intent.status in {"pending", "triggered", "filling", "requires_reconfirmation"}
+        ]
+
+    def list_history_for_user_signal_mode(
+        self,
+        *,
+        signal_id: UUID,
+        user_id: UUID,
+        mode: str,
+    ) -> list[PendingEntryIntentRead]:
+        return [
+            intent
+            for intent in self.records
+            if intent.signal_id == signal_id
+            and intent.user_id == user_id
+            and intent.mode == mode
+            and intent.status in {"filled", "failed", "cancelled", "expired"}
+        ]
 
     def transition_status(
         self,
@@ -323,10 +387,11 @@ class _FakePendingEntryRepository:
         filled_trade_id: UUID | None = None,
         now: datetime | None = None,
     ) -> PendingEntryIntentRead | None:
-        if self.active is None or self.active.id != intent_id:
+        existing = self.get_by_id(intent_id)
+        if existing is None:
             return None
         self.transitions.append((intent_id, status, failure_reason))
-        self.active = self.active.model_copy(
+        updated = existing.model_copy(
             update={
                 "status": status,
                 "failure_reason": failure_reason,
@@ -334,7 +399,9 @@ class _FakePendingEntryRepository:
                 "updated_at": now or datetime.now(timezone.utc),
             }
         )
-        return self.active
+        self.records = [updated if intent.id == intent_id else intent for intent in self.records]
+        self.active = updated if updated.status in {"pending", "triggered", "filling", "requires_reconfirmation"} else None
+        return updated
 
 
 def _signal(

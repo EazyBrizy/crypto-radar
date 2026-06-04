@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
-from app.schemas.pending_entry import PendingEntryIntentRead
+from app.schemas.pending_entry import PendingEntryIntentMode, PendingEntryIntentRead
 from app.schemas.trade import ManualConfirmRequest
 from app.services.pending_entry import pending_entry_intent_service
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
@@ -44,16 +44,47 @@ async def arm_pending_entry(
         ) from exc
 
 
-@router.get("/signals/{signal_id}/pending-entry", response_model=list[PendingEntryIntentRead])
-async def list_pending_entries_for_signal(
+@router.get("/signals/{signal_id}/pending-entry", response_model=PendingEntryIntentRead | None)
+async def get_active_pending_entry_for_signal(
     signal_id: str,
     user_id: str = Query(default="demo_user"),
-) -> list[PendingEntryIntentRead]:
+    mode: PendingEntryIntentMode = Query(default="virtual"),
+) -> PendingEntryIntentRead | None:
     try:
-        return pending_entry_intent_service.list_active_for_signal_user(
+        return pending_entry_intent_service.get_active_for_signal(
             signal_id=signal_id,
             user_id=user_id,
+            mode=mode,
         )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/signals/{signal_id}/pending-entry/history", response_model=list[PendingEntryIntentRead])
+async def list_pending_entry_history_for_signal(
+    signal_id: str,
+    user_id: str = Query(default="demo_user"),
+    mode: PendingEntryIntentMode = Query(default="virtual"),
+) -> list[PendingEntryIntentRead]:
+    try:
+        return pending_entry_intent_service.list_history_for_signal(
+            signal_id=signal_id,
+            user_id=user_id,
+            mode=mode,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

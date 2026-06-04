@@ -442,11 +442,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Pending Entries For Signal */
-        get: operations["list_pending_entries_for_signal_api_v1_signals__signal_id__pending_entry_get"];
+        /** Get Active Pending Entry For Signal */
+        get: operations["get_active_pending_entry_for_signal_api_v1_signals__signal_id__pending_entry_get"];
         put?: never;
         /** Arm Pending Entry */
         post: operations["arm_pending_entry_api_v1_signals__signal_id__pending_entry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/signals/{signal_id}/pending-entry/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pending Entry History For Signal */
+        get: operations["list_pending_entry_history_for_signal_api_v1_signals__signal_id__pending_entry_history_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2324,6 +2341,24 @@ export interface components {
             liquidation_price?: number | null;
             /** Liquidation Buffer Percent */
             liquidation_buffer_percent?: number | null;
+            /** Projected Liquidation Price */
+            projected_liquidation_price?: number | null;
+            /** Distance To Liquidation */
+            distance_to_liquidation?: number | null;
+            /** Distance To Liquidation Percent */
+            distance_to_liquidation_percent?: number | null;
+            /**
+             * Liquidation Price Source
+             * @default unavailable
+             */
+            liquidation_price_source: string;
+            /** Margin Mode */
+            margin_mode?: string | null;
+            /** Maintenance Margin Rate */
+            maintenance_margin_rate?: number | null;
+            /** Maintenance Margin Amount */
+            maintenance_margin_amount?: number | null;
+            liquidation_projection?: components["schemas"]["LiquidationProjectionResult"] | null;
             /** Min Liquidation Buffer Percent */
             min_liquidation_buffer_percent: number;
             /** Liquidation Before Stop */
@@ -2332,6 +2367,8 @@ export interface components {
             message: string;
             /** Warnings */
             warnings?: string[];
+            /** Blockers */
+            blockers?: string[];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -2354,6 +2391,34 @@ export interface components {
             real_order_id?: string | null;
             /** Exit Event Id */
             exit_event_id?: string | null;
+        };
+        /** LiquidationProjectionResult */
+        LiquidationProjectionResult: {
+            /** Projected Liquidation Price */
+            projected_liquidation_price?: number | null;
+            /** Distance To Liquidation */
+            distance_to_liquidation?: number | null;
+            /** Distance To Liquidation Percent */
+            distance_to_liquidation_percent?: number | null;
+            /** Margin Mode */
+            margin_mode?: string | null;
+            /** Maintenance Margin Rate */
+            maintenance_margin_rate?: number | null;
+            /** Maintenance Margin Amount */
+            maintenance_margin_amount?: number | null;
+            /**
+             * Liquidation Price Source
+             * @default unavailable
+             */
+            liquidation_price_source: string;
+            /** Formula */
+            formula?: string | null;
+            /** Formula Source */
+            formula_source?: string | null;
+            /** Warnings */
+            warnings?: string[];
+            /** Blockers */
+            blockers?: string[];
         };
         /** LiquidityMetrics */
         LiquidityMetrics: {
@@ -7460,10 +7525,11 @@ export interface operations {
             };
         };
     };
-    list_pending_entries_for_signal_api_v1_signals__signal_id__pending_entry_get: {
+    get_active_pending_entry_for_signal_api_v1_signals__signal_id__pending_entry_get: {
         parameters: {
             query?: {
                 user_id?: string;
+                mode?: "virtual" | "real";
             };
             header?: never;
             path: {
@@ -7479,7 +7545,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PendingEntryIntentRead"][];
+                    "application/json": components["schemas"]["PendingEntryIntentRead"] | null;
                 };
             };
             /** @description Validation Error */
@@ -7515,6 +7581,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PendingEntryIntentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pending_entry_history_for_signal_api_v1_signals__signal_id__pending_entry_history_get: {
+        parameters: {
+            query?: {
+                user_id?: string;
+                mode?: "virtual" | "real";
+            };
+            header?: never;
+            path: {
+                signal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingEntryIntentRead"][];
                 };
             };
             /** @description Validation Error */

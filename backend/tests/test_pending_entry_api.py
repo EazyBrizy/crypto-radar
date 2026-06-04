@@ -63,7 +63,7 @@ class PendingEntryApiTest(unittest.TestCase):
         self.assertEqual(second.json()["id"], first.json()["id"])
         self.assertEqual(service.created_intent_count, 1)
 
-    def test_list_pending_entries_endpoint_filters_by_signal_user(self) -> None:
+    def test_active_pending_entry_endpoint_returns_active_intent(self) -> None:
         service = _FakePendingEntryService()
         with patch("app.api.v1.pending_entry.pending_entry_intent_service", service):
             response = self.client.get(
@@ -72,8 +72,43 @@ class PendingEntryApiTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], str(INTENT_ID))
+        self.assertEqual(response.json()["status"], "pending")
+        self.assertEqual(service.active_calls, [(str(SIGNAL_ID), str(USER_ID), "virtual")])
+
+    def test_active_pending_entry_endpoint_returns_null_without_active_intent(self) -> None:
+        service = _FakePendingEntryService()
+        service.intent = None
+        with patch("app.api.v1.pending_entry.pending_entry_intent_service", service):
+            response = self.client.get(
+                f"/signals/{SIGNAL_ID}/pending-entry",
+                params={"user_id": str(USER_ID)},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json())
+
+    def test_pending_entry_history_endpoint_returns_terminal_intents(self) -> None:
+        service = _FakePendingEntryService()
+        cancelled = _pending_intent().model_copy(
+            update={
+                "status": "cancelled",
+                "failure_reason": "Cancelled by user.",
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        service.intent = None
+        service.history = [cancelled]
+        with patch("app.api.v1.pending_entry.pending_entry_intent_service", service):
+            response = self.client.get(
+                f"/signals/{SIGNAL_ID}/pending-entry/history",
+                params={"user_id": str(USER_ID)},
+            )
+
+        self.assertEqual(response.status_code, 200)
         self.assertEqual([item["id"] for item in response.json()], [str(INTENT_ID)])
-        self.assertEqual(service.list_calls, [(str(SIGNAL_ID), str(USER_ID))])
+        self.assertEqual(response.json()[0]["status"], "cancelled")
+        self.assertEqual(service.history_calls, [(str(SIGNAL_ID), str(USER_ID), "virtual")])
 
     def test_cancel_pending_entry_endpoint_returns_cancelled_intent(self) -> None:
         service = _FakePendingEntryService()
@@ -95,39 +130,53 @@ class _FakePendingEntryService:
         self.created_intent_count = 0
         self.arm_calls = 0
         self.arm_user_ids: list[str] = []
-        self.list_calls: list[tuple[str, str]] = []
+        self.active_calls: list[tuple[str, str, str]] = []
+        self.history_calls: list[tuple[str, str, str]] = []
         self.cancel_calls: list[tuple[str, str]] = []
+        self.history: list[PendingEntryIntentRead] = []
 
     def arm_signal_workflow(self, *, signal_id, request, auto_entry_arm=None) -> PendingEntryIntentRead:
         self.arm_calls += 1
         self.arm_user_ids.append(request.user_id)
-        if self.created_intent_count == 0:
+        if self.intent is None:
+            self.created_intent_count += 1
+            self.intent = _pending_intent(
+                UUID(f"ba520631-d035-4f95-a4c0-3b40553dd5{30 + self.created_intent_count:02d}")
+            )
+        elif self.created_intent_count == 0:
             self.created_intent_count = 1
         return self.intent
 
-    def list_active_for_signal_user(self, *, signal_id, user_id) -> list[PendingEntryIntentRead]:
-        self.list_calls.append((str(signal_id), str(user_id)))
-        return [self.intent]
+    def get_active_for_signal(self, *, signal_id, user_id, mode="virtual") -> PendingEntryIntentRead | None:
+        self.active_calls.append((str(signal_id), str(user_id), str(mode)))
+        return self.intent
+
+    def list_history_for_signal(self, *, signal_id, user_id, mode="virtual") -> list[PendingEntryIntentRead]:
+        self.history_calls.append((str(signal_id), str(user_id), str(mode)))
+        return self.history
 
     def cancel_intent(self, intent_id, *, user_id, reason: str) -> PendingEntryIntentRead:
         self.cancel_calls.append((str(intent_id), str(user_id)))
-        self.intent = self.intent.model_copy(
+        assert self.intent is not None
+        cancelled = self.intent.model_copy(
             update={
                 "status": "cancelled",
                 "failure_reason": reason,
                 "updated_at": datetime.now(timezone.utc),
             }
         )
-        return self.intent
+        self.history.insert(0, cancelled)
+        self.intent = None
+        return cancelled
 
     def reconfirm_intent(self, intent_id, *, request=None, auto_entry_arm=None) -> PendingEntryIntentRead:
         return self.intent
 
 
-def _pending_intent() -> PendingEntryIntentRead:
+def _pending_intent(intent_id: UUID = INTENT_ID) -> PendingEntryIntentRead:
     now = datetime.now(timezone.utc)
     return PendingEntryIntentRead(
-        id=INTENT_ID,
+        id=intent_id,
         user_id=USER_ID,
         signal_id=SIGNAL_ID,
         mode="virtual",

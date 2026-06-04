@@ -91,6 +91,16 @@ export function usePendingEntryQuery(signalId: string | null, userId = "demo_use
   });
 }
 
+export function usePendingEntryHistoryQuery(signalId: string | null, userId = "demo_user", options: PlannedQueryOptions = {}) {
+  return useQuery({
+    queryKey: serverStateKeys.signals.pendingEntryHistory(signalId ?? "none", userId),
+    queryFn: () => api.pendingEntryHistory(signalId as string, userId),
+    enabled: options.enabled ?? Boolean(signalId),
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
 export function useRadarStatusQuery() {
   return useQuery({
     queryKey: serverStateKeys.radar.status(),
@@ -554,11 +564,11 @@ export function useArmPendingEntryMutation() {
     onSuccess: async (intent, variables) => {
       queryClient.setQueryData(
         serverStateKeys.signals.pendingEntry(intent.signal_id, intent.user_id),
-        [intent]
+        intent
       );
       queryClient.setQueryData(
         serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
-        [intent]
+        intent
       );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
@@ -574,13 +584,21 @@ export function useCancelPendingEntryMutation() {
   return useMutation({
     mutationFn: api.cancelPendingEntry,
     onSuccess: async (intent, variables) => {
-      queryClient.setQueryData<PendingEntryIntent[]>(
+      queryClient.setQueryData<PendingEntryIntent | null>(
         serverStateKeys.signals.pendingEntry(intent.signal_id, intent.user_id),
-        (current) => (current ?? []).filter((item) => item.id !== intent.id && isActivePendingEntryIntent(item))
+        (current) => pendingEntryAfterCancel(current, intent)
+      );
+      queryClient.setQueryData<PendingEntryIntent | null>(
+        serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
+        (current) => pendingEntryAfterCancel(current, intent)
       );
       queryClient.setQueryData<PendingEntryIntent[]>(
-        serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
-        (current) => (current ?? []).filter((item) => item.id !== intent.id && isActivePendingEntryIntent(item))
+        serverStateKeys.signals.pendingEntryHistory(intent.signal_id, intent.user_id),
+        (current) => upsertPendingEntryHistory(current, intent)
+      );
+      queryClient.setQueryData<PendingEntryIntent[]>(
+        serverStateKeys.signals.pendingEntryHistory(intent.signal_id, variables.userId ?? "demo_user"),
+        (current) => upsertPendingEntryHistory(current, intent)
       );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
@@ -598,11 +616,11 @@ export function useReconfirmPendingEntryMutation() {
     onSuccess: async (intent, variables) => {
       queryClient.setQueryData(
         serverStateKeys.signals.pendingEntry(intent.signal_id, intent.user_id),
-        [intent]
+        intent
       );
       queryClient.setQueryData(
         serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
-        [intent]
+        intent
       );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
@@ -708,4 +726,22 @@ function filterSignals(signals: RadarSignal[], filters?: SignalHistoryFilters): 
 
 function isActivePendingEntryIntent(intent: PendingEntryIntent): boolean {
   return isActivePendingEntryStatus(intent.status);
+}
+
+function pendingEntryAfterCancel(current: PendingEntryIntent | null | undefined, cancelled: PendingEntryIntent): PendingEntryIntent | null {
+  if (!current) return null;
+  if (current.id === cancelled.id) return null;
+  return isActivePendingEntryIntent(current) ? current : null;
+}
+
+function upsertPendingEntryHistory(current: PendingEntryIntent[] | undefined, intent: PendingEntryIntent): PendingEntryIntent[] {
+  return [intent, ...(current ?? []).filter((item) => item.id !== intent.id)]
+    .sort((left, right) => pendingEntryUpdatedAt(right) - pendingEntryUpdatedAt(left));
+}
+
+function pendingEntryUpdatedAt(intent: PendingEntryIntent): number {
+  const updatedAt = Date.parse(intent.updated_at);
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const createdAt = Date.parse(intent.created_at);
+  return Number.isFinite(createdAt) ? createdAt : 0;
 }

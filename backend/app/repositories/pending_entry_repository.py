@@ -8,7 +8,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import SessionLocal
-from app.domain.pending_entry_intent import ACTIVE_PENDING_ENTRY_INTENT_STATUSES
+from app.domain.pending_entry_intent import (
+    ACTIVE_PENDING_ENTRY_INTENT_STATUSES,
+    TERMINAL_PENDING_ENTRY_INTENT_STATUSES,
+)
 from app.models.pending_entry import PendingEntryIntent
 from app.schemas.pending_entry import PendingEntryIntentCreate, PendingEntryIntentRead, PendingEntryIntentStatus
 
@@ -105,6 +108,30 @@ class PendingEntryIntentRepository:
                 mode=mode,
             )
             return _to_read(record) if record is not None else None
+
+    def list_history_for_user_signal_mode(
+        self,
+        *,
+        signal_id: str | UUID,
+        user_id: str | UUID,
+        mode: str,
+    ) -> list[PendingEntryIntentRead]:
+        parsed_signal_id = _parse_uuid(signal_id)
+        parsed_user_id = _parse_uuid(user_id)
+        if parsed_signal_id is None or parsed_user_id is None:
+            return []
+        with self._session_factory() as session:
+            records = session.scalars(
+                select(PendingEntryIntent)
+                .where(
+                    PendingEntryIntent.signal_id == parsed_signal_id,
+                    PendingEntryIntent.user_id == parsed_user_id,
+                    PendingEntryIntent.mode == mode.strip().lower(),
+                    PendingEntryIntent.status.in_(TERMINAL_PENDING_ENTRY_INTENT_STATUSES),
+                )
+                .order_by(PendingEntryIntent.updated_at.desc(), PendingEntryIntent.created_at.desc())
+            ).all()
+            return [_to_read(record) for record in records]
 
     def list_pending_for_market(self, exchange: str, symbol: str) -> list[PendingEntryIntentRead]:
         with self._session_factory() as session:

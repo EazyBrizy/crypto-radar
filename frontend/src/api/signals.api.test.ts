@@ -58,3 +58,56 @@ describe("signalsApi.armPendingEntry", () => {
     expect(JSON.parse(String(init?.body))).toMatchObject({ user_id: "demo_user" });
   });
 });
+
+describe("signalsApi.pendingEntry", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns null when the active pending-entry endpoint has no active intent", async () => {
+    const fetchSpy = vi.fn(async () =>
+      new Response("null", {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      })
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await signalsApi.pendingEntry("sig_1", "usr_demo");
+
+    expect(result).toBeNull();
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/api/v1/signals/sig_1/pending-entry?user_id=usr_demo");
+  });
+});
+
+describe("signalsApi.pendingEntryHistory", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("loads terminal pending-entry history records from the history endpoint", async () => {
+    const fetchSpy = vi.fn(async () =>
+      new Response(JSON.stringify([
+        {
+          id: "intent_cancelled",
+          user_id: "demo_user",
+          signal_id: "sig_1",
+          status: "cancelled",
+          updated_at: "2026-06-04T12:00:00.000Z"
+        }
+      ]), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      })
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await signalsApi.pendingEntryHistory("sig_1");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: "intent_cancelled", status: "cancelled" });
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/api/v1/signals/sig_1/pending-entry/history?user_id=demo_user");
+  });
+});

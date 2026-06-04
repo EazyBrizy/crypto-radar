@@ -195,6 +195,46 @@ class PendingEntryIntentRepositoryTest(unittest.TestCase):
 
         self.assertEqual([intent.id for intent in active], [pending.id])
 
+    def test_cancelled_intent_is_not_active_but_is_history_and_can_be_rearmed(self) -> None:
+        created = self.repository.create_intent(_intent_create(idempotency_key="intent:first"))
+        cancelled_at = datetime(2026, 6, 4, 12, 0, tzinfo=timezone.utc)
+
+        cancelled = self.repository.transition_status(
+            created.id,
+            status="cancelled",
+            failure_reason="Cancelled by user.",
+            now=cancelled_at,
+        )
+
+        self.assertIsNotNone(cancelled)
+        self.assertIsNone(
+            self.repository.get_active_for_user_signal_mode(
+                user_id=USER_ID,
+                signal_id=SIGNAL_ID,
+                mode="virtual",
+            )
+        )
+        history = self.repository.list_history_for_user_signal_mode(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+        )
+        self.assertEqual([intent.id for intent in history], [created.id])
+        self.assertEqual(history[0].status, "cancelled")
+
+        rearmed = self.repository.create_intent(_intent_create(idempotency_key="intent:rearmed"))
+
+        self.assertNotEqual(rearmed.id, created.id)
+        self.assertEqual(rearmed.status, "pending")
+        self.assertEqual(
+            self.repository.get_active_for_user_signal_mode(
+                user_id=USER_ID,
+                signal_id=SIGNAL_ID,
+                mode="virtual",
+            ).id,
+            rearmed.id,
+        )
+
     def test_transition_status_updates_state_and_reason(self) -> None:
         created = self.repository.create_intent(_intent_create())
         changed_at = datetime(2026, 6, 4, 12, 0, tzinfo=timezone.utc)

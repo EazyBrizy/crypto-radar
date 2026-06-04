@@ -88,6 +88,37 @@ class PendingEntryService:
     def lock_for_trigger(self, intent_id: str | UUID, *, session: Session) -> PendingEntryIntent | None:
         return self._repository.lock_for_trigger(intent_id, session=session)
 
+    def get_active_for_signal(
+        self,
+        *,
+        signal_id: str | UUID,
+        user_id: str | UUID,
+        mode: PendingEntryIntentMode = "virtual",
+    ) -> PendingEntryIntentRead | None:
+        user_uuid = self._resolve_user_uuid(user_id)
+        return self._get_active_intent(
+            user_id=user_uuid,
+            signal_id=signal_id,
+            mode=_pending_entry_mode(mode),
+        )
+
+    def list_history_for_signal(
+        self,
+        *,
+        signal_id: str | UUID,
+        user_id: str | UUID,
+        mode: PendingEntryIntentMode = "virtual",
+    ) -> list[PendingEntryIntentRead]:
+        user_uuid = self._resolve_user_uuid(user_id)
+        list_history = getattr(self._repository, "list_history_for_user_signal_mode", None)
+        if list_history is None:
+            return []
+        return list_history(
+            signal_id=signal_id,
+            user_id=user_uuid,
+            mode=_pending_entry_mode(mode),
+        )
+
     def list_active_for_signal_user(
         self,
         *,
@@ -272,12 +303,6 @@ class PendingEntryService:
         request_snapshot = _request_snapshot(request, mode=mode)
         accepted_plan = _accepted_trade_plan(signal)
         trade_plan_hash = accepted_trade_plan_hash(signal)
-        idempotency_key = _idempotency_key(
-            user_id=user_uuid,
-            signal_id=signal_uuid,
-            mode=mode,
-            trade_plan_hash=trade_plan_hash,
-        )
         existing = self._get_active_intent(
             user_id=user_uuid,
             signal_id=signal_uuid,
@@ -285,6 +310,18 @@ class PendingEntryService:
         )
         if existing is not None:
             return existing
+        idempotency_key = _idempotency_key(
+            user_id=user_uuid,
+            signal_id=signal_uuid,
+            mode=mode,
+            trade_plan_hash=trade_plan_hash,
+            attempt=self._next_idempotency_attempt(
+                user_id=user_uuid,
+                signal_id=signal_uuid,
+                mode=mode,
+                trade_plan_hash=trade_plan_hash,
+            ),
+        )
 
         intent = PendingEntryIntentCreate(
             user_id=user_uuid,
@@ -327,13 +364,30 @@ class PendingEntryService:
         self,
         *,
         user_id: UUID,
-        signal_id: UUID,
+        signal_id: str | UUID,
         mode: PendingEntryIntentMode,
     ) -> PendingEntryIntentRead | None:
         get_active = getattr(self._repository, "get_active_for_user_signal_mode", None)
         if get_active is None:
             return None
         return get_active(user_id=user_id, signal_id=signal_id, mode=mode)
+
+    def _next_idempotency_attempt(
+        self,
+        *,
+        user_id: UUID,
+        signal_id: UUID,
+        mode: PendingEntryIntentMode,
+        trade_plan_hash: str,
+    ) -> int:
+        list_history = getattr(self._repository, "list_history_for_user_signal_mode", None)
+        if list_history is None:
+            return 0
+        return sum(
+            1
+            for intent in list_history(signal_id=signal_id, user_id=user_id, mode=mode)
+            if intent.accepted_trade_plan_hash == trade_plan_hash
+        )
 
     def _get_visible_intent(
         self,
@@ -496,6 +550,10 @@ def _manual_confirm_request(request: ManualConfirmRequest | dict[str, Any] | Non
     return ManualConfirmRequest.model_validate(payload)
 
 
+def _pending_entry_mode(value: str) -> PendingEntryIntentMode:
+    return "real" if str(value).strip().lower() == "real" else "virtual"
+
+
 def _snapshot_hash(snapshot: dict[str, Any]) -> str:
     payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
     return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
@@ -528,8 +586,11 @@ def _idempotency_key(
     signal_id: UUID,
     mode: PendingEntryIntentMode,
     trade_plan_hash: str,
+    attempt: int = 0,
 ) -> str:
     payload = f"{user_id}:{signal_id}:{mode}:{trade_plan_hash}"
+    if attempt > 0:
+        payload = f"{payload}:attempt:{attempt}"
     return f"pending-entry:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
 

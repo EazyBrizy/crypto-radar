@@ -131,11 +131,11 @@ describe("paper trade eligibility", () => {
 });
 
 describe("pending entry selection", () => {
-  it("prefers active pending intents over terminal history", () => {
+  it("prefers active pending intent over terminal history", () => {
     const active = pendingIntent({ id: "active", status: "pending" });
     const terminal = pendingIntent({ id: "terminal", status: "cancelled" });
 
-    expect(selectPendingEntryForDetails([terminal, active])).toBe(active);
+    expect(selectPendingEntryForDetails(active, [terminal])).toBe(active);
   });
 
   it("falls back to the latest terminal pending intent", () => {
@@ -150,7 +150,18 @@ describe("pending entry selection", () => {
       updated_at: "2026-05-31T07:15:00.000Z"
     });
 
-    expect(selectPendingEntryForDetails([oldTerminal, latestTerminal])).toBe(latestTerminal);
+    expect(selectPendingEntryForDetails(null, [oldTerminal, latestTerminal])).toBe(latestTerminal);
+  });
+
+  it("does not treat terminal active endpoint data as active", () => {
+    const malformedActive = pendingIntent({ id: "cancelled-active", status: "cancelled" });
+    const latestTerminal = pendingIntent({
+      id: "latest",
+      status: "expired",
+      updated_at: "2026-05-31T07:15:00.000Z"
+    });
+
+    expect(selectPendingEntryForDetails(malformedActive, [latestTerminal])).toBe(latestTerminal);
   });
 });
 

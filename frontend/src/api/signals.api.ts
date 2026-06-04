@@ -68,10 +68,17 @@ export const signalsApi = {
       })
     );
   },
-  async pendingEntry(signalId: string, userId = "demo_user"): Promise<PendingEntryIntent[]> {
+  async pendingEntry(signalId: string, userId = "demo_user"): Promise<PendingEntryIntent | null> {
+    const params = new URLSearchParams({ user_id: userId });
+    const response = await requestJson<PendingEntryIntentDto | null>(
+      `/api/v1/signals/${encodeURIComponent(signalId)}/pending-entry?${params.toString()}`
+    );
+    return response ? normalizePendingEntryIntent(response) : null;
+  },
+  async pendingEntryHistory(signalId: string, userId = "demo_user"): Promise<PendingEntryIntent[]> {
     const params = new URLSearchParams({ user_id: userId });
     const response = await requestJson<PendingEntryIntentDto[]>(
-      `/api/v1/signals/${encodeURIComponent(signalId)}/pending-entry?${params.toString()}`
+      `/api/v1/signals/${encodeURIComponent(signalId)}/pending-entry/history?${params.toString()}`
     );
     return response.map(normalizePendingEntryIntent);
   },

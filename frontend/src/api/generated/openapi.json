@@ -1691,8 +1691,8 @@
         "tags": [
           "pending-entry"
         ],
-        "summary": "List Pending Entries For Signal",
-        "operationId": "list_pending_entries_for_signal_api_v1_signals__signal_id__pending_entry_get",
+        "summary": "Get Active Pending Entry For Signal",
+        "operationId": "get_active_pending_entry_for_signal_api_v1_signals__signal_id__pending_entry_get",
         "parameters": [
           {
             "name": "signal_id",
@@ -1712,6 +1712,94 @@
               "default": "demo_user",
               "title": "User Id"
             }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "virtual",
+                "real"
+              ],
+              "type": "string",
+              "default": "virtual",
+              "title": "Mode"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PendingEntryIntentRead"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Active Pending Entry For Signal Api V1 Signals  Signal Id  Pending Entry Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signals/{signal_id}/pending-entry/history": {
+      "get": {
+        "tags": [
+          "pending-entry"
+        ],
+        "summary": "List Pending Entry History For Signal",
+        "operationId": "list_pending_entry_history_for_signal_api_v1_signals__signal_id__pending_entry_history_get",
+        "parameters": [
+          {
+            "name": "signal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Signal Id"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "demo_user",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "virtual",
+                "real"
+              ],
+              "type": "string",
+              "default": "virtual",
+              "title": "Mode"
+            }
           }
         ],
         "responses": {
@@ -1724,7 +1812,7 @@
                   "items": {
                     "$ref": "#/components/schemas/PendingEntryIntentRead"
                   },
-                  "title": "Response List Pending Entries For Signal Api V1 Signals  Signal Id  Pending Entry Get"
+                  "title": "Response List Pending Entry History For Signal Api V1 Signals  Signal Id  Pending Entry History Get"
                 }
               }
             }
@@ -7181,6 +7269,92 @@
             ],
             "title": "Liquidation Buffer Percent"
           },
+          "projected_liquidation_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projected Liquidation Price"
+          },
+          "distance_to_liquidation": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance To Liquidation"
+          },
+          "distance_to_liquidation_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance To Liquidation Percent"
+          },
+          "liquidation_price_source": {
+            "type": "string",
+            "title": "Liquidation Price Source",
+            "default": "unavailable"
+          },
+          "margin_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Mode"
+          },
+          "maintenance_margin_rate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Margin Rate"
+          },
+          "maintenance_margin_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Margin Amount"
+          },
+          "liquidation_projection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiquidationProjectionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "min_liquidation_buffer_percent": {
             "type": "number",
             "minimum": 0,
@@ -7207,6 +7381,13 @@
             },
             "type": "array",
             "title": "Warnings"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blockers"
           }
         },
         "type": "object",
@@ -7318,6 +7499,124 @@
         },
         "type": "object",
         "title": "LifecycleTrace"
+      },
+      "LiquidationProjectionResult": {
+        "properties": {
+          "projected_liquidation_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projected Liquidation Price"
+          },
+          "distance_to_liquidation": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance To Liquidation"
+          },
+          "distance_to_liquidation_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance To Liquidation Percent"
+          },
+          "margin_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Mode"
+          },
+          "maintenance_margin_rate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Margin Rate"
+          },
+          "maintenance_margin_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Margin Amount"
+          },
+          "liquidation_price_source": {
+            "type": "string",
+            "title": "Liquidation Price Source",
+            "default": "unavailable"
+          },
+          "formula": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Formula"
+          },
+          "formula_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Formula Source"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blockers"
+          }
+        },
+        "type": "object",
+        "title": "LiquidationProjectionResult"
       },
       "LiquidityMetrics": {
         "properties": {

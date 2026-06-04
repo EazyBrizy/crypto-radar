@@ -11,19 +11,22 @@ PENDING_ENTRY_INTENT_STATUSES: tuple[str, ...] = (
     "requires_reconfirmation",
 )
 
-ACTIVE_PENDING_ENTRY_INTENT_STATUSES: tuple[str, ...] = (
+ACTIVE_PENDING_STATUSES: tuple[str, ...] = (
     "pending",
     "triggered",
     "filling",
     "requires_reconfirmation",
 )
 
-TERMINAL_PENDING_ENTRY_INTENT_STATUSES: tuple[str, ...] = (
+TERMINAL_PENDING_STATUSES: tuple[str, ...] = (
     "filled",
     "failed",
     "cancelled",
     "expired",
 )
+
+ACTIVE_PENDING_ENTRY_INTENT_STATUSES = ACTIVE_PENDING_STATUSES
+TERMINAL_PENDING_ENTRY_INTENT_STATUSES = TERMINAL_PENDING_STATUSES
 
 
 def is_active_pending_entry_intent_status(status: str) -> bool:

@@ -16242,6 +16242,49 @@
             ],
             "title": "Signal Id"
           },
+          "pending_entry_intent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Entry Intent Id"
+          },
+          "accepted_trade_plan_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Trade Plan Hash"
+          },
+          "trigger_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Source"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradeOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "mode": {
             "type": "string",
             "enum": [
@@ -16688,6 +16731,9 @@
             },
             "type": "array",
             "title": "Lifecycle Events"
+          },
+          "lifecycle_trace": {
+            "$ref": "#/components/schemas/LifecycleTrace"
           }
         },
         "type": "object",
@@ -16738,6 +16784,109 @@
           "trades"
         ],
         "title": "TradeJournalResponse"
+      },
+      "TradeOrigin": {
+        "properties": {
+          "signal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Id"
+          },
+          "pending_entry_intent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Entry Intent Id"
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "real"
+            ],
+            "title": "Mode",
+            "default": "virtual"
+          },
+          "accepted_trade_plan_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Trade Plan Hash"
+          },
+          "trigger_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Source"
+          },
+          "virtual_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Order Id"
+          },
+          "virtual_trade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Trade Id"
+          },
+          "position_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Id"
+          }
+        },
+        "type": "object",
+        "title": "TradeOrigin"
       },
       "TradePlan": {
         "properties": {
@@ -18074,6 +18223,49 @@
           "signal_id": {
             "type": "string",
             "title": "Signal Id"
+          },
+          "pending_entry_intent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Entry Intent Id"
+          },
+          "accepted_trade_plan_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Trade Plan Hash"
+          },
+          "trigger_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Source"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradeOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "mode": {
             "type": "string",

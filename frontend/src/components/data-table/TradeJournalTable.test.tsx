@@ -172,4 +172,29 @@ describe("TradeJournalTable", () => {
     expect(screen.getByText(/Remain/u)).toBeInTheDocument();
     expect(screen.getByText(/R \+\$3\.25 \/ U \+\$1\.75/u)).toBeInTheDocument();
   });
+
+  it("shows pending-entry origin for virtual trades", () => {
+    const pendingTrade: TradeJournalEntry = {
+      ...baseTrade,
+      pending_entry_intent_id: "intent-origin-123456",
+      accepted_trade_plan_hash: "sha256:accepted-plan",
+      trigger_source: "pending_entry",
+      origin: {
+        signal_id: "sig_1",
+        pending_entry_intent_id: "intent-origin-123456",
+        strategy: "EMA_PULLBACK",
+        mode: "virtual",
+        accepted_trade_plan_hash: "sha256:accepted-plan",
+        trigger_source: "pending_entry",
+        virtual_order_id: "order_1",
+        virtual_trade_id: "trade_1",
+        position_id: "trade_1"
+      }
+    };
+
+    render(<TradeJournalTable trades={[pendingTrade]} />);
+
+    expect(screen.getByText("Pending intent-o")).toBeInTheDocument();
+    expect(screen.getByTitle(/accepted_trade_plan_hash: sha256:accepted-plan/u)).toBeInTheDocument();
+  });
 });

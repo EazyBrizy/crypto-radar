@@ -726,7 +726,35 @@ export interface VirtualTradeTargetState {
   exit_fee: number;
 }
 
+export interface LifecycleTrace {
+  signal_id: string | null;
+  pending_entry_intent_id: string | null;
+  risk_decision_id: string | null;
+  audit_id: string | null;
+  virtual_trade_id: string | null;
+  real_order_id: string | null;
+  exit_event_id: string | null;
+}
+
+export interface TradeOrigin {
+  signal_id: string | null;
+  pending_entry_intent_id: string | null;
+  strategy: string | null;
+  mode: TradeMode;
+  accepted_trade_plan_hash: string | null;
+  trigger_source: string | null;
+  virtual_order_id: string | null;
+  virtual_trade_id: string | null;
+  position_id: string | null;
+}
+
 export interface VirtualTradeLifecycleEvent {
+  signal_id?: string | null;
+  pending_entry_intent_id?: string | null;
+  risk_decision_id?: string | null;
+  virtual_trade_id?: string | null;
+  real_order_id?: string | null;
+  exit_event_id?: string | null;
   event_type: string;
   reason: TradeCloseReason | null;
   target_label: string | null;
@@ -737,6 +765,7 @@ export interface VirtualTradeLifecycleEvent {
   exit_fee: number | null;
   stop_loss: number | null;
   created_at: string;
+  lifecycle_trace?: LifecycleTrace;
   metadata: Record<string, unknown>;
 }
 
@@ -744,6 +773,10 @@ export interface TradeJournalEntry {
   id: string;
   user_id: string;
   signal_id: string | null;
+  pending_entry_intent_id?: string | null;
+  accepted_trade_plan_hash?: string | null;
+  trigger_source?: string | null;
+  origin?: TradeOrigin | null;
   mode: TradeMode;
   source: TradeSource;
   tags: string[];
@@ -800,6 +833,7 @@ export interface TradeJournalEntry {
   closed_at: string | null;
   target_states?: VirtualTradeTargetState[];
   lifecycle_events?: VirtualTradeLifecycleEvent[];
+  lifecycle_trace?: LifecycleTrace;
 }
 
 export interface TradeInvalidationAlert {

@@ -370,10 +370,26 @@ class VirtualTradeLifecycleEvent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class TradeOrigin(BaseModel):
+    signal_id: Optional[str] = None
+    pending_entry_intent_id: Optional[str] = None
+    strategy: Optional[str] = None
+    mode: ExecutionMode = "virtual"
+    accepted_trade_plan_hash: Optional[str] = None
+    trigger_source: Optional[str] = None
+    virtual_order_id: Optional[str] = None
+    virtual_trade_id: Optional[str] = None
+    position_id: Optional[str] = None
+
+
 class VirtualTrade(BaseModel):
     id: str
     user_id: str
     signal_id: str
+    pending_entry_intent_id: Optional[str] = None
+    accepted_trade_plan_hash: Optional[str] = None
+    trigger_source: Optional[str] = None
+    origin: Optional[TradeOrigin] = None
     mode: Literal["virtual"] = "virtual"
 
     exchange: str
@@ -479,6 +495,10 @@ class TradeJournalEntry(BaseModel):
     id: str
     user_id: str
     signal_id: Optional[str] = None
+    pending_entry_intent_id: Optional[str] = None
+    accepted_trade_plan_hash: Optional[str] = None
+    trigger_source: Optional[str] = None
+    origin: Optional[TradeOrigin] = None
     mode: ExecutionMode
     source: TradeSource = "virtual"
     tags: list[str] = Field(default_factory=list)
@@ -541,6 +561,7 @@ class TradeJournalEntry(BaseModel):
     closed_at: Optional[datetime] = None
     target_states: list[VirtualTradeTargetState] = Field(default_factory=list)
     lifecycle_events: list[VirtualTradeLifecycleEvent] = Field(default_factory=list)
+    lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
 
 
 class RealTrade(TradeJournalEntry):

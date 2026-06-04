@@ -491,10 +491,24 @@ def _trigger_request_metadata(
             "pending_entry_intent_id": str(intent.id),
         }
     )
+    trigger_price = str(touch.price) if touch.price is not None else None
     metadata["pending_entry_intent_id"] = str(intent.id)
+    metadata["accepted_trade_plan_hash"] = intent.accepted_trade_plan_hash
+    metadata["trigger_source"] = "pending_entry"
     metadata["lifecycle_trace"] = trace
+    metadata["origin"] = {
+        **(metadata.get("origin") if isinstance(metadata.get("origin"), dict) else {}),
+        "signal_id": str(intent.signal_id),
+        "pending_entry_intent_id": str(intent.id),
+        "strategy": None,
+        "mode": intent.mode,
+        "accepted_trade_plan_hash": intent.accepted_trade_plan_hash,
+        "trigger_source": "pending_entry",
+    }
     metadata["pending_entry_trigger"] = {
-        "touch_price": str(touch.price) if touch.price is not None else None,
+        "touch_price": trigger_price,
+        "trigger_price": trigger_price,
+        "trigger_reason": "entry_zone_touched",
         "touch_price_source": touch.price_source,
         "warnings": list(touch.warnings),
     }

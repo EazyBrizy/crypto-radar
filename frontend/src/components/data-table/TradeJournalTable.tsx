@@ -205,6 +205,7 @@ function TargetStateCell({ trade }: { trade: TradeJournalEntry }) {
 
 function LifecycleCell({ trade }: { trade: TradeJournalEntry }) {
   const remaining = tradeRemainingQuantity(trade);
+  const pendingIntentId = trade.pending_entry_intent_id ?? trade.origin?.pending_entry_intent_id ?? null;
   return (
     <div className="table-lifecycle-cell">
       <span>Remain {formatQuantity(remaining)}</span>
@@ -212,6 +213,11 @@ function LifecycleCell({ trade }: { trade: TradeJournalEntry }) {
       <div>
         {trade.stop_moved_to_breakeven ? <Badge tone="blue">BE</Badge> : null}
         {trade.trailing_active ? <Badge tone="purple">Trail</Badge> : null}
+        {pendingIntentId ? (
+          <span title={originTitle(trade)}>
+            <Badge tone="blue">Pending {shortOriginId(pendingIntentId)}</Badge>
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -239,6 +245,22 @@ function sourceTone(trade: TradeJournalEntry): "green" | "red" | "yellow" | "blu
 
 function shortRunId(runId: string): string {
   return runId.slice(0, 8);
+}
+
+function shortOriginId(value: string): string {
+  return value.slice(0, 8);
+}
+
+function originTitle(trade: TradeJournalEntry): string {
+  const origin = trade.origin;
+  const pendingIntentId = trade.pending_entry_intent_id ?? origin?.pending_entry_intent_id ?? "";
+  const acceptedHash = trade.accepted_trade_plan_hash ?? origin?.accepted_trade_plan_hash ?? "";
+  return [
+    `pending_entry_intent_id: ${pendingIntentId}`,
+    acceptedHash ? `accepted_trade_plan_hash: ${acceptedHash}` : null,
+    `signal_id: ${trade.signal_id ?? origin?.signal_id ?? ""}`,
+    `trigger_source: ${trade.trigger_source ?? origin?.trigger_source ?? ""}`
+  ].filter(Boolean).join("\n");
 }
 
 function closeMarketTitle(trade: TradeJournalEntry): string {

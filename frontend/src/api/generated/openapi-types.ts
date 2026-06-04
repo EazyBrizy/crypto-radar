@@ -5476,6 +5476,13 @@ export interface components {
             user_id: string;
             /** Signal Id */
             signal_id?: string | null;
+            /** Pending Entry Intent Id */
+            pending_entry_intent_id?: string | null;
+            /** Accepted Trade Plan Hash */
+            accepted_trade_plan_hash?: string | null;
+            /** Trigger Source */
+            trigger_source?: string | null;
+            origin?: components["schemas"]["TradeOrigin"] | null;
             /**
              * Mode
              * @enum {string}
@@ -5653,12 +5660,38 @@ export interface components {
             target_states?: components["schemas"]["VirtualTradeTargetState"][];
             /** Lifecycle Events */
             lifecycle_events?: components["schemas"]["VirtualTradeLifecycleEvent"][];
+            lifecycle_trace?: components["schemas"]["LifecycleTrace"];
         };
         /** TradeJournalResponse */
         TradeJournalResponse: {
             /** Trades */
             trades: components["schemas"]["TradeJournalEntry"][];
             account?: components["schemas"]["VirtualAccount"] | null;
+        };
+        /** TradeOrigin */
+        TradeOrigin: {
+            /** Signal Id */
+            signal_id?: string | null;
+            /** Pending Entry Intent Id */
+            pending_entry_intent_id?: string | null;
+            /** Strategy */
+            strategy?: string | null;
+            /**
+             * Mode
+             * @default virtual
+             * @enum {string}
+             */
+            mode: "virtual" | "real";
+            /** Accepted Trade Plan Hash */
+            accepted_trade_plan_hash?: string | null;
+            /** Trigger Source */
+            trigger_source?: string | null;
+            /** Virtual Order Id */
+            virtual_order_id?: string | null;
+            /** Virtual Trade Id */
+            virtual_trade_id?: string | null;
+            /** Position Id */
+            position_id?: string | null;
         };
         /** TradePlan */
         TradePlan: {
@@ -6142,6 +6175,13 @@ export interface components {
             user_id: string;
             /** Signal Id */
             signal_id: string;
+            /** Pending Entry Intent Id */
+            pending_entry_intent_id?: string | null;
+            /** Accepted Trade Plan Hash */
+            accepted_trade_plan_hash?: string | null;
+            /** Trigger Source */
+            trigger_source?: string | null;
+            origin?: components["schemas"]["TradeOrigin"] | null;
             /**
              * Mode
              * @default virtual

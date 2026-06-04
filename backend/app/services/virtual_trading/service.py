@@ -31,11 +31,13 @@ from app.schemas.trade import (
     CloseReason,
     CloseVirtualTradeRequest,
     ManualConfirmRequest,
+    TradeOrigin,
     TradeJournalEntry,
     VirtualAccount,
     VirtualExecutionReport,
     VirtualMarketSnapshot,
     VirtualTrade,
+    VirtualTradeLifecycleEvent,
 )
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_audit import RiskAuditService, risk_audit_service
@@ -679,10 +681,20 @@ class VirtualTradingService:
             }
         )
         execution = execution.model_copy(update={"lifecycle_trace": lifecycle_trace})
+        origin = _trade_origin(
+            signal=signal,
+            request=gate_request,
+            lifecycle_trace=lifecycle_trace,
+            virtual_trade_id=trade_id,
+        )
         trade = VirtualTrade(
             id=trade_id,
             user_id=gate_request.user_id,
             signal_id=signal.id,
+            pending_entry_intent_id=origin.pending_entry_intent_id,
+            accepted_trade_plan_hash=origin.accepted_trade_plan_hash,
+            trigger_source=origin.trigger_source,
+            origin=origin,
             exchange=signal.exchange,
             symbol=signal.symbol,
             strategy=signal.strategy,
@@ -711,6 +723,7 @@ class VirtualTradingService:
             lifecycle_trace=lifecycle_trace,
         )
         trade = initialize_virtual_trade_lifecycle(trade)
+        trade = _append_created_from_pending_entry_event(trade, gate_request, now)
         return arm_virtual_trade_time_stop(
             trade,
             _trade_plan_time_stop_metadata(signal),
@@ -1395,6 +1408,115 @@ def _trade_plan_time_stop_metadata(signal: RadarSignal) -> dict[str, Any] | None
             if source.get(key) is not None:
                 metadata[key] = source[key]
     return metadata or None
+
+
+def _trade_origin(
+    *,
+    signal: RadarSignal,
+    request: ManualConfirmRequest,
+    lifecycle_trace: Any,
+    virtual_trade_id: str,
+) -> TradeOrigin:
+    metadata = _request_metadata(request)
+    raw_origin = metadata.get("origin") if isinstance(metadata.get("origin"), dict) else {}
+    pending_entry_intent_id = (
+        _metadata_string(metadata.get("pending_entry_intent_id"))
+        or _metadata_string(raw_origin.get("pending_entry_intent_id"))
+        or _metadata_string(lifecycle_trace.pending_entry_intent_id)
+    )
+    accepted_trade_plan_hash = (
+        _metadata_string(metadata.get("accepted_trade_plan_hash"))
+        or _metadata_string(raw_origin.get("accepted_trade_plan_hash"))
+    )
+    trigger_source = (
+        _metadata_string(metadata.get("trigger_source"))
+        or _metadata_string(raw_origin.get("trigger_source"))
+        or ("pending_entry" if pending_entry_intent_id is not None else "manual")
+    )
+    return TradeOrigin(
+        signal_id=str(signal.id),
+        pending_entry_intent_id=pending_entry_intent_id,
+        strategy=signal.strategy,
+        mode="virtual",
+        accepted_trade_plan_hash=accepted_trade_plan_hash,
+        trigger_source=trigger_source,
+        virtual_trade_id=virtual_trade_id,
+        position_id=virtual_trade_id,
+    )
+
+
+def _append_created_from_pending_entry_event(
+    trade: VirtualTrade,
+    request: ManualConfirmRequest,
+    now: datetime,
+) -> VirtualTrade:
+    if trade.pending_entry_intent_id is None or trade.trigger_source != "pending_entry":
+        return trade
+
+    metadata = _request_metadata(request)
+    trigger = metadata.get("pending_entry_trigger")
+    trigger_metadata = trigger if isinstance(trigger, dict) else {}
+    trigger_price_text = _metadata_string(
+        trigger_metadata.get("trigger_price") or trigger_metadata.get("touch_price")
+    )
+    trigger_reason = _metadata_string(trigger_metadata.get("trigger_reason")) or "entry_zone_touched"
+    trace = trade.lifecycle_trace.model_copy(
+        update={
+            "signal_id": trade.signal_id,
+            "pending_entry_intent_id": trade.pending_entry_intent_id,
+            "virtual_trade_id": trade.id,
+        }
+    )
+    event_metadata = {
+        "accepted_trade_plan_hash": trade.accepted_trade_plan_hash,
+        "trigger_price": trigger_price_text,
+        "trigger_price_source": _metadata_string(trigger_metadata.get("touch_price_source")),
+        "trigger_reason": trigger_reason,
+        "warnings": (
+            list(trigger_metadata.get("warnings"))
+            if isinstance(trigger_metadata.get("warnings"), list)
+            else []
+        ),
+    }
+    event = VirtualTradeLifecycleEvent(
+        signal_id=trade.signal_id,
+        pending_entry_intent_id=trade.pending_entry_intent_id,
+        risk_decision_id=trace.risk_decision_id,
+        virtual_trade_id=trade.id,
+        real_order_id=trace.real_order_id,
+        event_type="created_from_pending_entry",
+        price=_positive_float(trigger_price_text),
+        created_at=now,
+        lifecycle_trace=trace,
+        metadata={key: value for key, value in event_metadata.items() if value is not None},
+    )
+    return trade.model_copy(
+        update={
+            "lifecycle_events": [*trade.lifecycle_events, event],
+            "lifecycle_trace": trace,
+        }
+    )
+
+
+def _request_metadata(request: ManualConfirmRequest) -> dict[str, Any]:
+    return request.metadata if isinstance(request.metadata, dict) else {}
+
+
+def _metadata_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _positive_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 def _risk_decision_with_rr_warning(decision: RiskDecision, rr_warning_note: str | None) -> RiskDecision:

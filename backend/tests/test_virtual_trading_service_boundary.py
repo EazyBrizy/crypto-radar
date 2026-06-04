@@ -143,6 +143,71 @@ class VirtualTradingServiceBoundaryTest(unittest.TestCase):
             "intent-abc",
         )
 
+    def test_pending_entry_origin_is_preserved_on_virtual_trade_and_journal(self) -> None:
+        service = _service(RiskManagementSettings(max_price_deviation_bps=0))
+        signal = _signal("sig_pending_origin")
+        request = _request().model_copy(
+            update={
+                "metadata": {
+                    "pending_entry_intent_id": "intent-origin-123",
+                    "accepted_trade_plan_hash": "sha256:accepted-plan",
+                    "trigger_source": "pending_entry",
+                    "lifecycle_trace": {
+                        "signal_id": signal.id,
+                        "pending_entry_intent_id": "intent-origin-123",
+                    },
+                    "pending_entry_trigger": {
+                        "trigger_price": "100.0",
+                        "trigger_reason": "entry_zone_touched",
+                        "touch_price_source": "ask",
+                        "warnings": [],
+                    },
+                }
+            }
+        )
+
+        trade = service.open_virtual_trade(signal, request)
+        journal = service.list_trade_journal(mode="virtual")
+
+        self.assertEqual(trade.pending_entry_intent_id, "intent-origin-123")
+        self.assertEqual(trade.accepted_trade_plan_hash, "sha256:accepted-plan")
+        self.assertEqual(trade.trigger_source, "pending_entry")
+        self.assertIsNotNone(trade.origin)
+        assert trade.origin is not None
+        self.assertEqual(trade.origin.signal_id, signal.id)
+        self.assertEqual(trade.origin.pending_entry_intent_id, "intent-origin-123")
+        self.assertEqual(trade.origin.strategy, signal.strategy)
+        self.assertEqual(trade.origin.mode, "virtual")
+        self.assertEqual(trade.origin.accepted_trade_plan_hash, "sha256:accepted-plan")
+        self.assertTrue(any(
+            event.event_type == "created_from_pending_entry"
+            and event.pending_entry_intent_id == "intent-origin-123"
+            and event.metadata["accepted_trade_plan_hash"] == "sha256:accepted-plan"
+            for event in trade.lifecycle_events
+        ))
+        self.assertEqual(journal[0].pending_entry_intent_id, "intent-origin-123")
+        self.assertEqual(journal[0].accepted_trade_plan_hash, "sha256:accepted-plan")
+        self.assertEqual(journal[0].trigger_source, "pending_entry")
+        self.assertIsNotNone(journal[0].origin)
+        assert journal[0].origin is not None
+        self.assertEqual(journal[0].origin.pending_entry_intent_id, "intent-origin-123")
+
+    def test_manual_virtual_trade_flow_stays_compatible_without_pending_entry_origin(self) -> None:
+        service = _service(RiskManagementSettings(max_price_deviation_bps=0))
+
+        trade = service.open_virtual_trade(_signal("sig_manual_origin"), _request())
+        journal = service.list_trade_journal(mode="virtual")
+
+        self.assertIsNone(trade.pending_entry_intent_id)
+        self.assertIsNone(trade.accepted_trade_plan_hash)
+        self.assertEqual(trade.trigger_source, "manual")
+        self.assertIsNotNone(trade.origin)
+        assert trade.origin is not None
+        self.assertIsNone(trade.origin.pending_entry_intent_id)
+        self.assertEqual(trade.origin.trigger_source, "manual")
+        self.assertIsNone(journal[0].pending_entry_intent_id)
+        self.assertEqual(journal[0].trigger_source, "manual")
+
     def test_rejected_virtual_execution_prevents_trade_creation(self) -> None:
         repository = _EphemeralTradeRepository()
         service = _service(

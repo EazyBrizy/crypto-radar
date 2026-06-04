@@ -28,6 +28,7 @@ import type {
   ExecutionQualityGate,
   HealthStatus,
   ImpactRisk,
+  LifecycleTrace,
   LiquidityMetrics,
   MarketDataStatus,
   NoTradeFilterResult,
@@ -58,6 +59,8 @@ import type {
   StopLossPlan,
   TakeProfitPlan,
   TradeCloseReason,
+  TradeMode,
+  TradeOrigin,
   TradePlan,
   TradeSource,
   TrailingStopPlan,
@@ -82,6 +85,11 @@ type TradeJournalEntryExtra = TradeJournalEntryDto & Partial<Pick<
   | "filled_size_usd"
   | "unfilled_size_usd"
   | "execution"
+  | "pending_entry_intent_id"
+  | "accepted_trade_plan_hash"
+  | "trigger_source"
+  | "origin"
+  | "lifecycle_trace"
   | "source"
   | "tags"
   | "run_id"
@@ -210,10 +218,15 @@ export function normalizeTrade(trade: TradeJournalEntryDto): TradeJournalEntry {
   const remainingSizeUsd = enriched.remaining_size_usd ?? (trade.status === "closed" ? 0 : trade.size_usd);
   const realizedPnl = enriched.realized_pnl ?? (trade.status === "closed" ? trade.pnl ?? 0 : 0);
   const unrealizedPnl = enriched.unrealized_pnl ?? (trade.status === "open" ? trade.pnl ?? 0 : 0);
+  const origin = normalizeTradeOrigin(enriched.origin);
   return {
     id: trade.id,
     user_id: trade.user_id,
     signal_id: trade.signal_id ?? null,
+    pending_entry_intent_id: optionalString(enriched.pending_entry_intent_id) ?? origin?.pending_entry_intent_id ?? null,
+    accepted_trade_plan_hash: optionalString(enriched.accepted_trade_plan_hash) ?? origin?.accepted_trade_plan_hash ?? null,
+    trigger_source: optionalString(enriched.trigger_source) ?? origin?.trigger_source ?? null,
+    origin,
     mode: trade.mode,
     source: normalizeTradeSource(enriched.source, trade.mode),
     tags: normalizeStringList(enriched.tags),
@@ -269,7 +282,8 @@ export function normalizeTrade(trade: TradeJournalEntryDto): TradeJournalEntry {
     updated_at: trade.updated_at,
     closed_at: trade.closed_at ?? null,
     target_states: normalizeTargetStates(enriched.target_states, takeProfit, trade),
-    lifecycle_events: normalizeLifecycleEvents(enriched.lifecycle_events)
+    lifecycle_events: normalizeLifecycleEvents(enriched.lifecycle_events),
+    lifecycle_trace: normalizeLifecycleTrace(enriched.lifecycle_trace)
   };
 }
 
@@ -426,9 +440,43 @@ function normalizeTargetStates(
   ];
 }
 
+function normalizeTradeOrigin(value: unknown): TradeOrigin | null {
+  if (!isRecord(value)) return null;
+  return {
+    signal_id: optionalString(value.signal_id),
+    pending_entry_intent_id: optionalString(value.pending_entry_intent_id),
+    strategy: optionalString(value.strategy),
+    mode: normalizeTradeMode(value.mode),
+    accepted_trade_plan_hash: optionalString(value.accepted_trade_plan_hash),
+    trigger_source: optionalString(value.trigger_source),
+    virtual_order_id: optionalString(value.virtual_order_id),
+    virtual_trade_id: optionalString(value.virtual_trade_id),
+    position_id: optionalString(value.position_id)
+  };
+}
+
+function normalizeLifecycleTrace(value: unknown): LifecycleTrace {
+  const trace = isRecord(value) ? value : {};
+  return {
+    signal_id: optionalString(trace.signal_id),
+    pending_entry_intent_id: optionalString(trace.pending_entry_intent_id),
+    risk_decision_id: optionalString(trace.risk_decision_id),
+    audit_id: optionalString(trace.audit_id),
+    virtual_trade_id: optionalString(trace.virtual_trade_id),
+    real_order_id: optionalString(trace.real_order_id),
+    exit_event_id: optionalString(trace.exit_event_id)
+  };
+}
+
 function normalizeLifecycleEvents(value: unknown): VirtualTradeLifecycleEvent[] {
   if (!Array.isArray(value)) return [];
   return value.filter(isRecord).map((event) => ({
+    signal_id: optionalString(event.signal_id),
+    pending_entry_intent_id: optionalString(event.pending_entry_intent_id),
+    risk_decision_id: optionalString(event.risk_decision_id),
+    virtual_trade_id: optionalString(event.virtual_trade_id),
+    real_order_id: optionalString(event.real_order_id),
+    exit_event_id: optionalString(event.exit_event_id),
     event_type: String(event.event_type ?? "event"),
     reason: normalizeTradeCloseReason(event.reason),
     target_label: optionalString(event.target_label),
@@ -439,6 +487,7 @@ function normalizeLifecycleEvents(value: unknown): VirtualTradeLifecycleEvent[] 
     exit_fee: optionalNumber(event.exit_fee),
     stop_loss: optionalNumber(event.stop_loss),
     created_at: String(event.created_at ?? new Date().toISOString()),
+    lifecycle_trace: normalizeLifecycleTrace(event.lifecycle_trace),
     metadata: normalizeMetadata(event.metadata)
   }));
 }
@@ -948,6 +997,10 @@ function normalizeExecutionStatus(value: unknown): VirtualExecutionStatus {
 function normalizeTradeSource(value: unknown, mode: TradeJournalEntry["mode"]): TradeSource {
   if (value === "virtual" || value === "real" || value === "backtest") return value;
   return mode === "real" ? "real" : "virtual";
+}
+
+function normalizeTradeMode(value: unknown): TradeMode {
+  return value === "real" ? "real" : "virtual";
 }
 
 function normalizeStringList(value: unknown): string[] {

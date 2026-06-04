@@ -14,6 +14,7 @@ import app.models  # noqa: F401
 from app.models.pending_entry import PendingEntryIntent
 from app.models.user import AppUser
 from app.repositories.pending_entry_repository import PendingEntryIntentRepository
+from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.pending_entry import PendingEntryIntentCreate
 from app.schemas.risk import ResolvedExecutionProfile
 from app.schemas.signal import RadarSignal
@@ -81,9 +82,25 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
             str(created.id),
         )
         self.assertEqual(
+            self.virtual.calls[0][1].metadata["accepted_trade_plan_hash"],
+            created.accepted_trade_plan_hash,
+        )
+        self.assertEqual(self.virtual.calls[0][1].metadata["trigger_source"], "pending_entry")
+        self.assertEqual(
+            self.virtual.calls[0][1].metadata["origin"]["pending_entry_intent_id"],
+            str(created.id),
+        )
+        self.assertEqual(
+            self.virtual.calls[0][1].metadata["pending_entry_trigger"]["trigger_reason"],
+            "entry_zone_touched",
+        )
+        self.assertEqual(
             self.virtual.calls[0][1].metadata["lifecycle_trace"]["signal_id"],
             str(SIGNAL_ID),
         )
+        self.assertEqual(self.virtual.trades[0].pending_entry_intent_id, str(created.id))
+        self.assertEqual(self.virtual.trades[0].accepted_trade_plan_hash, created.accepted_trade_plan_hash)
+        self.assertEqual(self.virtual.trades[0].trigger_source, "pending_entry")
         self.assertEqual(self.events.statuses(), ["triggered", "filling", "filled"])
 
     def test_short_entry_touched_by_bid_fills_once(self) -> None:
@@ -317,6 +334,7 @@ class _FakeSignalProvider:
 class _FakeVirtualTrading:
     def __init__(self) -> None:
         self.calls: list[tuple[RadarSignal, ManualConfirmRequest]] = []
+        self.trades: list[VirtualTrade] = []
         self.failure: Exception | None = None
 
     def confirm_signal(self, signal: RadarSignal, request: ManualConfirmRequest) -> tuple[RadarSignal, VirtualTrade]:
@@ -324,6 +342,7 @@ class _FakeVirtualTrading:
         if self.failure is not None:
             raise self.failure
         trade = _virtual_trade(signal, request)
+        self.trades.append(trade)
         return signal.model_copy(update={"status": "confirmed", "confirmed_trade_id": trade.id}), trade
 
 
@@ -436,10 +455,17 @@ def _execution_profile() -> ResolvedExecutionProfile:
 
 def _virtual_trade(signal: RadarSignal, request: ManualConfirmRequest) -> VirtualTrade:
     now = datetime.now(timezone.utc)
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    pending_entry_intent_id = metadata.get("pending_entry_intent_id")
+    pending_entry_intent_id = str(pending_entry_intent_id) if pending_entry_intent_id is not None else None
     return VirtualTrade(
         id=str(TRADE_ID),
         user_id=request.user_id,
         signal_id=signal.id,
+        pending_entry_intent_id=pending_entry_intent_id,
+        accepted_trade_plan_hash=metadata.get("accepted_trade_plan_hash"),
+        trigger_source=metadata.get("trigger_source"),
+        origin=metadata.get("origin"),
         exchange=signal.exchange,
         symbol=signal.symbol,
         strategy=signal.strategy,
@@ -457,6 +483,11 @@ def _virtual_trade(signal: RadarSignal, request: ManualConfirmRequest) -> Virtua
         take_profit=[110.0],
         opened_at=now,
         updated_at=now,
+        lifecycle_trace=LifecycleTrace(
+            signal_id=signal.id,
+            pending_entry_intent_id=pending_entry_intent_id,
+            virtual_trade_id=str(TRADE_ID),
+        ),
     )
 
 

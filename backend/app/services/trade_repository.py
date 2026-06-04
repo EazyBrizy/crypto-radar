@@ -32,7 +32,7 @@ from app.repositories.signal_repository import (
     _persist_signal_event,
     _record_to_radar_signal,
 )
-from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
+from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, TradeOrigin, VirtualAccount, VirtualTrade
 from app.services.bootstrap_service import INITIAL_VIRTUAL_BALANCE
 from app.models.strategy import StrategyVersion
 from app.services.risk_state import risk_state_service
@@ -471,10 +471,24 @@ class PostgresVirtualTradeRepository:
             trade.model_copy(update={"id": str(position.id)}),
             signal_id=str(signal.id),
             virtual_trade_id=str(position.id),
+            virtual_order_id=str(order.id),
+            position_id=str(position.id),
         )
         order.metadata_ = {
             **(order.metadata_ or {}),
             "position_id": str(position.id),
+            "pending_entry_intent_id": persisted_trade.pending_entry_intent_id,
+            "accepted_trade_plan_hash": persisted_trade.accepted_trade_plan_hash,
+            "trigger_source": persisted_trade.trigger_source,
+            "origin": (
+                persisted_trade.origin.model_dump(mode="json", exclude_none=True)
+                if persisted_trade.origin is not None
+                else None
+            ),
+            "lifecycle_trace": persisted_trade.lifecycle_trace.model_dump(
+                mode="json",
+                exclude_none=True,
+            ),
             "virtual_trade": persisted_trade.model_dump(mode="json"),
             "virtual_execution": (
                 persisted_trade.execution.model_dump(mode="json")
@@ -498,11 +512,21 @@ class PostgresVirtualTradeRepository:
                 persisted_trade,
                 signal_id=str(signal.id),
                 virtual_trade_id=str(position.id),
+                virtual_order_id=str(order.id),
+                position_id=str(position.id),
                 risk_decision_id=str(risk_decision.id),
             )
             order.metadata_ = {
                 **(order.metadata_ or {}),
                 "risk_decision_id": str(risk_decision.id),
+                "pending_entry_intent_id": persisted_trade.pending_entry_intent_id,
+                "accepted_trade_plan_hash": persisted_trade.accepted_trade_plan_hash,
+                "trigger_source": persisted_trade.trigger_source,
+                "origin": (
+                    persisted_trade.origin.model_dump(mode="json", exclude_none=True)
+                    if persisted_trade.origin is not None
+                    else None
+                ),
                 "lifecycle_trace": persisted_trade.lifecycle_trace.model_dump(
                     mode="json",
                     exclude_none=True,
@@ -1236,13 +1260,30 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
     realized_pnl = _optional_float(snapshot.get("realized_pnl"))
     if realized_pnl is None:
         realized_pnl = pnl if pnl is not None else 0.0
+    lifecycle_trace = snapshot.get("lifecycle_trace") or metadata.get("lifecycle_trace") or {}
+    strategy = (
+        position.signal.strategy_version.strategy.code
+        if position.signal
+        else snapshot.get("strategy", "unknown")
+    )
+    origin = _origin_from_snapshot(
+        snapshot=snapshot,
+        metadata=metadata,
+        position=position,
+        strategy=strategy,
+        lifecycle_trace=lifecycle_trace,
+    )
     return VirtualTrade(
         id=str(position.id),
         user_id=snapshot.get("user_id") or (position.user.username or str(position.user_id)),
         signal_id=str(position.signal_id),
+        pending_entry_intent_id=origin.pending_entry_intent_id,
+        accepted_trade_plan_hash=origin.accepted_trade_plan_hash,
+        trigger_source=origin.trigger_source,
+        origin=origin,
         exchange=position.pair.exchange.code,
         symbol=position.pair.symbol,
-        strategy=position.signal.strategy_version.strategy.code if position.signal else snapshot.get("strategy", "unknown"),
+        strategy=strategy,
         timeframe=position.signal.timeframe if position.signal else snapshot.get("timeframe", "unknown"),
         side=position.side,
         entry_price=entry_price,
@@ -1304,8 +1345,74 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
         closed_at=position.closed_at,
         target_states=snapshot.get("target_states") or [],
         lifecycle_events=snapshot.get("lifecycle_events") or [],
-        lifecycle_trace=snapshot.get("lifecycle_trace") or {},
+        lifecycle_trace=lifecycle_trace,
     )
+
+
+def _origin_from_snapshot(
+    *,
+    snapshot: dict[str, Any],
+    metadata: dict[str, Any],
+    position: Position,
+    strategy: str,
+    lifecycle_trace: Any,
+) -> TradeOrigin:
+    origin = _parse_trade_origin(snapshot.get("origin"))
+    if origin is None:
+        origin = _parse_trade_origin(metadata.get("origin"))
+    if origin is None:
+        origin = TradeOrigin()
+
+    pending_entry_intent_id = (
+        _string_or_none(snapshot.get("pending_entry_intent_id"))
+        or _string_or_none(metadata.get("pending_entry_intent_id"))
+        or origin.pending_entry_intent_id
+        or _string_or_none(_trace_value(lifecycle_trace, "pending_entry_intent_id"))
+    )
+    accepted_trade_plan_hash = (
+        _string_or_none(snapshot.get("accepted_trade_plan_hash"))
+        or _string_or_none(metadata.get("accepted_trade_plan_hash"))
+        or origin.accepted_trade_plan_hash
+    )
+    trigger_source = (
+        _string_or_none(snapshot.get("trigger_source"))
+        or _string_or_none(metadata.get("trigger_source"))
+        or origin.trigger_source
+        or ("pending_entry" if pending_entry_intent_id is not None else "manual")
+    )
+    return origin.model_copy(
+        update={
+            "signal_id": (
+                _string_or_none(snapshot.get("signal_id"))
+                or origin.signal_id
+                or _string_or_none(position.signal_id)
+            ),
+            "pending_entry_intent_id": pending_entry_intent_id,
+            "strategy": strategy,
+            "mode": "virtual",
+            "accepted_trade_plan_hash": accepted_trade_plan_hash,
+            "trigger_source": trigger_source,
+            "virtual_trade_id": str(position.id),
+            "position_id": str(position.id),
+        }
+    )
+
+
+def _parse_trade_origin(value: Any) -> TradeOrigin | None:
+    if isinstance(value, TradeOrigin):
+        return value
+    if not isinstance(value, dict):
+        return None
+    try:
+        return TradeOrigin.model_validate(value)
+    except ValueError:
+        return None
+
+
+def _trace_value(trace: Any, key: str) -> Any:
+    if isinstance(trace, dict):
+        return trace.get(key)
+    return getattr(trace, key, None)
 
 
 def _signal_result_for_confirmed(signal: TradingSignal, trade_id: str) -> SignalWriteResult:
@@ -1373,6 +1480,13 @@ def _optional_decimal(value: Any | None) -> Decimal | None:
     return _decimal(value)
 
 
+def _string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _position_fee_estimate(sizing: Any) -> Decimal:
     position_size = _decimal(sizing.position_size_base)
     fee_per_unit = _decimal(sizing.estimated_entry_fee_per_unit) + _decimal(
@@ -1405,6 +1519,8 @@ def _trade_with_lifecycle_trace(
     *,
     signal_id: str,
     virtual_trade_id: str,
+    virtual_order_id: str | None = None,
+    position_id: str | None = None,
     risk_decision_id: str | None = None,
 ) -> VirtualTrade:
     trace = trade.lifecycle_trace.model_copy(
@@ -1414,6 +1530,24 @@ def _trade_with_lifecycle_trace(
             "risk_decision_id": risk_decision_id or trade.lifecycle_trace.risk_decision_id,
             "audit_id": risk_decision_id or trade.lifecycle_trace.audit_id,
         }
+    )
+    pending_entry_intent_id = trade.pending_entry_intent_id or trace.pending_entry_intent_id
+    trigger_source = trade.trigger_source or ("pending_entry" if pending_entry_intent_id is not None else "manual")
+    origin = _origin_with_persistence_ids(
+        trade,
+        signal_id=signal_id,
+        pending_entry_intent_id=pending_entry_intent_id,
+        trigger_source=trigger_source,
+        virtual_order_id=virtual_order_id,
+        virtual_trade_id=virtual_trade_id,
+        position_id=position_id or virtual_trade_id,
+    )
+    lifecycle_events = _events_with_lifecycle_trace(
+        trade,
+        trace=trace,
+        signal_id=signal_id,
+        pending_entry_intent_id=pending_entry_intent_id,
+        virtual_trade_id=virtual_trade_id,
     )
     execution = trade.execution
     if execution is not None:
@@ -1439,7 +1573,84 @@ def _trade_with_lifecycle_trace(
                 "risk_decision": risk_decision,
             }
         )
-    return trade.model_copy(update={"lifecycle_trace": trace, "execution": execution})
+    return trade.model_copy(
+        update={
+            "pending_entry_intent_id": pending_entry_intent_id,
+            "accepted_trade_plan_hash": trade.accepted_trade_plan_hash or origin.accepted_trade_plan_hash,
+            "trigger_source": trigger_source,
+            "origin": origin,
+            "lifecycle_events": lifecycle_events,
+            "lifecycle_trace": trace,
+            "execution": execution,
+        }
+    )
+
+
+def _origin_with_persistence_ids(
+    trade: VirtualTrade,
+    *,
+    signal_id: str,
+    pending_entry_intent_id: str | None,
+    trigger_source: str | None,
+    virtual_order_id: str | None,
+    virtual_trade_id: str,
+    position_id: str,
+) -> TradeOrigin:
+    origin = trade.origin or TradeOrigin()
+    return origin.model_copy(
+        update={
+            "signal_id": signal_id,
+            "pending_entry_intent_id": pending_entry_intent_id or origin.pending_entry_intent_id,
+            "strategy": trade.strategy or origin.strategy,
+            "mode": "virtual",
+            "accepted_trade_plan_hash": (
+                trade.accepted_trade_plan_hash
+                or origin.accepted_trade_plan_hash
+            ),
+            "trigger_source": trigger_source or origin.trigger_source,
+            "virtual_order_id": virtual_order_id or origin.virtual_order_id,
+            "virtual_trade_id": virtual_trade_id,
+            "position_id": position_id,
+        }
+    )
+
+
+def _events_with_lifecycle_trace(
+    trade: VirtualTrade,
+    *,
+    trace: Any,
+    signal_id: str,
+    pending_entry_intent_id: str | None,
+    virtual_trade_id: str,
+) -> list[Any]:
+    events: list[Any] = []
+    for event in trade.lifecycle_events:
+        event_trace = event.lifecycle_trace.model_copy(
+            update={
+                "signal_id": signal_id,
+                "pending_entry_intent_id": pending_entry_intent_id
+                or event.pending_entry_intent_id
+                or trace.pending_entry_intent_id,
+                "risk_decision_id": trace.risk_decision_id or event.risk_decision_id,
+                "audit_id": trace.audit_id or event.lifecycle_trace.audit_id,
+                "virtual_trade_id": virtual_trade_id,
+                "real_order_id": trace.real_order_id or event.real_order_id,
+                "exit_event_id": event.exit_event_id or event.lifecycle_trace.exit_event_id,
+            }
+        )
+        events.append(
+            event.model_copy(
+                update={
+                    "signal_id": signal_id,
+                    "pending_entry_intent_id": pending_entry_intent_id or event.pending_entry_intent_id,
+                    "risk_decision_id": trace.risk_decision_id or event.risk_decision_id,
+                    "virtual_trade_id": virtual_trade_id,
+                    "real_order_id": trace.real_order_id or event.real_order_id,
+                    "lifecycle_trace": event_trace,
+                }
+            )
+        )
+    return events
 
 
 def _risk_lifecycle_trace(

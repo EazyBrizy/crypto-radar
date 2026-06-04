@@ -34,6 +34,18 @@ class PendingEntryApiTest(unittest.TestCase):
         self.assertEqual(response.json()["status"], "pending")
         self.assertEqual(service.arm_calls, 1)
 
+    def test_arm_pending_entry_endpoint_accepts_usr_demo(self) -> None:
+        service = _FakePendingEntryService()
+        with patch("app.api.v1.pending_entry.pending_entry_intent_service", service):
+            response = self.client.post(
+                f"/signals/{SIGNAL_ID}/pending-entry",
+                json={"mode": "virtual", "user_id": "usr_demo", "auto_enter_on_confirmation": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], str(INTENT_ID))
+        self.assertEqual(service.arm_user_ids, ["usr_demo"])
+
     def test_double_arm_endpoint_returns_existing_intent(self) -> None:
         service = _FakePendingEntryService()
         with patch("app.api.v1.pending_entry.pending_entry_intent_service", service):
@@ -82,11 +94,13 @@ class _FakePendingEntryService:
         self.intent = _pending_intent()
         self.created_intent_count = 0
         self.arm_calls = 0
+        self.arm_user_ids: list[str] = []
         self.list_calls: list[tuple[str, str]] = []
         self.cancel_calls: list[tuple[str, str]] = []
 
     def arm_signal_workflow(self, *, signal_id, request, auto_entry_arm=None) -> PendingEntryIntentRead:
         self.arm_calls += 1
+        self.arm_user_ids.append(request.user_id)
         if self.created_intent_count == 0:
             self.created_intent_count = 1
         return self.intent

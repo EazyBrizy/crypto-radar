@@ -8,8 +8,9 @@ import json
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.database import SessionLocal
 from app.domain.pending_entry_intent import is_terminal_pending_entry_intent_status
 from app.domain.signal_status import is_market_opportunity_status, is_terminal_signal_status
 from app.models.pending_entry import PendingEntryIntent
@@ -33,6 +34,7 @@ from app.services.risk_management import (
 )
 from app.services.signal_risk_reward import ensure_signal_execution_eligible
 from app.services.strategy_config_service import strategy_config_service
+from app.services.user_identity import resolve_app_user_uuid
 
 SignalLoader = Callable[[str], RadarSignal | None]
 RiskSettingsProvider = Callable[[str], RiskManagementSettings]
@@ -46,11 +48,13 @@ class PendingEntryService:
         self,
         repository: PendingEntryIntentRepository | None = None,
         *,
+        session_factory: sessionmaker[Session] | None = None,
         signal_loader: SignalLoader | None = None,
         user_profile_provider: UserProfileProvider | None = None,
         risk_settings_provider: RiskSettingsProvider | None = None,
     ) -> None:
         self._repository = repository or PendingEntryIntentRepository()
+        self._session_factory = session_factory or getattr(self._repository, "_session_factory", SessionLocal)
         self._signal_loader = signal_loader
         self._user_profile_provider = user_profile_provider
         self._risk_settings_provider = risk_settings_provider or get_user_risk_management_settings
@@ -316,21 +320,8 @@ class PendingEntryService:
         return signal_service.get_signal(str(signal_id))
 
     def _resolve_user_uuid(self, user_id: str | UUID) -> UUID:
-        if isinstance(user_id, UUID):
-            return user_id
-        parsed = _parse_uuid(str(user_id))
-        if parsed is not None:
-            return parsed
-        profile_provider = self._user_profile_provider
-        if profile_provider is None:
-            from app.services.user_service import user_service
-
-            profile_provider = user_service.get_profile
-        profile = profile_provider(str(user_id))
-        profile_id = getattr(profile, "id", None)
-        if profile_id is None and isinstance(profile, dict):
-            profile_id = profile.get("id")
-        return _parse_uuid_or_raise(profile_id, "user_id")
+        with self._session_factory() as session:
+            return resolve_app_user_uuid(session, user_id)
 
     def _get_active_intent(
         self,

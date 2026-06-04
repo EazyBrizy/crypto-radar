@@ -59,6 +59,41 @@ describe("signalsApi.armPendingEntry", () => {
   });
 });
 
+describe("signalsApi.confirmReal", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("sends an explicit real confirmation without account balance override", async () => {
+    const fetchSpy = vi.fn(async () =>
+      new Response(JSON.stringify({ message: "ok" }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      })
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await signalsApi.confirmReal({
+      signalId: "sig_1",
+      userId: "user_1",
+      connectionId: "conn_1",
+      waitForConfirmation: true
+    });
+
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({
+      mode: "real",
+      user_id: "user_1",
+      connection_id: "conn_1",
+      auto_enter_on_confirmation: true
+    });
+    expect(body.metadata).toMatchObject({ connection_id: "conn_1" });
+    expect(body).not.toHaveProperty("account_balance");
+  });
+});
+
 describe("signalsApi.pendingEntry", () => {
   afterEach(() => {
     vi.restoreAllMocks();

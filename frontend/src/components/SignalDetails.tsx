@@ -19,7 +19,8 @@ import {
   riskGateTone
 } from "@/domain/signal-status";
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
-import type { DecisionReason, ExecutionGateStatus, ImpactRisk, PendingEntryIntent, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
+import type { AccountRiskSnapshot, ExchangeConnection } from "@/features/server-state/types";
+import type { DecisionReason, ExecutionGateStatus, ImpactRisk, PendingEntryIntent, RadarSignal, RiskStateResponse, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
 import {
   entryZone,
   formingCandleReason,
@@ -42,6 +43,7 @@ const LazySignalDetailsChart = dynamic(
 interface SignalDetailsProps {
   signal: RadarSignal | null;
   onPaperTrade: (signal: RadarSignal) => void;
+  onConfirmRealTrade?: (signal: RadarSignal) => void | Promise<unknown>;
   onAcceptPendingEntry?: (signal: RadarSignal) => void;
   onCancelPendingEntry?: (intent: PendingEntryIntent) => void;
   onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
@@ -53,11 +55,23 @@ interface SignalDetailsProps {
   executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
   tradingActionsDisabled?: boolean;
+  realTradeContext?: RealTradeContext;
+  realTradeBusy?: boolean;
+}
+
+export interface RealTradeContext {
+  userId: string;
+  connection: ExchangeConnection | null;
+  accountSnapshot: AccountRiskSnapshot | null;
+  riskState: RiskStateResponse | null;
+  realExecutionEnabled: boolean;
+  loading?: boolean;
 }
 
 export function SignalDetails({
   signal,
   onPaperTrade,
+  onConfirmRealTrade,
   onAcceptPendingEntry,
   onCancelPendingEntry,
   onReconfirmPendingEntry,
@@ -68,9 +82,12 @@ export function SignalDetails({
   executionPreview,
   executionPreviewError = null,
   executionPreviewLoading = false,
-  tradingActionsDisabled = false
+  tradingActionsDisabled = false,
+  realTradeContext,
+  realTradeBusy = false
 }: SignalDetailsProps) {
   const [chartOpen, setChartOpen] = useState(false);
+  const [realConfirmationOpen, setRealConfirmationOpen] = useState(false);
 
   if (!signal) {
     return (
@@ -111,6 +128,7 @@ export function SignalDetails({
     || !isMarketOpportunity(signal.status)
     || statusAllowsTrade;
   const cancelPendingDisabled = busy || tradingActionsDisabled || !activePendingEntry;
+  const realActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || !isMarketOpportunity(signal.status);
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const breakdown = signal.score_breakdown;
   const tradePlan = signalTradePlanSummary(signal);
@@ -228,21 +246,37 @@ export function SignalDetails({
 
       <div className="detail-actions">
         <button className="secondary-action" onClick={() => onAcceptPendingEntry?.(signal)} disabled={acceptPendingDisabled} type="button">
-          <FileCheck2 size={17} /> Принять и ждать вход
+          <FileCheck2 size={17} /> Принять и ждать виртуальный вход
+        </button>
+        <button className="real-action" onClick={() => setRealConfirmationOpen(true)} disabled={realActionDisabled} type="button">
+          <ShieldAlert size={17} /> Принять и ждать реальный вход
         </button>
         <button className="secondary-action" onClick={() => activePendingEntry ? onCancelPendingEntry?.(activePendingEntry) : undefined} disabled={cancelPendingDisabled} type="button">
           <XCircle size={17} /> Cancel waiting
         </button>
         <button className="primary-action" onClick={() => onPaperTrade(signal)} disabled={entryActionDisabled} type="button">
-          <FileCheck2 size={17} /> {statusAllowsTrade ? "Paper Trade" : autoEntryPending ? "Auto Paper Armed" : "Waiting Entry"}
+          <FileCheck2 size={17} /> {statusAllowsTrade ? "Открыть виртуальную сделку" : autoEntryPending ? "Виртуальный вход вооружён" : "Ждать виртуальный вход"}
         </button>
         <button className="secondary-action" type="button" disabled>
-          <ExternalLink size={17} /> Open Exchange
+          <ExternalLink size={17} /> Открыть биржу
         </button>
         <button className="danger-action" onClick={() => onReject(signal)} disabled={rejectDisabled} type="button">
-          <XCircle size={17} /> Ignore Signal
+          <XCircle size={17} /> Отклонить сигнал
         </button>
       </div>
+      {realConfirmationOpen ? (
+        <RealTradeConfirmationModal
+          busy={realTradeBusy}
+          context={realTradeContext}
+          execution={executionPreview}
+          onCancel={() => setRealConfirmationOpen(false)}
+          onConfirm={() => {
+            if (!onConfirmRealTrade) return;
+            void Promise.resolve(onConfirmRealTrade(signal)).then(() => setRealConfirmationOpen(false));
+          }}
+          signal={signal}
+        />
+      ) : null}
       {tradingActionsDisabled ? (
         <p className="form-description">Trading actions disabled until realtime data is current.</p>
       ) : null}
@@ -266,6 +300,284 @@ export function SignalDetails({
       ) : null}
     </section>
   );
+}
+
+function RealTradeConfirmationModal({
+  signal,
+  context,
+  execution,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  signal: RadarSignal;
+  context?: RealTradeContext;
+  execution: VirtualExecutionReport | null;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const snapshot = context?.accountSnapshot ?? null;
+  const connection = context?.connection ?? null;
+  const tradePlan = signalTradePlanSummary(signal);
+  const riskDecision = execution?.risk_decision ?? null;
+  const riskCheck = execution?.risk_check ?? null;
+  const sizing = execution?.position_sizing ?? riskDecision?.checked_position_sizing ?? null;
+  const environment = connectionEnvironment(connection);
+  const blockers = realTradeBlockers(signal, context, execution);
+  const warnings = realTradeWarnings(signal, context, execution);
+  const confirmDisabled = busy || blockers.length > 0;
+  const accountEquity = snapshot?.account_equity ?? riskCheck?.account_equity ?? null;
+  const availableBalance = snapshot?.available_balance ?? riskCheck?.available_balance ?? null;
+  const positionNotional = sizing?.notional ?? riskCheck?.position_notional ?? null;
+  const requiredMargin = sizing?.required_margin ?? riskCheck?.required_margin ?? null;
+  const riskAmount = riskCheck?.effective_risk_amount ?? sizing?.risk_amount ?? null;
+  const riskPercent = riskCheck?.adjusted_risk_percent ?? sizing?.risk_per_trade_percent ?? riskDecision?.risk_adjustment_plan.adjusted_risk_percent ?? null;
+  const feeRate = riskCheck?.taker_fee_rate ?? sizing?.fee_rate ?? null;
+  const slippageBps = riskCheck?.slippage_bps ?? sizing?.slippage_bps ?? execution?.entry_slippage_bps ?? null;
+  const exchangeLabel = connection
+    ? `${connection.exchange_name || connection.exchange_code} · ${connection.label}`
+    : signal.exchange;
+
+  return (
+    <div className="real-trade-modal-backdrop">
+      <div aria-labelledby="real-trade-confirm-title" aria-modal="true" className="real-trade-modal" role="dialog">
+        <div className="real-trade-modal-header">
+          <div>
+            <span className="muted">Real execution</span>
+            <h3 id="real-trade-confirm-title">Подтверждение реального входа</h3>
+          </div>
+          <div className="details-badges">
+            <Badge tone={environment === "testnet" ? "blue" : environment === "mainnet" ? "red" : "yellow"}>
+              {environment === "testnet" ? "Testnet" : environment === "mainnet" ? "Mainnet" : "Unknown net"}
+            </Badge>
+            <Badge tone={snapshotStatusTone(snapshot?.status ?? "missing")}>{snapshot?.status ?? "missing"}</Badge>
+          </div>
+        </div>
+
+        <div className="real-trade-warning">
+          <ShieldAlert size={18} />
+          <span>Реальный вход отделён от виртуального: подтверждение доступно только при свежем snapshot и без блокеров.</span>
+        </div>
+
+        <div className="real-trade-metric-grid">
+          <RealTradeMetric label="Exchange" value={exchangeLabel} />
+          <RealTradeMetric label="Account equity" value={formatCurrencyAmount(accountEquity)} />
+          <RealTradeMetric label="Available balance" value={formatCurrencyAmount(availableBalance)} />
+          <RealTradeMetric label="Snapshot age" value={formatSnapshotFreshness(snapshot)} />
+          <RealTradeMetric label="Symbol / side" value={`${signal.symbol} / ${signal.direction.toUpperCase()}`} />
+          <RealTradeMetric label="Entry zone" value={tradePlan.entryZone} />
+          <RealTradeMetric label="Stop-loss" value={formatPrice(tradePlan.stopLoss)} />
+          <RealTradeMetric label="TP targets" value={formatTargetsInline(tradePlan.targets)} />
+          <RealTradeMetric label="Selected RR" value={formatRMultiple(tradePlan.selectedRr)} />
+          <RealTradeMetric label="Position notional" value={formatCurrencyAmount(positionNotional)} />
+          <RealTradeMetric label="Required margin" value={formatCurrencyAmount(requiredMargin)} />
+          <RealTradeMetric label="Risk amount / %" value={`${formatCurrencyAmount(riskAmount)} / ${formatPercentValue(riskPercent)}`} />
+          <RealTradeMetric label="Fees / slippage" value={`${formatFeeRate(feeRate)} / ${formatBps(slippageBps)}`} />
+          <RealTradeMetric label="Protective stop" value={protectiveStopStatus(signal, execution)} />
+          <RealTradeMetric label="RiskGate" value={riskGateStatusLabel(signal, execution)} />
+        </div>
+
+        <div className="real-trade-blockers">
+          <strong>Key blockers / warnings</strong>
+          {blockers.length ? (
+            <ul className="risk-blocker-list">
+              {blockers.map((blocker) => (
+                <li key={blocker}>{blocker}</li>
+              ))}
+            </ul>
+          ) : (
+            <p>Блокеров нет.</p>
+          )}
+          {warnings.length ? (
+            <div className="real-trade-warning-list">
+              {warnings.map((warning) => (
+                <span key={warning}>{warning}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="real-trade-modal-actions">
+          <button className="secondary-action" onClick={onCancel} type="button">
+            Отмена
+          </button>
+          <button className="real-action" disabled={confirmDisabled} onClick={onConfirm} type="button">
+            <ShieldAlert size={17} /> Подтвердить реальный вход
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RealTradeMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="real-trade-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function realTradeBlockers(
+  signal: RadarSignal,
+  context: RealTradeContext | undefined,
+  execution: VirtualExecutionReport | null
+): string[] {
+  const snapshot = context?.accountSnapshot ?? null;
+  const riskCheck = execution?.risk_check ?? null;
+  const riskDecision = execution?.risk_decision ?? null;
+  const riskState = context?.riskState ?? null;
+  const blockers = [
+    ...(!context?.realExecutionEnabled ? ["Live trading выключен в настройках пользователя."] : []),
+    ...(!snapshot ? ["Account snapshot отсутствует."] : []),
+    ...(snapshot?.status === "missing" ? ["Account snapshot отсутствует."] : []),
+    ...(snapshot?.status === "stale" ? ["Account snapshot устарел."] : []),
+    ...(riskGateBlocked(signal, execution) ? ["RiskGate блокирует реальный вход."] : []),
+    ...(protectiveStopMissing(signal, execution) ? ["Protective stop отсутствует."] : []),
+    ...(riskCheck?.protective_orders_allowed === false || riskState?.protective_orders_allowed === false
+      ? ["Protective orders недоступны в текущем risk state."]
+      : []),
+    ...(riskCheck?.real_entries_allowed === false || riskState?.real_entries_allowed === false
+      ? ["Risk state запрещает real entries."]
+      : []),
+    ...(riskCheck?.close_only || riskState?.close_only ? ["Risk state находится в close-only режиме."] : []),
+    ...(connectionEnvironment(context?.connection ?? null) === "mainnet" && !mainnetExplicitlyEnabled(context?.connection ?? null)
+      ? ["Mainnet требует отдельного явного включения."]
+      : [])
+  ];
+  return dedupe([
+    ...blockers,
+    ...(riskCheck?.status === "failed" ? riskCheck.blockers : []),
+    ...(riskDecision?.status === "failed" ? riskDecision.blockers : []),
+    ...(signal.decision?.execution_allowed_real === false
+      ? signal.decision.blockers.filter((reason) => reason.scope === "real").map((reason) => reason.message)
+      : [])
+  ]);
+}
+
+function realTradeWarnings(
+  signal: RadarSignal,
+  context: RealTradeContext | undefined,
+  execution: VirtualExecutionReport | null
+): string[] {
+  const riskCheck = execution?.risk_check ?? null;
+  const riskDecision = execution?.risk_decision ?? null;
+  return dedupe([
+    ...(context?.loading ? ["Данные аккаунта обновляются."] : []),
+    ...(context?.accountSnapshot?.warnings ?? []),
+    ...(riskCheck?.warnings ?? []),
+    ...(riskDecision?.warnings ?? []),
+    ...(signal.no_trade_filter?.warnings ?? []),
+    ...(context?.riskState?.protection_reason ? [context.riskState.protection_reason] : [])
+  ]);
+}
+
+function riskGateBlocked(signal: RadarSignal, execution: VirtualExecutionReport | null): boolean {
+  const riskCheck = execution?.risk_check ?? null;
+  const riskDecision = execution?.risk_decision ?? null;
+  return signal.risk_gate_status === "failed"
+    || signal.can_enter === false
+    || signal.decision?.execution_allowed_real === false
+    || riskCheck?.status === "failed"
+    || riskDecision?.status === "failed"
+    || riskDecision?.can_enter === false;
+}
+
+function protectiveStopMissing(signal: RadarSignal, execution: VirtualExecutionReport | null): boolean {
+  const plan = signalTradePlanSummary(signal);
+  return plan.stopLoss == null && execution?.stop_loss_plan?.stop_loss_price == null;
+}
+
+function protectiveStopStatus(signal: RadarSignal, execution: VirtualExecutionReport | null): string {
+  if (protectiveStopMissing(signal, execution)) return "missing";
+  if (execution?.risk_check?.protective_orders_allowed === false) return "blocked";
+  const stop = execution?.stop_loss_plan?.stop_loss_price ?? signalTradePlanSummary(signal).stopLoss;
+  return `ready @ ${formatPrice(stop)}`;
+}
+
+function riskGateStatusLabel(signal: RadarSignal, execution: VirtualExecutionReport | null): string {
+  const status = execution?.risk_decision?.status ?? execution?.risk_check?.status ?? signal.risk_gate_status ?? "not previewed";
+  if (execution?.risk_decision?.can_enter === false || signal.can_enter === false) return `${status} / blocked`;
+  return status;
+}
+
+function connectionEnvironment(connection: ExchangeConnection | null): "testnet" | "mainnet" | "unknown" {
+  if (!connection) return "unknown";
+  const metadata = connection.metadata;
+  if (isTruthyMetadataValue(metadata.testnet)) return "testnet";
+  const environment = typeof metadata.environment === "string" ? metadata.environment.trim().toLowerCase() : "";
+  if (environment === "testnet") return "testnet";
+  return "mainnet";
+}
+
+function mainnetExplicitlyEnabled(connection: ExchangeConnection | null): boolean {
+  if (!connection) return false;
+  const metadata = connection.metadata;
+  return [
+    metadata.enable_mainnet_order_placement,
+    metadata.mainnet_order_placement_enabled,
+    metadata.allow_mainnet_order_placement,
+    metadata.mainnet_enabled,
+    metadata.enable_live_mainnet,
+    metadata.explicit_mainnet_enabled
+  ].some(isTruthyMetadataValue);
+}
+
+function isTruthyMetadataValue(value: unknown): boolean {
+  if (value === true) return true;
+  if (typeof value === "number") return value === 1;
+  if (typeof value !== "string") return false;
+  return ["1", "true", "yes", "on", "enabled"].includes(value.trim().toLowerCase());
+}
+
+function snapshotStatusTone(status: AccountRiskSnapshot["status"]): "green" | "red" | "yellow" | "blue" {
+  if (status === "fresh") return "green";
+  if (status === "stale") return "yellow";
+  return "red";
+}
+
+function formatSnapshotFreshness(snapshot: AccountRiskSnapshot | null): string {
+  if (!snapshot) return "missing";
+  return `${snapshot.status} / ${formatSnapshotAge(snapshot.fetched_at)}`;
+}
+
+function formatSnapshotAge(value: string | null | undefined): string {
+  if (!value) return "missing";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "unknown";
+  const diffSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (diffSeconds < 60) return "just now";
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  return `${Math.floor(diffMinutes / 60)}h ago`;
+}
+
+function formatCurrencyAmount(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "-";
+  return value.toLocaleString("en-US", {
+    currency: "USD",
+    maximumFractionDigits: value >= 1000 ? 2 : 6,
+    minimumFractionDigits: value >= 1000 ? 2 : 0,
+    style: "currency"
+  });
+}
+
+function formatPercentValue(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "-";
+  if (value > 0 && value < 0.01) return "<0.01%";
+  return `${value.toFixed(value >= 10 ? 1 : 2)}%`;
+}
+
+function formatFeeRate(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "fee -";
+  return `fee ${(value * 100).toFixed(3)}%`;
+}
+
+function formatBps(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "slippage -";
+  return `slippage ${value.toFixed(1)} bps`;
 }
 
 function recommendedAction(signal: RadarSignal): string {

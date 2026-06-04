@@ -13,6 +13,13 @@ type PendingEntryInput = {
   userId?: string;
 };
 
+type RealConfirmInput = {
+  signalId: string;
+  userId: string;
+  connectionId?: string | null;
+  waitForConfirmation?: boolean;
+};
+
 type PendingEntryIntentDto = Record<string, unknown>;
 
 export const signalsApi = {
@@ -66,6 +73,27 @@ export const signalsApi = {
           max_open_positions: 3
         }
       })
+    );
+  },
+  async confirmReal(input: RealConfirmInput) {
+    const body: Record<string, unknown> = {
+      mode: "real",
+      user_id: input.userId,
+      auto_enter_on_confirmation: Boolean(input.waitForConfirmation),
+      metadata: {
+        source: "radar_real_trade_confirmation_modal",
+        ...(input.connectionId ? { connection_id: input.connectionId } : {})
+      }
+    };
+    if (input.connectionId) {
+      body.connection_id = input.connectionId;
+    }
+    return requestJson<unknown>(
+      `/api/v1/signals/${encodeURIComponent(input.signalId)}/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify(body)
+      }
     );
   },
   async pendingEntry(signalId: string, userId = "demo_user"): Promise<PendingEntryIntent | null> {

@@ -611,6 +611,24 @@ export function useConfirmVirtualMutation() {
   });
 }
 
+export function useConfirmRealMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: api.confirmReal,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.signals.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.journal.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.risk.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.exchangeConnections.all() })
+      ]);
+    }
+  });
+}
+
 export function useArmPendingEntryMutation() {
   const queryClient = useQueryClient();
 

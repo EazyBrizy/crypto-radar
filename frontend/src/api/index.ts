@@ -33,6 +33,7 @@ export const api = {
   openSignals: signalsApi.open,
   historicalSignals: signalsApi.historical,
   confirmVirtual: signalsApi.confirmVirtual,
+  confirmReal: signalsApi.confirmReal,
   pendingEntry: signalsApi.pendingEntry,
   pendingEntryHistory: signalsApi.pendingEntryHistory,
   armPendingEntry: signalsApi.armPendingEntry,

@@ -1,7 +1,7 @@
 import { Filter, RadioTower, RefreshCw } from "lucide-react";
 
 import { Metric } from "@/components/Metric";
-import { SignalDetails } from "@/components/SignalDetails";
+import { SignalDetails, type RealTradeContext } from "@/components/SignalDetails";
 import { SignalFeed } from "@/components/SignalFeed";
 import { canShowEnterButton, RADAR_STATUS_FILTERS } from "@/domain/signal-status";
 import type { RadarDisplayMode } from "@/features/server-state/types";
@@ -23,6 +23,7 @@ interface RadarPageProps {
   onRadarDisplayModeChange: (mode: RadarDisplayMode) => void;
   onSignalViewChange: (view: "open" | "history") => void;
   onStatusFilterChange: (filter: "all" | SignalStatus) => void;
+  onConfirmRealTrade: (signal: RadarSignal) => void;
   onPaperTrade: (signal: RadarSignal) => void;
   onRefresh: () => void;
   onReject: (signal: RadarSignal) => void;
@@ -38,6 +39,8 @@ interface RadarPageProps {
   executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
   pendingEntryLoading?: boolean;
+  realTradeContext?: RealTradeContext;
+  realTradeBusy?: boolean;
   tradingActionsDisabled?: boolean;
 }
 
@@ -173,6 +176,7 @@ export function RadarPage(props: RadarPageProps) {
       <SignalDetails
         signal={props.selectedSignal}
         onPaperTrade={props.onPaperTrade}
+        onConfirmRealTrade={props.onConfirmRealTrade}
         onAcceptPendingEntry={props.onAcceptPendingEntry}
         onCancelPendingEntry={props.onCancelPendingEntry}
         onReconfirmPendingEntry={props.onReconfirmPendingEntry}
@@ -183,6 +187,8 @@ export function RadarPage(props: RadarPageProps) {
         executionPreview={props.executionPreview ?? null}
         executionPreviewError={props.executionPreviewError ?? null}
         executionPreviewLoading={props.executionPreviewLoading ?? false}
+        realTradeContext={props.realTradeContext}
+        realTradeBusy={props.realTradeBusy ?? false}
         tradingActionsDisabled={props.tradingActionsDisabled}
       />
     </div>

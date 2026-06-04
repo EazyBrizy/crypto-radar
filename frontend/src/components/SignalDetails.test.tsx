@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { PendingEntryIntent, RadarSignal } from "@/types";
-import { SignalDetails } from "./SignalDetails";
+import { SignalDetails, type RealTradeContext } from "./SignalDetails";
 
 vi.mock("next/dynamic", () => ({
   default: () => () => null
@@ -155,8 +155,8 @@ describe("SignalDetails", () => {
     );
 
     expect(screen.getByText("Market setup exists, wait for entry trigger")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Waiting Entry/u })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: /Paper Trade/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ждать виртуальный вход/u })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Открыть виртуальную сделку/u })).not.toBeInTheDocument();
   });
 
   it("shows forming candle reason and disables actionable UI by default", () => {
@@ -196,7 +196,7 @@ describe("SignalDetails", () => {
     expect(screen.getByText("forming candle")).toBeInTheDocument();
     expect(screen.getByText("preview")).toBeInTheDocument();
     expect(screen.getAllByText(/forming candle preview/u).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /Waiting Entry/u })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Ждать виртуальный вход/u })).toBeDisabled();
   });
 
   it("keeps actionable UI for open candles only when metadata explicitly allows it", () => {
@@ -256,7 +256,85 @@ describe("SignalDetails", () => {
     );
 
     expect(screen.getByText("forming allowed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Paper Trade/u })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Открыть виртуальную сделку/u })).toBeEnabled();
+  });
+
+  it("opens real confirmation modal without calling the API action immediately", () => {
+    const onConfirmRealTrade = vi.fn();
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onConfirmRealTrade={onConfirmRealTrade}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        realTradeContext={realTradeContext()}
+        signal={{ ...signal, no_trade_filter: null }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать реальный вход/u }));
+
+    expect(onConfirmRealTrade).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: /Подтверждение реального входа/u })).toBeInTheDocument();
+  });
+
+  it("disables real confirmation for a stale account snapshot", () => {
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onConfirmRealTrade={vi.fn()}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        realTradeContext={realTradeContext({ accountSnapshot: { ...accountSnapshot(), status: "stale" } })}
+        signal={{ ...signal, no_trade_filter: null }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать реальный вход/u }));
+
+    expect(screen.getByText("Account snapshot устарел.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Подтвердить реальный вход/u })).toBeDisabled();
+  });
+
+  it("enables real confirmation for a fresh testnet snapshot", () => {
+    const onConfirmRealTrade = vi.fn();
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onConfirmRealTrade={onConfirmRealTrade}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        realTradeContext={realTradeContext()}
+        signal={{ ...signal, no_trade_filter: null }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать реальный вход/u }));
+    const confirmButton = screen.getByRole("button", { name: /Подтвердить реальный вход/u });
+
+    expect(confirmButton).toBeEnabled();
+    fireEvent.click(confirmButton);
+    expect(onConfirmRealTrade).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps virtual action one-click", () => {
+    const onPaperTrade = vi.fn();
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={onPaperTrade}
+        onReject={vi.fn()}
+        signal={{ ...signal, can_enter: true, no_trade_filter: null }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Открыть виртуальную сделку/u }));
+
+    expect(onPaperTrade).toHaveBeenCalledTimes(1);
   });
 
   it("renders decision snapshot blockers and warnings", () => {
@@ -335,7 +413,7 @@ describe("SignalDetails", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать вход/u }));
+    fireEvent.click(screen.getByRole("button", { name: /Принять и ждать виртуальный вход/u }));
 
     expect(onAcceptPendingEntry).toHaveBeenCalledTimes(1);
   });
@@ -358,7 +436,7 @@ describe("SignalDetails", () => {
     expect(screen.getAllByText("Waiting entry").length).toBeGreaterThan(0);
     expect(screen.getByText("Ожидание входа активно: backend trigger service ждёт касание зоны входа.")).toBeInTheDocument();
     expect(screen.getByText("100 - 101")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Принять и ждать вход/u })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Принять и ждать виртуальный вход/u })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /Cancel waiting/u }));
     expect(onCancelPendingEntry).toHaveBeenCalledTimes(1);
   });
@@ -470,6 +548,50 @@ function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntr
     filled_trade_id: null,
     failure_reason: null,
     ...overrides
+  };
+}
+
+function realTradeContext(overrides: Partial<RealTradeContext> = {}): RealTradeContext {
+  return {
+    userId: "user_1",
+    connection: {
+      id: "conn_1",
+      user_id: "user_1",
+      exchange_id: "ex_bybit",
+      exchange_code: "bybit",
+      exchange_name: "Bybit",
+      label: "Bybit testnet",
+      account_type: "linear",
+      key_ref: "vault:bybit:testnet",
+      permissions: {},
+      status: "active",
+      last_sync_at: "2026-06-04T12:00:00.000Z",
+      metadata: { testnet: true },
+      created_at: "2026-06-04T11:00:00.000Z"
+    },
+    accountSnapshot: accountSnapshot(),
+    riskState: null,
+    realExecutionEnabled: true,
+    loading: false,
+    ...overrides
+  };
+}
+
+function accountSnapshot(): NonNullable<RealTradeContext["accountSnapshot"]> {
+  return {
+    status: "fresh",
+    fetched_at: new Date().toISOString(),
+    account_equity: 10_000,
+    available_balance: 8_000,
+    wallet_balance: 10_000,
+    margin_mode: "cross",
+    total_initial_margin: 500,
+    total_maintenance_margin: 50,
+    maintenance_margin_rate: 0.005,
+    positions: [],
+    open_risk_amount: 0,
+    source: "exchange",
+    warnings: []
   };
 }
 

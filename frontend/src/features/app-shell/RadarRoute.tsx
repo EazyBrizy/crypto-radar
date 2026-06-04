@@ -6,8 +6,11 @@ import { useRouter } from "next/navigation";
 import { RadarPage } from "@/features/app-shell/RadarPage";
 import { useAuthSessionQuery } from "@/auth/use-auth";
 import {
+  useConfirmRealMutation,
   useConfirmVirtualMutation,
   useArmPendingEntryMutation,
+  useExchangeConnectionAccountSnapshotsQuery,
+  useExchangeConnectionsQuery,
   useHealthQuery,
   useHistoricalSignalsQuery,
   useCancelPendingEntryMutation,
@@ -17,7 +20,9 @@ import {
   useRadarStatusQuery,
   useReconfirmPendingEntryMutation,
   useRejectSignalMutation,
-  useSignalExecutionPreviewQuery
+  useRiskStateQuery,
+  useSignalExecutionPreviewQuery,
+  useUserProfileQuery
 } from "@/hooks/use-radar-queries";
 import {
   canShowEnterButton,
@@ -31,7 +36,7 @@ import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
 import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
-import type { RadarDisplayMode } from "@/features/server-state/types";
+import type { ExchangeConnection, RadarDisplayMode } from "@/features/server-state/types";
 import { isOpenFeedSignal } from "@/utils";
 
 export function RadarRoute() {
@@ -57,7 +62,11 @@ export function RadarRoute() {
   const radarStatusQuery = useRadarStatusQuery();
   const radarQuery = useRadarQuery(radarDisplayMode, userId);
   const historicalSignalsQuery = useHistoricalSignalsQuery();
+  const exchangeConnectionsQuery = useExchangeConnectionsQuery();
+  const userProfileQuery = useUserProfileQuery({ enabled: true });
+  const riskStateQuery = useRiskStateQuery();
   const confirmVirtualMutation = useConfirmVirtualMutation();
+  const confirmRealMutation = useConfirmRealMutation();
   const armPendingEntryMutation = useArmPendingEntryMutation();
   const cancelPendingEntryMutation = useCancelPendingEntryMutation();
   const reconfirmPendingEntryMutation = useReconfirmPendingEntryMutation();
@@ -93,6 +102,15 @@ export function RadarRoute() {
     () => sourceSignals.find((signal) => signal.id === selectedSignalId) ?? visibleSignals[0] ?? null,
     [selectedSignalId, sourceSignals, visibleSignals]
   );
+  const selectedRealConnection = useMemo(
+    () => selectRealTradeConnection(exchangeConnectionsQuery.data ?? [], selectedSignal),
+    [exchangeConnectionsQuery.data, selectedSignal]
+  );
+  const realConnectionIds = useMemo(
+    () => selectedRealConnection ? [selectedRealConnection.id] : [],
+    [selectedRealConnection]
+  );
+  const accountSnapshotsQuery = useExchangeConnectionAccountSnapshotsQuery(realConnectionIds, userId);
   const executionPreviewQuery = useSignalExecutionPreviewQuery(selectedSignal?.id ?? null, {
     enabled: shouldRequestExecutionPreview(selectedSignal, signalView, tradingActionsDisabled)
   });
@@ -106,9 +124,36 @@ export function RadarRoute() {
     () => selectPendingEntryForDetails(pendingEntryQuery.data ?? null, pendingEntryHistoryQuery.data ?? []),
     [pendingEntryHistoryQuery.data, pendingEntryQuery.data]
   );
+  const selectedAccountSnapshot = selectedRealConnection
+    ? accountSnapshotsQuery.dataByConnectionId[selectedRealConnection.id] ?? null
+    : null;
+  const realTradeContext = useMemo(() => ({
+    userId,
+    connection: selectedRealConnection,
+    accountSnapshot: selectedAccountSnapshot,
+    riskState: riskStateQuery.data ?? null,
+    realExecutionEnabled: Boolean(userProfileQuery.data?.settings.risk_management.real_execution_enabled),
+    loading: Boolean(
+      exchangeConnectionsQuery.isFetching
+      || userProfileQuery.isFetching
+      || riskStateQuery.isFetching
+      || (selectedRealConnection && accountSnapshotsQuery.pendingByConnectionId[selectedRealConnection.id])
+    )
+  }), [
+    accountSnapshotsQuery.pendingByConnectionId,
+    exchangeConnectionsQuery.isFetching,
+    riskStateQuery.data,
+    riskStateQuery.isFetching,
+    selectedAccountSnapshot,
+    selectedRealConnection,
+    userId,
+    userProfileQuery.data,
+    userProfileQuery.isFetching
+  ]);
   const loading = [healthQuery, radarStatusQuery, radarQuery].some((query) => query.isLoading)
     || (signalView === "history" && historicalSignalsQuery.isLoading);
   const busy = confirmVirtualMutation.isPending
+    || confirmRealMutation.isPending
     || armPendingEntryMutation.isPending
     || cancelPendingEntryMutation.isPending
     || reconfirmPendingEntryMutation.isPending
@@ -120,9 +165,11 @@ export function RadarRoute() {
       healthQuery.refetch(),
       radarStatusQuery.refetch(),
       radarQuery.refetch(),
-      historicalSignalsQuery.refetch()
+      historicalSignalsQuery.refetch(),
+      riskStateQuery.refetch(),
+      userProfileQuery.refetch()
     ]);
-  }, [healthQuery, historicalSignalsQuery, radarQuery, radarStatusQuery]);
+  }, [healthQuery, historicalSignalsQuery, radarQuery, radarStatusQuery, riskStateQuery, userProfileQuery]);
 
   const handleSelectSignal = useCallback((signal: RadarSignal) => {
     setActionError(null);
@@ -133,7 +180,7 @@ export function RadarRoute() {
     try {
       if (tradingActionsDisabled) return;
       if (!canSendPaperTrade(signal)) {
-        setActionError("Only open strategy ideas can be armed or sent to Paper Trade.");
+        setActionError("Only open strategy ideas can be armed or sent to virtual trading.");
         return;
       }
       setActionError(null);
@@ -147,6 +194,26 @@ export function RadarRoute() {
       }
     } catch (exc) {
       setActionError(errorMessage(exc, "Virtual trade was rejected by execution quality checks."));
+    }
+  }
+
+  async function handleConfirmRealTrade(signal: RadarSignal) {
+    try {
+      if (tradingActionsDisabled) return;
+      setActionError(null);
+      const connection = selectRealTradeConnection(exchangeConnectionsQuery.data ?? [], signal);
+      await confirmRealMutation.mutateAsync({
+        signalId: signal.id,
+        userId,
+        connectionId: connection?.id ?? null,
+        waitForConfirmation: !isActionableSignal(signal)
+      });
+      await refreshData();
+      if (isActionableSignal(signal)) {
+        router.push("/dashboard/trades/active");
+      }
+    } catch (exc) {
+      setActionError(errorMessage(exc, "Real trade was rejected by execution safeguards."));
     }
   }
 
@@ -228,10 +295,13 @@ export function RadarRoute() {
       onRefresh={() => void refreshData()}
       onSelectSignal={handleSelectSignal}
       onPaperTrade={handlePaperTrade}
+      onConfirmRealTrade={handleConfirmRealTrade}
       onAcceptPendingEntry={handleAcceptPendingEntry}
       onCancelPendingEntry={handleCancelPendingEntry}
       onReconfirmPendingEntry={handleReconfirmPendingEntry}
       onReject={handleReject}
+      realTradeContext={realTradeContext}
+      realTradeBusy={confirmRealMutation.isPending}
       selectedSignalId={selectedSignal?.id ?? null}
       signalIds={visibleSignalIds}
     />
@@ -266,6 +336,20 @@ export function canArmAutoEntry(signal: RadarSignal | null): boolean {
   return isWaitingEntry(signal.status);
 }
 
+export function selectRealTradeConnection(
+  connections: ExchangeConnection[],
+  signal: RadarSignal | null
+): ExchangeConnection | null {
+  if (!signal) return null;
+  const signalExchange = signal.exchange.trim().toLowerCase();
+  return connections.find((connection) =>
+    isActiveExchangeConnection(connection)
+    && [connection.exchange_code, connection.exchange_name]
+      .map((value) => value.trim().toLowerCase())
+      .includes(signalExchange)
+  ) ?? null;
+}
+
 export function selectPendingEntryForDetails(
   activeIntent: PendingEntryIntent | null,
   historyIntents: PendingEntryIntent[] = []
@@ -280,6 +364,11 @@ function errorMessage(exc: unknown, fallback: string): string {
 
 function isActivePendingEntryIntent(intent: PendingEntryIntent): boolean {
   return isActivePendingEntryStatus(intent.status);
+}
+
+function isActiveExchangeConnection(connection: ExchangeConnection): boolean {
+  const status = connection.status.trim().toLowerCase();
+  return status === "active" || status === "connected";
 }
 
 function latestTerminalPendingEntryIntent(intents: PendingEntryIntent[]): PendingEntryIntent | null {

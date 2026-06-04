@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
-import { canArmAutoEntry, canSendPaperTrade, selectPendingEntryForDetails, shouldRequestExecutionPreview } from "./RadarRoute";
+import { canArmAutoEntry, canSendPaperTrade, selectPendingEntryForDetails, selectRealTradeConnection, shouldRequestExecutionPreview } from "./RadarRoute";
+import type { ExchangeConnection } from "@/features/server-state/types";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() })
@@ -165,6 +166,21 @@ describe("pending entry selection", () => {
   });
 });
 
+describe("real trade connection selection", () => {
+  it("selects an active connection for the signal exchange only", () => {
+    const disabledBybit = exchangeConnection({ id: "disabled", status: "disabled" });
+    const activeBybit = exchangeConnection({ id: "active" });
+    const activeOther = exchangeConnection({
+      id: "binance",
+      exchange_code: "binance",
+      exchange_name: "Binance"
+    });
+
+    expect(selectRealTradeConnection([disabledBybit, activeOther, activeBybit], baseSignal)).toBe(activeBybit);
+    expect(selectRealTradeConnection([activeOther], baseSignal)).toBeNull();
+  });
+});
+
 function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntryIntent {
   return {
     id: "intent_1",
@@ -196,6 +212,25 @@ function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntr
     filled_at: null,
     filled_trade_id: null,
     failure_reason: null,
+    ...overrides
+  };
+}
+
+function exchangeConnection(overrides: Partial<ExchangeConnection> = {}): ExchangeConnection {
+  return {
+    id: "conn_1",
+    user_id: "user_1",
+    exchange_id: "ex_bybit",
+    exchange_code: "bybit",
+    exchange_name: "Bybit",
+    label: "Bybit testnet",
+    account_type: "linear",
+    key_ref: "vault:bybit:testnet",
+    permissions: {},
+    status: "active",
+    last_sync_at: null,
+    metadata: { testnet: true },
+    created_at: "2026-06-04T11:00:00.000Z",
     ...overrides
   };
 }

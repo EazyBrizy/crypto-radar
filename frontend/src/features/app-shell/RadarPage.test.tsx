@@ -27,6 +27,7 @@ describe("RadarPage", () => {
         onRadarDisplayModeChange={onRadarDisplayModeChange}
         onSignalViewChange={vi.fn()}
         onStatusFilterChange={vi.fn()}
+        onConfirmRealTrade={vi.fn()}
         onPaperTrade={vi.fn()}
         onRefresh={vi.fn()}
         onReject={vi.fn()}

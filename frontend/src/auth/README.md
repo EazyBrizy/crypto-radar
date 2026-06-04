@@ -6,6 +6,9 @@ Frontend auth is prepared for the long-term Crypto Radar target: FastAPI custom 
 
 - `NEXT_PUBLIC_AUTH_MVP_BYPASS` defaults to enabled unless set to `false`.
 - In bypass mode the frontend returns a local demo session so dashboard routes stay usable while backend auth endpoints are not ready.
+- The local demo session uses `user.id = "demo_user"`. Backend also accepts
+  `usr_demo` as a legacy/external demo auth subject, but new frontend demo
+  calls should continue to send `demo_user`.
 - No secrets, refresh tokens, exchange API keys, or 2FA data are stored in the browser.
 
 ## Planned FastAPI endpoints

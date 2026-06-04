@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from app.exchanges.base import exchange_execution_capabilities
 from app.domain.signal_status import is_execution_candidate_status, is_terminal_signal_status
 from app.schemas.risk import AccountRiskSnapshot, RiskDecision
 from app.schemas.signal import RadarSignal
@@ -57,7 +58,7 @@ class RealExecutionReadinessService:
 
         live_messages = [
             *_live_feature_flag_blockers(risk_settings, live_adapter=live_adapter),
-            *_live_adapter_blockers(adapter),
+            *_live_adapter_blockers(adapter, execution_plan=execution_plan),
             *_exchange_rule_blockers(reference, risk_decision),
             *_real_account_blockers(account_snapshot, reference=reference),
             *_fee_rate_blockers(fee_rate, risk_settings),
@@ -73,6 +74,8 @@ class RealExecutionReadinessService:
             "adapter": getattr(adapter, "name", "unknown"),
             "adapter_is_dry_run": adapter_is_dry_run,
             "live_adapter": live_adapter,
+            "protective_order_strategy": getattr(execution_plan, "protective_order_strategy", "unsupported"),
+            "adapter_capabilities": _adapter_capability_metadata(adapter),
             "real_execution_enabled": risk_settings.real_execution_enabled,
             "signal_status": signal.status,
             "decision_execution_allowed_real": (
@@ -251,10 +254,25 @@ def _live_feature_flag_blockers(
     return []
 
 
-def _live_adapter_blockers(adapter: Any) -> list[str]:
-    if _bool_attr(adapter, "protective_order_guarantee", "protective_orders_guaranteed"):
-        return []
-    return ["Live adapter must guarantee protective stop/target order placement before entry."]
+def _live_adapter_blockers(adapter: Any, *, execution_plan: RealExecutionPlan) -> list[str]:
+    if bool(getattr(adapter, "is_dry_run", False)):
+        strategy = getattr(execution_plan, "protective_order_strategy", "unsupported")
+        if strategy == "sequential_dry_run":
+            return [
+                "Dry-run simulates entry, protective stop, and take-profit sequentially; "
+                "this is not a live protective-order guarantee."
+            ]
+        return ["Dry-run execution plan must declare sequential_dry_run protective order strategy."]
+
+    capabilities = exchange_execution_capabilities(adapter)
+    blockers: list[str] = []
+    if getattr(execution_plan, "protective_order_strategy", "unsupported") not in {"bracket", "oco"}:
+        blockers.append("Live execution plan must use bracket/OCO/protective guarantee before entry.")
+    if not capabilities.has_live_protective_guarantee:
+        blockers.append("Live adapter must support bracket/OCO or guarantee protective stop/target placement before entry.")
+    if not capabilities.supports_reduce_only:
+        blockers.append("Live adapter must support reduce-only protective stop/take-profit orders.")
+    return blockers
 
 
 def _exchange_rule_blockers(reference: Any, risk_decision: RiskDecision) -> list[str]:
@@ -419,6 +437,16 @@ def _number_attr(target: Any, *names: str) -> float | None:
 def _bool_attr(target: Any, *names: str) -> bool:
     value = _first_attr(target, *names)
     return _truthy(value)
+
+
+def _adapter_capability_metadata(adapter: Any) -> dict[str, bool]:
+    capabilities = exchange_execution_capabilities(adapter)
+    return {
+        "supports_bracket_orders": capabilities.supports_bracket_orders,
+        "supports_oco": capabilities.supports_oco,
+        "guarantees_protective_after_entry": capabilities.guarantees_protective_after_entry,
+        "supports_reduce_only": capabilities.supports_reduce_only,
+    }
 
 
 def _first_attr(target: Any, *names: str) -> Any:

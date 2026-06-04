@@ -49,6 +49,7 @@ ExecutionGateStatus = Literal["passed", "warning", "blocked"]
 ExecutionOrderRole = Literal["entry", "protective_stop", "take_profit"]
 ExecutionOrderSide = Literal["buy", "sell"]
 ExecutionOrderType = Literal["market", "limit", "stop", "take_profit"]
+ProtectiveOrderStrategy = Literal["bracket", "oco", "sequential_dry_run", "unsupported"]
 ExecutionOrderStatus = Literal[
     "planned",
     "new",
@@ -156,6 +157,7 @@ class RealExecutionPlan(BaseModel):
     leverage: int = Field(..., ge=1)
     idempotency_key: str = Field(..., min_length=1)
     client_order_id: str = Field(..., min_length=1)
+    protective_order_strategy: ProtectiveOrderStrategy = "unsupported"
     planned_orders: list[ExecutionPlannedOrder] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -416,6 +418,7 @@ class RealExecutionResult(BaseModel):
     planned_orders: list[ExecutionPlannedOrder] = Field(default_factory=list)
     idempotency_key: Optional[str] = None
     adapter: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
     validation_errors: list[str] = Field(default_factory=list)
 
 

@@ -123,6 +123,10 @@ class BybitRealExecutionAdapter:
     name = "bybit_real"
     is_dry_run = False
     live_order_placement_implemented = False
+    supports_bracket_orders = False
+    supports_oco = False
+    guarantees_protective_after_entry = False
+    supports_reduce_only = False
 
     async def place_order(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
         raise NotImplementedError("Bybit real order submission is not implemented")

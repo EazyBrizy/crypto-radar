@@ -170,8 +170,8 @@ Real execution eligibility is stricter than discovery, research, virtual
 confirmation, and backtests. A real entry must have: `risk passed`, no hard
 no-trade result, positive edge, sufficient edge sample size, fresh market data,
 valid orderbook, a valid liquidation price/buffer for futures, available
-protective orders, valid exchange rules, and, when `real_rr_guard_mode = "hard"`
-(the default), `RR passed`.
+protective orders, valid exchange rules, a live protective-order guarantee, and,
+when `real_rr_guard_mode = "hard"` (the default), `RR passed`.
 
 Virtual execution may continue to surface research warnings for weak RR,
 unknown or weak edge, or incomplete context, but warnings must not be confused
@@ -1916,7 +1916,8 @@ all live-readiness requirements pass:
 - fresh exchange fee rates are available within `real_fee_rate_ttl_seconds`;
 - futures requests have a passed liquidation projection;
 - position reconciliation is enabled;
-- the live adapter declares protective-order placement guarantees.
+- the live adapter declares exchange-native bracket/OCO support or an
+  adapter-level protective guarantee before entry placement.
 
 `RiskManagementSettings` adds:
 
@@ -1926,8 +1927,28 @@ all live-readiness requirements pass:
 `real_execution_enabled=false` blocks non-dry-run live placement. It does not
 disable virtual execution and does not prevent `DryRunExecutionAdapter` from
 returning an auditable dry-run plan. A non-dry-run adapter must never submit a
-naked entry, and duplicate calls with the same order intent must reuse existing
-orders by `client_order_id`/`idempotency_key` rather than submitting duplicates.
+naked entry. If the adapter cannot guarantee bracket/OCO/protective placement,
+live execution is blocked before any adapter placement method is called.
+Duplicate calls with the same order intent must reuse existing orders by
+`client_order_id`/`idempotency_key` rather than submitting duplicates.
+
+Dry-run execution may simulate sequential entry, protective stop, and
+take-profit placement only when the plan is marked
+`protective_order_strategy = "sequential_dry_run"` and the readiness result
+contains an explicit warning that this is not a live protective guarantee.
+
+`ExchangeExecutionAdapter` is an async protocol with these capability fields:
+
+- `supports_bracket_orders: bool`
+- `supports_oco: bool`
+- `guarantees_protective_after_entry: bool`
+- `supports_reduce_only: bool`
+
+For live adapters, `supports_bracket_orders`, `supports_oco`, or
+`guarantees_protective_after_entry` must be true, and `supports_reduce_only`
+must be true for protective stop/take-profit orders. Legacy fields such as
+`protective_order_guarantee` may be accepted by compatibility adapters, but new
+adapters must declare the canonical capability names above.
 
 `ExchangeExecutionAdapter` is an async protocol with these methods:
 
@@ -1970,7 +1991,19 @@ placement method is called.
 - `planned_orders`: flattened list of planned adapter orders;
 - `idempotency_key`: stable key for the same signal/order intent;
 - `adapter`: adapter name such as `dry_run`;
+- `warnings`: readiness/execution warnings, including dry-run sequential
+  protective-order simulation warnings;
 - `validation_errors`: execution-plan validation failures when present.
+
+`RealExecutionPlan` records:
+
+- `protective_order_strategy`: `bracket`, `oco`, `sequential_dry_run`, or
+  `unsupported`.
+
+`bracket` means a bracket order or adapter-guaranteed bracket-equivalent
+protective placement. `oco` means an exchange-native OCO protective strategy.
+`sequential_dry_run` is allowed only for `DryRunExecutionAdapter` and must be
+returned with a warning. `unsupported` blocks live placement.
 
 `ExecutionPlannedOrder` records:
 

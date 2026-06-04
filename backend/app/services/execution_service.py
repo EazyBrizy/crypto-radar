@@ -3,7 +3,12 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
-from app.exchanges.base import DryRunExecutionAdapter, ExchangeExecutionAdapter
+from app.exchanges.base import (
+    DryRunExecutionAdapter,
+    ExchangeExecutionAdapter,
+    exchange_execution_capabilities,
+    protective_order_strategy_for_adapter,
+)
 from app.schemas.risk import AccountRiskSnapshot, RiskDecision
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
@@ -274,6 +279,7 @@ class RealExecutionService:
             signal=signal,
             request=request,
             risk_decision=risk_decision,
+            adapter=self._execution_adapter,
         )
         validation_errors = _validate_execution_plan(
             plan=execution_plan,
@@ -336,6 +342,7 @@ class RealExecutionService:
                 execution_plan=execution_plan,
                 planned_orders=execution_plan.planned_orders,
                 idempotency_key=execution_plan.idempotency_key,
+                warnings=readiness.warnings,
                 validation_errors=readiness.blockers,
             )
 
@@ -366,6 +373,7 @@ class RealExecutionService:
             planned_orders=planned_orders,
             idempotency_key=execution_plan.idempotency_key,
             adapter=adapter_name,
+            warnings=readiness.warnings,
         )
 
     def _record_real_attempt(
@@ -560,6 +568,7 @@ def _build_execution_plan(
     signal: RadarSignal,
     request: ManualConfirmRequest,
     risk_decision: RiskDecision,
+    adapter: Any | None,
 ) -> RealExecutionPlan:
     sizing = risk_decision.checked_position_sizing
     side = signal.direction
@@ -571,6 +580,8 @@ def _build_execution_plan(
         risk_decision=risk_decision,
     )
     plan_version = "real_execution_plan_v1"
+    protective_order_strategy = protective_order_strategy_for_adapter(adapter)
+    adapter_capabilities = exchange_execution_capabilities(adapter)
     idempotency_key = f"real-exec:{digest}"
     client_order_id = f"cr-{digest[:20]}"
     entry_client_order_id = _order_client_id(digest, "entry")
@@ -658,6 +669,7 @@ def _build_execution_plan(
         leverage=sizing.leverage,
         idempotency_key=idempotency_key,
         client_order_id=client_order_id,
+        protective_order_strategy=protective_order_strategy,
         planned_orders=orders,
         metadata={
             "signal_id": signal.id,
@@ -665,6 +677,13 @@ def _build_execution_plan(
             "strategy": signal.strategy,
             "timeframe": signal.timeframe,
             "risk_status": risk_decision.status,
+            "protective_order_strategy": protective_order_strategy,
+            "adapter_capabilities": {
+                "supports_bracket_orders": adapter_capabilities.supports_bracket_orders,
+                "supports_oco": adapter_capabilities.supports_oco,
+                "guarantees_protective_after_entry": adapter_capabilities.guarantees_protective_after_entry,
+                "supports_reduce_only": adapter_capabilities.supports_reduce_only,
+            },
         },
     )
 
@@ -745,6 +764,9 @@ async def _place_execution_plan(
     plan: RealExecutionPlan,
     adapter: ExchangeExecutionAdapter,
 ) -> list[ExecutionPlannedOrder]:
+    placement_blockers = _live_placement_safety_blockers(plan, adapter)
+    if placement_blockers:
+        raise ValueError("; ".join(placement_blockers))
     placed: list[ExecutionPlannedOrder] = []
     for order in plan.planned_orders:
         existing = await adapter.get_order(
@@ -771,6 +793,26 @@ async def _place_execution_plan(
         else:
             placed.append(await adapter.place_take_profit(order))
     return placed
+
+
+def _live_placement_safety_blockers(plan: RealExecutionPlan, adapter: ExchangeExecutionAdapter) -> list[str]:
+    if bool(getattr(adapter, "is_dry_run", False)):
+        return []
+    capabilities = exchange_execution_capabilities(adapter)
+    blockers: list[str] = []
+    stop_orders = [order for order in plan.planned_orders if order.role == "protective_stop"]
+    take_profit_orders = [order for order in plan.planned_orders if order.role == "take_profit"]
+    if not any(order.stop_price is not None for order in stop_orders):
+        blockers.append("Live execution plan must include a protective stop before entry.")
+    if not take_profit_orders:
+        blockers.append("Live execution plan must include take-profit orders before entry.")
+    if plan.protective_order_strategy not in {"bracket", "oco"}:
+        blockers.append("Live execution plan must use bracket/OCO/protective guarantee before entry.")
+    if not capabilities.has_live_protective_guarantee:
+        blockers.append("Live adapter lacks bracket/OCO/protective guarantee.")
+    if not capabilities.supports_reduce_only:
+        blockers.append("Live adapter must support reduce-only protective orders.")
+    return _dedupe(blockers)
 
 
 def _same_idempotent_order(existing: ExecutionPlannedOrder, requested: ExecutionPlannedOrder) -> bool:

@@ -1,6 +1,6 @@
 import unittest
 
-from app.exchanges.base import DryRunExecutionAdapter
+from app.exchanges.base import DryRunExecutionAdapter, exchange_execution_capabilities
 from app.exchanges.bybit import BybitRealExecutionAdapter
 from app.schemas.trade import ExecutionPlannedOrder
 
@@ -23,6 +23,19 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
             ),
             result,
         )
+
+    async def test_adapters_declare_protective_order_capabilities(self) -> None:
+        dry_run = exchange_execution_capabilities(DryRunExecutionAdapter())
+        self.assertFalse(dry_run.supports_bracket_orders)
+        self.assertFalse(dry_run.supports_oco)
+        self.assertFalse(dry_run.guarantees_protective_after_entry)
+        self.assertTrue(dry_run.supports_reduce_only)
+
+        bybit = exchange_execution_capabilities(BybitRealExecutionAdapter())
+        self.assertFalse(bybit.supports_bracket_orders)
+        self.assertFalse(bybit.supports_oco)
+        self.assertFalse(bybit.guarantees_protective_after_entry)
+        self.assertFalse(bybit.supports_reduce_only)
 
     async def test_dry_run_adapter_handles_protective_and_take_profit_orders(self) -> None:
         adapter = DryRunExecutionAdapter()

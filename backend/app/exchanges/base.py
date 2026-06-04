@@ -1,8 +1,9 @@
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from app.schemas.market import MarketData
-from app.schemas.trade import ExecutionPlannedOrder
+from app.schemas.trade import ExecutionPlannedOrder, ProtectiveOrderStrategy
 
 
 class ExchangeAdapter(Protocol):
@@ -20,6 +21,22 @@ class ExchangeExecutionAdapter(Protocol):
 
     @property
     def is_dry_run(self) -> bool:
+        ...
+
+    @property
+    def supports_bracket_orders(self) -> bool:
+        ...
+
+    @property
+    def supports_oco(self) -> bool:
+        ...
+
+    @property
+    def guarantees_protective_after_entry(self) -> bool:
+        ...
+
+    @property
+    def supports_reduce_only(self) -> bool:
         ...
 
     async def place_order(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
@@ -74,9 +91,29 @@ class ExchangeExecutionAdapter(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ExchangeExecutionCapabilities:
+    supports_bracket_orders: bool = False
+    supports_oco: bool = False
+    guarantees_protective_after_entry: bool = False
+    supports_reduce_only: bool = False
+
+    @property
+    def has_live_protective_guarantee(self) -> bool:
+        return (
+            self.supports_bracket_orders
+            or self.supports_oco
+            or self.guarantees_protective_after_entry
+        )
+
+
 class DryRunExecutionAdapter:
     name = "dry_run"
     is_dry_run = True
+    supports_bracket_orders = False
+    supports_oco = False
+    guarantees_protective_after_entry = False
+    supports_reduce_only = True
 
     def __init__(self) -> None:
         self._orders: dict[tuple[str, str, str], ExecutionPlannedOrder] = {}
@@ -192,3 +229,56 @@ def _order_key(order: ExecutionPlannedOrder) -> tuple[str, str, str]:
         order.symbol.strip().upper(),
         order.client_order_id,
     )
+
+
+def exchange_execution_capabilities(adapter: Any | None) -> ExchangeExecutionCapabilities:
+    if adapter is None:
+        return ExchangeExecutionCapabilities()
+    is_dry_run = _truthy_attr(adapter, "is_dry_run")
+    supports_bracket_orders = _truthy_attr(adapter, "supports_bracket_orders")
+    supports_oco = _truthy_attr(adapter, "supports_oco")
+    guarantees_protective_after_entry = (
+        supports_bracket_orders
+        or supports_oco
+        or _truthy_attr(
+            adapter,
+            "guarantees_protective_after_entry",
+            "protective_order_guarantee",
+            "protective_orders_guaranteed",
+        )
+    )
+    supports_reduce_only = is_dry_run or _truthy_attr(adapter, "supports_reduce_only")
+    return ExchangeExecutionCapabilities(
+        supports_bracket_orders=supports_bracket_orders,
+        supports_oco=supports_oco,
+        guarantees_protective_after_entry=guarantees_protective_after_entry,
+        supports_reduce_only=supports_reduce_only,
+    )
+
+
+def protective_order_strategy_for_adapter(adapter: Any | None) -> ProtectiveOrderStrategy:
+    if adapter is None:
+        return "unsupported"
+    if _truthy_attr(adapter, "is_dry_run"):
+        return "sequential_dry_run"
+    capabilities = exchange_execution_capabilities(adapter)
+    if capabilities.supports_bracket_orders:
+        return "bracket"
+    if capabilities.supports_oco:
+        return "oco"
+    if capabilities.guarantees_protective_after_entry:
+        return "bracket"
+    return "unsupported"
+
+
+def _truthy_attr(target: Any, *names: str) -> bool:
+    for name in names:
+        if not hasattr(target, name):
+            continue
+        value = getattr(target, name)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "enabled", "supported"}
+        return bool(value)
+    return False

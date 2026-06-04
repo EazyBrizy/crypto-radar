@@ -42,6 +42,8 @@ Real trading:
 - requires fresh exchange rules and valid order-size/price constraints;
 - requires protective stop/take-profit orders to be available in the execution
   plan;
+- requires the live adapter to guarantee protective placement through
+  exchange-native bracket/OCO support or an adapter-level protective guarantee;
 - for futures, requires a valid liquidation price or liquidation-buffer check
   before entry can be treated as production-safe;
 - for spot, enforces the configured `spot_max_position_size_percent` cap.
@@ -50,9 +52,13 @@ Real trading:
   blocker.
 
 Real execution must never downgrade these failures into research warnings. If a
-real gate fails, the adapter must not submit an exchange order. Virtual can help
-generate evidence for strategy calibration, but positive EV with enough sample
-size is required before a signal is eligible for real entry.
+real gate fails, the adapter must not submit an exchange order. A live adapter
+without bracket/OCO/protective guarantee must be blocked before entry placement;
+order list sequencing is not a safety guarantee. Dry-run may simulate
+sequential entry, stop, and take-profit placement only with an explicit
+readiness warning. Virtual can help generate evidence for strategy calibration,
+but positive EV with enough sample size is required before a signal is eligible
+for real entry.
 
 Real confirm API boundaries return the service decision as structured
 `RealExecutionResult` data. `risk_failed`, `readiness_failed`,

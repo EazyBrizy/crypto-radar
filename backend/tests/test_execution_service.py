@@ -47,6 +47,10 @@ class _FakeRiskGateService:
 class _FakeExecutionAdapter:
     name = "fake"
     is_dry_run = False
+    supports_bracket_orders = True
+    supports_oco = False
+    guarantees_protective_after_entry = True
+    supports_reduce_only = True
     protective_order_guarantee = True
     position_reconciliation_enabled = True
 
@@ -171,6 +175,15 @@ class _NotImplementedLiveAdapter(_FakeExecutionAdapter):
     live_order_placement_implemented = False
 
 
+class _NoProtectiveGuaranteeAdapter(_FakeExecutionAdapter):
+    name = "no_protective_guarantee"
+    supports_bracket_orders = False
+    supports_oco = False
+    guarantees_protective_after_entry = False
+    supports_reduce_only = True
+    protective_order_guarantee = False
+
+
 def _order_key(order: ExecutionPlannedOrder) -> tuple[str, str, str]:
     return (
         order.exchange.strip().lower(),
@@ -273,6 +286,12 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.execution_allowed)
         self.assertEqual(result.adapter, "dry_run")
         self.assertIsNotNone(result.idempotency_key)
+        self.assertIsNotNone(result.execution_plan)
+        assert result.execution_plan is not None
+        self.assertEqual(result.execution_plan.protective_order_strategy, "sequential_dry_run")
+        self.assertTrue(
+            any("Dry-run simulates entry" in warning for warning in result.warnings)
+        )
         self.assertEqual(
             [order.role for order in result.planned_orders],
             ["entry", "protective_stop", "take_profit", "take_profit"],
@@ -295,6 +314,9 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
             [order.role for order in result.planned_orders],
             ["entry", "protective_stop", "take_profit", "take_profit"],
         )
+        self.assertIsNotNone(result.execution_plan)
+        assert result.execution_plan is not None
+        self.assertEqual(result.execution_plan.protective_order_strategy, "unsupported")
         self.assertTrue(all(order.status == "planned" for order in result.planned_orders))
 
     async def test_unimplemented_live_adapter_returns_not_implemented_before_adapter_call(self) -> None:
@@ -485,6 +507,26 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(adapter.calls), 4)
         self.assertTrue(all(order.metadata.get("idempotent_replay") for order in second.planned_orders))
 
+    async def test_live_adapter_without_protective_guarantee_blocks_before_entry(self) -> None:
+        adapter = _NoProtectiveGuaranteeAdapter()
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "readiness_failed")
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("protective", result.message.lower())
+        self.assertIsNotNone(result.execution_plan)
+        assert result.execution_plan is not None
+        self.assertEqual(result.execution_plan.protective_order_strategy, "unsupported")
+        self.assertEqual(adapter.calls, [])
+
     async def test_partial_fill_creates_reconciliation_state(self) -> None:
         adapter = _PartialFillExecutionAdapter()
         service = _service(
@@ -535,9 +577,46 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "submitted")
         self.assertTrue(result.signal_valid)
         self.assertTrue(result.execution_allowed)
+        self.assertIsNotNone(result.execution_plan)
+        assert result.execution_plan is not None
+        self.assertEqual(result.execution_plan.protective_order_strategy, "bracket")
         self.assertEqual([role for role, _order in adapter.calls], ["entry", "protective_stop", "take_profit", "take_profit"])
         self.assertTrue(all(order.status == "submitted" for order in result.planned_orders))
         self.assertTrue(result.execution_plan.metadata["reconciliation_required"])
+
+    async def test_live_missing_take_profit_blocks_before_adapter_call(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(targets=[]),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("take-profit", result.message)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_live_missing_stop_blocks_before_adapter_call(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision_without_stop_loss(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("Protective stop order must include stop_price", result.message)
+        self.assertEqual(adapter.calls, [])
 
     async def test_exchange_rule_step_validation_blocks_adapter_call(self) -> None:
         adapter = _FakeExecutionAdapter()
@@ -1012,10 +1091,11 @@ def _decision(
     leverage: int = 1,
     futures_risk_plan: FuturesRiskPlan | None = None,
 ) -> RiskDecision:
-    targets = targets or [
-        TakeProfitTarget(label="TP1", r_multiple=1.0, price=105.0, close_percent=50.0, action="observe"),
-        TakeProfitTarget(label="TP2", r_multiple=2.0, price=110.0, close_percent=50.0, action="full_close"),
-    ]
+    if targets is None:
+        targets = [
+            TakeProfitTarget(label="TP1", r_multiple=1.0, price=105.0, close_percent=50.0, action="observe"),
+            TakeProfitTarget(label="TP2", r_multiple=2.0, price=110.0, close_percent=50.0, action="full_close"),
+        ]
     sizing = PositionSizingResult(
         side="long",
         account_equity=account_equity,
@@ -1086,7 +1166,7 @@ def _decision(
         partial_take_profit_enabled=True,
         targets=targets,
         source=take_profit_source,
-        selected_rr=targets[-1].r_multiple,
+        selected_rr=targets[-1].r_multiple if targets else None,
     )
     return RiskDecision(
         mode="real",
@@ -1123,6 +1203,15 @@ def _decision(
             source="disabled",
         ),
         futures_risk_plan=futures_risk_plan,
+    )
+
+
+def _decision_without_stop_loss() -> RiskDecision:
+    decision = _decision()
+    return decision.model_copy(
+        update={
+            "stop_loss_plan": decision.stop_loss_plan.model_copy(update={"stop_loss_price": None})
+        }
     )
 
 

@@ -923,6 +923,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
             direction=direction,
             confidence=0.8,
             risk_reward=3.0,
+            status="entry_touched",
             urgency="medium",
             score=78,
             timeframe="15m",

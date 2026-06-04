@@ -21,6 +21,7 @@ from typing import Any, Protocol
 from typing import Optional
 from uuid import uuid4
 
+from app.domain.signal_status import is_execution_candidate_status
 from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
 from app.repositories.signal_repository import SignalWriteResult
@@ -297,6 +298,7 @@ class VirtualTradingService:
         signal: RadarSignal,
         request: ManualConfirmRequest,
     ) -> tuple[RadarSignal, VirtualTrade]:
+        _ensure_signal_execution_candidate(signal)
         confirm_with_trade = getattr(self._repository, "confirm_signal_with_trade", None)
         existing = self.get_virtual_trade_by_signal(signal.id)
         risk_settings = self._risk_settings_for_user(request.user_id) or self._fallback_risk_settings(request)
@@ -1297,6 +1299,12 @@ def _market_context_kwargs(market_data: RiskMarketDataSnapshot) -> dict[str, Any
         "market_data_source": market_data.market_data_source,
         "market_data_warnings": list(market_data.warnings),
     }
+
+
+def _ensure_signal_execution_candidate(signal: RadarSignal) -> None:
+    if is_execution_candidate_status(signal.status):
+        return
+    raise ValueError("Signal entry is not execution-ready; arm pending entry to wait for the entry zone.")
 
 
 def _fee_context_kwargs(fee_rate: RiskFeeRateSnapshot) -> dict[str, Any]:

@@ -17,6 +17,7 @@ from app.schemas.risk import (
     TakeProfitPlan,
     TrailingStopPlan,
 )
+from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.signal import RadarSignal
 
 ExecutionMode = Literal["virtual", "real"]
@@ -444,6 +445,7 @@ class ManualDecisionResponse(BaseModel):
     virtual_trade: Optional[VirtualTrade] = None
     real_execution: Optional[RealExecutionResult] = None
     real_execution_result: Optional[RealExecutionResult] = None
+    pending_entry_intent: Optional[PendingEntryIntentRead] = None
     message: str
 
     @model_validator(mode="after")

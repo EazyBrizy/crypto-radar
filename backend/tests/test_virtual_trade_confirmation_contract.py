@@ -112,6 +112,19 @@ class VirtualTradeConfirmationContractTest(unittest.TestCase):
         self.assertEqual(analytics.events, [{"event_type": "signal.confirmed"}])
         self.assertEqual(hot_store.results[0].signal.id, signal.id)
 
+    def test_confirm_signal_rejects_waiting_entry_status_before_trade_creation(self) -> None:
+        repository = FakeConfirmRepository()
+        service = TradeService(
+            repository=repository,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(max_price_deviation_bps=0),
+        )
+
+        with self.assertRaises(ValueError) as exc:
+            service.confirm_signal(_signal().model_copy(update={"status": "active"}), ManualConfirmRequest())
+
+        self.assertIn("entry is not execution-ready", str(exc.exception))
+        self.assertIsNone(repository.received_trade)
+
     def test_confirm_signal_allows_low_rr_signal_in_soft_virtual_mode(self) -> None:
         repository = FakeConfirmRepository()
         service = TradeService(
@@ -152,6 +165,7 @@ def _signal() -> RadarSignal:
         direction="long",
         confidence=0.82,
         risk_reward=3.0,
+        status="entry_touched",
         score=82,
         timeframe="15m",
         entry_min=100,

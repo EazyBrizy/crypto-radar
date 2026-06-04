@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import SessionLocal
+from app.domain.pending_entry_intent import ACTIVE_PENDING_ENTRY_INTENT_STATUSES
 from app.models.pending_entry import PendingEntryIntent
 from app.schemas.pending_entry import PendingEntryIntentCreate, PendingEntryIntentRead, PendingEntryIntentStatus
 
@@ -21,6 +22,14 @@ class PendingEntryIntentRepository:
             existing = _get_by_idempotency_key(session, intent.idempotency_key)
             if existing is not None:
                 return _to_read(existing)
+            active = _get_active_for_user_signal_mode(
+                session,
+                user_id=intent.user_id,
+                signal_id=intent.signal_id,
+                mode=intent.mode,
+            )
+            if active is not None:
+                return _to_read(active)
 
             now = datetime.now(timezone.utc)
             record = PendingEntryIntent(
@@ -58,6 +67,14 @@ class PendingEntryIntentRepository:
                 existing = _get_by_idempotency_key(session, intent.idempotency_key)
                 if existing is not None:
                     return _to_read(existing)
+                active = _get_active_for_user_signal_mode(
+                    session,
+                    user_id=intent.user_id,
+                    signal_id=intent.signal_id,
+                    mode=intent.mode,
+                )
+                if active is not None:
+                    return _to_read(active)
                 raise
             return _to_read(record)
 
@@ -67,6 +84,26 @@ class PendingEntryIntentRepository:
             return None
         with self._session_factory() as session:
             record = session.get(PendingEntryIntent, parsed_id)
+            return _to_read(record) if record is not None else None
+
+    def get_active_for_user_signal_mode(
+        self,
+        *,
+        user_id: str | UUID,
+        signal_id: str | UUID,
+        mode: str,
+    ) -> PendingEntryIntentRead | None:
+        parsed_user_id = _parse_uuid(user_id)
+        parsed_signal_id = _parse_uuid(signal_id)
+        if parsed_user_id is None or parsed_signal_id is None:
+            return None
+        with self._session_factory() as session:
+            record = _get_active_for_user_signal_mode(
+                session,
+                user_id=parsed_user_id,
+                signal_id=parsed_signal_id,
+                mode=mode,
+            )
             return _to_read(record) if record is not None else None
 
     def list_pending_for_market(self, exchange: str, symbol: str) -> list[PendingEntryIntentRead]:
@@ -136,6 +173,23 @@ def _get_by_idempotency_key(session: Session, idempotency_key: str) -> PendingEn
     return session.scalars(
         select(PendingEntryIntent).where(PendingEntryIntent.idempotency_key == idempotency_key.strip())
     ).one_or_none()
+
+
+def _get_active_for_user_signal_mode(
+    session: Session,
+    *,
+    user_id: UUID,
+    signal_id: UUID,
+    mode: str,
+) -> PendingEntryIntent | None:
+    return session.scalars(
+        select(PendingEntryIntent).where(
+            PendingEntryIntent.user_id == user_id,
+            PendingEntryIntent.signal_id == signal_id,
+            PendingEntryIntent.mode == mode.strip().lower(),
+            PendingEntryIntent.status.in_(ACTIVE_PENDING_ENTRY_INTENT_STATUSES),
+        )
+    ).first()
 
 
 def _to_read(record: PendingEntryIntent) -> PendingEntryIntentRead:

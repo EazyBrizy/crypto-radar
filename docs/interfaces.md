@@ -233,6 +233,7 @@ ManualDecisionResponse = {
     "virtual_trade": VirtualTrade | None,
     "real_execution": RealExecutionResult | None,
     "real_execution_result": RealExecutionResult | None,
+    "pending_entry_intent": PendingEntryIntent | None,
     "message": str,
 }
 ```

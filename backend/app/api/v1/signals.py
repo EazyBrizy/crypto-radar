@@ -67,21 +67,32 @@ async def confirm_signal(
         )
     if request.auto_enter_on_confirmation and not _signal_can_enter_now(signal, mode=request.mode):
         try:
-            armed_signal = signal_service.arm_auto_entry(signal.id, request.model_dump(mode="json"))
+            arm_result = signal_service.arm_auto_entry(signal.id, request.model_dump(mode="json"))
         except StrategyRiskRewardBlocked as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=exc.reason,
             ) from exc
-        if armed_signal is None:
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        except LookupError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        if arm_result is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Signal is not found",
             )
-        await realtime_event_broker.publish(signal_updated_event(armed_signal))
+        await realtime_event_broker.publish(signal_updated_event(arm_result.signal))
         return ManualDecisionResponse(
-            signal=armed_signal,
-            message="Auto-entry armed; the strategy will enter after confirmation",
+            signal=arm_result.signal,
+            pending_entry_intent=arm_result.pending_entry_intent,
+            message="Auto-entry armed; waiting for accepted entry zone",
         )
     if not _signal_can_enter_now(signal, mode=request.mode):
         raise HTTPException(

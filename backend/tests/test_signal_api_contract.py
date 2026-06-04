@@ -1,6 +1,8 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from unittest.mock import patch
+from uuid import UUID
 
 from fastapi import FastAPI
 from fastapi import HTTPException
@@ -8,9 +10,11 @@ from fastapi.testclient import TestClient
 
 from app.api.v1 import signals as signals_api
 from app.api.v1.signals import confirm_signal, list_active_signals, list_open_signals
+from app.schemas.pending_entry import PendingEntryIntentRead
+from app.schemas.risk import ResolvedExecutionProfile
 from app.api.v1.trades import confirm_real_trade
 from app.schemas.signal import RadarSignal
-from app.schemas.trade import ManualConfirmRequest, RealConfirmRequest, RealExecutionResult
+from app.schemas.trade import ManualConfirmRequest, RealConfirmRequest, RealExecutionResult, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.execution_service import RealExecutionService
 from app.services.risk_market_data import RiskMarketDataSnapshot
@@ -33,6 +37,42 @@ class _FakeRealExecutionService:
     async def place_order(self, signal: RadarSignal, request: ManualConfirmRequest) -> RealExecutionResult:
         self.calls += 1
         return self.result
+
+
+class _FakePendingEntryService:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.intent = _pending_intent()
+
+    def resolve_execution_profile(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        *,
+        mode: str,
+    ) -> ResolvedExecutionProfile:
+        return _execution_profile(mode=mode)
+
+    def arm_from_signal(self, **kwargs) -> PendingEntryIntentRead:
+        self.calls += 1
+        return self.intent
+
+
+class _FakeVirtualTradingService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def confirm_signal(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+    ) -> tuple[RadarSignal, VirtualTrade]:
+        self.calls += 1
+        now = datetime.now(timezone.utc)
+        return (
+            signal.model_copy(update={"status": "confirmed", "confirmed_at": now}),
+            _virtual_trade(signal, request, now=now),
+        )
 
 
 class _FakeMarketDataService:
@@ -218,9 +258,11 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         )
         self.signal_service.add_signal(signal)
         broker = _FakeRealtimeBroker()
+        pending_service = _FakePendingEntryService()
 
         with (
             patch("app.api.v1.signals.signal_service", self.signal_service),
+            patch("app.services.pending_entry.pending_entry_intent_service", pending_service),
             patch("app.api.v1.signals.realtime_event_broker", broker),
         ):
             response = await confirm_signal(
@@ -231,7 +273,9 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.signal.status, "ready")
         self.assertEqual(response.signal.auto_entry.status if response.signal.auto_entry else None, "pending")
         self.assertEqual(response.signal.auto_entry.mode if response.signal.auto_entry else None, "virtual")
+        self.assertEqual(response.pending_entry_intent.id, pending_service.intent.id)
         self.assertIn("Auto-entry armed", response.message)
+        self.assertEqual(pending_service.calls, 1)
         self.assertEqual(broker.events[0]["type"], "signal.updated")
 
     async def test_confirm_endpoint_allows_auto_entry_when_virtual_rr_guard_is_soft(self) -> None:
@@ -239,9 +283,11 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         signal = _rr_failed_signal("sig_low_rr", now=now, status="ready")
         self.signal_service.add_signal(signal)
         broker = _FakeRealtimeBroker()
+        pending_service = _FakePendingEntryService()
 
         with (
             patch("app.api.v1.signals.signal_service", self.signal_service),
+            patch("app.services.pending_entry.pending_entry_intent_service", pending_service),
             patch("app.api.v1.signals.realtime_event_broker", broker),
         ):
             response = await confirm_signal(
@@ -251,7 +297,77 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.signal.status, "ready")
         self.assertEqual(response.signal.auto_entry.status if response.signal.auto_entry else None, "pending")
+        self.assertEqual(response.pending_entry_intent.status, "pending")
         self.assertIn("Auto-entry armed", response.message)
+
+    async def test_confirm_endpoint_enters_immediately_for_entry_touched_signal(self) -> None:
+        now = datetime.now(timezone.utc)
+        signal = RadarSignal(
+            id="sig_entry_touched",
+            symbol="BTC/USDT:PERP",
+            exchange="bybit",
+            strategy="trend_pullback_continuation",
+            direction="long",
+            confidence=0.82,
+            status="entry_touched",
+            score=82,
+            entry_min=100.0,
+            entry_max=100.0,
+            stop_loss=95.0,
+            take_profit_1=110.0,
+            created_at=now,
+            updated_at=now,
+        )
+        self.signal_service.add_signal(signal)
+        broker = _FakeRealtimeBroker()
+        pending_service = _FakePendingEntryService()
+        virtual_service = _FakeVirtualTradingService()
+
+        with (
+            patch("app.api.v1.signals.signal_service", self.signal_service),
+            patch("app.services.pending_entry.pending_entry_intent_service", pending_service),
+            patch("app.api.v1.signals.virtual_trading_service", virtual_service),
+            patch("app.api.v1.signals.realtime_event_broker", broker),
+        ):
+            response = await confirm_signal(
+                signal.id,
+                ManualConfirmRequest(mode="virtual", user_id="demo_user", auto_enter_on_confirmation=True),
+            )
+
+        self.assertIsNone(response.pending_entry_intent)
+        self.assertIsNotNone(response.virtual_trade)
+        self.assertEqual(pending_service.calls, 0)
+        self.assertEqual(virtual_service.calls, 1)
+
+    async def test_confirm_endpoint_does_not_arm_terminal_signal(self) -> None:
+        now = datetime.now(timezone.utc)
+        signal = RadarSignal(
+            id="sig_invalidated",
+            symbol="BTC/USDT:PERP",
+            exchange="bybit",
+            strategy="trend_pullback_continuation",
+            direction="long",
+            confidence=0.82,
+            status="invalidated",
+            score=82,
+            created_at=now,
+            updated_at=now,
+        )
+        self.signal_service.add_signal(signal)
+        pending_service = _FakePendingEntryService()
+
+        with (
+            patch("app.api.v1.signals.signal_service", self.signal_service),
+            patch("app.services.pending_entry.pending_entry_intent_service", pending_service),
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                await confirm_signal(
+                    signal.id,
+                    ManualConfirmRequest(mode="virtual", user_id="demo_user", auto_enter_on_confirmation=True),
+                )
+
+        self.assertEqual(exc.exception.status_code, 409)
+        self.assertEqual(pending_service.calls, 0)
 
     async def test_real_confirm_signal_returns_dry_run_structured_response(self) -> None:
         signal = _real_ready_signal("sig_real_dry_run")
@@ -462,6 +578,71 @@ def _rr_failed_signal(signal_id: str, *, now: datetime, status: str) -> RadarSig
         take_profit_1=99.68,
         take_profit_2=99.5,
         created_at=now,
+        updated_at=now,
+    )
+
+
+def _execution_profile(*, mode: str) -> ResolvedExecutionProfile:
+    return ResolvedExecutionProfile(
+        execution_mode="real" if mode == "real" else "virtual",
+        instrument_type="spot",
+        risk_mode="percent",
+        risk_percent=Decimal("1.0"),
+        fixed_risk_currency="USDT",
+        leverage=Decimal("1"),
+        rr_guard_mode="soft",
+        min_rr_ratio=Decimal("2.0"),
+        rr_target="final",
+        radar_display_mode="all_market_opportunities",
+    )
+
+
+def _pending_intent() -> PendingEntryIntentRead:
+    now = datetime.now(timezone.utc)
+    return PendingEntryIntentRead(
+        id=UUID("ba520631-d035-4f95-a4c0-3b40553dd530"),
+        user_id=UUID("ba520631-d035-4f95-a4c0-3b40553dd524"),
+        signal_id=UUID("ba520631-d035-4f95-a4c0-3b40553dd527"),
+        mode="virtual",
+        status="pending",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="long",
+        entry_min=Decimal("100"),
+        entry_max=Decimal("101"),
+        entry_price_policy="accepted_entry_zone",
+        stop_loss=Decimal("95"),
+        targets_snapshot=[{"label": "TP1", "price": "110"}],
+        accepted_trade_plan_snapshot={"entry": {"min_price": "100", "max_price": "101"}},
+        accepted_trade_plan_hash="sha256:test",
+        accepted_signal_status="ready",
+        execution_profile_snapshot={"rr_guard_mode": "soft"},
+        request_snapshot={"auto_enter_on_confirmation": True},
+        idempotency_key="pending-entry:test",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _virtual_trade(signal: RadarSignal, request: ManualConfirmRequest, *, now: datetime) -> VirtualTrade:
+    return VirtualTrade(
+        id="trade_entry_touched",
+        user_id=request.user_id,
+        signal_id=signal.id,
+        exchange=signal.exchange,
+        symbol=signal.symbol,
+        strategy=signal.strategy,
+        timeframe=signal.timeframe,
+        side=signal.direction,
+        entry_price=signal.entry_min or 100.0,
+        current_price=signal.entry_min or 100.0,
+        size_usd=100.0,
+        quantity=1.0,
+        leverage=1,
+        risk_percent=1.0,
+        stop_loss=signal.stop_loss or 95.0,
+        take_profit=[signal.take_profit_1 or 110.0],
+        opened_at=now,
         updated_at=now,
     )
 

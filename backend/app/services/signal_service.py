@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import json
 import logging
 from typing import Any, Protocol
@@ -11,8 +12,10 @@ from app.repositories.signal_repository import (
     SignalRepository,
     SignalWriteResult,
 )
+from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.risk import RadarDisplayMode, RiskDecision, RiskPreviewRequest
 from app.schemas.signal import RadarSignal, StrategySignal
+from app.schemas.trade import ManualConfirmRequest
 from app.services.risk_management import default_rr_guard_mode_for_context
 from app.services.signal_risk_reward import ensure_signal_execution_eligible
 
@@ -106,6 +109,12 @@ class NullSignalAnalyticsWriter:
 class NullSignalHotStore:
     def write_signal(self, result: SignalWriteResult) -> None:
         return None
+
+
+@dataclass(frozen=True)
+class SignalAutoEntryArmResult:
+    signal: RadarSignal
+    pending_entry_intent: PendingEntryIntentRead
 
 
 class SignalService:
@@ -252,25 +261,62 @@ class SignalService:
         self._after_write(result)
         return result.signal
 
-    def arm_auto_entry(self, signal_id: str, request: dict[str, Any]) -> RadarSignal | None:
-        arm = getattr(self._repository, "arm_auto_entry", None)
-        if arm is None:
-            return None
+    def arm_auto_entry(
+        self,
+        signal_id: str,
+        request: dict[str, Any],
+        *,
+        pending_entry_intent: PendingEntryIntentRead | None = None,
+    ) -> SignalAutoEntryArmResult | None:
         signal = self._repository.get_signal(signal_id)
         if signal is None:
             return None
         raw_mode = str(request.get("mode") or "virtual").strip().lower()
         mode = "real" if raw_mode == "real" else "virtual"
-        ensure_signal_execution_eligible(
-            signal,
-            mode=mode,
-            rr_guard_mode=default_rr_guard_mode_for_context(mode),
-        )
-        result = arm(signal_id, request=request)
+        request_model = ManualConfirmRequest.model_validate({**request, "mode": mode})
+        if pending_entry_intent is None:
+            from app.services.pending_entry import pending_entry_intent_service
+
+            execution_profile = pending_entry_intent_service.resolve_execution_profile(
+                signal,
+                request_model,
+                mode=mode,
+            )
+            ensure_signal_execution_eligible(
+                signal,
+                mode=mode,
+                rr_guard_mode=execution_profile.rr_guard_mode,
+            )
+            pending_entry_intent = pending_entry_intent_service.arm_from_signal(
+                user_id=request_model.user_id,
+                signal_id=signal.id,
+                mode=mode,
+                request=request_model,
+                execution_profile=execution_profile,
+            )
+        else:
+            ensure_signal_execution_eligible(
+                signal,
+                mode=mode,
+                rr_guard_mode=pending_entry_intent.execution_profile_snapshot.get(
+                    "rr_guard_mode",
+                    default_rr_guard_mode_for_context(mode),
+                ),
+            )
+        arm = getattr(self._repository, "arm_auto_entry", None)
+        if arm is None:
+            return SignalAutoEntryArmResult(signal=signal, pending_entry_intent=pending_entry_intent)
+        mirror_request = {
+            **request_model.model_dump(mode="json"),
+            "pending_entry_intent_id": str(pending_entry_intent.id),
+            "accepted_trade_plan_hash": pending_entry_intent.accepted_trade_plan_hash,
+            "idempotency_key": pending_entry_intent.idempotency_key,
+        }
+        result = arm(signal_id, request=mirror_request)
         if result is None:
             return None
         self._after_write(result)
-        return result.signal
+        return SignalAutoEntryArmResult(signal=result.signal, pending_entry_intent=pending_entry_intent)
 
     def update_auto_entry(
         self,

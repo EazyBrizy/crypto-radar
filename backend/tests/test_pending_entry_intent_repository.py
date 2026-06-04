@@ -149,6 +149,23 @@ class PendingEntryIntentRepositoryTest(unittest.TestCase):
             count = session.scalar(select(func.count()).select_from(PendingEntryIntent))
         self.assertEqual(count, 1)
 
+    def test_duplicate_active_user_signal_mode_returns_existing_intent(self) -> None:
+        first = self.repository.create_intent(_intent_create(idempotency_key="intent:first"))
+        second = self.repository.create_intent(
+            _intent_create(
+                idempotency_key="intent:changed-plan",
+                accepted_trade_plan_hash="changed-trade-plan-hash",
+                accepted_trade_plan_snapshot={"entry": {"min_price": "100", "max_price": "102"}},
+            )
+        )
+
+        self.assertEqual(second.id, first.id)
+        self.assertEqual(second.accepted_trade_plan_hash, "trade-plan-hash")
+
+        with self.SessionFactory() as session:
+            count = session.scalar(select(func.count()).select_from(PendingEntryIntent))
+        self.assertEqual(count, 1)
+
     def test_list_pending_for_market_filters_by_exchange_symbol_and_status(self) -> None:
         btc_pending = self.repository.create_intent(_intent_create(idempotency_key="intent:btc"))
         eth_pending = self.repository.create_intent(

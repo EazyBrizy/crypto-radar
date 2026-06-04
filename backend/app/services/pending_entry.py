@@ -1,18 +1,54 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
+import hashlib
+import json
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.domain.signal_status import is_market_opportunity_status, is_terminal_signal_status
 from app.models.pending_entry import PendingEntryIntent
 from app.repositories.pending_entry_repository import PendingEntryIntentRepository
-from app.schemas.pending_entry import PendingEntryIntentCreate, PendingEntryIntentRead, PendingEntryIntentStatus
+from app.schemas.pending_entry import (
+    PendingEntryIntentCreate,
+    PendingEntryIntentMode,
+    PendingEntryIntentRead,
+    PendingEntryIntentStatus,
+)
+from app.schemas.risk import ResolvedExecutionProfile
+from app.schemas.signal import RadarSignal
+from app.schemas.trade import ManualConfirmRequest
+from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
+from app.schemas.user import RiskManagementSettings
+from app.services.risk_management import (
+    execution_profile_resolver,
+    get_user_risk_management_settings,
+    request_risk_override_to_execution_settings,
+)
+from app.services.strategy_config_service import strategy_config_service
+
+SignalLoader = Callable[[str], RadarSignal | None]
+RiskSettingsProvider = Callable[[str], RiskManagementSettings]
+UserProfileProvider = Callable[[str], Any]
 
 
-class PendingEntryIntentService:
-    def __init__(self, repository: PendingEntryIntentRepository | None = None) -> None:
+class PendingEntryService:
+    def __init__(
+        self,
+        repository: PendingEntryIntentRepository | None = None,
+        *,
+        signal_loader: SignalLoader | None = None,
+        user_profile_provider: UserProfileProvider | None = None,
+        risk_settings_provider: RiskSettingsProvider | None = None,
+    ) -> None:
         self._repository = repository or PendingEntryIntentRepository()
+        self._signal_loader = signal_loader
+        self._user_profile_provider = user_profile_provider
+        self._risk_settings_provider = risk_settings_provider or get_user_risk_management_settings
 
     def create_intent(self, intent: PendingEntryIntentCreate) -> PendingEntryIntentRead:
         return self._repository.create_intent(intent)
@@ -43,5 +79,370 @@ class PendingEntryIntentService:
     def lock_for_trigger(self, intent_id: str | UUID, *, session: Session) -> PendingEntryIntent | None:
         return self._repository.lock_for_trigger(intent_id, session=session)
 
+    def resolve_execution_profile(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        *,
+        mode: PendingEntryIntentMode,
+    ) -> ResolvedExecutionProfile:
+        risk_settings = self._risk_settings_provider(request.user_id)
+        strategy_risk_settings, _ = _strategy_risk_settings(signal, user_id=request.user_id)
+        return execution_profile_resolver.resolve(
+            user_risk_settings=risk_settings,
+            strategy_execution_settings=strategy_risk_settings,
+            request_override=request_risk_override_to_execution_settings(request.risk_override),
+            mode=mode,
+            instrument_type=_request_instrument_type(request),
+        )
 
-pending_entry_intent_service = PendingEntryIntentService()
+    def arm_from_signal(
+        self,
+        *,
+        user_id: str | UUID,
+        signal_id: str | UUID,
+        mode: PendingEntryIntentMode,
+        request: ManualConfirmRequest | dict[str, Any],
+        execution_profile: ResolvedExecutionProfile,
+    ) -> PendingEntryIntentRead:
+        signal = self._load_signal(signal_id)
+        if signal is None:
+            raise LookupError("Signal is not found")
+        if is_terminal_signal_status(signal.status):
+            raise ValueError("Signal cannot be armed for pending entry in terminal status")
+        if not is_market_opportunity_status(signal.status):
+            raise ValueError("Signal is not a market opportunity")
+
+        user_uuid = self._resolve_user_uuid(user_id)
+        signal_uuid = _parse_uuid_or_raise(signal.id, "signal_id")
+        request_snapshot = _request_snapshot(request, mode=mode)
+        accepted_plan = _accepted_trade_plan(signal)
+        trade_plan_hash = _snapshot_hash(accepted_plan.snapshot)
+        idempotency_key = _idempotency_key(
+            user_id=user_uuid,
+            signal_id=signal_uuid,
+            mode=mode,
+            trade_plan_hash=trade_plan_hash,
+        )
+        existing = self._get_active_intent(
+            user_id=user_uuid,
+            signal_id=signal_uuid,
+            mode=mode,
+        )
+        if existing is not None:
+            return existing
+
+        intent = PendingEntryIntentCreate(
+            user_id=user_uuid,
+            signal_id=signal_uuid,
+            strategy_id=None,
+            mode=mode,
+            status="pending",
+            exchange=signal.exchange,
+            symbol=signal.symbol,
+            side=signal.direction,
+            entry_min=accepted_plan.entry_min,
+            entry_max=accepted_plan.entry_max,
+            entry_price_policy=accepted_plan.entry_price_policy,
+            stop_loss=accepted_plan.stop_loss,
+            targets_snapshot=accepted_plan.targets_snapshot,
+            accepted_trade_plan_snapshot=accepted_plan.snapshot,
+            accepted_trade_plan_hash=trade_plan_hash,
+            accepted_signal_status=signal.status,
+            accepted_signal_version=accepted_plan.signal_version,
+            accepted_signal_fingerprint=_signal_fingerprint(signal, trade_plan_hash),
+            execution_profile_snapshot=execution_profile.model_dump(mode="json"),
+            request_snapshot=request_snapshot,
+            idempotency_key=idempotency_key,
+            expires_at=signal.expires_at,
+        )
+        return self._repository.create_intent(intent)
+
+    def _load_signal(self, signal_id: str | UUID) -> RadarSignal | None:
+        if self._signal_loader is not None:
+            return self._signal_loader(str(signal_id))
+        from app.services.signal_service import signal_service
+
+        return signal_service.get_signal(str(signal_id))
+
+    def _resolve_user_uuid(self, user_id: str | UUID) -> UUID:
+        if isinstance(user_id, UUID):
+            return user_id
+        parsed = _parse_uuid(str(user_id))
+        if parsed is not None:
+            return parsed
+        profile_provider = self._user_profile_provider
+        if profile_provider is None:
+            from app.services.user_service import user_service
+
+            profile_provider = user_service.get_profile
+        profile = profile_provider(str(user_id))
+        profile_id = getattr(profile, "id", None)
+        if profile_id is None and isinstance(profile, dict):
+            profile_id = profile.get("id")
+        return _parse_uuid_or_raise(profile_id, "user_id")
+
+    def _get_active_intent(
+        self,
+        *,
+        user_id: UUID,
+        signal_id: UUID,
+        mode: PendingEntryIntentMode,
+    ) -> PendingEntryIntentRead | None:
+        get_active = getattr(self._repository, "get_active_for_user_signal_mode", None)
+        if get_active is None:
+            return None
+        return get_active(user_id=user_id, signal_id=signal_id, mode=mode)
+
+
+PendingEntryIntentService = PendingEntryService
+
+
+class _AcceptedTradePlan:
+    def __init__(
+        self,
+        *,
+        snapshot: dict[str, Any],
+        entry_min: Decimal,
+        entry_max: Decimal,
+        entry_price_policy: str,
+        stop_loss: Decimal,
+        targets_snapshot: list[dict[str, Any]],
+        signal_version: str | None,
+    ) -> None:
+        self.snapshot = snapshot
+        self.entry_min = entry_min
+        self.entry_max = entry_max
+        self.entry_price_policy = entry_price_policy
+        self.stop_loss = stop_loss
+        self.targets_snapshot = targets_snapshot
+        self.signal_version = signal_version
+
+
+def _accepted_trade_plan(signal: RadarSignal) -> _AcceptedTradePlan:
+    trade_plan = _trade_plan_from_signal(signal)
+    entry_min = _positive_decimal(
+        _first_present(trade_plan.entry.min_price, signal.entry_min, trade_plan.entry.price),
+        "entry_min",
+    )
+    entry_max = _positive_decimal(
+        _first_present(trade_plan.entry.max_price, signal.entry_max, trade_plan.entry.price),
+        "entry_max",
+    )
+    if entry_max < entry_min:
+        raise ValueError("Pending entry requires entry_max greater than or equal to entry_min")
+    stop_loss = _positive_decimal(
+        _first_present(
+            trade_plan.stop_loss,
+            signal.stop_loss,
+            trade_plan.invalidation.hard_stop if trade_plan.invalidation is not None else None,
+            trade_plan.invalidation.price if trade_plan.invalidation is not None else None,
+        ),
+        "stop_loss",
+    )
+    targets_snapshot = _targets_snapshot(trade_plan)
+    if not targets_snapshot:
+        raise ValueError("Pending entry requires at least one take-profit target price")
+
+    snapshot = trade_plan.model_dump(mode="json", exclude_none=True)
+    entry_snapshot = dict(snapshot.get("entry") or {})
+    entry_snapshot.update(
+        {
+            "min_price": _decimal_string(entry_min),
+            "max_price": _decimal_string(entry_max),
+            "price": _decimal_string((entry_min + entry_max) / Decimal("2")),
+        }
+    )
+    snapshot.update(
+        {
+            "entry": entry_snapshot,
+            "stop_loss": _decimal_string(stop_loss),
+            "targets": targets_snapshot,
+            "accepted_legacy_fields": {
+                "entry_min": _decimal_string(entry_min),
+                "entry_max": _decimal_string(entry_max),
+                "stop_loss": _decimal_string(stop_loss),
+                "take_profit_1": _decimal_string_or_none(signal.take_profit_1),
+                "take_profit_2": _decimal_string_or_none(signal.take_profit_2),
+            },
+        }
+    )
+    return _AcceptedTradePlan(
+        snapshot=snapshot,
+        entry_min=entry_min,
+        entry_max=entry_max,
+        entry_price_policy="accepted_entry_zone",
+        stop_loss=stop_loss,
+        targets_snapshot=targets_snapshot,
+        signal_version=_signal_version(trade_plan),
+    )
+
+
+def _trade_plan_from_signal(signal: RadarSignal) -> TradePlan:
+    if signal.trade_plan is not None:
+        return signal.trade_plan
+    return build_trade_plan_from_legacy_fields(
+        entry_min=signal.entry_min,
+        entry_max=signal.entry_max,
+        stop_loss=signal.stop_loss,
+        take_profit_1=signal.take_profit_1,
+        take_profit_2=signal.take_profit_2,
+        risk_reward=signal.risk_reward,
+        first_target_rr=signal.first_target_rr,
+        final_target_rr=signal.final_target_rr,
+        selected_rr=signal.selected_rr,
+        selected_rr_target=signal.selected_rr_target,
+        min_rr_ratio=signal.min_rr_ratio,
+        source="pending_entry_acceptance",
+    )
+
+
+def _targets_snapshot(trade_plan: TradePlan) -> list[dict[str, Any]]:
+    targets: list[dict[str, Any]] = []
+    for target in trade_plan.targets:
+        if target.price is None:
+            continue
+        price = _positive_decimal(target.price, "target.price")
+        target_snapshot = target.model_dump(mode="json", exclude_none=True)
+        target_snapshot["price"] = _decimal_string(price)
+        targets.append(target_snapshot)
+    return targets
+
+
+def _request_snapshot(
+    request: ManualConfirmRequest | dict[str, Any],
+    *,
+    mode: PendingEntryIntentMode,
+) -> dict[str, Any]:
+    if isinstance(request, ManualConfirmRequest):
+        snapshot = request.model_dump(mode="json")
+    elif hasattr(request, "model_dump"):
+        snapshot = request.model_dump(mode="json")
+    else:
+        snapshot = dict(request)
+    snapshot["mode"] = mode
+    snapshot["pending_entry_flow"] = "arm_from_signal"
+    return snapshot
+
+
+def _snapshot_hash(snapshot: dict[str, Any]) -> str:
+    payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+
+def _signal_fingerprint(signal: RadarSignal, trade_plan_hash: str) -> str:
+    payload = {
+        "signal_id": signal.id,
+        "exchange": signal.exchange,
+        "symbol": signal.symbol,
+        "strategy": signal.strategy,
+        "timeframe": signal.timeframe,
+        "direction": signal.direction,
+        "status": signal.status,
+        "trade_plan_hash": trade_plan_hash,
+        "expires_at": signal.expires_at.isoformat() if signal.expires_at is not None else None,
+    }
+    return _snapshot_hash(payload)
+
+
+def _idempotency_key(
+    *,
+    user_id: UUID,
+    signal_id: UUID,
+    mode: PendingEntryIntentMode,
+    trade_plan_hash: str,
+) -> str:
+    payload = f"{user_id}:{signal_id}:{mode}:{trade_plan_hash}"
+    return f"pending-entry:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+
+def _request_instrument_type(request: ManualConfirmRequest) -> str:
+    if request.execution_profile is not None and request.execution_profile.instrument_type is not None:
+        return request.execution_profile.instrument_type
+    if request.risk_override is not None and request.risk_override.leverage is not None:
+        return "futures" if request.risk_override.leverage > 1 else "spot"
+    return "futures" if request.leverage > 1 else "spot"
+
+
+def _strategy_risk_settings(signal: RadarSignal, *, user_id: str) -> tuple[dict[str, Any], str]:
+    try:
+        configs = strategy_config_service.list_configs(user_id=user_id)
+    except Exception as exc:
+        return {}, f"unavailable:{exc.__class__.__name__}"
+    signal_exchange = signal.exchange.strip().lower()
+    signal_symbol = signal.symbol.strip().upper()
+    for config in configs:
+        if config.strategy_code != signal.strategy:
+            continue
+        if config.timeframes and signal.timeframe not in config.timeframes:
+            continue
+        if config.pairs:
+            pairs = {
+                (pair.exchange.strip().lower(), pair.symbol.strip().upper())
+                for pair in config.pairs
+            }
+            if (signal_exchange, signal_symbol) not in pairs:
+                continue
+        elif config.exchanges and signal_exchange not in {exchange.strip().lower() for exchange in config.exchanges}:
+            continue
+        return config.risk_settings.to_legacy_dict(), "strategy_config"
+    return {}, "not_configured"
+
+
+def _signal_version(trade_plan: TradePlan) -> str | None:
+    for source in (trade_plan.metadata, trade_plan.risk_rules.metadata):
+        value = source.get("signal_version") or source.get("strategy_version")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return trade_plan.version
+
+
+def _positive_decimal(value: Any, field_name: str) -> Decimal:
+    if value is None:
+        raise ValueError(f"Pending entry requires {field_name}")
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"Pending entry requires numeric {field_name}") from exc
+    if number <= 0:
+        raise ValueError(f"Pending entry requires positive {field_name}")
+    return number
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _decimal_string(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _decimal_string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _decimal_string(_positive_decimal(value, "price"))
+
+
+def _parse_uuid_or_raise(value: Any, field_name: str) -> UUID:
+    parsed = _parse_uuid(value)
+    if parsed is None:
+        raise ValueError(f"Pending entry requires UUID {field_name}")
+    return parsed
+
+
+def _parse_uuid(value: Any) -> UUID | None:
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
+pending_entry_intent_service = PendingEntryService()
+pending_entry_service = pending_entry_intent_service

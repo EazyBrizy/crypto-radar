@@ -351,6 +351,7 @@ def _signal(signal_id: str = "sig_virtual_boundary") -> RadarSignal:
         direction="long",
         confidence=0.82,
         risk_reward=3.0,
+        status="entry_touched",
         score=82,
         timeframe="15m",
         entry_min=100.0,

@@ -95,6 +95,9 @@ remain only as a read mirror/backward-compatibility surface. When an intent
 triggers, virtual or real execution must rebuild RiskGate context from current
 account, market/orderbook, exchange rules, fee, and signal data. Real execution
 still must pass `RealExecutionReadinessService` before any adapter order.
+Manual confirm responses that arm a deferred entry include the created or
+idempotently reused `pending_entry_intent`; they do not create a virtual trade
+or send a real order while the entry zone has not been touched.
 
 ## Storage
 

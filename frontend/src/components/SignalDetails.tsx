@@ -7,26 +7,17 @@ import { BarChart3, CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert,
 import { Badge } from "./Badge";
 import {
   canShowSignalEntryAction,
-  canShowEnterButton,
-  isEntryTouched,
-  isExecutionReady,
-  isFormingCandleSignal,
-  isMarketOpportunity,
-  isOpenCandleActionableAllowed,
-  isWaitingEntry,
   marketOpportunityLabel,
   marketOpportunityTone,
   riskGateTone
 } from "@/domain/signal-status";
-import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
 import type { AccountRiskSnapshot, ExchangeConnection } from "@/features/server-state/types";
 import type { DecisionReason, ExecutionGateStatus, ImpactRisk, PendingEntryIntent, RadarSignal, RiskStateResponse, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
+import { buildSignalDetailsViewModel, type SignalDetailsViewModel, type UiBlocker } from "./signal-details-view-model";
 import {
   entryZone,
-  formingCandleReason,
   formatPrice,
   isRiskRewardBlocked,
-  riskLabel,
   riskRewardBlockReason,
   riskRewardWarningReason,
   signalTradePlanSummary
@@ -99,57 +90,50 @@ export function SignalDetails({
     );
   }
 
-  const isLong = signal.direction === "long";
-  const riskFailed = executionPreview?.risk_check?.status === "failed";
-  const strategyRiskBlocked = isRiskRewardBlocked(signal);
-  const strategyRiskWarning = riskRewardWarningReason(signal);
-  const formingCandle = isFormingCandleSignal(signal);
-  const openCandleAllowed = isOpenCandleActionableAllowed(signal);
-  const formingReason = formingCandleReason(signal);
-  const statusAllowsTrade = canShowEnterButton(signal) && (!formingCandle || openCandleAllowed);
-  const activePendingEntry = pendingEntry && isActivePendingEntryStatus(pendingEntry.status) ? pendingEntry : null;
-  const terminalPendingEntry = pendingEntry && isTerminalPendingEntryStatus(pendingEntry.status) ? pendingEntry : null;
-  const hasPendingEntryIntent = pendingEntry != null;
-  const activeLegacyAutoEntry = !hasPendingEntryIntent && signal.auto_entry && isActivePendingEntryStatus(signal.auto_entry.status)
-    ? signal.auto_entry
-    : null;
-  const terminalLegacyAutoEntry = !hasPendingEntryIntent && signal.auto_entry && isTerminalPendingEntryStatus(signal.auto_entry.status)
-    ? signal.auto_entry
-    : null;
+  const viewModel = buildSignalDetailsViewModel(signal, pendingEntry, { executionPreview });
+  const isLong = viewModel.side === "long";
+  const riskFailed = viewModel.riskSummary.riskFailed;
+  const strategyRiskBlocked = viewModel.riskSummary.riskRewardBlocked;
+  const strategyRiskWarning = viewModel.riskSummary.riskRewardWarning;
+  const formingCandle = viewModel.riskSummary.formingCandle;
+  const openCandleAllowed = viewModel.riskSummary.openCandleAllowed;
+  const formingReason = viewModel.riskSummary.formingReason;
+  const statusAllowsTrade = viewModel.riskSummary.statusAllowsTrade;
+  const activePendingEntry = viewModel.activePendingEntry;
+  const terminalPendingEntry = viewModel.terminalPendingEntry;
+  const activeLegacyAutoEntry = viewModel.activeLegacyAutoEntry;
+  const terminalLegacyAutoEntry = viewModel.terminalLegacyAutoEntry;
   const activePendingStatus = activePendingEntry?.status ?? activeLegacyAutoEntry?.status ?? null;
   const hasActivePendingStatus = activePendingStatus != null;
   const autoEntryPending = activePendingStatus === "pending";
-  const requiresReconfirmation = activePendingStatus === "requires_reconfirmation";
+  const requiresReconfirmation = viewModel.primaryStatus === "requires_reconfirmation";
   const entryActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || strategyRiskBlocked || !statusAllowsTrade || riskFailed;
   const acceptPendingDisabled = busy
     || tradingActionsDisabled
     || pendingEntryLoading
     || hasActivePendingStatus
-    || !isMarketOpportunity(signal.status)
+    || !viewModel.riskSummary.isMarketOpportunity
     || statusAllowsTrade;
   const cancelPendingDisabled = busy || tradingActionsDisabled || !activePendingEntry;
-  const realActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || !isMarketOpportunity(signal.status);
+  const realActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || !viewModel.riskSummary.isMarketOpportunity;
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const breakdown = signal.score_breakdown;
-  const tradePlan = signalTradePlanSummary(signal);
-  const tradePlanComplete = tradePlan.entryPrice != null && tradePlan.stopLoss != null && tradePlan.targets.length > 0;
-  const riskRewardOk = tradePlan.selectedRr != null || signal.risk_reward != null;
-  const reasons = [
-    ...(formingReason ? [formingReason] : []),
-    ...(signal.explanation.length ? signal.explanation : ["Стратегия сформировала сигнал по текущему market context."])
-  ];
+  const tradePlan = viewModel.tradePlanSummary;
+  const tradePlanComplete = viewModel.riskSummary.tradePlanComplete;
+  const riskRewardOk = viewModel.riskSummary.riskRewardOk;
+  const reasons = viewModel.topReasons;
 
   return (
     <section className="details-panel">
       <div className="details-header">
         <div>
           <span className="muted">Signal Details</span>
-          <h2>{signal.symbol} {signal.direction.toUpperCase()} Signal</h2>
+          <h2>{viewModel.title}</h2>
         </div>
         <div className="details-badges">
           <Badge tone={isLong ? "green" : "red"}>{signal.direction.toUpperCase()}</Badge>
           {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
-          <Badge tone="yellow">Risk {riskLabel(signal)}</Badge>
+          <Badge tone="yellow">Risk {viewModel.riskSummary.label}</Badge>
           <Badge tone={marketOpportunityTone(signal)}>{formingReason ? "preview" : marketOpportunityLabel(signal)}</Badge>
           {activePendingStatus ? <Badge tone={pendingEntryTone(activePendingStatus)}>{pendingEntryLabel(activePendingStatus)}</Badge> : null}
           {signal.risk_gate_status ? <Badge tone={riskGateTone(signal.risk_gate_status)}>RiskGate {signal.risk_gate_status}</Badge> : null}
@@ -158,8 +142,8 @@ export function SignalDetails({
 
       <div className="decision-block">
         <span>Recommended action</span>
-        <strong>{recommendedAction(signal)}</strong>
-        <p>{signal.status_reason ?? "Decision must use setup status, invalidation and risk context, not direction alone."}</p>
+        <strong>{viewModel.primaryActionLabel}</strong>
+        <p>{viewModel.recommendedActionText}</p>
       </div>
 
       <RadarAnnotationBlock signal={signal} />
@@ -186,7 +170,7 @@ export function SignalDetails({
       <RiskRewardDetailBlock signal={signal} />
       <EdgeSnapshotBlock signal={signal} />
       <DecisionSnapshotBlock signal={signal} />
-      <RiskBlockersDetailBlock signal={signal} execution={executionPreview} />
+      <RiskBlockersDetailBlock viewModel={viewModel} />
 
       <ExecutionQualityBlock
         signal={signal}
@@ -578,19 +562,6 @@ function formatFeeRate(value: number | null | undefined): string {
 function formatBps(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "slippage -";
   return `slippage ${value.toFixed(1)} bps`;
-}
-
-function recommendedAction(signal: RadarSignal): string {
-  if (formingCandleReason(signal)) return "Forming candle preview, wait for close";
-  if (isExecutionReady(signal.status, signal.decision, signal.can_enter)) return `Execution-ready inside ${entryZone(signal)}`;
-  if (signal.risk_gate_status === "failed" || signal.can_enter === false) return "RiskGate blocks entry right now";
-  if (isEntryTouched(signal.status)) return "Entry touched, waiting for RiskGate permission";
-  if (isWaitingEntry(signal.status)) return "Market setup exists, wait for entry trigger";
-  if (signal.status === "watchlist") return "Watch setup formation, no entry yet";
-  if (signal.status === "ready") return "Setup exists, wait for confirmation";
-  if (signal.status === "wait_for_pullback") return "Wait for pullback or retest";
-  if (signal.status === "invalidated") return "Idea is invalidated";
-  return `Monitor status ${signal.status.replaceAll("_", " ")}`;
 }
 
 function RadarAnnotationBlock({ signal }: { signal: RadarSignal }) {
@@ -1110,32 +1081,12 @@ function DecisionReasonList({ title, reasons }: { title: string; reasons: Decisi
 }
 
 function RiskBlockersDetailBlock({
-  signal,
-  execution
+  viewModel
 }: {
-  signal: RadarSignal;
-  execution: VirtualExecutionReport | null;
+  viewModel: SignalDetailsViewModel;
 }) {
-  const rrBlockReason = riskRewardBlockReason(signal);
-  const rrWarningReason = riskRewardWarningReason(signal);
-  const noTrade = signal.no_trade_filter ?? null;
-  const riskDecision = execution?.risk_decision ?? null;
-  const riskCheck = execution?.risk_check ?? null;
-  const decision = signal.decision ?? null;
-  const blockers = dedupe([
-    ...(rrBlockReason ? [rrBlockReason] : []),
-    ...(signal.risk_gate_status === "failed" && signal.display_reason ? [signal.display_reason] : []),
-    ...(noTrade?.blockers ?? []),
-    ...(decision?.blockers.map((reason) => reason.message) ?? []),
-    ...(riskDecision?.blockers ?? riskCheck?.blockers ?? [])
-  ]);
-  const warnings = dedupe([
-    ...(!rrBlockReason && rrWarningReason ? [rrWarningReason] : []),
-    ...(signal.risk_gate_status === "warning" && signal.display_reason ? [signal.display_reason] : []),
-    ...(noTrade?.warnings ?? []),
-    ...(decision?.warnings.map((reason) => reason.message) ?? []),
-    ...(riskDecision?.warnings ?? riskCheck?.warnings ?? [])
-  ]);
+  const blockers = viewModel.topBlockers;
+  const warnings = viewModel.warnings;
   if (!blockers.length && !warnings.length) return null;
   return (
     <div className="risk-block">
@@ -1143,15 +1094,19 @@ function RiskBlockersDetailBlock({
       {blockers.length ? (
         <ul className="risk-blocker-list">
           {blockers.map((blocker) => (
-            <li key={blocker}>{blocker}</li>
+            <li key={blockerKey(blocker)}>{blocker.userMessage}</li>
           ))}
         </ul>
       ) : null}
       {warnings.map((warning) => (
-        <p key={warning}>{warning}</p>
+        <p key={blockerKey(warning)}>{warning.userMessage}</p>
       ))}
     </div>
   );
+}
+
+function blockerKey(blocker: UiBlocker): string {
+  return `${blocker.severity}:${blocker.category}:${blocker.code}:${blocker.userMessage}`;
 }
 
 function StrategyLayersBlock({ signal, execution }: { signal: RadarSignal; execution: VirtualExecutionReport | null }) {

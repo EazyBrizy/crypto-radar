@@ -133,6 +133,13 @@ class ExecutionPlannedOrder(BaseModel):
     quantity: float = Field(..., gt=0)
     price: Optional[float] = Field(default=None, gt=0)
     stop_price: Optional[float] = Field(default=None, gt=0)
+    requested_quantity: Optional[float] = Field(default=None, ge=0)
+    normalized_quantity: Optional[float] = Field(default=None, ge=0)
+    requested_price: Optional[float] = Field(default=None, gt=0)
+    normalized_price: Optional[float] = Field(default=None, gt=0)
+    requested_stop_price: Optional[float] = Field(default=None, gt=0)
+    normalized_stop_price: Optional[float] = Field(default=None, gt=0)
+    rounding_reason: Optional[str] = None
     reduce_only: bool = False
     close_percent: Optional[float] = Field(default=None, ge=0, le=100)
     time_in_force: Optional[str] = None
@@ -154,6 +161,13 @@ class RealExecutionPlan(BaseModel):
     entry_price: float = Field(..., gt=0)
     quantity: float = Field(..., gt=0)
     notional: float = Field(..., gt=0)
+    requested_quantity: Optional[float] = Field(default=None, ge=0)
+    normalized_quantity: Optional[float] = Field(default=None, ge=0)
+    requested_entry_price: Optional[float] = Field(default=None, gt=0)
+    normalized_entry_price: Optional[float] = Field(default=None, gt=0)
+    requested_notional: Optional[float] = Field(default=None, ge=0)
+    normalized_notional: Optional[float] = Field(default=None, ge=0)
+    margin_mode: Optional[str] = None
     leverage: int = Field(..., ge=1)
     idempotency_key: str = Field(..., min_length=1)
     client_order_id: str = Field(..., min_length=1)

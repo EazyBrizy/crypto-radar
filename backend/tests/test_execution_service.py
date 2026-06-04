@@ -580,7 +580,10 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result.execution_plan)
         assert result.execution_plan is not None
         self.assertEqual(result.execution_plan.protective_order_strategy, "bracket")
-        self.assertEqual([role for role, _order in adapter.calls], ["entry", "protective_stop", "take_profit", "take_profit"])
+        self.assertEqual(
+            [role for role, _order in adapter.calls],
+            ["entry", "protective_stop", "take_profit", "take_profit"],
+        )
         self.assertTrue(all(order.status == "submitted" for order in result.planned_orders))
         self.assertTrue(result.execution_plan.metadata["reconciliation_required"])
 
@@ -618,23 +621,87 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Protective stop order must include stop_price", result.message)
         self.assertEqual(adapter.calls, [])
 
-    async def test_exchange_rule_step_validation_blocks_adapter_call(self) -> None:
+    async def test_exchange_rule_normalization_rounds_qty_down_before_submit(self) -> None:
         adapter = _FakeExecutionAdapter()
         service = _service(
             _decision(quantity=1.0),
             execution_adapter=adapter,
             risk_state=_FakeRiskState(_Reference(exchange_qty_step=0.3, exchange_tick_size=0.5)),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "submitted")
+        self.assertEqual(
+            [role for role, _order in adapter.calls],
+            ["entry", "protective_stop", "take_profit", "take_profit"],
+        )
+        self.assertIsNotNone(result.execution_plan)
+        assert result.execution_plan is not None
+        self.assertEqual(result.execution_plan.requested_quantity, 1.0)
+        self.assertAlmostEqual(result.execution_plan.normalized_quantity or 0.0, 0.9)
+        self.assertAlmostEqual(result.execution_plan.quantity, 0.9)
+        entry_order = result.planned_orders[0]
+        self.assertEqual(entry_order.requested_quantity, 1.0)
+        self.assertAlmostEqual(entry_order.normalized_quantity or 0.0, 0.9)
+        self.assertIn("qty_step", entry_order.rounding_reason or "")
+        normalization = result.execution_plan.metadata["order_rule_normalization"]
+        self.assertEqual(normalization["risk_trace"]["requested_quantity"], 1.0)
+        self.assertAlmostEqual(normalization["risk_trace"]["normalized_quantity"], 0.9)
+        self.assertAlmostEqual(normalization["risk_trace"]["normalized_risk_amount"], 4.5)
+
+    async def test_exchange_rule_normalization_rounds_price_to_tick_before_submit(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(
+                targets=[
+                    TakeProfitTarget(label="TP1", r_multiple=1.0, price=105.2, close_percent=50.0, action="observe"),
+                    TakeProfitTarget(label="TP2", r_multiple=2.0, price=110.2, close_percent=50.0, action="full_close"),
+                ]
+            ),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference(exchange_tick_size=0.5)),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "submitted")
+        take_profits = [order for order in result.planned_orders if order.role == "take_profit"]
+        self.assertEqual([order.requested_price for order in take_profits], [105.2, 110.2])
+        self.assertEqual([order.normalized_price for order in take_profits], [105.0, 110.0])
+        self.assertEqual([order.price for order in take_profits], [105.0, 110.0])
+        self.assertTrue(all("tick_size" in (order.rounding_reason or "") for order in take_profits))
+
+    async def test_exchange_rule_normalization_blocks_rounded_qty_below_min_qty(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(quantity=0.11),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    exchange_min_order_size=0.15,
+                    exchange_qty_step=0.1,
+                    exchange_tick_size=0.01,
+                )
+            ),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
         )
 
         result = await service.place_order(_signal(), _request())
 
         self.assertEqual(result.status, "risk_failed")
-        self.assertTrue(result.signal_valid)
-        self.assertFalse(result.execution_allowed)
-        self.assertIn("quantity is not aligned to qty_step", result.message)
+        self.assertIn("normalized quantity is below exchange minimum order size", result.message)
         self.assertEqual(adapter.calls, [])
+        self.assertIsNotNone(result.execution_plan)
+        assert result.execution_plan is not None
+        self.assertAlmostEqual(result.execution_plan.normalized_quantity or 0.0, 0.1)
 
-    async def test_exchange_rules_validate_tick_qty_min_notional(self) -> None:
+    async def test_exchange_rule_normalization_blocks_rounded_notional_below_min_notional(self) -> None:
         adapter = _FakeExecutionAdapter()
         service = _service(
             _decision(quantity=1.0),
@@ -653,9 +720,39 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await service.place_order(_signal(), _request())
 
         self.assertEqual(result.status, "risk_failed")
-        self.assertIn("quantity is not aligned to qty_step", result.message)
-        self.assertIn("notional is below exchange minimum notional", result.message)
+        self.assertNotIn("not aligned to qty_step", result.message)
+        self.assertIn("normalized notional is below exchange minimum notional", result.message)
         self.assertEqual(adapter.calls, [])
+        self.assertIsNotNone(result.execution_plan)
+        assert result.execution_plan is not None
+        self.assertAlmostEqual(result.execution_plan.normalized_notional or 0.0, 90.0)
+
+    async def test_order_rule_normalization_preserves_reduce_only_protective_flags(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(quantity=1.0),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference(exchange_qty_step=0.3, exchange_tick_size=0.5)),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "submitted")
+        flags_by_role = [
+            (order.role, order.reduce_only, order.metadata["reduce_only"])
+            for order in result.planned_orders
+        ]
+        self.assertEqual(
+            flags_by_role,
+            [
+                ("entry", False, False),
+                ("protective_stop", True, True),
+                ("take_profit", True, True),
+                ("take_profit", True, True),
+            ],
+        )
 
     async def test_real_balance_required_not_virtual_equity(self) -> None:
         adapter = _FakeExecutionAdapter()

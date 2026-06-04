@@ -1889,14 +1889,23 @@ layer before any production exchange integration:
 RealExecutionService
 -> AccountRiskSnapshotProvider
 -> RiskGate
+-> OrderRuleNormalizer
+-> execution-plan validation
 -> RealExecutionReadinessService
 -> ExchangeExecutionAdapter / DryRunExecutionAdapter
 ```
 
-`RealExecutionReadinessService` is the service-layer guard after RiskGate and
-execution-plan validation, and before any adapter call. It does not submit
-orders and does not replace RiskGate. It blocks live adapter placement unless
-all live-readiness requirements pass:
+`OrderRuleNormalizer` is the service-layer step after RiskGate sizing and before
+execution-plan validation. It consumes the requested `RealExecutionPlan` and
+fresh exchange instrument rules, writes requested-vs-normalized trace metadata,
+rounds quantities/prices by exchange filters, then returns a normalized plan
+plus explicit adjustments, warnings, and errors. Validation and adapter
+placement must consume only the normalized plan.
+
+`RealExecutionReadinessService` is the service-layer guard after RiskGate,
+order-rule normalization, and execution-plan validation, and before any adapter
+call. It does not submit orders and does not replace RiskGate. It blocks live
+adapter placement unless all live-readiness requirements pass:
 
 - signal status is `entry_touched`, `actionable`, or `confirmed`, and not
   terminal;
@@ -1911,6 +1920,9 @@ all live-readiness requirements pass:
   `idempotency_key`;
 - fresh exchange rules, `qty_step`, `tick_size`, and `min_notional` are
   available;
+- generated order quantities/prices have been normalized by `qty_step`,
+  `min_qty` / `min_order_size`, `min_notional`, `tick_size`, optional price
+  precision, reduce-only support, and margin-mode constraints before validation;
 - fresh exchange-derived account equity and available-balance snapshots are
   available, and were the sizing source for the pre-execution RiskGate context;
 - fresh exchange fee rates are available within `real_fee_rate_ttl_seconds`;
@@ -1999,6 +2011,14 @@ placement method is called.
 
 - `protective_order_strategy`: `bracket`, `oco`, `sequential_dry_run`, or
   `unsupported`.
+- `margin_mode`: optional normalized execution margin mode, such as `spot`,
+  `isolated`, or `cross`.
+- requested-vs-normalized values: `requested_quantity`,
+  `normalized_quantity`, `requested_entry_price`, `normalized_entry_price`,
+  `requested_notional`, and `normalized_notional`.
+- `metadata.order_rule_normalization`: normalization source, exchange-rule
+  filters used, adjustments, warnings, errors, and risk/PnL trace including
+  requested and normalized risk amount, notional, and target gross-PnL values.
 
 `bracket` means a bracket order or adapter-guaranteed bracket-equivalent
 protective placement. `oco` means an exchange-native OCO protective strategy.
@@ -2010,7 +2030,11 @@ returned with a warning. `unsupported` blocks live placement.
 - `role`: `entry`, `protective_stop`, or `take_profit`;
 - `side`: exchange order side, `buy` or `sell`;
 - `order_type`: `market`, `limit`, `stop`, or `take_profit`;
-- `quantity`, optional `price`, optional `stop_price`;
+- `quantity`, optional `price`, optional `stop_price`; after normalization
+  these are the values allowed to reach validation and adapter placement;
+- requested-vs-normalized fields: `requested_quantity`, `normalized_quantity`,
+  `requested_price`, `normalized_price`, `requested_stop_price`,
+  `normalized_stop_price`, and optional `rounding_reason`;
 - `reduce_only` for protective stop and take-profit orders;
 - optional `close_percent`;
 - optional exchange state: `exchange_order_id`, `filled_qty`,
@@ -2023,9 +2047,11 @@ Order status values are additive and include `planned`, `new`, `dry_run`,
 
 Real execution must not place an order when no adapter is configured. In that
 case it returns `not_implemented` after the risk decision and execution plan are
-available. If exchange rule step sizes are available, quantity must align with
-`qty_step` and entry/stop/take-profit prices must align with `tick_size` before
-adapter methods are called.
+available. If exchange rule step sizes are available, the requested plan must be
+normalized first, then validated. Quantities must align with `qty_step`, entry
+/ stop / take-profit prices must align with `tick_size`, and only truly invalid
+orders after rounding, such as rounded quantity below `min_qty` or rounded
+notional below `min_notional`, are rejected before adapter methods are called.
 
 Partial fills must remain explicit. `RealExecutionService` must not assume a
 full fill when an adapter returns `partially_filled` or nonzero

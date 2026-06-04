@@ -29,6 +29,10 @@ from app.services.risk_management import (
     resolved_risk_profile_source,
 )
 from app.services.risk_market_data import RiskMarketDataService, risk_market_data_service
+from app.services.order_rule_normalizer import (
+    OrderRuleNormalizer,
+    order_rule_normalizer,
+)
 from app.services.real_execution_readiness import (
     RealExecutionReadinessService,
     RealExecutionReadinessResult,
@@ -59,6 +63,7 @@ class RealExecutionService:
         market_data_service: RiskMarketDataService | None = risk_market_data_service,
         fee_rate_service: RiskFeeRateService | None = risk_fee_rate_service,
         readiness_service: RealExecutionReadinessService | None = real_execution_readiness_service,
+        order_plan_normalizer: OrderRuleNormalizer | None = order_rule_normalizer,
         execution_adapter: ExchangeExecutionAdapter | None | object = _DEFAULT_EXECUTION_ADAPTER,
         risk_settings_provider: RiskSettingsProvider | None = None,
         account_snapshot_provider: Any | None = None,
@@ -70,6 +75,7 @@ class RealExecutionService:
         self._market_data_service = market_data_service
         self._fee_rate_service = fee_rate_service
         self._readiness_service = readiness_service or RealExecutionReadinessService()
+        self._order_plan_normalizer = order_plan_normalizer or OrderRuleNormalizer()
         self._execution_adapter = (
             DryRunExecutionAdapter()
             if execution_adapter is _DEFAULT_EXECUTION_ADAPTER
@@ -280,12 +286,19 @@ class RealExecutionService:
             request=request,
             risk_decision=risk_decision,
             adapter=self._execution_adapter,
+            account_snapshot=account_snapshot,
         )
+        normalization = self._order_plan_normalizer.normalize_order_plan(
+            execution_plan,
+            reference,
+        )
+        execution_plan = normalization.plan
         validation_errors = _validate_execution_plan(
             plan=execution_plan,
             risk_decision=risk_decision,
             reference=reference,
         )
+        validation_errors = _dedupe([*normalization.errors, *validation_errors])
         if validation_errors:
             return RealExecutionResult(
                 status="risk_failed",
@@ -299,6 +312,7 @@ class RealExecutionService:
                 execution_plan=execution_plan,
                 planned_orders=execution_plan.planned_orders,
                 idempotency_key=execution_plan.idempotency_key,
+                warnings=normalization.warnings,
                 validation_errors=validation_errors,
             )
         if not_implemented_reason is not None:
@@ -315,6 +329,7 @@ class RealExecutionService:
                 planned_orders=execution_plan.planned_orders,
                 idempotency_key=execution_plan.idempotency_key,
                 adapter=getattr(self._execution_adapter, "name", None),
+                warnings=normalization.warnings,
             )
 
         readiness = self._readiness_service.evaluate(
@@ -342,7 +357,7 @@ class RealExecutionService:
                 execution_plan=execution_plan,
                 planned_orders=execution_plan.planned_orders,
                 idempotency_key=execution_plan.idempotency_key,
-                warnings=readiness.warnings,
+                warnings=_dedupe([*normalization.warnings, *readiness.warnings]),
                 validation_errors=readiness.blockers,
             )
 
@@ -373,7 +388,7 @@ class RealExecutionService:
             planned_orders=planned_orders,
             idempotency_key=execution_plan.idempotency_key,
             adapter=adapter_name,
-            warnings=readiness.warnings,
+            warnings=_dedupe([*normalization.warnings, *readiness.warnings]),
         )
 
     def _record_real_attempt(
@@ -569,6 +584,7 @@ def _build_execution_plan(
     request: ManualConfirmRequest,
     risk_decision: RiskDecision,
     adapter: Any | None,
+    account_snapshot: AccountRiskSnapshot | None = None,
 ) -> RealExecutionPlan:
     sizing = risk_decision.checked_position_sizing
     side = signal.direction
@@ -666,6 +682,10 @@ def _build_execution_plan(
         entry_price=sizing.entry_price,
         quantity=sizing.position_size_base,
         notional=sizing.notional,
+        requested_quantity=sizing.position_size_base,
+        requested_entry_price=sizing.entry_price,
+        requested_notional=sizing.notional,
+        margin_mode=account_snapshot.margin_mode if account_snapshot is not None else None,
         leverage=sizing.leverage,
         idempotency_key=idempotency_key,
         client_order_id=client_order_id,
@@ -678,6 +698,16 @@ def _build_execution_plan(
             "timeframe": signal.timeframe,
             "risk_status": risk_decision.status,
             "protective_order_strategy": protective_order_strategy,
+            "margin_mode": account_snapshot.margin_mode if account_snapshot is not None else None,
+            "risk_trace": {
+                "requested_quantity": sizing.position_size_base,
+                "requested_entry_price": sizing.entry_price,
+                "requested_notional": sizing.notional,
+                "requested_risk_amount": sizing.risk_amount,
+                "effective_risk_amount": sizing.effective_risk_amount,
+                "effective_risk_per_unit": sizing.effective_risk_per_unit,
+                "stop_loss_price": risk_decision.stop_loss_plan.stop_loss_price,
+            },
             "adapter_capabilities": {
                 "supports_bracket_orders": adapter_capabilities.supports_bracket_orders,
                 "supports_oco": adapter_capabilities.supports_oco,

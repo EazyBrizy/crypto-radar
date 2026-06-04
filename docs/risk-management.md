@@ -8,7 +8,9 @@ decision layer that real execution will use before any exchange order can be
 sent. Preview, blocked-attempt, successful virtual, and real-attempt decisions
 are now auditable through `risk_decisions`. `risk_protection_state`,
 `asset_risk_groups`, and cached exchange instrument rules are wired into the
-backend risk context, with some production automation still outstanding below.
+backend risk context. Real execution now normalizes order quantities and prices
+against cached exchange rules before execution-plan validation and adapter
+placement, with requested-vs-normalized trace metadata kept on the plan.
 
 ## Virtual Vs Real Gates
 
@@ -40,6 +42,8 @@ Real trading:
 - requires fresh market data when `real_requires_fresh_market_data` is enabled;
 - requires a valid orderbook/depth snapshot for liquidity and spread checks;
 - requires fresh exchange rules and valid order-size/price constraints;
+- normalizes the requested execution plan by exchange rules before validation,
+  then submits only the normalized quantities/prices;
 - requires protective stop/take-profit orders to be available in the execution
   plan;
 - requires the live adapter to guarantee protective placement through
@@ -306,10 +310,6 @@ while the module is being built step by step.
 - Add fee-rate TTL/staleness policy and background refresh observability. The
   risk paths now consume cached/synced Bybit fee-rate data, but there is no
   separate production scheduler for refreshing stale private fee rates yet.
-- Apply quantity and price rounding from cached `qty_step` and `tick_size`.
-  Automatic Bybit rule refresh exists and the risk context reads cached min/max
-  order size, min notional, max leverage, and rule freshness, but execution
-  paths do not yet round outgoing quantities/prices by these filters.
 - Add fee-rate retrieval for exchanges beyond Bybit.
 - Add full funding checks for futures. A production derivative snapshot runner
   now refreshes Bybit ticker `fundingRate` into PostgreSQL and Redis hot cache
@@ -556,6 +556,10 @@ Current behavior:
 - real confirm paths call the same gate and return a structured
   `RealExecutionResult`, such as `risk_failed`, `readiness_failed`,
   `not_implemented`, `dry_run`, or future live adapter statuses;
+- real confirm paths build requested order plans, run `OrderRuleNormalizer`
+  against cached exchange rules, validate the normalized plan, and keep
+  requested vs normalized quantity, price, notional, risk amount, and target PnL
+  trace in execution-plan metadata before any adapter method is called;
 - frontend receives backend `risk_decision` / `risk_check` and displays the
   backend status instead of calculating entry permission locally.
 
@@ -608,7 +612,6 @@ Still missing:
 
 - production scheduling/observability for exchange-rule refresh beyond the
   in-process FastAPI runner;
-- quantity/price rounding enforcement from `qty_step` and `tick_size`;
 - admin/editor workflow for maintaining asset-group taxonomy;
 - real trade close updates for `risk_protection_state`;
 - multi-group per-asset enforcement beyond the current primary-group MVP.
@@ -671,6 +674,10 @@ Implemented for the current backend:
 - `RiskStateService` passes rule freshness into `RiskGateService`;
 - missing or stale exchange rules are a warning for virtual mode and a hard
   blocker for real mode.
+- real execution normalizes requested quantities/prices through cached
+  `qty_step`, `min_order_size`, `min_notional`, `tick_size`, optional price
+  precision, reduce-only support, and margin-mode constraints before
+  execution-plan validation.
 
 Still missing for this point:
 
@@ -679,7 +686,6 @@ Still missing for this point:
 - add metrics/alerts for stale or failed sync cycles;
 - run configured spot + derivatives categories based on real product coverage,
   not only the current default;
-- enforce `qty_step` and `tick_size` rounding before real order submission.
 
 ## Bybit Market Context In Risk Gate
 

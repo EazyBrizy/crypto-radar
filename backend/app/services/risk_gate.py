@@ -683,13 +683,12 @@ def _account_values_from_snapshot(
         raise ValueError("Fresh account risk snapshot is required for real RiskGate context.")
     if snapshot.source != "exchange" and not allow_request_account_balance:
         raise ValueError(
-            "Live real RiskGate context requires an exchange account snapshot; "
-            "request.account_balance is not a live source of truth."
+            "Live entry requires source=exchange account snapshot."
         )
     if snapshot.account_equity is None or snapshot.account_equity <= 0:
-        raise ValueError("Account equity is required for real RiskGate sizing.")
-    if snapshot.available_balance is None or snapshot.available_balance < 0:
-        raise ValueError("Available balance is required for real RiskGate sizing.")
+        raise ValueError("Exchange account equity is missing.")
+    if snapshot.available_balance is None or snapshot.available_balance <= 0:
+        raise ValueError("Exchange available balance is insufficient.")
     return (
         float(snapshot.account_equity),
         float(snapshot.available_balance),

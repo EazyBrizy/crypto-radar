@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -47,8 +48,14 @@ class RiskReferenceSnapshot:
 
 
 class RiskStateService:
-    def __init__(self, session_factory: sessionmaker[Session] = SessionLocal) -> None:
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session] = SessionLocal,
+        *,
+        account_snapshot_provider: Any | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._account_snapshot_provider = account_snapshot_provider
 
     def get_state(
         self,
@@ -144,6 +151,24 @@ class RiskStateService:
         reference_snapshot = _account_snapshot_from_reference(reference)
         if reference_snapshot is not None:
             return reference_snapshot
+
+        provider = self._account_snapshot_provider or _default_account_snapshot_provider()
+        if mode == "real" and provider is not None and provider is not self:
+            if hasattr(provider, "get_real_account_snapshot"):
+                return provider.get_real_account_snapshot(
+                    user_id=user_id,
+                    exchange=exchange,
+                    mode=mode,
+                    live_adapter=live_adapter,
+                    request_account_balance=request_account_balance,
+                    reference=reference,
+                )
+            if hasattr(provider, "get_snapshot"):
+                return provider.get_snapshot(
+                    user_id=user_id,
+                    exchange=exchange,
+                    mode="real",
+                )
 
         return AccountRiskSnapshot(
             status="missing",
@@ -779,6 +804,12 @@ def _first_attr(reference: object, *names: str) -> object | None:
         if hasattr(reference, name):
             return getattr(reference, name)
     return None
+
+
+def _default_account_snapshot_provider() -> Any | None:
+    from app.services.exchange_account_snapshot import exchange_account_snapshot_service
+
+    return exchange_account_snapshot_service
 
 
 risk_state_service = RiskStateService()

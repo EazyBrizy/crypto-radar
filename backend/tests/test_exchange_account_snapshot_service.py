@@ -138,8 +138,32 @@ class ExchangeAccountSnapshotServiceTest(unittest.TestCase):
         self.assertTrue(any("wallet timeout" in warning for warning in stale.warnings))
         self.assertEqual(
             _live_account_snapshot_blockers(stale),
-            ["Fresh exchange account snapshot is required before live RiskGate sizing."],
+            ["Fresh exchange account snapshot is required before live entry."],
         )
+
+    def test_get_real_account_snapshot_dry_run_does_not_fetch_wallet(self) -> None:
+        calls = 0
+
+        def wallet_fetcher(**_kwargs: Any) -> BybitWalletBalance:
+            nonlocal calls
+            calls += 1
+            raise AssertionError("wallet fetcher should not run in dry-run")
+
+        service = _service(self.SessionFactory, wallet_fetcher=wallet_fetcher)
+
+        snapshot = service.get_real_account_snapshot(
+            user_id="usr_demo",
+            exchange="bybit",
+            mode="real",
+            live_adapter=False,
+            request_account_balance=Decimal("321.50"),
+        )
+
+        self.assertEqual(calls, 0)
+        self.assertEqual(snapshot.status, "fresh")
+        self.assertEqual(snapshot.source, "demo")
+        self.assertEqual(snapshot.account_equity, Decimal("321.50"))
+        self.assertEqual(snapshot.available_balance, Decimal("321.50"))
 
     def test_usr_demo_resolves_to_seeded_demo_user(self) -> None:
         _seed_connection(self.SessionFactory, CONNECTION_ID, USER_ID)

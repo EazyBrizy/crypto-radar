@@ -204,6 +204,7 @@ class _Reference:
     exchange_rule_age_seconds: float | None = None
     exchange_rule_ttl_seconds: int | None = None
     real_account_snapshot_status: str = "fresh"
+    real_account_snapshot_source: str = "exchange"
     real_account_equity: float | None = 1_000.0
     real_available_balance: float | None = 1_000.0
     position_reconciliation_enabled: bool = True
@@ -233,7 +234,7 @@ class _FakeRiskState:
             available_balance=self.reference.real_available_balance,
             margin_mode="spot",
             open_risk_amount=self.reference.open_risk_amount,
-            source="exchange",
+            source=self.reference.real_account_snapshot_source,
         )
 
 
@@ -773,9 +774,35 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await service.place_order(_signal(), _request())
 
         self.assertEqual(result.status, "risk_failed")
-        self.assertIn("Fresh exchange account snapshot", result.message)
-        self.assertIn("Exchange account equity is required", result.message)
-        self.assertIn("Exchange available balance is required", result.message)
+        self.assertIn("Fresh exchange account snapshot is required before live entry.", result.message)
+        self.assertIn("Exchange account equity is missing.", result.message)
+        self.assertIn("Exchange available balance is insufficient.", result.message)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_live_stale_account_snapshot_blocks_before_risk_gate_and_adapter(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        gate = _FakeRiskGateService(_decision())
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    real_account_snapshot_status="stale",
+                    real_account_equity=1_000.0,
+                    real_available_balance=1_000.0,
+                )
+            ),
+            market_data_service=_FakeMarketDataService(),
+            fee_rate_service=_FakeFeeRateService(),
+            execution_adapter=adapter,
+            risk_settings_provider=lambda _user_id: _risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIn("Fresh exchange account snapshot is required before live entry.", result.message)
+        self.assertEqual(gate.calls, 0)
         self.assertEqual(adapter.calls, [])
 
     async def test_live_missing_account_snapshot_blocks_before_risk_gate_and_adapter(self) -> None:
@@ -800,7 +827,85 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await service.place_order(_signal(), _request())
 
         self.assertEqual(result.status, "risk_failed")
-        self.assertIn("Fresh exchange account snapshot", result.message)
+        self.assertIn("Fresh exchange account snapshot is required before live entry.", result.message)
+        self.assertEqual(gate.calls, 0)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_live_request_account_balance_without_exchange_snapshot_blocks_entry(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        gate = _FakeRiskGateService(_decision(account_equity=999_999.0))
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    real_account_snapshot_status="missing",
+                    real_account_equity=None,
+                    real_available_balance=None,
+                )
+            ),
+            market_data_service=_FakeMarketDataService(),
+            fee_rate_service=_FakeFeeRateService(),
+            execution_adapter=adapter,
+            risk_settings_provider=lambda _user_id: _risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request(account_balance=999_999.0))
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIn("Fresh exchange account snapshot is required before live entry.", result.message)
+        self.assertIn("Exchange account equity is missing.", result.message)
+        self.assertEqual(gate.calls, 0)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_live_request_source_snapshot_blocks_before_risk_gate_and_adapter(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        gate = _FakeRiskGateService(_decision())
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    real_account_snapshot_source="request",
+                    real_account_equity=1_000.0,
+                    real_available_balance=1_000.0,
+                )
+            ),
+            market_data_service=_FakeMarketDataService(),
+            fee_rate_service=_FakeFeeRateService(),
+            execution_adapter=adapter,
+            risk_settings_provider=lambda _user_id: _risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request(account_balance=1_000.0))
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIn("Live entry requires source=exchange account snapshot.", result.message)
+        self.assertEqual(gate.calls, 0)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_live_zero_available_balance_blocks_before_risk_gate_and_adapter(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        gate = _FakeRiskGateService(_decision())
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=_FakeRiskState(
+                _Reference(
+                    real_account_equity=1_000.0,
+                    real_available_balance=0.0,
+                )
+            ),
+            market_data_service=_FakeMarketDataService(),
+            fee_rate_service=_FakeFeeRateService(),
+            execution_adapter=adapter,
+            risk_settings_provider=lambda _user_id: _risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertIn("Exchange available balance is insufficient.", result.message)
         self.assertEqual(gate.calls, 0)
         self.assertEqual(adapter.calls, [])
 

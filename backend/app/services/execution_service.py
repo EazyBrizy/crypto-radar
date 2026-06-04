@@ -86,10 +86,10 @@ class RealExecutionService:
         self._risk_settings_provider = risk_settings_provider or get_user_risk_management_settings
         if account_snapshot_provider is not None:
             self._account_snapshot_provider = account_snapshot_provider
-        elif risk_state is risk_state_service or risk_state is None:
-            self._account_snapshot_provider = exchange_account_snapshot_service
+        elif self._risk_state is not None:
+            self._account_snapshot_provider = self._risk_state
         else:
-            self._account_snapshot_provider = self._risk_state or exchange_account_snapshot_service
+            self._account_snapshot_provider = exchange_account_snapshot_service
 
     async def place_order(
         self,
@@ -571,16 +571,16 @@ def _risk_rejection_message(risk_decision: RiskDecision) -> str:
 
 def _live_account_snapshot_blockers(account_snapshot: AccountRiskSnapshot | None) -> list[str]:
     if account_snapshot is None:
-        return ["Fresh exchange account snapshot is required before live RiskGate sizing."]
+        return ["Fresh exchange account snapshot is required before live entry."]
     blockers: list[str] = []
     if account_snapshot.status != "fresh":
-        blockers.append("Fresh exchange account snapshot is required before live RiskGate sizing.")
+        blockers.append("Fresh exchange account snapshot is required before live entry.")
     if account_snapshot.source != "exchange":
-        blockers.append("Live RiskGate sizing requires source=exchange account snapshot.")
+        blockers.append("Live entry requires source=exchange account snapshot.")
     if account_snapshot.account_equity is None or account_snapshot.account_equity <= 0:
-        blockers.append("Exchange account equity is required before live RiskGate sizing.")
-    if account_snapshot.available_balance is None or account_snapshot.available_balance < 0:
-        blockers.append("Exchange available balance is required before live RiskGate sizing.")
+        blockers.append("Exchange account equity is missing.")
+    if account_snapshot.available_balance is None or account_snapshot.available_balance <= 0:
+        blockers.append("Exchange available balance is insufficient.")
     return _dedupe(blockers)
 
 

@@ -299,16 +299,16 @@ def _real_account_blockers(
     if account_snapshot is None:
         account_snapshot = _legacy_account_snapshot(reference)
     if account_snapshot is None:
-        return ["Fresh real account equity/balance snapshot is required for live real execution."]
+        return ["Fresh exchange account snapshot is required before live entry."]
     blockers: list[str] = []
     if account_snapshot.status != "fresh":
-        blockers.append("Fresh real account equity/balance snapshot is required for live real execution.")
+        blockers.append("Fresh exchange account snapshot is required before live entry.")
     if account_snapshot.source != "exchange":
-        blockers.append("Live real execution requires an exchange account snapshot, not request/demo balance.")
+        blockers.append("Live entry requires source=exchange account snapshot.")
     if account_snapshot.account_equity is None or account_snapshot.account_equity <= 0:
-        blockers.append("Real account equity is required; request.account_balance cannot authorize live sizing.")
-    if account_snapshot.available_balance is None or account_snapshot.available_balance < 0:
-        blockers.append("Real available balance is required; virtual equity cannot authorize live sizing.")
+        blockers.append("Exchange account equity is missing.")
+    if account_snapshot.available_balance is None or account_snapshot.available_balance <= 0:
+        blockers.append("Exchange available balance is insufficient.")
     return blockers
 
 

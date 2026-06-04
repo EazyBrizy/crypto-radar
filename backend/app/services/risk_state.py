@@ -4,7 +4,6 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -18,7 +17,7 @@ from app.models.risk import AssetRiskGroup, ExchangeInstrumentRule, RiskProtecti
 from app.models.user import AppUser, UserProfile
 from app.schemas.risk import AccountRiskSnapshot, PositionRiskSummary, RiskStateResponse
 from app.schemas.user import RiskManagementSettings
-from app.services.bootstrap_service import DEMO_USERNAME
+from app.services.user_identity import DEMO_USER_ALIASES, resolve_app_user
 
 
 @dataclass(frozen=True)
@@ -62,7 +61,7 @@ class RiskStateService:
         instrument_type: str | None = None,
     ) -> RiskStateResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             settings = _risk_settings(session, user)
             equity = _portfolio_equity(session, user)
             state = _get_or_create_state(session, user, equity)
@@ -97,7 +96,7 @@ class RiskStateService:
         with self._session_factory() as session:
             flush_context = session.no_autoflush if read_only else nullcontext()
             with flush_context:
-                user = _resolve_user(session, user_id)
+                user = resolve_app_user(session, user_id)
                 settings = _risk_settings(session, user)
                 equity = _portfolio_equity(session, user)
                 state = _get_or_create_state(
@@ -414,27 +413,6 @@ def _limit_enabled(value: float | int | Decimal | None) -> bool:
     return value is not None and Decimal(str(value)) > 0
 
 
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    try:
-        user_uuid = UUID(str(user_id))
-    except (TypeError, ValueError):
-        user_uuid = None
-    if user_uuid is not None:
-        user = session.get(AppUser, user_uuid)
-        if user is not None:
-            return user
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).one_or_none()
-    if user is not None:
-        return user
-    if user_id == "demo_user":
-        user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).one_or_none()
-        if user is not None:
-            return user
-    raise ValueError(f"User is not seeded: {user_id}")
-
-
 def _risk_settings(session: Session, user: AppUser) -> RiskManagementSettings:
     profile = session.get(UserProfile, user.id)
     settings = (profile.settings or {}).get("risk_management") if profile else None
@@ -677,7 +655,7 @@ def _dry_run_account_snapshot(
             source="dry_run",
             warnings=["Dry-run account balance is missing; request/demo balance is required."],
         )
-    source = "demo" if user_id == "demo_user" else "dry_run"
+    source = "demo" if user_id in DEMO_USER_ALIASES else "dry_run"
     return AccountRiskSnapshot(
         status="fresh",
         fetched_at=datetime.now(timezone.utc),

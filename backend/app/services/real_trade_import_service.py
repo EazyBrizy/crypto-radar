@@ -24,7 +24,7 @@ from app.schemas.external_exchange import (
     RealTradeImportRequest,
     RealTradeImportResult,
 )
-from app.services.bootstrap_service import DEMO_USERNAME
+from app.services.user_identity import resolve_app_user_uuid
 
 
 class ClickHouseInsertClient(Protocol):
@@ -372,7 +372,7 @@ class RealTradeImportRepository:
                 .order_by(ExternalExchangeOrder.imported_at.desc())
                 .limit(limit)
             )
-            statement = _scope_to_user(statement, user_id)
+            statement = _scope_to_user(session, statement, user_id)
             if connection_id is not None:
                 statement = statement.where(ExternalExchangeOrder.connection_id == _parse_uuid(connection_id))
             return [_order_to_response(order) for order in session.scalars(statement).all()]
@@ -396,7 +396,7 @@ class RealTradeImportRepository:
                 .order_by(ExternalExchangeTrade.traded_at.desc(), ExternalExchangeTrade.imported_at.desc())
                 .limit(limit)
             )
-            statement = _scope_to_user(statement, user_id)
+            statement = _scope_to_user(session, statement, user_id)
             if connection_id is not None:
                 statement = statement.where(ExternalExchangeTrade.connection_id == _parse_uuid(connection_id))
             return [_trade_to_response(trade) for trade in session.scalars(statement).all()]
@@ -779,13 +779,8 @@ def _connection_select():
     )
 
 
-def _scope_to_user(statement: Any, user_id: str) -> Any:
-    if user_id == "demo_user":
-        return statement.where(UserExchangeConnection.user.has(username=DEMO_USERNAME))
-    user_uuid = _parse_uuid(user_id)
-    if user_uuid is not None:
-        return statement.where(UserExchangeConnection.user_id == user_uuid)
-    return statement.where(UserExchangeConnection.user.has(username=user_id))
+def _scope_to_user(session: Session, statement: Any, user_id: str) -> Any:
+    return statement.where(UserExchangeConnection.user_id == resolve_app_user_uuid(session, user_id))
 
 
 def _order_to_response(order: ExternalExchangeOrder) -> ExternalExchangeOrderResponse:

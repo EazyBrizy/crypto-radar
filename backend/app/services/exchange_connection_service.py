@@ -20,7 +20,7 @@ from app.schemas.exchange_connection import (
     ExchangeConnectionResponse,
     ExchangeConnectionUpdateRequest,
 )
-from app.services.bootstrap_service import DEMO_USERNAME
+from app.services.user_identity import resolve_app_user
 
 
 class SecretRefProvider(Protocol):
@@ -78,7 +78,7 @@ class ExchangeConnectionService:
 
     def list_connections(self, user_id: str = "demo_user") -> list[ExchangeConnectionResponse]:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             records = session.scalars(
                 _connection_select()
                 .where(UserExchangeConnection.user_id == user.id)
@@ -88,7 +88,7 @@ class ExchangeConnectionService:
 
     def create_connection(self, request: ExchangeConnectionCreateRequest) -> ExchangeConnectionResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             exchange = _get_exchange(session, request.exchange_code)
             credentials = _extract_credentials(request)
             key_ref = self._secret_provider.store_exchange_credentials(
@@ -241,7 +241,7 @@ class ExchangeConnectionService:
         normalized_category = category.strip().lower()
         normalized_symbol = symbol.strip().upper() if isinstance(symbol, str) and symbol.strip() else None
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             connection = _active_connection_for_fee(
                 session=session,
                 user=user,
@@ -326,7 +326,7 @@ class ExchangeConnectionService:
         normalized_category = category.strip().lower()
         normalized_symbol = symbol.strip().upper() if isinstance(symbol, str) and symbol.strip() else None
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             connection = session.scalars(
                 _connection_select()
                 .where(UserExchangeConnection.user_id == user.id)
@@ -412,24 +412,6 @@ def _get_exchange(session: Session, exchange_code: str) -> MarketExchange:
     if exchange is None:
         raise LookupError(f"Market exchange is not seeded: {exchange_code}")
     return exchange
-
-
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    user_uuid = _parse_uuid(user_id)
-    if user_uuid is not None:
-        user = session.get(AppUser, user_uuid)
-        if user is not None:
-            return user
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).one_or_none()
-    if user is not None:
-        return user
-    if user_id == "demo_user":
-        user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).one_or_none()
-        if user is not None:
-            return user
-    raise ValueError(f"User is not seeded: {user_id}")
 
 
 def _extract_credentials(request: ExchangeConnectionCreateRequest | ExchangeConnectionUpdateRequest) -> dict[str, str]:

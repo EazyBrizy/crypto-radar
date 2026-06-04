@@ -4,14 +4,12 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import SessionLocal
 from app.models.risk import RiskDecisionRecord
-from app.models.user import AppUser
 from app.schemas.risk import RiskDecision
-from app.services.bootstrap_service import DEMO_USERNAME
+from app.services.user_identity import resolve_app_user
 
 
 class RiskAuditService:
@@ -34,7 +32,7 @@ class RiskAuditService:
         created_at: datetime | None = None,
     ) -> UUID:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             input_payload = dict(input_snapshot or {})
             trace = _trace_from_decision(decision, input_payload)
             resolved_signal_id = signal_id or trace.get("signal_id")
@@ -75,24 +73,6 @@ class RiskAuditService:
             )
             session.commit()
             return record.id
-
-
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    user_uuid = _parse_uuid(user_id)
-    if user_uuid is not None:
-        user = session.get(AppUser, user_uuid)
-        if user is not None:
-            return user
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).one_or_none()
-    if user is not None:
-        return user
-    if user_id == "demo_user":
-        user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).one_or_none()
-        if user is not None:
-            return user
-    raise ValueError(f"User is not seeded: {user_id}")
 
 
 def _parse_uuid(value: str | UUID | None) -> UUID | None:

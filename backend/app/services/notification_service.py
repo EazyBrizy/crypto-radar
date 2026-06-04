@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session, joinedload, sessionmaker
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
 from app.models.notification import Notification, NotificationDelivery
-from app.models.user import AppUser
 from app.schemas.notification import (
     NotificationCreateRequest,
     NotificationDeliveryResponse,
@@ -19,9 +18,9 @@ from app.schemas.notification import (
     NotificationUpdateRequest,
 )
 from app.schemas.signal import RadarSignal
-from app.services.bootstrap_service import DEMO_USERNAME
 from app.services.message_broker import RedisMessageBroker, realtime_event_broker
 from app.services.realtime_events import notification_created_event
+from app.services.user_identity import resolve_app_user
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ class NotificationService:
         limit: int = 50,
     ) -> list[NotificationResponse]:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             statement = _notification_select().where(Notification.user_id == user.id)
             if unread_only:
                 statement = statement.where(Notification.is_read.is_(False))
@@ -164,7 +163,7 @@ class NotificationService:
 
     def mark_all_read(self, user_id: str = "demo_user") -> int:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             notifications = session.scalars(
                 select(Notification).where(
                     Notification.user_id == user.id,
@@ -199,7 +198,7 @@ class NotificationService:
         channels = _normalize_channels(request.channels)
         now = datetime.now(timezone.utc)
         with self._session_factory() as session:
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             notification = Notification(
                 user_id=user.id,
                 type=request.type.strip(),
@@ -250,24 +249,6 @@ def _get_notification(session: Session, notification_id: str) -> Notification:
     if notification is None:
         raise LookupError(f"Notification not found: {notification_id}")
     return notification
-
-
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    user_uuid = _parse_uuid(user_id)
-    if user_uuid is not None:
-        user = session.get(AppUser, user_uuid)
-        if user is not None:
-            return user
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).one_or_none()
-    if user is not None:
-        return user
-    if user_id == "demo_user":
-        user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).one_or_none()
-        if user is not None:
-            return user
-    raise ValueError(f"User is not seeded: {user_id}")
 
 
 def _parse_uuid(value: str | UUID) -> UUID | None:

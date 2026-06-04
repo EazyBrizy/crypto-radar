@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from typing import Protocol
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from app.core.database import SessionLocal
-from app.models.user import AppUser, SubscriptionPlan, UserSubscription
+from app.models.user import SubscriptionPlan, UserSubscription
 from app.schemas.billing import (
     BillingCheckoutRequest,
     BillingPlanResponse,
@@ -17,7 +16,7 @@ from app.schemas.billing import (
     BillingSubscriptionResponse,
     BillingWebhookRequest,
 )
-from app.services.bootstrap_service import DEMO_USERNAME
+from app.services.user_identity import resolve_app_user
 
 
 class BillingProvider(Protocol):
@@ -59,7 +58,7 @@ class BillingService:
 
     def subscription_status(self, user_id: str = "demo_user") -> BillingSubscriptionResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             subscription = session.scalars(
                 select(UserSubscription)
                 .options(joinedload(UserSubscription.plan))
@@ -100,7 +99,7 @@ class BillingService:
 
     def create_checkout_session(self, request: BillingCheckoutRequest) -> BillingProviderActionResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             plan = _resolve_plan(session, request.plan_code)
         if self._provider is None:
             raise BillingProviderNotReadyError(
@@ -122,7 +121,7 @@ class BillingService:
 
     def create_customer_portal(self, request: BillingPortalRequest) -> BillingProviderActionResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             subscription = session.scalars(
                 select(UserSubscription)
                 .where(UserSubscription.user_id == user.id)
@@ -162,24 +161,6 @@ class BillingService:
         return self._provider.handle_webhook(request)
 
 
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    user_uuid = _parse_uuid(user_id)
-    if user_uuid is not None:
-        user = session.get(AppUser, user_uuid)
-        if user is not None:
-            return user
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).one_or_none()
-    if user is not None:
-        return user
-    if user_id == "demo_user":
-        user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).one_or_none()
-        if user is not None:
-            return user
-    raise LookupError(f"User is not seeded: {user_id}")
-
-
 def _resolve_plan(session: Session, plan_code: str) -> SubscriptionPlan:
     plan = session.scalars(
         select(SubscriptionPlan).where(
@@ -204,13 +185,5 @@ def _plan_to_response(plan: SubscriptionPlan) -> BillingPlanResponse:
         is_active=plan.is_active,
         created_at=plan.created_at,
     )
-
-
-def _parse_uuid(value: str) -> UUID | None:
-    try:
-        return UUID(value)
-    except (TypeError, ValueError):
-        return None
-
 
 billing_service = BillingService()

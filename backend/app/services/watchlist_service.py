@@ -22,7 +22,8 @@ from app.schemas.watchlist import (
     WatchlistResponse,
     WatchlistUpdateRequest,
 )
-from app.services.bootstrap_service import DEFAULT_WATCHLIST_NAME, DEMO_USERNAME
+from app.services.bootstrap_service import DEFAULT_WATCHLIST_NAME
+from app.services.user_identity import resolve_app_user
 
 
 class WatchlistService:
@@ -36,7 +37,7 @@ class WatchlistService:
 
     def list_watchlists(self, user_id: str = "demo_user") -> list[WatchlistResponse]:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             records = session.scalars(
                 _watchlist_select()
                 .where(UserWatchlist.user_id == user.id)
@@ -46,13 +47,13 @@ class WatchlistService:
 
     def get_default_watchlist(self, user_id: str = "demo_user") -> WatchlistResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             watchlist = _get_default_watchlist(session, user)
             return _watchlist_to_response(watchlist)
 
     def create_watchlist(self, request: WatchlistCreateRequest) -> WatchlistResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             if request.is_default:
                 _clear_default_watchlists(session, user.id)
             watchlist = UserWatchlist(
@@ -93,7 +94,7 @@ class WatchlistService:
 
     def add_pair_to_default(self, request: WatchlistPairCreateRequest) -> WatchlistResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             watchlist = _get_default_watchlist(session, user)
             pair = _resolve_pair(session, request)
             _ensure_watchlist_pair(session, watchlist, pair)
@@ -102,7 +103,7 @@ class WatchlistService:
 
     def remove_pair_from_default(self, pair_id: str, user_id: str = "demo_user") -> WatchlistResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             watchlist = _get_default_watchlist(session, user)
             _delete_watchlist_pair(session, watchlist.id, pair_id)
             session.commit()
@@ -129,7 +130,7 @@ class WatchlistService:
 
     def list_alert_rules(self, user_id: str = "demo_user") -> list[AlertRuleResponse]:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             records = session.scalars(
                 _alert_select()
                 .where(UserAlertRule.user_id == user.id)
@@ -139,7 +140,7 @@ class WatchlistService:
 
     def create_alert_rule(self, request: AlertRuleCreateRequest) -> AlertRuleResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             if request.pair_id is not None:
                 _get_pair(session, str(request.pair_id))
             if request.strategy_version_id is not None:
@@ -239,24 +240,6 @@ def _alert_select():
         joinedload(UserAlertRule.pair).joinedload(MarketPair.base_asset),
         joinedload(UserAlertRule.pair).joinedload(MarketPair.quote_asset),
     )
-
-
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    user_uuid = _parse_uuid(user_id)
-    if user_uuid is not None:
-        user = session.get(AppUser, user_uuid)
-        if user is not None:
-            return user
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).one_or_none()
-    if user is not None:
-        return user
-    if user_id == "demo_user":
-        user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).one_or_none()
-        if user is not None:
-            return user
-    raise ValueError(f"User is not seeded: {user_id}")
 
 
 def _get_default_watchlist(session: Session, user: AppUser) -> UserWatchlist:

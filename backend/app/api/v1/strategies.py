@@ -12,6 +12,8 @@ router = APIRouter(prefix="/strategies", tags=["strategies"])
 async def list_strategy_configs(user_id: str = Query(default="demo_user")) -> list[StrategyConfigResponse]:
     try:
         return strategy_config_service.list_configs(user_id=user_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -28,6 +30,8 @@ async def update_strategy_config(
         return config
     except StrategyConfigValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

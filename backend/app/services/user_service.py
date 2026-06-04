@@ -2,20 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import SessionLocal
 from app.models.user import AppUser, UserProfile
 from app.schemas.user import UserProfileResponse, UserSettingsPatchRequest
-from app.services.bootstrap_service import DEMO_USERNAME
 from app.services.risk_management import (
     apply_risk_management_patch,
     normalize_risk_management_settings,
 )
 from app.services.trade_repository import sync_virtual_starting_balance
+from app.services.user_identity import resolve_app_user
 
 
 class UserService:
@@ -24,7 +22,7 @@ class UserService:
 
     def get_profile(self, user_id: str = "demo_user") -> UserProfileResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             return _profile_response(user)
 
     def update_settings(
@@ -33,7 +31,7 @@ class UserService:
         user_id: str = "demo_user",
     ) -> UserProfileResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             profile = _ensure_profile(session, user)
             settings = dict(profile.settings or {})
             previous_risk_management = normalize_risk_management_settings(
@@ -65,31 +63,6 @@ class UserService:
             session.commit()
             session.refresh(user)
             return _profile_response(user)
-
-
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    user_uuid = _parse_uuid(user_id)
-    if user_uuid is not None:
-        user = session.scalars(
-            select(AppUser).options(joinedload(AppUser.profile)).where(AppUser.id == user_uuid)
-        ).one_or_none()
-        if user is not None:
-            return user
-    user = session.scalars(
-        select(AppUser)
-        .options(joinedload(AppUser.profile))
-        .where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).one_or_none()
-    if user is not None:
-        return user
-    if user_id == "demo_user":
-        user = session.scalars(
-            select(AppUser).options(joinedload(AppUser.profile)).where(AppUser.username == DEMO_USERNAME)
-        ).one_or_none()
-        if user is not None:
-            return user
-    raise LookupError(f"User is not seeded: {user_id}")
-
 
 def _ensure_profile(session: Session, user: AppUser) -> UserProfile:
     if user.profile is not None:
@@ -170,13 +143,5 @@ def _sync_virtual_balance_if_changed(
 
 def _default_settings() -> dict:
     return _settings_with_defaults({}, "balanced")
-
-
-def _parse_uuid(value: str) -> UUID | None:
-    try:
-        return UUID(value)
-    except (TypeError, ValueError):
-        return None
-
 
 user_service = UserService()

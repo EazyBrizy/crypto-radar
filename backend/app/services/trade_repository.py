@@ -33,9 +33,10 @@ from app.repositories.signal_repository import (
     _record_to_radar_signal,
 )
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
-from app.services.bootstrap_service import DEMO_USERNAME, INITIAL_VIRTUAL_BALANCE
+from app.services.bootstrap_service import INITIAL_VIRTUAL_BALANCE
 from app.models.strategy import StrategyVersion
 from app.services.risk_state import risk_state_service
+from app.services.user_identity import resolve_app_user
 
 
 class TradeRepository(Protocol):
@@ -110,7 +111,7 @@ class PostgresVirtualTradeRepository:
                 signal = _get_signal_record(session, trade.signal_id)
                 if signal is None:
                     raise ValueError("Signal is not found for virtual trade")
-                user = _resolve_user(session, trade.user_id)
+                user = resolve_app_user(session, trade.user_id)
                 portfolio = _resolve_virtual_portfolio(session, user)
                 quote_asset = _quote_asset(signal)
                 balance = _resolve_balance(session, portfolio, quote_asset)
@@ -153,7 +154,7 @@ class PostgresVirtualTradeRepository:
             if is_terminal_signal_status(signal.status):
                 raise ValueError("Signal cannot be confirmed in current status")
 
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             existing_position = session.scalars(
                 _position_select()
                 .where(
@@ -249,7 +250,7 @@ class PostgresVirtualTradeRepository:
 
     def get_virtual_account(self, user_id: str = "demo_user") -> VirtualAccount:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             portfolio = _resolve_virtual_portfolio(session, user)
             quote_asset = _resolve_asset(session, portfolio.base_currency)
             balance = _resolve_balance(session, portfolio, quote_asset)
@@ -859,27 +860,6 @@ def _position_select():
         .joinedload(TradingSignal.strategy_version)
         .joinedload(StrategyVersion.strategy),
     )
-
-
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    user_uuid = _parse_uuid(user_id)
-    if user_uuid is not None:
-        user = session.get(AppUser, user_uuid)
-        if user is not None:
-            return user
-
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).one_or_none()
-    if user is not None:
-        return user
-
-    if user_id == "demo_user":
-        user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).one_or_none()
-        if user is not None:
-            return user
-
-    raise ValueError(f"User is not seeded: {user_id}")
 
 
 def _resolve_virtual_portfolio(session: Session, user: AppUser) -> Portfolio:

@@ -32,7 +32,7 @@ async def create_strategy_test_run(
 ) -> StrategyTestRunResponse:
     try:
         run = service.enqueue_run(request)
-    except ValueError as exc:
+    except (LookupError, ValueError) as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     background_tasks.add_task(service.execute_run, run.run_id, request)
     return run
@@ -47,7 +47,7 @@ async def list_strategy_test_runs(
 ) -> list[StrategyTestRunResponse]:
     try:
         return service.list_runs(user_id=user_id, limit=limit, status=status)
-    except ValueError as exc:
+    except (LookupError, ValueError) as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 

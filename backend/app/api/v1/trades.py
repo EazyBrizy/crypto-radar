@@ -146,11 +146,14 @@ async def list_external_exchange_orders(
     connection_id: Optional[str] = None,
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[ExternalExchangeOrderResponse]:
-    return real_trade_import_service.list_orders(
-        user_id=user_id,
-        connection_id=connection_id,
-        limit=limit,
-    )
+    try:
+        return real_trade_import_service.list_orders(
+            user_id=user_id,
+            connection_id=connection_id,
+            limit=limit,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get("/real/external-trades", response_model=list[ExternalExchangeTradeResponse])
@@ -159,11 +162,14 @@ async def list_external_exchange_trades(
     connection_id: Optional[str] = None,
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[ExternalExchangeTradeResponse]:
-    return real_trade_import_service.list_trades(
-        user_id=user_id,
-        connection_id=connection_id,
-        limit=limit,
-    )
+    try:
+        return real_trade_import_service.list_trades(
+            user_id=user_id,
+            connection_id=connection_id,
+            limit=limit,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get("/virtual/account", response_model=VirtualAccount)
@@ -204,11 +210,14 @@ async def record_trade_invalidation_action(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Trade is not found",
         )
-    alert = trade_invalidation_service.record_user_action(
-        trade,
-        request.action,
-        user_id=request.user_id,
-    )
+    try:
+        alert = trade_invalidation_service.record_user_action(
+            trade,
+            request.action,
+            user_id=request.user_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return TradeInvalidationActionResponse(
         action=request.action,
         alert=alert,
@@ -262,11 +271,14 @@ async def close_market_trade(
                 detail="Virtual trade is not found",
             )
         if invalidation_alert is not None:
-            trade_invalidation_service.record_user_action(
-                virtual_trade,
-                "close_market",
-                alert=invalidation_alert,
-            )
+            try:
+                trade_invalidation_service.record_user_action(
+                    virtual_trade,
+                    "close_market",
+                    alert=invalidation_alert,
+                )
+            except LookupError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         if was_open:
             await _publish_virtual_close_events(closed_trade)
         return CloseMarketTradeResponse(
@@ -312,11 +324,14 @@ async def close_virtual_trade(
             detail="Виртуальная сделка не найдена",
         )
     if current_trade is not None and invalidation_alert is not None:
-        trade_invalidation_service.record_user_action(
-            current_trade,
-            "close_market",
-            alert=invalidation_alert,
-        )
+        try:
+            trade_invalidation_service.record_user_action(
+                current_trade,
+                "close_market",
+                alert=invalidation_alert,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     await _publish_virtual_close_events(trade)
     return trade
 

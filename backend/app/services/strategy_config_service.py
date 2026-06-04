@@ -18,8 +18,8 @@ from app.models.user import AppUser
 from app.schemas.candle import DEFAULT_TIMEFRAMES
 from app.schemas.strategy import StrategyConfigResponse, StrategyConfigUpdateRequest, StrategyPairScope
 from app.schemas.user import RiskManagementSettings
-from app.services.bootstrap_service import DEMO_USERNAME
 from app.services.risk_management import resolve_rr_guard_mode
+from app.services.user_identity import resolve_app_user
 
 RUNTIME_CONFIG_CACHE_TTL_SEC = 10.0
 RR_TARGET_DEFAULT_VERSION = "strategy-rr-target-v1"
@@ -179,7 +179,7 @@ class StrategyConfigService:
 
     def list_configs(self, user_id: str = "demo_user") -> list[StrategyConfigResponse]:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             _ensure_default_configs(session, user)
             records = session.scalars(
                 _config_select()
@@ -190,7 +190,7 @@ class StrategyConfigService:
 
     def update_config(self, config_id: str, request: StrategyConfigUpdateRequest) -> StrategyConfigResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             config = _get_config(session, config_id)
             if config.user_id != user.id:
                 raise ValueError("Strategy config does not belong to this user")
@@ -219,7 +219,7 @@ class StrategyConfigService:
 
     def get_config(self, config_id: str, user_id: str = "demo_user") -> StrategyConfigResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             config = _get_config(session, config_id)
             if config.user_id != user.id:
                 raise ValueError("Strategy config does not belong to this user")
@@ -286,18 +286,6 @@ def _config_select():
         .join(StrategyVersion.strategy)
         .options(joinedload(UserStrategyConfig.strategy_version).joinedload(StrategyVersion.strategy))
     )
-
-
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).first()
-    if user is not None:
-        return user
-    user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).first()
-    if user is None:
-        raise ValueError("User is not found")
-    return user
 
 
 def _ensure_default_configs(session: Session, user: AppUser) -> None:

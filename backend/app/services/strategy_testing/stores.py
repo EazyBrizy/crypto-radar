@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.clickhouse_client import create_clickhouse_client
 from app.core.database import SessionLocal
 from app.models.strategy_testing import StrategyTestRun
-from app.models.user import AppUser
 from app.services.strategy_testing.schemas import (
     StrategyTestMetricRow,
     StrategyTestRunDetailResponse,
@@ -21,10 +20,9 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunStatus,
     StrategyTestTrade,
 )
+from app.services.user_identity import resolve_app_user
 
 
-DEMO_PUBLIC_USER_ID = "demo_user"
-DEMO_USERNAME = "demo"
 REQUEST_PARAMS_KEY = "request_params"
 INITIAL_CAPITAL_KEY = "initial_capital"
 FEE_RATE_KEY = "fee_rate"
@@ -430,7 +428,7 @@ class PostgresStrategyTestRunStore:
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunDetailResponse:
         with self._session_factory() as session:
-            user = _resolve_user(session, request.user_id)
+            user = resolve_app_user(session, request.user_id)
             now = datetime.now(timezone.utc)
             run = StrategyTestRun(
                 id=uuid4(),
@@ -466,7 +464,7 @@ class PostgresStrategyTestRunStore:
         with self._session_factory() as session:
             statement = select(StrategyTestRun)
             if user_id is not None:
-                user = _resolve_user(session, user_id)
+                user = resolve_app_user(session, user_id)
                 statement = statement.where(StrategyTestRun.user_id == user.id)
             if status is not None:
                 statement = statement.where(StrategyTestRun.status == status)
@@ -516,33 +514,6 @@ class PostgresStrategyTestRunStore:
             detail = _run_to_detail(run)
             session.commit()
             return detail
-
-
-def _resolve_user(session: Session, user_id: str) -> AppUser:
-    value = user_id.strip()
-    if not value:
-        raise ValueError(f"User is not seeded: {user_id}")
-
-    if value == DEMO_PUBLIC_USER_ID:
-        user = session.scalars(select(AppUser).where(AppUser.username == DEMO_USERNAME)).one_or_none()
-        if user is not None:
-            return user
-        raise ValueError(f"User is not seeded: {user_id}")
-
-    user_uuid = _parse_uuid(value)
-    if user_uuid is not None:
-        user = session.get(AppUser, user_uuid)
-        if user is not None:
-            return user
-        raise ValueError(f"User is not seeded: {user_id}")
-
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == value) | (AppUser.email == value))
-    ).one_or_none()
-    if user is not None:
-        return user
-
-    raise ValueError(f"User is not seeded: {user_id}")
 
 
 def _get_run_or_raise(session: Session, run_id: UUID) -> StrategyTestRun:
@@ -602,18 +573,6 @@ def _requested_matrix(run: StrategyTestRun) -> dict[str, Any]:
         "tags": list(run.tags),
         "scenario_count": len(run.requested_strategies) * len(run.requested_pairs) * len(run.requested_timeframes),
     }
-
-
-def _parse_uuid(value: str | UUID | None) -> UUID | None:
-    if value is None:
-        return None
-    if isinstance(value, UUID):
-        return value
-    try:
-        return UUID(value)
-    except ValueError:
-        return None
-
 
 def _trade_select_columns_sql() -> str:
     return ",\n                ".join(ClickHouseStrategyTestStore._trade_columns)

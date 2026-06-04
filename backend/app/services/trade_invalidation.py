@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import SessionLocal
 from app.models.trade_invalidation import TradeInvalidationAction
-from app.models.user import AppUser
 from app.schemas.candle import OHLCVCandle
 from app.schemas.market import Features
 from app.schemas.signal import RadarSignal, SignalInvalidationSnapshot
@@ -23,6 +22,7 @@ from app.services.feature_engine import FeatureEngine
 from app.services.message_broker import realtime_event_broker
 from app.services.realtime_events import trade_invalidation_event
 from app.services.signal_service import signal_service
+from app.services.user_identity import resolve_app_user
 from app.services.virtual_trading import virtual_trading_service
 
 logger = logging.getLogger(__name__)
@@ -108,9 +108,9 @@ class PostgresTradeInvalidationActionStore:
         now = datetime.now(timezone.utc)
         fingerprint = alert.fingerprint or _alert_fingerprint(alert)
         with self._session_factory() as session:
-            user = _resolve_user(session, user_id)
+            user = resolve_app_user(session, user_id)
             record = TradeInvalidationAction(
-                user_id=user.id if user is not None else None,
+                user_id=user.id,
                 trade_id=alert.trade_id,
                 signal_id=_uuid_or_none(alert.signal_id),
                 mode=alert.metadata.get("trade_mode") if alert.metadata.get("trade_mode") in {"virtual", "real"} else "virtual",
@@ -599,15 +599,6 @@ def _action_record(record: TradeInvalidationAction | None) -> TradeInvalidationA
         created_at=record.created_at,
         dismissed_at=record.dismissed_at,
     )
-
-
-def _resolve_user(session: Session, user_id: str) -> AppUser | None:
-    user = session.scalars(
-        select(AppUser).where((AppUser.username == user_id) | (AppUser.email == user_id))
-    ).first()
-    if user is not None:
-        return user
-    return session.scalars(select(AppUser).where(AppUser.username == "demo")).first()
 
 
 def _uuid_or_none(value: str | None) -> UUID | None:

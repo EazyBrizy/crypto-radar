@@ -6,10 +6,13 @@ import { BarChart3, CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert,
 
 import { Badge } from "./Badge";
 import {
+  canShowSignalEntryAction,
   canShowEnterButton,
   isEntryTouched,
   isExecutionReady,
+  isFormingCandleSignal,
   isMarketOpportunity,
+  isOpenCandleActionableAllowed,
   isWaitingEntry,
   marketOpportunityLabel,
   marketOpportunityTone,
@@ -20,10 +23,7 @@ import {
   entryZone,
   formingCandleReason,
   formatPrice,
-  isFormingCandleSignal,
-  isOpenCandleActionableAllowed,
   isRiskRewardBlocked,
-  isSignalActionableForUi,
   riskLabel,
   riskRewardBlockReason,
   riskRewardWarningReason,
@@ -445,7 +445,7 @@ function breakoutEntryPlan(signal: RadarSignal): {
     aggressiveEntry,
     conservativeZone,
     measuredMoveTarget,
-    actionableMode: !isSignalActionableForUi(signal)
+    actionableMode: !canShowSignalEntryAction(signal)
       ? "Entry is preview-only until the signal is fully actionable."
       : signal.status === "wait_for_pullback"
       ? "Actionable entry is the retest zone while the breakout candle cools off."
@@ -500,7 +500,7 @@ function liquiditySweepPlan(signal: RadarSignal): {
     confirmationZone: conservativeMin == null && conservativeMax == null
       ? formatPrice(conservativeTrigger)
       : `${formatPrice(conservativeMin)} - ${formatPrice(conservativeMax)}`,
-    mode: isSignalActionableForUi(signal)
+    mode: canShowSignalEntryAction(signal)
       ? "Sweep is actionable only after reclaim, wick, volume and RR checks stay valid."
       : "Sweep is staged; wait for reclaim or a confirmation candle through micro structure."
   };

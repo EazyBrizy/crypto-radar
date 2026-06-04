@@ -3,7 +3,7 @@ import { Filter, RadioTower, RefreshCw } from "lucide-react";
 import { Metric } from "@/components/Metric";
 import { SignalDetails } from "@/components/SignalDetails";
 import { SignalFeed } from "@/components/SignalFeed";
-import { canShowEnterButton } from "@/domain/signal-status";
+import { canShowEnterButton, RADAR_STATUS_FILTERS } from "@/domain/signal-status";
 import type { RadarDisplayMode } from "@/features/server-state/types";
 import type { HealthStatus, PendingEntryIntent, RadarSignal, RadarStatus, SignalStatus, VirtualExecutionReport } from "@/types";
 import { isRiskRewardBlocked } from "@/utils";
@@ -138,7 +138,7 @@ export function RadarPage(props: RadarPageProps) {
           ))}
         </div>
         <div className="filter-row status-filter-row">
-          {(["all", "watchlist", "ready", "actionable", "wait_for_pullback", "invalidated", "expired"] as const).map((item) => (
+          {RADAR_STATUS_FILTERS.map((item) => (
             <button
               className={props.statusFilter === item ? "filter-chip active" : "filter-chip"}
               key={item}

@@ -1,8 +1,8 @@
 import unittest
 from datetime import datetime, timezone
 
-from app.api.v1.signals import _signal_can_enter_now
 from app.domain.signal_status import (
+    can_signal_enter_now,
     is_execution_candidate_status,
     is_market_opportunity_status,
     is_terminal_signal_status,
@@ -17,14 +17,61 @@ class SignalStatusContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(is_market_opportunity_status("active"))
         self.assertTrue(is_waiting_entry_status("active"))
         self.assertFalse(is_execution_candidate_status("active"))
-        self.assertFalse(_signal_can_enter_now(_signal(status="active", can_enter=True)))
+        active = _signal(status="active", can_enter=True)
+        self.assertFalse(
+            can_signal_enter_now(
+                active.status,
+                decision=active.decision,
+                can_enter=active.can_enter,
+            )
+        )
+        self.assertFalse(
+            can_signal_enter_now(
+                "active",
+                can_enter=True,
+                decision={
+                    "signal_actionable": True,
+                    "execution_allowed_virtual": True,
+                    "execution_allowed_real": True,
+                    "blockers": [],
+                },
+            )
+        )
 
-    def test_entry_touched_and_actionable_are_execution_candidates(self) -> None:
+    def test_entry_touched_and_actionable_are_consistent_execution_candidates(self) -> None:
         self.assertTrue(is_execution_candidate_status("entry_touched"))
         self.assertTrue(is_execution_candidate_status("actionable"))
         self.assertTrue(is_execution_candidate_status("confirmed"))
-        self.assertTrue(_signal_can_enter_now(_signal(status="entry_touched", can_enter=True)))
-        self.assertTrue(_signal_can_enter_now(_signal(status="actionable", can_enter=True)))
+        for status in ("entry_touched", "actionable"):
+            signal = _signal(status=status, can_enter=True)
+            self.assertTrue(
+                can_signal_enter_now(
+                    signal.status,
+                    decision=signal.decision,
+                    can_enter=signal.can_enter,
+                )
+            )
+
+            denied_signal = _signal(status=status, can_enter=False)
+            self.assertFalse(
+                can_signal_enter_now(
+                    denied_signal.status,
+                    decision=denied_signal.decision,
+                    can_enter=denied_signal.can_enter,
+                )
+            )
+            self.assertTrue(
+                can_signal_enter_now(
+                    status,
+                    decision={
+                        "signal_actionable": True,
+                        "execution_allowed_virtual": True,
+                        "execution_allowed_real": True,
+                        "blockers": [],
+                    },
+                    can_enter=None,
+                )
+            )
 
     def test_invalidated_and_expired_are_terminal(self) -> None:
         self.assertTrue(is_terminal_signal_status("invalidated"))

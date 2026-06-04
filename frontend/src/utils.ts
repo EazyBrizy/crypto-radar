@@ -1,5 +1,5 @@
 import type { RadarSignal, TradeJournalEntry, VirtualTradeTargetState } from "./types";
-import { canShowEnterButton, isMarketOpportunity } from "./domain/signal-status";
+import { isFormingCandleSignal, isMarketOpportunity, isOpenCandleActionableAllowed } from "./domain/signal-status";
 
 export function formatPrice(value: number | null | undefined): string {
   if (value == null) return "-";
@@ -134,30 +134,6 @@ export function riskRewardWarningReason(signal: RadarSignal): string | null {
     return asRiskRewardWarning(check.reason) ?? "Risk/reward warning: selected R:R is below configured reporting threshold.";
   }
   return null;
-}
-
-export function isFormingCandleSignal(signal: RadarSignal): boolean {
-  return signal.candle_state === "open";
-}
-
-export function isOpenCandleActionableAllowed(signal: RadarSignal): boolean {
-  if (!isFormingCandleSignal(signal)) return true;
-  const candleStateCheck = signal.confirmation?.checks.find((item) => item.name === "candle_state_gate");
-  const metadataSources = [
-    signal.trade_plan?.metadata,
-    signal.trade_plan?.risk_rules.metadata,
-    candleStateCheck?.metadata
-  ].filter((source): source is Record<string, unknown> => Boolean(source));
-  return metadataSources.some((metadata) => {
-    if (booleanMetadata(metadata, "actionable_from_open_candle") === true) return true;
-    return booleanMetadata(metadata, "allow_open_candle_actionable") === true
-      && booleanMetadata(metadata, "signal_actionable") === true;
-  });
-}
-
-export function isSignalActionableForUi(signal: RadarSignal): boolean {
-  if (!canShowEnterButton(signal)) return false;
-  return !isFormingCandleSignal(signal) || isOpenCandleActionableAllowed(signal);
 }
 
 export function formingCandleReason(signal: RadarSignal): string | null {

@@ -3,7 +3,9 @@ import { Activity, ArrowDownRight, ArrowUpRight, Clock3 } from "lucide-react";
 
 import { Badge } from "./Badge";
 import {
+  isFormingCandleSignal,
   isMarketOpportunity,
+  isOpenCandleActionableAllowed,
   marketOpportunityLabel,
   marketOpportunityTone,
   riskGateTone,
@@ -15,12 +17,10 @@ import { useSignalStore } from "@/stores/signal-store";
 import type { DecisionReason, PendingEntryIntentStatus, RadarSignal, SignalEdgeStatus } from "../types";
 import {
   formatPrice,
-  isRiskRewardBlocked,
-  isFormingCandleSignal,
-  isOpenCandleActionableAllowed,
-  riskRewardWarningReason,
   isSignalExpired,
+  isRiskRewardBlocked,
   riskLabel,
+  riskRewardWarningReason,
   signalAge,
   signalTtlLabel,
   signalTradePlanSummary,

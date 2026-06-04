@@ -66,11 +66,28 @@ describe("signal status domain helper", () => {
     expect(isExecutionReady("active")).toBe(false);
     expect(canShowEnterButton(baseSignal)).toBe(false);
     expect(canShowEnterButton({ ...baseSignal, can_enter: true })).toBe(false);
+    expect(canShowEnterButton({
+      ...baseSignal,
+      can_enter: true,
+      decision: {
+        setup_valid: true,
+        trade_plan_valid: true,
+        market_context_score: 80,
+        signal_actionable: true,
+        execution_allowed_virtual: true,
+        execution_allowed_real: true,
+        blockers: [],
+        warnings: []
+      }
+    })).toBe(false);
   });
 
-  it("marks entry-touched/actionable as execution candidates and invalidated/expired as terminal", () => {
-    expect(isExecutionCandidateStatus("entry_touched")).toBe(true);
-    expect(isExecutionCandidateStatus("actionable")).toBe(true);
+  it("marks entry-touched/actionable consistently as execution candidates and invalidated/expired as terminal", () => {
+    for (const status of ["entry_touched", "actionable"] as const) {
+      expect(isExecutionCandidateStatus(status)).toBe(true);
+      expect(canShowEnterButton({ ...baseSignal, status, can_enter: true })).toBe(true);
+      expect(canShowEnterButton({ ...baseSignal, status, can_enter: false })).toBe(false);
+    }
     expect(isExecutionCandidateStatus("confirmed")).toBe(true);
     expect(isTerminalSignalStatus("invalidated")).toBe(true);
     expect(isTerminalSignalStatus("expired")).toBe(true);

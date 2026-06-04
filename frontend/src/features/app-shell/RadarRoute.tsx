@@ -18,13 +18,19 @@ import {
   useRejectSignalMutation,
   useSignalExecutionPreviewQuery
 } from "@/hooks/use-radar-queries";
-import { canShowEnterButton, isMarketOpportunity } from "@/domain/signal-status";
+import {
+  canShowEnterButton,
+  canShowSignalEntryAction,
+  isMarketOpportunity,
+  isOpenCandleActionableAllowed,
+  isWaitingEntry
+} from "@/domain/signal-status";
 import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
 import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
 import type { RadarDisplayMode } from "@/features/server-state/types";
-import { isOpenCandleActionableAllowed, isOpenFeedSignal, isSignalActionableForUi } from "@/utils";
+import { isOpenFeedSignal } from "@/utils";
 
 export function RadarRoute() {
   const router = useRouter();
@@ -228,7 +234,7 @@ export function RadarRoute() {
 }
 
 function isActionableSignal(signal: RadarSignal): boolean {
-  return isSignalActionableForUi(signal);
+  return canShowSignalEntryAction(signal);
 }
 
 export function shouldRequestExecutionPreview(
@@ -252,11 +258,7 @@ export function canArmAutoEntry(signal: RadarSignal | null): boolean {
   if (canShowEnterButton(signal)) return false;
   if (signal.auto_entry && isActivePendingEntryStatus(signal.auto_entry.status)) return false;
   if (signal.candle_state === "open" && !isOpenCandleActionableAllowed(signal)) return false;
-  return signal.status === "new"
-    || signal.status === "active"
-    || signal.status === "watchlist"
-    || signal.status === "ready"
-    || signal.status === "wait_for_pullback";
+  return isWaitingEntry(signal.status);
 }
 
 function errorMessage(exc: unknown, fallback: string): string {

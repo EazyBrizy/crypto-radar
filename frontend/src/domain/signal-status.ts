@@ -1,6 +1,7 @@
 import type { RadarSignal, RiskCheckStatus, SignalStatus } from "@/types";
 
 export type SignalUiBadgeTone = "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
+export type RadarStatusFilter = "all" | SignalStatus;
 
 export const SIGNAL_STATUSES = [
   "new",
@@ -50,6 +51,16 @@ export const TERMINAL_SIGNAL_STATUSES = [
   "rejected"
 ] as const satisfies readonly SignalStatus[];
 
+export const RADAR_STATUS_FILTERS = [
+  "all",
+  "watchlist",
+  "ready",
+  "actionable",
+  "wait_for_pullback",
+  "invalidated",
+  "expired"
+] as const satisfies readonly RadarStatusFilter[];
+
 const MARKET_OPPORTUNITY_STATUS_SET = new Set<SignalStatus>(MARKET_OPPORTUNITY_STATUSES);
 const WAITING_ENTRY_STATUS_SET = new Set<SignalStatus>(WAITING_ENTRY_STATUSES);
 const EXECUTION_CANDIDATE_STATUS_SET = new Set<SignalStatus>(EXECUTION_CANDIDATE_STATUSES);
@@ -96,6 +107,30 @@ export function canShowEnterButton(signal: RadarSignal | null): boolean {
   return isExecutionReady(signal.status, signal.decision, signal.can_enter);
 }
 
+export function isFormingCandleSignal(signal: RadarSignal): boolean {
+  return signal.candle_state === "open";
+}
+
+export function isOpenCandleActionableAllowed(signal: RadarSignal): boolean {
+  if (!isFormingCandleSignal(signal)) return true;
+  const candleStateCheck = signal.confirmation?.checks.find((item) => item.name === "candle_state_gate");
+  const metadataSources = [
+    signal.trade_plan?.metadata,
+    signal.trade_plan?.risk_rules.metadata,
+    candleStateCheck?.metadata
+  ].filter((source): source is Record<string, unknown> => Boolean(source));
+  return metadataSources.some((metadata) => {
+    if (booleanMetadata(metadata, "actionable_from_open_candle") === true) return true;
+    return booleanMetadata(metadata, "allow_open_candle_actionable") === true
+      && booleanMetadata(metadata, "signal_actionable") === true;
+  });
+}
+
+export function canShowSignalEntryAction(signal: RadarSignal): boolean {
+  if (!canShowEnterButton(signal)) return false;
+  return !isFormingCandleSignal(signal) || isOpenCandleActionableAllowed(signal);
+}
+
 export function statusBadgeTone(
   signal: RadarSignal,
   previewOnly = false
@@ -140,4 +175,15 @@ export function riskGateTone(status: RiskCheckStatus | null | undefined): Signal
   if (status === "failed") return "red";
   if (status === "warning") return "yellow";
   return "neutral";
+}
+
+function booleanMetadata(metadata: Record<string, unknown>, key: string): boolean | null {
+  const value = metadata[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+  return null;
 }

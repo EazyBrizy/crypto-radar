@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, object_session, sessionmaker
 
 from app.core.database import SessionLocal
+from app.domain.signal_status import is_terminal_signal_status
 from app.models.audit import AuditLog
 from app.models.external_exchange import ExternalExchangeTrade
 from app.models.market import MarketAsset, MarketPair
@@ -149,7 +150,7 @@ class PostgresVirtualTradeRepository:
             signal = _get_signal_record(session, signal_id)
             if signal is None:
                 raise ValueError("Signal is not found")
-            if signal.status in {"expired", "invalidated", "closed"}:
+            if is_terminal_signal_status(signal.status):
                 raise ValueError("Signal cannot be confirmed in current status")
 
             user = _resolve_user(session, request.user_id)

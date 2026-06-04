@@ -1241,6 +1241,13 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
         current_stop_loss=current_stop_loss,
         stop_moved_to_breakeven=bool(snapshot.get("stop_moved_to_breakeven") or False),
         trailing_active=bool(snapshot.get("trailing_active") or False),
+        trailing_distance=_optional_float(snapshot.get("trailing_distance")),
+        highest_price_after_trailing=_optional_float(
+            snapshot.get("highest_price_after_trailing")
+        ),
+        lowest_price_after_trailing=_optional_float(
+            snapshot.get("lowest_price_after_trailing")
+        ),
         take_profit=[float(value) for value in (position.take_profit or [])],
         fees=float(snapshot_fees if snapshot_fees is not None else position.fees_total or 0),
         realized_pnl=realized_pnl,

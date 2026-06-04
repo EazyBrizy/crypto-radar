@@ -2069,6 +2069,20 @@ export interface components {
             price?: number | null;
             /** Stop Price */
             stop_price?: number | null;
+            /** Requested Quantity */
+            requested_quantity?: number | null;
+            /** Normalized Quantity */
+            normalized_quantity?: number | null;
+            /** Requested Price */
+            requested_price?: number | null;
+            /** Normalized Price */
+            normalized_price?: number | null;
+            /** Requested Stop Price */
+            requested_stop_price?: number | null;
+            /** Normalized Stop Price */
+            normalized_stop_price?: number | null;
+            /** Rounding Reason */
+            rounding_reason?: string | null;
             /**
              * Reduce Only
              * @default false
@@ -2414,6 +2428,7 @@ export interface components {
             signal: components["schemas"]["RadarSignal"];
             virtual_trade?: components["schemas"]["VirtualTrade"] | null;
             real_execution?: components["schemas"]["RealExecutionResult"] | null;
+            real_execution_result?: components["schemas"]["RealExecutionResult"] | null;
             /** Message */
             message: string;
         };
@@ -2681,6 +2696,25 @@ export interface components {
             side: "long" | "short";
             /** Account Equity */
             account_equity: number;
+            /**
+             * Risk Mode
+             * @default percent
+             * @enum {string}
+             */
+            risk_mode: "percent" | "fixed";
+            /** Fixed Risk Amount */
+            fixed_risk_amount?: number | null;
+            /** Requested Risk Amount */
+            requested_risk_amount?: number | null;
+            /** Effective Risk Amount */
+            effective_risk_amount?: number | null;
+            /**
+             * Risk Amount Capped
+             * @default false
+             */
+            risk_amount_capped: boolean;
+            /** Risk Cap Amount */
+            risk_cap_amount?: number | null;
             /** Risk Per Trade Percent */
             risk_per_trade_percent: number;
             /** Risk Amount */
@@ -2879,6 +2913,14 @@ export interface components {
             decision_note?: string | null;
             /** Confirmed Trade Id */
             confirmed_trade_id?: string | null;
+            /** Rr Status */
+            rr_status?: ("passed" | "warning" | "failed" | "skipped" | "unknown") | null;
+            /** Risk Gate Status */
+            risk_gate_status?: ("passed" | "warning" | "failed") | null;
+            /** Can Enter */
+            can_enter?: boolean | null;
+            /** Display Reason */
+            display_reason?: string | null;
         };
         /** RealConfirmRequest */
         RealConfirmRequest: {
@@ -2973,12 +3015,32 @@ export interface components {
             quantity: number;
             /** Notional */
             notional: number;
+            /** Requested Quantity */
+            requested_quantity?: number | null;
+            /** Normalized Quantity */
+            normalized_quantity?: number | null;
+            /** Requested Entry Price */
+            requested_entry_price?: number | null;
+            /** Normalized Entry Price */
+            normalized_entry_price?: number | null;
+            /** Requested Notional */
+            requested_notional?: number | null;
+            /** Normalized Notional */
+            normalized_notional?: number | null;
+            /** Margin Mode */
+            margin_mode?: string | null;
             /** Leverage */
             leverage: number;
             /** Idempotency Key */
             idempotency_key: string;
             /** Client Order Id */
             client_order_id: string;
+            /**
+             * Protective Order Strategy
+             * @default unsupported
+             * @enum {string}
+             */
+            protective_order_strategy: "bracket" | "oco" | "sequential_dry_run" | "unsupported";
             /** Planned Orders */
             planned_orders?: components["schemas"]["ExecutionPlannedOrder"][];
             /** Metadata */
@@ -2999,7 +3061,7 @@ export interface components {
              * @default not_implemented
              * @enum {string}
              */
-            status: "not_implemented" | "risk_failed" | "dry_run" | "submitted";
+            status: "risk_failed" | "readiness_failed" | "not_implemented" | "dry_run" | "submitted" | "partially_filled" | "failed";
             /**
              * Signal Valid
              * @default true
@@ -3026,6 +3088,8 @@ export interface components {
             idempotency_key?: string | null;
             /** Adapter */
             adapter?: string | null;
+            /** Warnings */
+            warnings?: string[];
             /** Validation Errors */
             validation_errors?: string[];
         };
@@ -3136,13 +3200,40 @@ export interface components {
              * Instrument Type
              * @enum {string}
              */
-            instrument_type: "spot" | "futures" | "virtual";
+            instrument_type: "spot" | "futures";
             /** Strategy */
             strategy: string;
             /** Signal Score */
             signal_score: number;
             /** Account Equity */
             account_equity: number;
+            /**
+             * Risk Mode
+             * @default percent
+             * @enum {string}
+             */
+            risk_mode: "percent" | "fixed";
+            /** Fixed Risk Amount */
+            fixed_risk_amount?: number | null;
+            /**
+             * Requested Risk Amount
+             * @default 0
+             */
+            requested_risk_amount: number;
+            /**
+             * Effective Risk Amount
+             * @default 0
+             */
+            effective_risk_amount: number;
+            /**
+             * Risk Amount Capped
+             * @default false
+             */
+            risk_amount_capped: boolean;
+            /** Risk Cap Amount */
+            risk_cap_amount?: number | null;
+            /** Risk Cap Percent */
+            risk_cap_percent?: number | null;
             /** Base Risk Percent */
             base_risk_percent: number;
             /** Base Risk Amount */
@@ -3389,7 +3480,7 @@ export interface components {
              * Instrument Type
              * @enum {string}
              */
-            instrument_type: "spot" | "futures" | "virtual";
+            instrument_type: "spot" | "futures";
             /** Requested Notional */
             requested_notional?: number | null;
             risk_adjustment_plan: components["schemas"]["RiskAdjustmentPlan"];
@@ -4253,6 +4344,8 @@ export interface components {
             spot_risk_per_trade_percent?: number | string | null;
             /** Virtual Risk Per Trade Percent */
             virtual_risk_per_trade_percent?: number | string | null;
+            /** Legacy Instrument Type */
+            legacy_instrument_type?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -5182,6 +5275,12 @@ export interface components {
              * @default false
              */
             trailing_active: boolean;
+            /** Trailing Distance */
+            trailing_distance?: number | null;
+            /** Highest Price After Trailing */
+            highest_price_after_trailing?: number | null;
+            /** Lowest Price After Trailing */
+            lowest_price_after_trailing?: number | null;
             /** Take Profit */
             take_profit?: number[];
             /**
@@ -5832,6 +5931,12 @@ export interface components {
              * @default false
              */
             trailing_active: boolean;
+            /** Trailing Distance */
+            trailing_distance?: number | null;
+            /** Highest Price After Trailing */
+            highest_price_after_trailing?: number | null;
+            /** Lowest Price After Trailing */
+            lowest_price_after_trailing?: number | null;
             /** Take Profit */
             take_profit?: number[];
             /**
@@ -7130,6 +7235,9 @@ export interface operations {
             query?: {
                 user_id?: string;
                 radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
+                exchange?: string | null;
+                symbol?: string | null;
+                timeframe?: string | null;
             };
             header?: never;
             path?: never;

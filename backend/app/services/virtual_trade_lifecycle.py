@@ -86,6 +86,7 @@ def apply_virtual_trade_market_price(
     now: datetime,
 ) -> VirtualTradeLifecycleResult:
     updated = _mark_price(initialize_virtual_trade_lifecycle(trade), price, now)
+    updated = update_trailing_stop_on_mark(updated, price, now)
     if updated.status != "open":
         return VirtualTradeLifecycleResult(trade=updated)
 
@@ -94,7 +95,9 @@ def apply_virtual_trade_market_price(
 
     stop_price = updated.current_stop_loss or updated.stop_loss
     if _stop_reached(updated.side, price, stop_price):
-        return _close_remaining(updated, stop_price, _stop_reason(updated, stop_price), now)
+        stop_reason = _stop_reason(updated, stop_price)
+        exit_price = price if stop_reason == "trailing_stop" else stop_price
+        return _close_remaining(updated, exit_price, stop_reason, now)
 
     realized_delta = 0.0
     working = updated
@@ -116,6 +119,54 @@ def apply_virtual_trade_market_price(
         trade=working,
         realized_pnl_delta=realized_delta,
         closed=False,
+    )
+
+
+def update_trailing_stop_on_mark(
+    trade: VirtualTrade,
+    price: float,
+    now: datetime,
+) -> VirtualTrade:
+    if trade.status != "open" or not trade.trailing_active:
+        return trade
+    trailing_distance = _trailing_distance(trade)
+    if trailing_distance is None:
+        return trade
+
+    current_stop = trade.current_stop_loss or trade.stop_loss
+    updates: dict[str, Any] = {
+        "trailing_distance": trailing_distance,
+        "updated_at": now,
+    }
+    if trade.side == "long":
+        reference_price = max(trade.highest_price_after_trailing or price, price)
+        updates["highest_price_after_trailing"] = reference_price
+        new_stop = reference_price - trailing_distance
+    else:
+        reference_price = min(trade.lowest_price_after_trailing or price, price)
+        updates["lowest_price_after_trailing"] = reference_price
+        new_stop = reference_price + trailing_distance
+
+    if new_stop <= 0:
+        return trade.model_copy(update=updates)
+    if not _stop_improves(trade.side, current_stop, new_stop):
+        return trade.model_copy(update=updates)
+
+    updates["current_stop_loss"] = new_stop
+    updated = trade.model_copy(update=updates)
+    return _append_event(
+        updated,
+        VirtualTradeLifecycleEvent(
+            event_type="trailing_stop_updated",
+            price=reference_price,
+            stop_loss=new_stop,
+            created_at=now,
+            metadata={
+                "old_stop": current_stop,
+                "new_stop": new_stop,
+                "reference_price": reference_price,
+            },
+        ),
     )
 
 
@@ -334,14 +385,24 @@ def _apply_target_action(
                 ),
             )
     if target.action == "trailing_stop" and not updated.trailing_active:
-        trailing_stop = _trailing_stop_price(updated)
         update: dict[str, Any] = {"trailing_active": True, "updated_at": now}
-        if trailing_stop is not None and _stop_improves(
-            updated.side,
-            updated.current_stop_loss or updated.stop_loss,
-            trailing_stop,
-        ):
-            update["current_stop_loss"] = trailing_stop
+        current_stop = updated.current_stop_loss or updated.stop_loss
+        reference_price = updated.current_price
+        trailing_distance = _trailing_distance(updated)
+        if trailing_distance is not None:
+            update["trailing_distance"] = trailing_distance
+            if updated.side == "long":
+                update["highest_price_after_trailing"] = reference_price
+                trailing_stop = reference_price - trailing_distance
+            else:
+                update["lowest_price_after_trailing"] = reference_price
+                trailing_stop = reference_price + trailing_distance
+            if trailing_stop > 0 and _stop_improves(
+                updated.side,
+                current_stop,
+                trailing_stop,
+            ):
+                update["current_stop_loss"] = trailing_stop
         updated = _append_event(
             updated.model_copy(update=update),
             VirtualTradeLifecycleEvent(
@@ -349,8 +410,27 @@ def _apply_target_action(
                 target_label=target.label,
                 stop_loss=update.get("current_stop_loss"),
                 created_at=now,
+                metadata={
+                    "trailing_distance": update.get("trailing_distance"),
+                    "reference_price": reference_price,
+                },
             ),
         )
+        if update.get("current_stop_loss") is not None:
+            updated = _append_event(
+                updated,
+                VirtualTradeLifecycleEvent(
+                    event_type="trailing_stop_updated",
+                    price=reference_price,
+                    stop_loss=update["current_stop_loss"],
+                    created_at=now,
+                    metadata={
+                        "old_stop": current_stop,
+                        "new_stop": update["current_stop_loss"],
+                        "reference_price": reference_price,
+                    },
+                ),
+            )
     return updated
 
 
@@ -484,7 +564,9 @@ def _stop_reached(side: str, price: float, stop_price: float) -> bool:
 
 def _stop_reason(trade: VirtualTrade, stop_price: float) -> CloseReason:
     breakeven_stop = _breakeven_stop_price(trade)
-    if trade.trailing_active and abs(stop_price - breakeven_stop) > _EPSILON:
+    if trade.stop_moved_to_breakeven and abs(stop_price - breakeven_stop) <= _EPSILON:
+        return "breakeven_stop"
+    if trade.trailing_active and _stop_improves(trade.side, trade.stop_loss, stop_price):
         return "trailing_stop"
     if trade.stop_moved_to_breakeven:
         return "breakeven_stop"
@@ -503,6 +585,23 @@ def _trailing_stop_price(trade: VirtualTrade) -> float | None:
     if trailing_plan is None or not trailing_plan.enabled:
         return None
     return trailing_plan.trailing_stop_price
+
+
+def _trailing_distance(trade: VirtualTrade) -> float | None:
+    if trade.trailing_distance is not None and trade.trailing_distance > 0:
+        return trade.trailing_distance
+    trailing_plan = trade.execution.trailing_stop_plan if trade.execution else None
+    if trailing_plan is None or not trailing_plan.enabled:
+        return None
+    if trailing_plan.trailing_distance is not None and trailing_plan.trailing_distance > 0:
+        return trailing_plan.trailing_distance
+    trailing_stop = _trailing_stop_price(trade)
+    if trailing_stop is None:
+        return None
+    distance = abs(trailing_plan.current_price - trailing_stop)
+    if distance <= _EPSILON:
+        return None
+    return distance
 
 
 def _stop_improves(side: str, current_stop: float, next_stop: float) -> bool:

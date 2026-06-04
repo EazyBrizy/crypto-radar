@@ -13,11 +13,13 @@ from app.schemas.trade import (
     TradeJournalEntry,
     VirtualTrade,
     VirtualTradeLifecycleEvent,
+    VirtualTradeTargetState,
 )
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_fee_rate import RiskFeeRateSnapshot
 from app.services.risk_market_data import RiskMarketDataSnapshot
 from app.services.trade_service import TradeService
+from app.services.virtual_trade_lifecycle import apply_virtual_trade_market_price
 
 
 class EphemeralTradeRepository:
@@ -472,6 +474,105 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertEqual(spot_fee_service.instrument_types, ["spot"])
         self.assertEqual(futures_fee_service.instrument_types, ["futures"])
 
+    def test_long_trailing_stop_moves_only_upward(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="long",
+            stop_loss=90.0,
+            current_stop_loss=95.0,
+            trailing_active=True,
+            trailing_distance=5.0,
+            highest_price_after_trailing=100.0,
+            now=now,
+        )
+
+        moved = apply_virtual_trade_market_price(trade, 110.0, now).trade
+        unchanged = apply_virtual_trade_market_price(moved, 108.0, now).trade
+
+        self.assertAlmostEqual(moved.current_stop_loss or 0.0, 105.0)
+        self.assertAlmostEqual(moved.highest_price_after_trailing or 0.0, 110.0)
+        self.assertEqual(moved.lifecycle_events[-1].event_type, "trailing_stop_updated")
+        self.assertEqual(moved.lifecycle_events[-1].metadata["old_stop"], 95.0)
+        self.assertEqual(moved.lifecycle_events[-1].metadata["new_stop"], 105.0)
+        self.assertEqual(moved.lifecycle_events[-1].metadata["reference_price"], 110.0)
+        self.assertAlmostEqual(unchanged.current_stop_loss or 0.0, 105.0)
+        self.assertEqual(len(unchanged.lifecycle_events), len(moved.lifecycle_events))
+
+    def test_short_trailing_stop_moves_only_downward(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="short",
+            stop_loss=110.0,
+            current_stop_loss=105.0,
+            trailing_active=True,
+            trailing_distance=5.0,
+            lowest_price_after_trailing=100.0,
+            now=now,
+        )
+
+        moved = apply_virtual_trade_market_price(trade, 90.0, now).trade
+        unchanged = apply_virtual_trade_market_price(moved, 94.0, now).trade
+
+        self.assertAlmostEqual(moved.current_stop_loss or 0.0, 95.0)
+        self.assertAlmostEqual(moved.lowest_price_after_trailing or 0.0, 90.0)
+        self.assertEqual(moved.lifecycle_events[-1].event_type, "trailing_stop_updated")
+        self.assertEqual(moved.lifecycle_events[-1].metadata["old_stop"], 105.0)
+        self.assertEqual(moved.lifecycle_events[-1].metadata["new_stop"], 95.0)
+        self.assertEqual(moved.lifecycle_events[-1].metadata["reference_price"], 90.0)
+        self.assertAlmostEqual(unchanged.current_stop_loss or 0.0, 95.0)
+        self.assertEqual(len(unchanged.lifecycle_events), len(moved.lifecycle_events))
+
+    def test_updated_trailing_stop_closes_with_actual_close_price_pnl(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="long",
+            stop_loss=90.0,
+            current_stop_loss=105.0,
+            trailing_active=True,
+            trailing_distance=5.0,
+            highest_price_after_trailing=110.0,
+            now=now,
+        )
+
+        result = apply_virtual_trade_market_price(trade, 104.0, now)
+
+        self.assertTrue(result.closed)
+        self.assertEqual(result.trade.status, "closed")
+        self.assertEqual(result.trade.close_reason, "trailing_stop")
+        self.assertAlmostEqual(result.trade.exit_price or 0.0, 104.0)
+        self.assertAlmostEqual(result.trade.pnl or 0.0, 4.0)
+
+    def test_partial_take_profit_then_trailing_keeps_remaining_quantity(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="long",
+            quantity=2.0,
+            size_usd=200.0,
+            stop_loss=90.0,
+            current_stop_loss=90.0,
+            trailing_distance=5.0,
+            now=now,
+            target_states=[
+                VirtualTradeTargetState(
+                    label="TP1",
+                    price=110.0,
+                    close_percent=50.0,
+                    action="trailing_stop",
+                )
+            ],
+        )
+
+        after_target = apply_virtual_trade_market_price(trade, 110.0, now).trade
+        after_trailing_update = apply_virtual_trade_market_price(after_target, 112.0, now).trade
+
+        self.assertTrue(after_target.trailing_active)
+        self.assertAlmostEqual(after_target.remaining_quantity or 0.0, 1.0)
+        self.assertAlmostEqual(after_target.closed_quantity, 1.0)
+        self.assertAlmostEqual(after_target.current_stop_loss or 0.0, 105.0)
+        self.assertAlmostEqual(after_trailing_update.remaining_quantity or 0.0, 1.0)
+        self.assertAlmostEqual(after_trailing_update.closed_quantity, 1.0)
+        self.assertAlmostEqual(after_trailing_update.current_stop_loss or 0.0, 107.0)
+
     @staticmethod
     def _service(
         repository: EphemeralTradeRepository | None = None,
@@ -506,6 +607,50 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
             risks=[],
             created_at=now,
             updated_at=now,
+        )
+
+    @staticmethod
+    def _lifecycle_trade(
+        *,
+        side: str,
+        stop_loss: float,
+        now: datetime,
+        quantity: float = 1.0,
+        size_usd: float = 100.0,
+        current_stop_loss: float | None = None,
+        trailing_active: bool = False,
+        trailing_distance: float | None = None,
+        highest_price_after_trailing: float | None = None,
+        lowest_price_after_trailing: float | None = None,
+        target_states: list[VirtualTradeTargetState] | None = None,
+    ) -> VirtualTrade:
+        return VirtualTrade(
+            id=f"lifecycle_{side}",
+            user_id="demo_user",
+            signal_id=f"signal_{side}",
+            exchange="bybit",
+            symbol="BTCUSDT",
+            strategy="test_strategy",
+            timeframe="15m",
+            side=side,
+            entry_price=100.0,
+            current_price=100.0,
+            size_usd=size_usd,
+            quantity=quantity,
+            leverage=1,
+            risk_percent=1.0,
+            risk_amount=abs(100.0 - stop_loss) * quantity,
+            stop_loss=stop_loss,
+            current_stop_loss=current_stop_loss,
+            trailing_active=trailing_active,
+            trailing_distance=trailing_distance,
+            highest_price_after_trailing=highest_price_after_trailing,
+            lowest_price_after_trailing=lowest_price_after_trailing,
+            take_profit=[],
+            status="open",
+            opened_at=now,
+            updated_at=now,
+            target_states=target_states or [],
         )
 
 

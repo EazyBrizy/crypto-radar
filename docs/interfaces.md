@@ -1691,6 +1691,8 @@ Lifecycle-aware virtual trades also expose:
 - `initial_quantity`, `remaining_quantity`, `closed_quantity`
 - `initial_size_usd`, `remaining_size_usd`
 - `current_stop_loss`, `stop_moved_to_breakeven`, `trailing_active`
+- `trailing_distance`, `highest_price_after_trailing`,
+  `lowest_price_after_trailing`
 - `realized_pnl`, `unrealized_pnl`, `exit_fees`
 - `target_states: list[VirtualTradeTargetState]`
 - `lifecycle_events: list[VirtualTradeLifecycleEvent]`
@@ -1706,6 +1708,24 @@ Partial take-profit events keep the trade open, update remaining/closed
 quantities, account proportional entry fees plus exit fees in `realized_pnl`,
 and append a lifecycle event. Final closes set legacy `pnl` / `pnl_percent`
 from accumulated lifecycle PnL.
+
+When `trailing_active = true`, `current_stop_loss` is the current executable
+trailing stop price. The lifecycle stores a favorable-price watermark after
+trailing activation: `highest_price_after_trailing` for long trades and
+`lowest_price_after_trailing` for short trades. Each new mark updates the
+watermark before stop/target checks and may improve the stop:
+
+- long: `new_stop = highest_price_after_trailing - trailing_distance`, and the
+  stop may only move up;
+- short: `new_stop = lowest_price_after_trailing + trailing_distance`, and the
+  stop may only move down.
+
+A trailing update appends a `trailing_stop_updated` lifecycle event with
+`metadata.old_stop`, `metadata.new_stop`, and `metadata.reference_price`. The
+stop must never move to a worse risk level. If the same mark reaches the
+updated trailing stop, the trade closes with `close_reason = "trailing_stop"`
+and PnL is calculated from the actual lifecycle close price after the configured
+exit slippage model.
 
 Lifecycle state is persisted through the virtual trade metadata snapshot stored
 on the entry order. No database migration is required for v1.

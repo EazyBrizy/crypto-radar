@@ -799,7 +799,14 @@ Current behavior:
 - virtual execution previews and opened virtual trades include these plans in
   the execution report;
 - virtual lifecycle can move `current_stop_loss`, mark breakeven/trailing state,
-  and persist lifecycle events on the entry-order metadata snapshot;
+  persist trailing distance and favorable-price watermarks, and persist lifecycle
+  events on the entry-order metadata snapshot;
+- after trailing activation, each mark updates the favorable high/low watermark
+  before stop checks and improves the trailing stop only in the favorable
+  direction: up for long trades, down for short trades;
+- trailing-stop updates append `trailing_stop_updated` lifecycle events with the
+  previous stop, new stop, and reference price, and a trailing stop hit closes
+  the remaining position with `close_reason = "trailing_stop"`;
 - `max_leverage` is enforced for virtual entries;
 - if `liquidation_price` is provided, the guard blocks trades where liquidation
   can happen before stop-loss or where the stop-to-liquidation buffer is below

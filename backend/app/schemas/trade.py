@@ -388,6 +388,9 @@ class VirtualTrade(BaseModel):
     current_stop_loss: Optional[float] = Field(default=None, gt=0)
     stop_moved_to_breakeven: bool = False
     trailing_active: bool = False
+    trailing_distance: Optional[float] = Field(default=None, gt=0)
+    highest_price_after_trailing: Optional[float] = Field(default=None, gt=0)
+    lowest_price_after_trailing: Optional[float] = Field(default=None, gt=0)
     take_profit: list[float] = Field(default_factory=list)
     fees: float = 0.0
     realized_pnl: float = 0.0
@@ -490,6 +493,9 @@ class TradeJournalEntry(BaseModel):
     current_stop_loss: Optional[float] = Field(default=None, gt=0)
     stop_moved_to_breakeven: bool = False
     trailing_active: bool = False
+    trailing_distance: Optional[float] = Field(default=None, gt=0)
+    highest_price_after_trailing: Optional[float] = Field(default=None, gt=0)
+    lowest_price_after_trailing: Optional[float] = Field(default=None, gt=0)
     take_profit: list[float] = Field(default_factory=list)
     fees: float = 0.0
     realized_pnl: float = 0.0

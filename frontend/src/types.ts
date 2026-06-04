@@ -721,6 +721,9 @@ export interface TradeJournalEntry {
   current_stop_loss?: number | null;
   stop_moved_to_breakeven?: boolean;
   trailing_active?: boolean;
+  trailing_distance?: number | null;
+  highest_price_after_trailing?: number | null;
+  lowest_price_after_trailing?: number | null;
   take_profit: number[];
   fees: number;
   realized_pnl?: number;

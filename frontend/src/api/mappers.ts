@@ -92,6 +92,9 @@ type TradeJournalEntryExtra = TradeJournalEntryDto & Partial<Pick<
   | "current_stop_loss"
   | "stop_moved_to_breakeven"
   | "trailing_active"
+  | "trailing_distance"
+  | "highest_price_after_trailing"
+  | "lowest_price_after_trailing"
   | "realized_pnl"
   | "unrealized_pnl"
   | "exit_fees"
@@ -202,6 +205,9 @@ export function normalizeTrade(trade: TradeJournalEntryDto): TradeJournalEntry {
     current_stop_loss: enriched.current_stop_loss ?? trade.stop_loss,
     stop_moved_to_breakeven: enriched.stop_moved_to_breakeven ?? false,
     trailing_active: enriched.trailing_active ?? false,
+    trailing_distance: enriched.trailing_distance ?? null,
+    highest_price_after_trailing: enriched.highest_price_after_trailing ?? null,
+    lowest_price_after_trailing: enriched.lowest_price_after_trailing ?? null,
     take_profit: takeProfit,
     fees: trade.fees,
     realized_pnl: realizedPnl,

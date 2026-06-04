@@ -1666,6 +1666,54 @@
               ],
               "title": "Radar Display Mode"
             }
+          },
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exchange"
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "timeframe",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timeframe"
+            }
           }
         ],
         "responses": {
@@ -6282,6 +6330,89 @@
             ],
             "title": "Stop Price"
           },
+          "requested_quantity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Quantity"
+          },
+          "normalized_quantity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Quantity"
+          },
+          "requested_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Price"
+          },
+          "normalized_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Price"
+          },
+          "requested_stop_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Stop Price"
+          },
+          "normalized_stop_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Stop Price"
+          },
+          "rounding_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounding Reason"
+          },
           "reduce_only": {
             "type": "boolean",
             "title": "Reduce Only",
@@ -7135,6 +7266,16 @@
               }
             ]
           },
+          "real_execution_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RealExecutionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "message": {
             "type": "string",
             "title": "Message"
@@ -7742,6 +7883,68 @@
             "type": "number",
             "exclusiveMinimum": 0,
             "title": "Account Equity"
+          },
+          "risk_mode": {
+            "type": "string",
+            "enum": [
+              "percent",
+              "fixed"
+            ],
+            "title": "Risk Mode",
+            "default": "percent"
+          },
+          "fixed_risk_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Risk Amount"
+          },
+          "requested_risk_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Risk Amount"
+          },
+          "effective_risk_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Risk Amount"
+          },
+          "risk_amount_capped": {
+            "type": "boolean",
+            "title": "Risk Amount Capped",
+            "default": false
+          },
+          "risk_cap_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Cap Amount"
           },
           "risk_per_trade_percent": {
             "type": "number",
@@ -8408,6 +8611,62 @@
               }
             ],
             "title": "Confirmed Trade Id"
+          },
+          "rr_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "warning",
+                  "failed",
+                  "skipped",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rr Status"
+          },
+          "risk_gate_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "warning",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Gate Status"
+          },
+          "can_enter": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can Enter"
+          },
+          "display_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Reason"
           }
         },
         "type": "object",
@@ -8616,6 +8875,89 @@
             "exclusiveMinimum": 0,
             "title": "Notional"
           },
+          "requested_quantity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Quantity"
+          },
+          "normalized_quantity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Quantity"
+          },
+          "requested_entry_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Entry Price"
+          },
+          "normalized_entry_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Entry Price"
+          },
+          "requested_notional": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Notional"
+          },
+          "normalized_notional": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Notional"
+          },
+          "margin_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Mode"
+          },
           "leverage": {
             "type": "integer",
             "minimum": 1,
@@ -8630,6 +8972,17 @@
             "type": "string",
             "minLength": 1,
             "title": "Client Order Id"
+          },
+          "protective_order_strategy": {
+            "type": "string",
+            "enum": [
+              "bracket",
+              "oco",
+              "sequential_dry_run",
+              "unsupported"
+            ],
+            "title": "Protective Order Strategy",
+            "default": "unsupported"
           },
           "planned_orders": {
             "items": {
@@ -8669,10 +9022,13 @@
           "status": {
             "type": "string",
             "enum": [
-              "not_implemented",
               "risk_failed",
+              "readiness_failed",
+              "not_implemented",
               "dry_run",
-              "submitted"
+              "submitted",
+              "partially_filled",
+              "failed"
             ],
             "title": "Status",
             "default": "not_implemented"
@@ -8758,6 +9114,13 @@
               }
             ],
             "title": "Adapter"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
           },
           "validation_errors": {
             "items": {
@@ -8997,8 +9360,7 @@
             "type": "string",
             "enum": [
               "spot",
-              "futures",
-              "virtual"
+              "futures"
             ],
             "title": "Instrument Type"
           },
@@ -9016,6 +9378,68 @@
             "type": "number",
             "exclusiveMinimum": 0,
             "title": "Account Equity"
+          },
+          "risk_mode": {
+            "type": "string",
+            "enum": [
+              "percent",
+              "fixed"
+            ],
+            "title": "Risk Mode",
+            "default": "percent"
+          },
+          "fixed_risk_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Risk Amount"
+          },
+          "requested_risk_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Requested Risk Amount",
+            "default": 0
+          },
+          "effective_risk_amount": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Effective Risk Amount",
+            "default": 0
+          },
+          "risk_amount_capped": {
+            "type": "boolean",
+            "title": "Risk Amount Capped",
+            "default": false
+          },
+          "risk_cap_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Cap Amount"
+          },
+          "risk_cap_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Cap Percent"
           },
           "base_risk_percent": {
             "type": "number",
@@ -9653,8 +10077,7 @@
             "type": "string",
             "enum": [
               "spot",
-              "futures",
-              "virtual"
+              "futures"
             ],
             "title": "Instrument Type"
           },
@@ -12559,6 +12982,17 @@
               }
             ],
             "title": "Virtual Risk Per Trade Percent"
+          },
+          "legacy_instrument_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legacy Instrument Type"
           }
         },
         "additionalProperties": true,
@@ -14957,6 +15391,42 @@
             "title": "Trailing Active",
             "default": false
           },
+          "trailing_distance": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailing Distance"
+          },
+          "highest_price_after_trailing": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Highest Price After Trailing"
+          },
+          "lowest_price_after_trailing": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lowest Price After Trailing"
+          },
           "take_profit": {
             "items": {
               "type": "number"
@@ -16719,6 +17189,42 @@
             "type": "boolean",
             "title": "Trailing Active",
             "default": false
+          },
+          "trailing_distance": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trailing Distance"
+          },
+          "highest_price_after_trailing": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Highest Price After Trailing"
+          },
+          "lowest_price_after_trailing": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lowest Price After Trailing"
           },
           "take_profit": {
             "items": {

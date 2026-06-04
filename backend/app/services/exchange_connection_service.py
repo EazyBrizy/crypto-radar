@@ -172,6 +172,9 @@ class ExchangeConnectionService:
             session.delete(connection)
             session.commit()
 
+    def load_credentials(self, key_ref: str) -> dict[str, str] | None:
+        return self._secret_provider.load_exchange_credentials(key_ref)
+
     def test_connection(self, connection_id: str) -> ExchangeConnectionActionResponse:
         connection = self.get_connection(connection_id)
         fee_rate_status: dict[str, Any] = {"checked": False}

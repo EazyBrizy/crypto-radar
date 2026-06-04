@@ -39,6 +39,7 @@ from app.services.real_execution_readiness import (
     RealExecutionReadinessResult,
     real_execution_readiness_service,
 )
+from app.services.exchange_account_snapshot import exchange_account_snapshot_service
 from app.services.risk_state import RiskStateService, risk_state_service
 from app.services.strategy_config_service import strategy_config_service
 
@@ -83,7 +84,12 @@ class RealExecutionService:
             else execution_adapter
         )
         self._risk_settings_provider = risk_settings_provider or get_user_risk_management_settings
-        self._account_snapshot_provider = account_snapshot_provider or self._risk_state or RiskStateService()
+        if account_snapshot_provider is not None:
+            self._account_snapshot_provider = account_snapshot_provider
+        elif risk_state is risk_state_service or risk_state is None:
+            self._account_snapshot_provider = exchange_account_snapshot_service
+        else:
+            self._account_snapshot_provider = self._risk_state or exchange_account_snapshot_service
 
     async def place_order(
         self,
@@ -461,6 +467,12 @@ class RealExecutionService:
                 live_adapter=live_adapter,
                 request_account_balance=request_account_balance,
                 reference=reference,
+            )
+        if live_adapter and hasattr(provider, "get_snapshot"):
+            return provider.get_snapshot(
+                user_id=user_id,
+                exchange=exchange,
+                mode="real",
             )
         return RiskStateService().get_real_account_snapshot(
             user_id=user_id,

@@ -2,7 +2,7 @@ import unittest
 from uuid import UUID
 
 from app.schemas.exchange_connection import ExchangeConnectionResponse, ExchangeFeeRateResponse
-from app.services.exchange_connection_service import StubSecretRefProvider
+from app.services.exchange_connection_service import ExchangeConnectionService, StubSecretRefProvider
 
 
 class ExchangeConnectionServiceContractTest(unittest.TestCase):
@@ -40,6 +40,21 @@ class ExchangeConnectionServiceContractTest(unittest.TestCase):
         self.assertNotIn("api_key", fields)
         self.assertNotIn("api_secret", fields)
         self.assertNotIn("api_passphrase", fields)
+
+    def test_service_loads_credentials_through_secret_provider_boundary(self) -> None:
+        provider = StubSecretRefProvider()
+        service = ExchangeConnectionService(secret_provider=provider)
+        key_ref = provider.store_exchange_credentials(
+            user_id=UUID("ba520631-d035-4f95-a4c0-3b40553dd524"),
+            exchange_code="bybit",
+            label="Main",
+            credentials={"api_key": "public", "api_secret": "private"},
+        )
+
+        self.assertEqual(
+            service.load_credentials(key_ref),
+            {"api_key": "public", "api_secret": "private"},
+        )
 
     def test_fee_rate_response_exposes_maker_and_taker_rates(self) -> None:
         fields = set(ExchangeFeeRateResponse.model_fields)

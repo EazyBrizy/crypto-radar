@@ -125,6 +125,18 @@ class ExchangeConnectionService:
             connection = _get_connection(session, connection_id)
             return _connection_to_response(connection)
 
+    def get_connection_for_user(
+        self,
+        connection_id: str,
+        user_id: str = "demo_user",
+    ) -> ExchangeConnectionResponse:
+        with self._session_factory() as session:
+            user = resolve_app_user(session, user_id)
+            connection = _get_connection(session, connection_id)
+            if connection.user_id != user.id:
+                raise PermissionError("Exchange connection does not belong to the resolved user.")
+            return _connection_to_response(connection)
+
     def update_connection(
         self,
         connection_id: str,

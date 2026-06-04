@@ -12,10 +12,12 @@ import {
   type RiskProfilePresetName
 } from "@/features/server-state/risk-management-contract";
 import type {
+  AccountRiskSnapshot,
   AlertRule,
   AlertRuleDraft,
   ExchangeConnection,
   ExchangeConnectionDraft,
+  ExchangeWalletBalance,
   MarketPairOption,
   RadarDisplayMode,
   RiskManagementSettings,
@@ -41,6 +43,9 @@ interface SettingsPageProps {
   strategyConfigs: StrategyConfig[];
   alertRules: AlertRule[];
   exchangeConnections: ExchangeConnection[];
+  exchangeAccountSnapshots: Record<string, AccountRiskSnapshot | null>;
+  exchangeBalanceLoading: Record<string, boolean>;
+  exchangeWalletBalances: Record<string, ExchangeWalletBalance | null>;
   userProfile: UserProfile | null;
   riskState: RiskStateResponse | null;
   busy: boolean;
@@ -51,6 +56,7 @@ interface SettingsPageProps {
   onCreateExchangeConnection: (draft: ExchangeConnectionDraft) => Promise<unknown>;
   onToggleExchangeConnection: (connectionId: string, isActive: boolean) => Promise<unknown>;
   onDeleteExchangeConnection: (connectionId: string) => Promise<unknown>;
+  onRefreshExchangeBalance: (connectionId: string) => Promise<unknown>;
   onTestExchangeConnection: (connectionId: string) => Promise<unknown>;
   onSyncExchangeConnection: (connectionId: string) => Promise<unknown>;
   onSelectSimulationLevel: (simulationLevel: VirtualSimulationLevel) => Promise<unknown>;
@@ -658,6 +664,9 @@ export function SettingsPage({
   strategyConfigs,
   alertRules,
   exchangeConnections,
+  exchangeAccountSnapshots,
+  exchangeBalanceLoading,
+  exchangeWalletBalances,
   userProfile,
   riskState,
   busy,
@@ -668,6 +677,7 @@ export function SettingsPage({
   onCreateExchangeConnection,
   onToggleExchangeConnection,
   onDeleteExchangeConnection,
+  onRefreshExchangeBalance,
   onTestExchangeConnection,
   onSyncExchangeConnection,
   onSelectSimulationLevel,
@@ -1070,34 +1080,81 @@ export function SettingsPage({
           </div>
           <div className="connection-list">
             {exchangeConnections.length === 0 ? <div className="empty-state compact-empty">No exchange connections</div> : null}
-            {exchangeConnections.map((connection) => (
-              <div className="connection-row" key={connection.id}>
-                <div>
-                  <strong>{connection.label}</strong>
-                  <span>{connection.exchange_code}:{connection.account_type}</span>
-                  <code>{shortKeyRef(connection.key_ref)}</code>
+            {exchangeConnections.map((connection) => {
+              const walletBalance = exchangeWalletBalances[connection.id] ?? null;
+              const accountSnapshot = exchangeAccountSnapshots[connection.id] ?? null;
+              const balancePending = Boolean(exchangeBalanceLoading[connection.id]);
+              const snapshotStatus = accountSnapshot?.status ?? walletBalance?.status ?? "missing";
+              const balanceWarnings = uniqueStrings([
+                ...(accountSnapshot?.warnings ?? []),
+                ...(walletBalance?.warnings ?? [])
+              ]);
+              return (
+                <div className="connection-row" key={connection.id}>
+                  <div className="connection-main">
+                    <strong>{connection.label}</strong>
+                    <span>{connection.exchange_code}:{connection.account_type}</span>
+                    <code>{shortKeyRef(connection.key_ref)}</code>
+                  </div>
+                  <div className="connection-balance-panel">
+                    <div className="connection-balance-metrics">
+                      <span>
+                        <small>Equity</small>
+                        <strong>{formatBalanceAmount(walletBalance?.total_equity ?? accountSnapshot?.account_equity)}</strong>
+                      </span>
+                      <span>
+                        <small>Available</small>
+                        <strong>{formatBalanceAmount(walletBalance?.total_available_balance ?? accountSnapshot?.available_balance)}</strong>
+                      </span>
+                      <span>
+                        <small>Wallet balance</small>
+                        <strong>{formatBalanceAmount(walletBalance?.total_wallet_balance ?? accountSnapshot?.wallet_balance)}</strong>
+                      </span>
+                    </div>
+                    <div className="connection-freshness-row">
+                      <Badge tone={snapshotStatusTone(snapshotStatus)}>{snapshotStatus}</Badge>
+                      <span>Snapshot age {formatSnapshotAge(accountSnapshot?.fetched_at ?? walletBalance?.fetched_at)}</span>
+                    </div>
+                    {balanceWarnings.length ? (
+                      <div className="connection-warning-list">
+                        {balanceWarnings.map((warning) => (
+                          <span key={warning}>{warning}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <Badge tone={connection.status === "active" ? "green" : "red"}>{connection.status}</Badge>
+                  <label className="toggle-row compact-toggle">
+                    <input
+                      checked={connection.status === "active"}
+                      disabled={busy}
+                      onChange={(event) => onToggleExchangeConnection(connection.id, event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>{connection.status === "active" ? "On" : "Off"}</span>
+                  </label>
+                  <button
+                    className="secondary-action compact-action balance-refresh-button"
+                    disabled={busy || balancePending}
+                    onClick={() => onRefreshExchangeBalance(connection.id)}
+                    title="Обновить баланс"
+                    type="button"
+                  >
+                    <RefreshCw size={15} />
+                    Обновить баланс
+                  </button>
+                  <button className="icon-button compact" disabled={busy} onClick={() => onTestExchangeConnection(connection.id)} title="Test" type="button">
+                    <Send size={15} />
+                  </button>
+                  <button className="icon-button compact" disabled={busy} onClick={() => onSyncExchangeConnection(connection.id)} title="Sync" type="button">
+                    <RefreshCw size={15} />
+                  </button>
+                  <button className="icon-button compact" disabled={busy} onClick={() => onDeleteExchangeConnection(connection.id)} title="Delete" type="button">
+                    <Trash2 size={15} />
+                  </button>
                 </div>
-                <Badge tone={connection.status === "active" ? "green" : "red"}>{connection.status}</Badge>
-                <label className="toggle-row compact-toggle">
-                  <input
-                    checked={connection.status === "active"}
-                    disabled={busy}
-                    onChange={(event) => onToggleExchangeConnection(connection.id, event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span>{connection.status === "active" ? "On" : "Off"}</span>
-                </label>
-                <button className="icon-button compact" disabled={busy} onClick={() => onTestExchangeConnection(connection.id)} title="Test" type="button">
-                  <Send size={15} />
-                </button>
-                <button className="icon-button compact" disabled={busy} onClick={() => onSyncExchangeConnection(connection.id)} title="Sync" type="button">
-                  <RefreshCw size={15} />
-                </button>
-                <button className="icon-button compact" disabled={busy} onClick={() => onDeleteExchangeConnection(connection.id)} title="Delete" type="button">
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </SettingsAccordionSection>
 
@@ -2522,6 +2579,37 @@ function shortKeyRef(keyRef: string): string {
   const parts = keyRef.split("/");
   const suffix = parts[parts.length - 1] ?? keyRef;
   return `key_ref:${suffix.slice(0, 8)}`;
+}
+
+function formatBalanceAmount(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "-";
+  return value.toLocaleString("en-US", {
+    currency: "USD",
+    maximumFractionDigits: value >= 1000 ? 2 : 6,
+    minimumFractionDigits: value >= 1000 ? 2 : 0,
+    style: "currency"
+  });
+}
+
+function formatSnapshotAge(value: string | null | undefined): string {
+  if (!value) return "missing";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "unknown";
+  const diffSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (diffSeconds < 60) return "just now";
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  return `${Math.floor(diffMinutes / 60)}h ago`;
+}
+
+function snapshotStatusTone(status: AccountRiskSnapshot["status"]): "green" | "red" | "yellow" | "blue" {
+  if (status === "fresh") return "green";
+  if (status === "stale") return "yellow";
+  return "red";
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
 function dedupeStrings(values: string[]): string[] {

@@ -1,12 +1,16 @@
 import type {
+  AccountRiskSnapshot,
   AlertRule,
   BillingPlan,
   ExchangeCatalog,
   ExchangeConnection,
   ExchangeConnectionStatus,
   ExchangeFeeRate,
+  ExchangeWalletBalance,
+  ExchangeWalletCoinBalance,
   MarketPairOption,
   NotificationDelivery,
+  PositionRiskSummary,
   PersistedNotification,
   RadarDisplayMode,
   RRGuardMode,
@@ -1632,6 +1636,94 @@ export function normalizeExchangeFeeRate(value: unknown): ExchangeFeeRate {
     source: String(fee.source ?? "unknown"),
     fetched_at: String(fee.fetched_at ?? new Date().toISOString())
   };
+}
+
+export function normalizeExchangeWalletBalance(value: unknown): ExchangeWalletBalance {
+  const wallet = value as Partial<ExchangeWalletBalance>;
+  return {
+    exchange: String(wallet.exchange ?? ""),
+    connection_id: String(wallet.connection_id ?? ""),
+    account_type: String(wallet.account_type ?? "unknown"),
+    total_equity: optionalNumber(wallet.total_equity),
+    total_wallet_balance: optionalNumber(wallet.total_wallet_balance),
+    total_available_balance: optionalNumber(wallet.total_available_balance),
+    coins: Array.isArray(wallet.coins) ? wallet.coins.map(normalizeExchangeWalletCoinBalance) : [],
+    fetched_at: wallet.fetched_at == null ? null : String(wallet.fetched_at),
+    status: normalizeAccountSnapshotStatus(wallet.status),
+    warnings: Array.isArray(wallet.warnings) ? wallet.warnings.map(String) : []
+  };
+}
+
+export function normalizeAccountRiskSnapshot(value: unknown): AccountRiskSnapshot {
+  const snapshot = value as Partial<AccountRiskSnapshot>;
+  return {
+    status: normalizeAccountSnapshotStatus(snapshot.status),
+    fetched_at: snapshot.fetched_at == null ? null : String(snapshot.fetched_at),
+    account_equity: optionalNumber(snapshot.account_equity),
+    available_balance: optionalNumber(snapshot.available_balance),
+    wallet_balance: optionalNumber(snapshot.wallet_balance),
+    margin_mode: snapshot.margin_mode == null ? null : String(snapshot.margin_mode),
+    total_initial_margin: optionalNumber(snapshot.total_initial_margin),
+    total_maintenance_margin: optionalNumber(snapshot.total_maintenance_margin),
+    maintenance_margin_rate: optionalNumber(snapshot.maintenance_margin_rate),
+    positions: Array.isArray(snapshot.positions) ? snapshot.positions.map(normalizePositionRiskSummary) : [],
+    open_risk_amount: Number(snapshot.open_risk_amount ?? 0),
+    source: normalizeAccountSnapshotSource(snapshot.source),
+    warnings: Array.isArray(snapshot.warnings) ? snapshot.warnings.map(String) : []
+  };
+}
+
+function normalizeExchangeWalletCoinBalance(value: unknown): ExchangeWalletCoinBalance {
+  const coin = value as Partial<ExchangeWalletCoinBalance>;
+  return {
+    coin: String(coin.coin ?? ""),
+    equity: optionalNumber(coin.equity),
+    usd_value: optionalNumber(coin.usd_value),
+    wallet_balance: optionalNumber(coin.wallet_balance),
+    available_to_withdraw: optionalNumber(coin.available_to_withdraw),
+    locked: optionalNumber(coin.locked),
+    borrow_amount: optionalNumber(coin.borrow_amount),
+    accrued_interest: optionalNumber(coin.accrued_interest),
+    total_order_im: optionalNumber(coin.total_order_im),
+    total_position_im: optionalNumber(coin.total_position_im),
+    total_position_mm: optionalNumber(coin.total_position_mm),
+    unrealised_pnl: optionalNumber(coin.unrealised_pnl)
+  };
+}
+
+function normalizePositionRiskSummary(value: unknown): PositionRiskSummary {
+  const position = value as Partial<PositionRiskSummary>;
+  const side = position.side === "long" || position.side === "short" ? position.side : "unknown";
+  return {
+    symbol: position.symbol == null ? null : String(position.symbol),
+    side,
+    quantity: optionalNumber(position.quantity),
+    notional: optionalNumber(position.notional),
+    entry_price: optionalNumber(position.entry_price),
+    mark_price: optionalNumber(position.mark_price),
+    unrealized_pnl: optionalNumber(position.unrealized_pnl),
+    risk_amount: optionalNumber(position.risk_amount),
+    initial_margin: optionalNumber(position.initial_margin),
+    maintenance_margin: optionalNumber(position.maintenance_margin),
+    margin_mode: position.margin_mode == null ? null : String(position.margin_mode)
+  };
+}
+
+function normalizeAccountSnapshotStatus(value: unknown): AccountRiskSnapshot["status"] {
+  return value === "fresh" || value === "stale" || value === "missing" ? value : "missing";
+}
+
+function normalizeAccountSnapshotSource(value: unknown): AccountRiskSnapshot["source"] {
+  if (
+    value === "exchange" ||
+    value === "request" ||
+    value === "virtual" ||
+    value === "dry_run" ||
+    value === "demo"
+  ) {
+    return value;
+  }
+  return "exchange";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,5 +1,6 @@
 from datetime import datetime
-from typing import Any
+from decimal import Decimal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -61,6 +62,34 @@ class ExchangeFeeRateResponse(BaseModel):
     taker_fee_rate: float = Field(..., ge=0)
     source: str
     fetched_at: datetime
+
+
+class ExchangeWalletCoinBalance(BaseModel):
+    coin: str
+    equity: Decimal | None = Field(default=None, ge=0)
+    usd_value: Decimal | None = Field(default=None, ge=0)
+    wallet_balance: Decimal | None = Field(default=None, ge=0)
+    available_to_withdraw: Decimal | None = Field(default=None, ge=0)
+    locked: Decimal | None = Field(default=None, ge=0)
+    borrow_amount: Decimal | None = Field(default=None, ge=0)
+    accrued_interest: Decimal | None = Field(default=None, ge=0)
+    total_order_im: Decimal | None = Field(default=None, ge=0)
+    total_position_im: Decimal | None = Field(default=None, ge=0)
+    total_position_mm: Decimal | None = Field(default=None, ge=0)
+    unrealised_pnl: Decimal | None = None
+
+
+class ExchangeWalletBalanceResponse(BaseModel):
+    exchange: str
+    connection_id: UUID
+    account_type: str
+    total_equity: Decimal | None = Field(default=None, ge=0)
+    total_wallet_balance: Decimal | None = Field(default=None, ge=0)
+    total_available_balance: Decimal | None = Field(default=None, ge=0)
+    coins: list[ExchangeWalletCoinBalance] = Field(default_factory=list)
+    fetched_at: datetime | None = None
+    status: Literal["fresh", "stale", "missing"]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ExchangeInstrumentRuleResponse(BaseModel):

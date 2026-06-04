@@ -1,4 +1,4 @@
-import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api";
 import { isActivePendingEntryStatus } from "@/domain/pending-entry-status";
@@ -11,7 +11,9 @@ import type {
 } from "@/features/strategy-testing/types";
 import type {
   AlertRuleDraft,
+  AccountRiskSnapshot,
   ExchangeConnectionDraft,
+  ExchangeWalletBalance,
   NotificationDraft,
   RadarDisplayMode,
   StrategyConfigPatch,
@@ -455,6 +457,59 @@ export function useExchangeConnectionsQuery() {
   });
 }
 
+export function useExchangeConnectionWalletBalancesQuery(connectionIds: string[], userId = "demo_user") {
+  const uniqueConnectionIds = uniqueIds(connectionIds);
+  const queries = useQueries({
+    queries: uniqueConnectionIds.map((connectionId) => ({
+      queryKey: serverStateKeys.exchangeConnections.walletBalance(connectionId, userId),
+      queryFn: () => api.getConnectionWalletBalance(connectionId, userId),
+      enabled: Boolean(connectionId),
+      refetchInterval: serverStatePolicy.slowBackgroundRefreshMs,
+      staleTime: serverStatePolicy.realtimeStaleTimeMs
+    }))
+  });
+
+  return mapConnectionQueryResults<ExchangeWalletBalance>(uniqueConnectionIds, queries);
+}
+
+export function useExchangeConnectionAccountSnapshotsQuery(connectionIds: string[], userId = "demo_user") {
+  const uniqueConnectionIds = uniqueIds(connectionIds);
+  const queries = useQueries({
+    queries: uniqueConnectionIds.map((connectionId) => ({
+      queryKey: serverStateKeys.exchangeConnections.accountSnapshot(connectionId, userId),
+      queryFn: () => api.getConnectionAccountSnapshot(connectionId, userId),
+      enabled: Boolean(connectionId),
+      refetchInterval: serverStatePolicy.slowBackgroundRefreshMs,
+      staleTime: serverStatePolicy.realtimeStaleTimeMs
+    }))
+  });
+
+  return mapConnectionQueryResults<AccountRiskSnapshot>(uniqueConnectionIds, queries);
+}
+
+export function useRefreshExchangeConnectionBalanceMutation(userId = "demo_user") {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (connectionId: string) => {
+      const snapshot = await api.getConnectionAccountSnapshot(connectionId, userId, true);
+      const wallet = await api.getConnectionWalletBalance(connectionId, userId, false);
+      return { connectionId, snapshot, wallet };
+    },
+    onSuccess: async ({ connectionId, snapshot, wallet }) => {
+      queryClient.setQueryData(
+        serverStateKeys.exchangeConnections.accountSnapshot(connectionId, userId),
+        snapshot
+      );
+      queryClient.setQueryData(
+        serverStateKeys.exchangeConnections.walletBalance(connectionId, userId),
+        wallet
+      );
+      await queryClient.invalidateQueries({ queryKey: serverStateKeys.exchangeConnections.all() });
+    }
+  });
+}
+
 export function useCreateExchangeConnectionMutation() {
   const queryClient = useQueryClient();
 
@@ -688,6 +743,36 @@ export function useStopScannerMutation() {
       ]);
     }
   });
+}
+
+function uniqueIds(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function mapConnectionQueryResults<T>(
+  connectionIds: string[],
+  queries: Array<{
+    data?: T;
+    error: unknown;
+    isFetching: boolean;
+    isLoading: boolean;
+    isPending?: boolean;
+  }>
+) {
+  const dataByConnectionId: Record<string, T | null> = {};
+  const pendingByConnectionId: Record<string, boolean> = {};
+  const errorByConnectionId: Record<string, unknown> = {};
+
+  connectionIds.forEach((connectionId, index) => {
+    const query = queries[index];
+    dataByConnectionId[connectionId] = query?.data ?? null;
+    pendingByConnectionId[connectionId] = Boolean(query?.isLoading || query?.isFetching || query?.isPending);
+    if (query?.error) {
+      errorByConnectionId[connectionId] = query.error;
+    }
+  });
+
+  return { dataByConnectionId, pendingByConnectionId, errorByConnectionId };
 }
 
 export function applySignalSnapshot(queryClient: QueryClient, signals: RadarSignal[]) {

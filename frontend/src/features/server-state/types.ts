@@ -310,6 +310,67 @@ export interface ExchangeFeeRate {
   fetched_at: string;
 }
 
+export type AccountSnapshotStatus = "fresh" | "stale" | "missing";
+export type AccountSnapshotSource = "exchange" | "request" | "virtual" | "dry_run" | "demo";
+
+export interface PositionRiskSummary {
+  symbol: string | null;
+  side: "long" | "short" | "unknown";
+  quantity: number | null;
+  notional: number | null;
+  entry_price: number | null;
+  mark_price: number | null;
+  unrealized_pnl: number | null;
+  risk_amount: number | null;
+  initial_margin: number | null;
+  maintenance_margin: number | null;
+  margin_mode: string | null;
+}
+
+export interface AccountRiskSnapshot {
+  status: AccountSnapshotStatus;
+  fetched_at: string | null;
+  account_equity: number | null;
+  available_balance: number | null;
+  wallet_balance: number | null;
+  margin_mode: string | null;
+  total_initial_margin: number | null;
+  total_maintenance_margin: number | null;
+  maintenance_margin_rate: number | null;
+  positions: PositionRiskSummary[];
+  open_risk_amount: number;
+  source: AccountSnapshotSource;
+  warnings: string[];
+}
+
+export interface ExchangeWalletCoinBalance {
+  coin: string;
+  equity: number | null;
+  usd_value: number | null;
+  wallet_balance: number | null;
+  available_to_withdraw: number | null;
+  locked: number | null;
+  borrow_amount: number | null;
+  accrued_interest: number | null;
+  total_order_im: number | null;
+  total_position_im: number | null;
+  total_position_mm: number | null;
+  unrealised_pnl: number | null;
+}
+
+export interface ExchangeWalletBalance {
+  exchange: string;
+  connection_id: string;
+  account_type: string;
+  total_equity: number | null;
+  total_wallet_balance: number | null;
+  total_available_balance: number | null;
+  coins: ExchangeWalletCoinBalance[];
+  fetched_at: string | null;
+  status: AccountSnapshotStatus;
+  warnings: string[];
+}
+
 export interface ExchangeConnectionDraft {
   exchange_code: string;
   label: string;

@@ -279,6 +279,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/exchanges/connections/{connection_id}/wallet-balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Exchange Connection Wallet Balance */
+        get: operations["get_exchange_connection_wallet_balance_api_v1_exchanges_connections__connection_id__wallet_balance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/exchanges/connections/{connection_id}/account-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Exchange Connection Account Snapshot */
+        get: operations["get_exchange_connection_account_snapshot_api_v1_exchanges_connections__connection_id__account_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/exchanges/connections/{connection_id}/account-snapshot/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Exchange Connection Account Snapshot */
+        post: operations["refresh_exchange_connection_account_snapshot_api_v1_exchanges_connections__connection_id__account_snapshot_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/exchanges/instrument-rules": {
         parameters: {
             query?: never;
@@ -1448,6 +1499,44 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** AccountRiskSnapshot */
+        AccountRiskSnapshot: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "fresh" | "stale" | "missing";
+            /** Fetched At */
+            fetched_at?: string | null;
+            /** Account Equity */
+            account_equity?: string | null;
+            /** Available Balance */
+            available_balance?: string | null;
+            /** Wallet Balance */
+            wallet_balance?: string | null;
+            /** Margin Mode */
+            margin_mode?: string | null;
+            /** Total Initial Margin */
+            total_initial_margin?: string | null;
+            /** Total Maintenance Margin */
+            total_maintenance_margin?: string | null;
+            /** Maintenance Margin Rate */
+            maintenance_margin_rate?: string | null;
+            /** Positions */
+            positions?: components["schemas"]["PositionRiskSummary"][];
+            /**
+             * Open Risk Amount
+             * @default 0
+             */
+            open_risk_amount: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "exchange" | "request" | "virtual" | "dry_run" | "demo";
+            /** Warnings */
+            warnings?: string[];
+        };
         /** AlertRuleCreateRequest */
         AlertRuleCreateRequest: {
             /**
@@ -2110,6 +2199,62 @@ export interface components {
              * @default false
              */
             is_stale: boolean;
+        };
+        /** ExchangeWalletBalanceResponse */
+        ExchangeWalletBalanceResponse: {
+            /** Exchange */
+            exchange: string;
+            /**
+             * Connection Id
+             * Format: uuid
+             */
+            connection_id: string;
+            /** Account Type */
+            account_type: string;
+            /** Total Equity */
+            total_equity?: string | null;
+            /** Total Wallet Balance */
+            total_wallet_balance?: string | null;
+            /** Total Available Balance */
+            total_available_balance?: string | null;
+            /** Coins */
+            coins?: components["schemas"]["ExchangeWalletCoinBalance"][];
+            /** Fetched At */
+            fetched_at?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "fresh" | "stale" | "missing";
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** ExchangeWalletCoinBalance */
+        ExchangeWalletCoinBalance: {
+            /** Coin */
+            coin: string;
+            /** Equity */
+            equity?: string | null;
+            /** Usd Value */
+            usd_value?: string | null;
+            /** Wallet Balance */
+            wallet_balance?: string | null;
+            /** Available To Withdraw */
+            available_to_withdraw?: string | null;
+            /** Locked */
+            locked?: string | null;
+            /** Borrow Amount */
+            borrow_amount?: string | null;
+            /** Accrued Interest */
+            accrued_interest?: string | null;
+            /** Total Order Im */
+            total_order_im?: string | null;
+            /** Total Position Im */
+            total_position_im?: string | null;
+            /** Total Position Mm */
+            total_position_mm?: string | null;
+            /** Unrealised Pnl */
+            unrealised_pnl?: string | null;
         };
         /** ExecutionPlannedOrder */
         ExecutionPlannedOrder: {
@@ -2931,6 +3076,35 @@ export interface components {
             filled_trade_id?: string | null;
             /** Failure Reason */
             failure_reason?: string | null;
+        };
+        /** PositionRiskSummary */
+        PositionRiskSummary: {
+            /** Symbol */
+            symbol?: string | null;
+            /**
+             * Side
+             * @default unknown
+             * @enum {string}
+             */
+            side: "long" | "short" | "unknown";
+            /** Quantity */
+            quantity?: string | null;
+            /** Notional */
+            notional?: string | null;
+            /** Entry Price */
+            entry_price?: string | null;
+            /** Mark Price */
+            mark_price?: string | null;
+            /** Unrealized Pnl */
+            unrealized_pnl?: string | null;
+            /** Risk Amount */
+            risk_amount?: string | null;
+            /** Initial Margin */
+            initial_margin?: string | null;
+            /** Maintenance Margin */
+            maintenance_margin?: string | null;
+            /** Margin Mode */
+            margin_mode?: string | null;
         };
         /** PositionSizingResult */
         PositionSizingResult: {
@@ -7223,6 +7397,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExchangeFeeRateResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_exchange_connection_wallet_balance_api_v1_exchanges_connections__connection_id__wallet_balance_get: {
+        parameters: {
+            query?: {
+                user_id?: string;
+                force_refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeWalletBalanceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_exchange_connection_account_snapshot_api_v1_exchanges_connections__connection_id__account_snapshot_get: {
+        parameters: {
+            query?: {
+                user_id?: string;
+                force_refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRiskSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_exchange_connection_account_snapshot_api_v1_exchanges_connections__connection_id__account_snapshot_refresh_post: {
+        parameters: {
+            query?: {
+                user_id?: string;
+            };
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRiskSnapshot"];
                 };
             };
             /** @description Validation Error */

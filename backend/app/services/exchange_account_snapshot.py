@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.exchanges.bybit import (
     BYBIT_API_URL,
+    BybitCoinBalance,
     BybitPositionInfo,
     BybitWalletBalance,
     fetch_bybit_positions,
@@ -25,6 +26,10 @@ from app.exchanges.bybit import (
 from app.models.exchange_connection import UserExchangeConnection
 from app.models.market import MarketExchange
 from app.models.user import AppUser
+from app.schemas.exchange_connection import (
+    ExchangeWalletBalanceResponse,
+    ExchangeWalletCoinBalance,
+)
 from app.schemas.risk import AccountRiskSnapshot, PositionRiskSummary
 from app.services.exchange_connection_service import exchange_connection_service
 from app.services.user_identity import resolve_app_user
@@ -52,6 +57,12 @@ class _CachedSnapshot:
     stored_at_monotonic: float
 
 
+@dataclass(frozen=True)
+class _CachedWalletBalance:
+    wallet_balance: ExchangeWalletBalanceResponse
+    stored_at_monotonic: float
+
+
 class ExchangeAccountSnapshotService:
     """Builds live account risk snapshots from exchange wallet and positions."""
 
@@ -74,6 +85,7 @@ class ExchangeAccountSnapshotService:
             else snapshot_ttl_seconds
         )
         self._cache: dict[tuple[str, str, str, str, str], _CachedSnapshot] = {}
+        self._wallet_cache: dict[tuple[str, str, str, str, str], _CachedWalletBalance] = {}
 
     def get_snapshot(
         self,
@@ -176,7 +188,130 @@ class ExchangeAccountSnapshotService:
                 snapshot=snapshot.model_copy(deep=True),
                 stored_at_monotonic=time.monotonic(),
             )
+            self._wallet_cache[cache_key] = _CachedWalletBalance(
+                wallet_balance=_wallet_response_from_bybit(
+                    connection=connection,
+                    wallet=wallet,
+                    fetched_at=snapshot.fetched_at or datetime.now(timezone.utc),
+                    status="fresh",
+                    warnings=_wallet_response_warnings(wallet),
+                ),
+                stored_at_monotonic=time.monotonic(),
+            )
             return snapshot
+
+    def get_wallet_balance(
+        self,
+        *,
+        user_id: str | UUID,
+        exchange: str = "bybit",
+        connection_id: UUID,
+        mode: Literal["real", "virtual"] = "real",
+        force_refresh: bool = False,
+    ) -> ExchangeWalletBalanceResponse:
+        normalized_exchange = exchange.strip().lower()
+        if mode == "virtual":
+            return _missing_wallet_balance(
+                exchange=normalized_exchange,
+                connection_id=connection_id,
+                account_type="virtual",
+                warnings=["Exchange wallet balance is not used for virtual mode."],
+            )
+        if normalized_exchange != "bybit":
+            return _missing_wallet_balance(
+                exchange=normalized_exchange,
+                connection_id=connection_id,
+                account_type="unknown",
+                warnings=[f"Wallet balance is not implemented for exchange {normalized_exchange}."],
+            )
+
+        with self._session_factory() as session:
+            user = resolve_app_user(session, user_id)
+            lookup = _find_connection(
+                session=session,
+                user=user,
+                exchange_code=normalized_exchange,
+                connection_id=connection_id,
+            )
+            if lookup.connection is None:
+                return _missing_wallet_balance(
+                    exchange=normalized_exchange,
+                    connection_id=connection_id,
+                    account_type="unknown",
+                    warnings=[lookup.warning or "Active exchange connection is missing."],
+                )
+            connection = lookup.connection
+            account_type = _wallet_account_type(connection)
+            cache_key = (
+                str(user.id),
+                normalized_exchange,
+                str(connection.id),
+                account_type,
+                mode,
+            )
+            cached = self._wallet_cache.get(cache_key)
+            if not force_refresh:
+                cached_wallet = self._fresh_cached_wallet_balance(cached)
+                if cached_wallet is not None:
+                    return cached_wallet
+
+            credentials = self._credential_provider.load_credentials(connection.key_ref)
+            if credentials is None:
+                return self._failure_wallet_balance(
+                    cache_key,
+                    cached,
+                    connection=connection,
+                    account_type=account_type,
+                    warnings=[
+                        "Exchange credentials are not available in the configured secret provider."
+                    ],
+                )
+            api_key = credentials.get("api_key")
+            api_secret = credentials.get("api_secret")
+            if not api_key or not api_secret:
+                return self._failure_wallet_balance(
+                    cache_key,
+                    cached,
+                    connection=connection,
+                    account_type=account_type,
+                    warnings=["Bybit wallet balance requires api_key and api_secret."],
+                )
+
+            try:
+                wallet = self._bybit_wallet_fetcher(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    account_type=account_type,
+                    coin=_wallet_coin(connection),
+                    base_url=_bybit_base_url(connection),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Bybit wallet balance lookup failed for user=%s connection=%s: %s",
+                    user.id,
+                    connection.id,
+                    exc,
+                )
+                return self._failure_wallet_balance(
+                    cache_key,
+                    cached,
+                    connection=connection,
+                    account_type=account_type,
+                    warnings=[f"Bybit wallet balance is unavailable: {exc}"],
+                )
+
+            response = _wallet_response_from_bybit(
+                connection=connection,
+                wallet=wallet,
+                fetched_at=datetime.now(timezone.utc),
+                status="fresh",
+                warnings=_wallet_response_warnings(wallet),
+            )
+            self._wallet_cache[cache_key] = _CachedWalletBalance(
+                wallet_balance=response.model_copy(deep=True),
+                stored_at_monotonic=time.monotonic(),
+            )
+            return response
 
     def get_real_account_snapshot(
         self,
@@ -218,6 +353,17 @@ class ExchangeAccountSnapshotService:
             return None
         return cached.snapshot.model_copy(deep=True)
 
+    def _fresh_cached_wallet_balance(
+        self,
+        cached: _CachedWalletBalance | None,
+    ) -> ExchangeWalletBalanceResponse | None:
+        if cached is None or self._snapshot_ttl_seconds <= 0:
+            return None
+        age_seconds = time.monotonic() - cached.stored_at_monotonic
+        if age_seconds > self._snapshot_ttl_seconds:
+            return None
+        return cached.wallet_balance.model_copy(deep=True)
+
     def _failure_snapshot(
         self,
         cache_key: tuple[str, str, str, str, str],
@@ -236,6 +382,31 @@ class ExchangeAccountSnapshotService:
             )
         return _missing_snapshot(source="exchange", warnings=warnings)
 
+    def _failure_wallet_balance(
+        self,
+        cache_key: tuple[str, str, str, str, str],
+        cached: _CachedWalletBalance | None,
+        *,
+        connection: UserExchangeConnection,
+        account_type: str,
+        warnings: list[str],
+    ) -> ExchangeWalletBalanceResponse:
+        cached = cached or self._wallet_cache.get(cache_key)
+        if cached is not None:
+            wallet_balance = cached.wallet_balance.model_copy(deep=True)
+            return wallet_balance.model_copy(
+                update={
+                    "status": "stale",
+                    "warnings": _dedupe([*wallet_balance.warnings, *warnings]),
+                }
+            )
+        return _missing_wallet_balance(
+            exchange=connection.exchange.code,
+            connection_id=connection.id,
+            account_type=account_type,
+            warnings=warnings,
+        )
+
     def _snapshot_from_bybit_wallet(
         self,
         *,
@@ -245,16 +416,12 @@ class ExchangeAccountSnapshotService:
         api_secret: str,
         fetched_at: datetime,
     ) -> AccountRiskSnapshot:
-        warnings: list[str] = []
+        warnings = _wallet_response_warnings(wallet)
         account_equity = _positive_decimal(wallet.total_equity)
         available_balance = _non_negative_decimal(wallet.total_available_balance)
         wallet_balance = _non_negative_decimal(wallet.total_wallet_balance)
         total_initial_margin = _non_negative_decimal(wallet.total_initial_margin)
         total_maintenance_margin = _non_negative_decimal(wallet.total_maintenance_margin)
-        if account_equity is None:
-            warnings.append("Bybit wallet total_equity is missing or not positive.")
-        if available_balance is None:
-            warnings.append("Bybit wallet total_available_balance is missing.")
 
         positions: list[PositionRiskSummary] = []
         try:
@@ -386,6 +553,54 @@ def _bybit_base_url(connection: UserExchangeConnection) -> str:
     if isinstance(api_base_url, str) and api_base_url:
         return api_base_url.rstrip("/")
     return BYBIT_API_URL
+
+
+def _wallet_response_from_bybit(
+    *,
+    connection: UserExchangeConnection,
+    wallet: BybitWalletBalance,
+    fetched_at: datetime,
+    status: Literal["fresh", "stale", "missing"],
+    warnings: list[str],
+) -> ExchangeWalletBalanceResponse:
+    return ExchangeWalletBalanceResponse(
+        exchange=connection.exchange.code,
+        connection_id=connection.id,
+        account_type=wallet.account_type or _wallet_account_type(connection),
+        total_equity=_non_negative_decimal(wallet.total_equity),
+        total_wallet_balance=_non_negative_decimal(wallet.total_wallet_balance),
+        total_available_balance=_non_negative_decimal(wallet.total_available_balance),
+        coins=[_coin_balance_response(coin) for coin in wallet.coins],
+        fetched_at=fetched_at,
+        status=status,
+        warnings=_dedupe(warnings),
+    )
+
+
+def _coin_balance_response(coin: BybitCoinBalance) -> ExchangeWalletCoinBalance:
+    return ExchangeWalletCoinBalance(
+        coin=coin.coin,
+        equity=_non_negative_decimal(coin.equity),
+        usd_value=_non_negative_decimal(coin.usd_value),
+        wallet_balance=_non_negative_decimal(coin.wallet_balance),
+        available_to_withdraw=_non_negative_decimal(coin.available_to_withdraw),
+        locked=_non_negative_decimal(coin.locked),
+        borrow_amount=_non_negative_decimal(coin.borrow_amount),
+        accrued_interest=_non_negative_decimal(coin.accrued_interest),
+        total_order_im=_non_negative_decimal(coin.total_order_im),
+        total_position_im=_non_negative_decimal(coin.total_position_im),
+        total_position_mm=_non_negative_decimal(coin.total_position_mm),
+        unrealised_pnl=_decimal_or_none(coin.unrealised_pnl),
+    )
+
+
+def _wallet_response_warnings(wallet: BybitWalletBalance) -> list[str]:
+    warnings: list[str] = []
+    if _positive_decimal(wallet.total_equity) is None:
+        warnings.append("Bybit wallet total_equity is missing or not positive.")
+    if _non_negative_decimal(wallet.total_available_balance) is None:
+        warnings.append("Bybit wallet total_available_balance is missing.")
+    return warnings
 
 
 def _account_margin_mode(
@@ -536,6 +751,27 @@ def _missing_snapshot(
         positions=[],
         open_risk_amount=Decimal("0"),
         source=source,
+        warnings=_dedupe(warnings),
+    )
+
+
+def _missing_wallet_balance(
+    *,
+    exchange: str,
+    connection_id: UUID,
+    account_type: str,
+    warnings: list[str],
+) -> ExchangeWalletBalanceResponse:
+    return ExchangeWalletBalanceResponse(
+        exchange=exchange,
+        connection_id=connection_id,
+        account_type=account_type,
+        total_equity=None,
+        total_wallet_balance=None,
+        total_available_balance=None,
+        coins=[],
+        fetched_at=None,
+        status="missing",
         warnings=_dedupe(warnings),
     )
 

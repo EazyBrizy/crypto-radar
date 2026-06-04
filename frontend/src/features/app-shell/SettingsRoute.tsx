@@ -7,9 +7,12 @@ import {
   useCreateExchangeConnectionMutation,
   useDeleteAlertRuleMutation,
   useDeleteExchangeConnectionMutation,
+  useExchangeConnectionAccountSnapshotsQuery,
+  useExchangeConnectionWalletBalancesQuery,
   useExchangeConnectionsQuery,
   useMarketPairsQuery,
   useRadarConfigQuery,
+  useRefreshExchangeConnectionBalanceMutation,
   useRiskStateQuery,
   useStrategyConfigsQuery,
   useSyncExchangeConnectionMutation,
@@ -35,6 +38,9 @@ export function SettingsRoute() {
   const strategyConfigsQuery = useStrategyConfigsQuery();
   const alertRulesQuery = useAlertRulesQuery();
   const exchangeConnectionsQuery = useExchangeConnectionsQuery();
+  const exchangeConnectionIds = (exchangeConnectionsQuery.data ?? []).map((connection) => connection.id);
+  const exchangeWalletBalancesQuery = useExchangeConnectionWalletBalancesQuery(exchangeConnectionIds);
+  const exchangeAccountSnapshotsQuery = useExchangeConnectionAccountSnapshotsQuery(exchangeConnectionIds);
   const userProfileQuery = useUserProfileQuery({ enabled: true });
   const riskStateQuery = useRiskStateQuery();
   const createAlertRuleMutation = useCreateAlertRuleMutation();
@@ -46,6 +52,7 @@ export function SettingsRoute() {
   const deleteExchangeConnectionMutation = useDeleteExchangeConnectionMutation();
   const testExchangeConnectionMutation = useTestExchangeConnectionMutation();
   const syncExchangeConnectionMutation = useSyncExchangeConnectionMutation();
+  const refreshExchangeConnectionBalanceMutation = useRefreshExchangeConnectionBalanceMutation();
   const updateUserSettingsMutation = useUpdateUserSettingsMutation();
   const updateStrategyConfigMutation = useUpdateStrategyConfigMutation();
 
@@ -56,6 +63,15 @@ export function SettingsRoute() {
       strategyConfigs={strategyConfigsQuery.data ?? []}
       alertRules={alertRulesQuery.data ?? []}
       exchangeConnections={exchangeConnectionsQuery.data ?? []}
+      exchangeAccountSnapshots={exchangeAccountSnapshotsQuery.dataByConnectionId}
+      exchangeBalanceLoading={mergePendingByConnectionId(
+        exchangeWalletBalancesQuery.pendingByConnectionId,
+        exchangeAccountSnapshotsQuery.pendingByConnectionId,
+        refreshExchangeConnectionBalanceMutation.isPending
+          ? refreshExchangeConnectionBalanceMutation.variables
+          : null
+      )}
+      exchangeWalletBalances={exchangeWalletBalancesQuery.dataByConnectionId}
       userProfile={userProfileQuery.data ?? null}
       riskState={riskStateQuery.data ?? null}
       busy={
@@ -68,6 +84,7 @@ export function SettingsRoute() {
         deleteExchangeConnectionMutation.isPending ||
         testExchangeConnectionMutation.isPending ||
         syncExchangeConnectionMutation.isPending ||
+        refreshExchangeConnectionBalanceMutation.isPending ||
         updateUserSettingsMutation.isPending ||
         updateStrategyConfigMutation.isPending
       }
@@ -85,6 +102,7 @@ export function SettingsRoute() {
         })
       }
       onDeleteExchangeConnection={(connectionId) => deleteExchangeConnectionMutation.mutateAsync(connectionId)}
+      onRefreshExchangeBalance={(connectionId) => refreshExchangeConnectionBalanceMutation.mutateAsync(connectionId)}
       onTestExchangeConnection={(connectionId) => testExchangeConnectionMutation.mutateAsync(connectionId)}
       onSyncExchangeConnection={(connectionId) => syncExchangeConnectionMutation.mutateAsync(connectionId)}
       onSelectSimulationLevel={(simulationLevel: VirtualSimulationLevel) =>
@@ -97,5 +115,23 @@ export function SettingsRoute() {
         updateStrategyConfigMutation.mutateAsync({ configId, patch })
       }
     />
+  );
+}
+
+function mergePendingByConnectionId(
+  walletPending: Record<string, boolean>,
+  snapshotPending: Record<string, boolean>,
+  refreshingConnectionId: string | null
+): Record<string, boolean> {
+  const connectionIds = new Set([
+    ...Object.keys(walletPending),
+    ...Object.keys(snapshotPending),
+    ...(refreshingConnectionId ? [refreshingConnectionId] : [])
+  ]);
+  return Object.fromEntries(
+    Array.from(connectionIds).map((connectionId) => [
+      connectionId,
+      Boolean(walletPending[connectionId] || snapshotPending[connectionId] || refreshingConnectionId === connectionId)
+    ])
   );
 }

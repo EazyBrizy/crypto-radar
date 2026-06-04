@@ -72,6 +72,8 @@ export const api = {
   updateExchangeConnection: exchangesApi.updateConnection,
   deleteExchangeConnection: exchangesApi.deleteConnection,
   testExchangeConnection: exchangesApi.testConnection,
+  getConnectionWalletBalance: exchangesApi.getConnectionWalletBalance,
+  getConnectionAccountSnapshot: exchangesApi.getConnectionAccountSnapshot,
   syncExchangeConnection: exchangesApi.syncConnection,
   userProfile: settingsApi.userProfile,
   updateUserSettings: settingsApi.updateUserSettings,

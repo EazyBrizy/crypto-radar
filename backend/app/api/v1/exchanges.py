@@ -11,12 +11,15 @@ from app.schemas.exchange_connection import (
     ExchangeInstrumentRuleResponse,
     ExchangeConnectionResponse,
     ExchangeConnectionUpdateRequest,
+    ExchangeWalletBalanceResponse,
 )
+from app.schemas.risk import AccountRiskSnapshot
 from app.schemas.external_exchange import (
     RealTradeImportNotReadyResponse,
     RealTradeImportRequest,
     RealTradeImportResult,
 )
+from app.services.exchange_account_snapshot import exchange_account_snapshot_service
 from app.services.exchange_connection_service import exchange_connection_service
 from app.services.exchange_instrument_service import exchange_instrument_rule_service
 from app.services.real_trade_import_service import RealTradeImportNotReadyError, real_trade_import_service
@@ -27,6 +30,8 @@ router = APIRouter(prefix="/exchanges", tags=["exchanges"])
 def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, LookupError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
@@ -105,6 +110,55 @@ async def get_exchange_connection_fee_rates(
         )
     except (LookupError, ValueError) as exc:
         raise _http_error(exc) from exc
+
+
+@router.get("/connections/{connection_id}/wallet-balance", response_model=ExchangeWalletBalanceResponse)
+async def get_exchange_connection_wallet_balance(
+    connection_id: str,
+    user_id: str = "demo_user",
+    force_refresh: bool = False,
+) -> ExchangeWalletBalanceResponse:
+    try:
+        connection = exchange_connection_service.get_connection_for_user(connection_id, user_id)
+        return exchange_account_snapshot_service.get_wallet_balance(
+            user_id=user_id,
+            exchange=connection.exchange_code,
+            connection_id=connection.id,
+            force_refresh=force_refresh,
+        )
+    except (LookupError, PermissionError, ValueError) as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/connections/{connection_id}/account-snapshot", response_model=AccountRiskSnapshot)
+async def get_exchange_connection_account_snapshot(
+    connection_id: str,
+    user_id: str = "demo_user",
+    force_refresh: bool = False,
+) -> AccountRiskSnapshot:
+    try:
+        connection = exchange_connection_service.get_connection_for_user(connection_id, user_id)
+        return exchange_account_snapshot_service.get_snapshot(
+            user_id=user_id,
+            exchange=connection.exchange_code,
+            connection_id=connection.id,
+            mode="real",
+            force_refresh=force_refresh,
+        )
+    except (LookupError, PermissionError, ValueError) as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/connections/{connection_id}/account-snapshot/refresh", response_model=AccountRiskSnapshot)
+async def refresh_exchange_connection_account_snapshot(
+    connection_id: str,
+    user_id: str = "demo_user",
+) -> AccountRiskSnapshot:
+    return await get_exchange_connection_account_snapshot(
+        connection_id=connection_id,
+        user_id=user_id,
+        force_refresh=True,
+    )
 
 
 @router.get("/instrument-rules", response_model=list[ExchangeInstrumentRuleResponse])

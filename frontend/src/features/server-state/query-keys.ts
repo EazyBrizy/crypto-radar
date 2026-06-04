@@ -137,7 +137,11 @@ export const serverStateKeys = {
   },
   exchangeConnections: {
     all: () => [...serverStateKeys.all, "exchange-connections"] as const,
-    list: () => [...serverStateKeys.exchangeConnections.all(), "list"] as const
+    list: () => [...serverStateKeys.exchangeConnections.all(), "list"] as const,
+    walletBalance: (connectionId: string, userId = "demo_user") =>
+      [...serverStateKeys.exchangeConnections.all(), "wallet-balance", connectionId, userId] as const,
+    accountSnapshot: (connectionId: string, userId = "demo_user") =>
+      [...serverStateKeys.exchangeConnections.all(), "account-snapshot", connectionId, userId] as const
   },
   signals: {
     all: () => [...serverStateKeys.all, "signals"] as const,

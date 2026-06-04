@@ -8,8 +8,11 @@ import {
   riskProfilePreset
 } from "@/features/server-state/risk-management-contract";
 import type {
+  AccountRiskSnapshot,
   AlertRuleDraft,
+  ExchangeConnection,
   ExchangeConnectionDraft,
+  ExchangeWalletBalance,
   StrategyConfigPatch,
   UserProfile,
   UserSettingsPatch,
@@ -71,11 +74,52 @@ describe("SettingsPage risk profile UX", () => {
   });
 });
 
+describe("SettingsPage exchange balance UX", () => {
+  it("shows wallet balance, snapshot freshness, warnings, and refresh action", async () => {
+    const user = userEvent.setup();
+    const onRefreshExchangeBalance = vi.fn<SettingsPagePropsForTest["onRefreshExchangeBalance"]>().mockResolvedValue(null);
+
+    renderSettingsPage({
+      exchangeAccountSnapshots: {
+        [EXCHANGE_CONNECTION_ID]: accountSnapshot()
+      },
+      exchangeConnections: [exchangeConnection()],
+      exchangeWalletBalances: {
+        [EXCHANGE_CONNECTION_ID]: walletBalance()
+      },
+      onRefreshExchangeBalance
+    });
+
+    await user.click(screen.getByRole("button", { name: /Exchanges/u }));
+
+    expect(screen.getByText("$1,234.56")).toBeInTheDocument();
+    expect(screen.getByText("$987.65")).toBeInTheDocument();
+    expect(screen.getByText("$1,200.00")).toBeInTheDocument();
+    expect(screen.getByText("fresh")).toBeInTheDocument();
+    expect(screen.getByText(/Snapshot age just now/u)).toBeInTheDocument();
+    expect(screen.getByText("Bybit positions are unavailable: timeout")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Обновить баланс" }));
+
+    expect(onRefreshExchangeBalance).toHaveBeenCalledWith(EXCHANGE_CONNECTION_ID);
+  });
+});
+
 async function openRiskSettings(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: /Risk management/u }));
 }
 
-function renderSettingsPage() {
+const EXCHANGE_CONNECTION_ID = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+
+type RenderSettingsPageOptions = {
+  exchangeAccountSnapshots?: Record<string, AccountRiskSnapshot | null>;
+  exchangeBalanceLoading?: Record<string, boolean>;
+  exchangeConnections?: ExchangeConnection[];
+  exchangeWalletBalances?: Record<string, ExchangeWalletBalance | null>;
+  onRefreshExchangeBalance?: SettingsPagePropsForTest["onRefreshExchangeBalance"];
+};
+
+function renderSettingsPage(options: RenderSettingsPageOptions = {}) {
   const onUpdateRiskManagement = vi.fn<SettingsPagePropsForTest["onUpdateRiskManagement"]>().mockResolvedValue(null);
 
   render(
@@ -84,7 +128,10 @@ function renderSettingsPage() {
       availablePairs={[]}
       busy={false}
       config={radarConfig()}
-      exchangeConnections={[]}
+      exchangeAccountSnapshots={options.exchangeAccountSnapshots ?? {}}
+      exchangeBalanceLoading={options.exchangeBalanceLoading ?? {}}
+      exchangeConnections={options.exchangeConnections ?? []}
+      exchangeWalletBalances={options.exchangeWalletBalances ?? {}}
       riskState={null}
       strategyConfigs={[]}
       userProfile={userProfile()}
@@ -92,6 +139,7 @@ function renderSettingsPage() {
       onCreateExchangeConnection={vi.fn<SettingsPagePropsForTest["onCreateExchangeConnection"]>().mockResolvedValue(null)}
       onDeleteAlert={vi.fn<SettingsPagePropsForTest["onDeleteAlert"]>().mockResolvedValue(null)}
       onDeleteExchangeConnection={vi.fn<SettingsPagePropsForTest["onDeleteExchangeConnection"]>().mockResolvedValue(null)}
+      onRefreshExchangeBalance={options.onRefreshExchangeBalance ?? vi.fn<SettingsPagePropsForTest["onRefreshExchangeBalance"]>().mockResolvedValue(null)}
       onSelectSimulationLevel={vi.fn<SettingsPagePropsForTest["onSelectSimulationLevel"]>().mockResolvedValue(null)}
       onSyncExchangeConnection={vi.fn<SettingsPagePropsForTest["onSyncExchangeConnection"]>().mockResolvedValue(null)}
       onTestAlert={vi.fn<SettingsPagePropsForTest["onTestAlert"]>().mockResolvedValue(null)}
@@ -111,6 +159,7 @@ type SettingsPagePropsForTest = {
   onCreateExchangeConnection: (draft: ExchangeConnectionDraft) => Promise<unknown>;
   onDeleteAlert: (alertId: string) => Promise<unknown>;
   onDeleteExchangeConnection: (connectionId: string) => Promise<unknown>;
+  onRefreshExchangeBalance: (connectionId: string) => Promise<unknown>;
   onSelectSimulationLevel: (simulationLevel: VirtualSimulationLevel) => Promise<unknown>;
   onSyncExchangeConnection: (connectionId: string) => Promise<unknown>;
   onTestAlert: (alertId: string) => Promise<unknown>;
@@ -127,6 +176,72 @@ function radarConfig(): RadarConfig {
     symbols: [],
     timeframes: ["15m"],
     use_all_symbols: true
+  };
+}
+
+function exchangeConnection(): ExchangeConnection {
+  return {
+    account_type: "linear",
+    created_at: "2026-06-04T00:00:00.000Z",
+    exchange_code: "bybit",
+    exchange_id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
+    exchange_name: "Bybit",
+    id: EXCHANGE_CONNECTION_ID,
+    key_ref: "vault://stub/exchange/demo/bybit/main/abcdef123456",
+    label: "Main Bybit",
+    last_sync_at: null,
+    metadata: {},
+    permissions: { read: true, trade: false },
+    status: "active",
+    user_id: "demo_user"
+  };
+}
+
+function walletBalance(): ExchangeWalletBalance {
+  return {
+    account_type: "UNIFIED",
+    coins: [
+      {
+        accrued_interest: 0,
+        available_to_withdraw: 987.65,
+        borrow_amount: 0,
+        coin: "USDT",
+        equity: 1234.56,
+        locked: 0,
+        total_order_im: 0,
+        total_position_im: 25,
+        total_position_mm: 10,
+        unrealised_pnl: 12.34,
+        usd_value: 1234.56,
+        wallet_balance: 1200
+      }
+    ],
+    connection_id: EXCHANGE_CONNECTION_ID,
+    exchange: "bybit",
+    fetched_at: new Date().toISOString(),
+    status: "fresh",
+    total_available_balance: 987.65,
+    total_equity: 1234.56,
+    total_wallet_balance: 1200,
+    warnings: []
+  };
+}
+
+function accountSnapshot(): AccountRiskSnapshot {
+  return {
+    account_equity: 1234.56,
+    available_balance: 987.65,
+    fetched_at: new Date().toISOString(),
+    maintenance_margin_rate: null,
+    margin_mode: "cross",
+    open_risk_amount: 0,
+    positions: [],
+    source: "exchange",
+    status: "fresh",
+    total_initial_margin: 25,
+    total_maintenance_margin: 10,
+    wallet_balance: 1200,
+    warnings: ["Bybit positions are unavailable: timeout"]
   };
 }
 

@@ -2136,7 +2136,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .connection-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto auto;
+  grid-template-columns: minmax(160px, 0.85fr) minmax(280px, 1.35fr) auto auto auto auto auto auto;
   align-items: center;
   gap: 8px;
   padding: 10px;
@@ -2161,6 +2161,68 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .connection-row code {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.connection-main {
+  min-width: 0;
+}
+
+.connection-balance-panel {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.connection-balance-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.connection-balance-metrics span {
+  min-width: 0;
+}
+
+.connection-balance-metrics small {
+  display: block;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.connection-balance-metrics strong {
+  overflow: hidden;
+  color: #e5e7eb;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-freshness-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.connection-freshness-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-warning-list {
+  display: grid;
+  gap: 3px;
+}
+
+.connection-warning-list span {
+  color: #fbbf24;
+}
+
+.balance-refresh-button {
+  min-width: 150px;
+  white-space: nowrap;
 }
 
 .settings-accordion-section {
@@ -2845,6 +2907,14 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .connection-row,
   .risk-profile-footer {
     grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .connection-balance-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .balance-refresh-button {
     width: 100%;
   }
 

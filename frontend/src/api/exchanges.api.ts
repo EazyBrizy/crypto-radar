@@ -1,6 +1,19 @@
-import type { ExchangeCatalog, ExchangeConnection, ExchangeConnectionDraft, ExchangeFeeRate } from "@/features/server-state/types";
+import type {
+  AccountRiskSnapshot,
+  ExchangeCatalog,
+  ExchangeConnection,
+  ExchangeConnectionDraft,
+  ExchangeFeeRate,
+  ExchangeWalletBalance
+} from "@/features/server-state/types";
 import { openApiClient, request } from "./client";
-import { normalizeExchangeCatalog, normalizeExchangeConnection, normalizeExchangeFeeRate } from "./mappers";
+import {
+  normalizeAccountRiskSnapshot,
+  normalizeExchangeCatalog,
+  normalizeExchangeConnection,
+  normalizeExchangeFeeRate,
+  normalizeExchangeWalletBalance
+} from "./mappers";
 
 export const exchangesApi = {
   async catalog(): Promise<ExchangeCatalog> {
@@ -69,6 +82,38 @@ export const exchangesApi = {
       })
     );
     return response.map(normalizeExchangeFeeRate);
+  },
+  async getConnectionWalletBalance(
+    connectionId: string,
+    userId = "demo_user",
+    forceRefresh = false
+  ): Promise<ExchangeWalletBalance> {
+    return normalizeExchangeWalletBalance(
+      await request(() =>
+        openApiClient.GET("/api/v1/exchanges/connections/{connection_id}/wallet-balance", {
+          params: {
+            path: { connection_id: connectionId },
+            query: { user_id: userId, force_refresh: forceRefresh }
+          }
+        })
+      )
+    );
+  },
+  async getConnectionAccountSnapshot(
+    connectionId: string,
+    userId = "demo_user",
+    forceRefresh = false
+  ): Promise<AccountRiskSnapshot> {
+    return normalizeAccountRiskSnapshot(
+      await request(() =>
+        openApiClient.GET("/api/v1/exchanges/connections/{connection_id}/account-snapshot", {
+          params: {
+            path: { connection_id: connectionId },
+            query: { user_id: userId, force_refresh: forceRefresh }
+          }
+        })
+      )
+    );
   },
   async syncConnection(connectionId: string) {
     return request(() =>

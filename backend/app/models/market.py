@@ -105,7 +105,32 @@ class MarketPair(Base):
         CheckConstraint("min_qty IS NULL OR min_qty >= 0", name="ck_market_pairs_min_qty_non_negative"),
         CheckConstraint("tick_size IS NULL OR tick_size > 0", name="ck_market_pairs_tick_size_positive"),
         CheckConstraint("lot_size IS NULL OR lot_size > 0", name="ck_market_pairs_lot_size_positive"),
+        CheckConstraint(
+            "quote_volume_24h IS NULL OR quote_volume_24h >= 0",
+            name="ck_market_pairs_quote_volume_24h_non_negative",
+        ),
+        CheckConstraint(
+            "base_volume_24h IS NULL OR base_volume_24h >= 0",
+            name="ck_market_pairs_base_volume_24h_non_negative",
+        ),
+        CheckConstraint(
+            "turnover_24h IS NULL OR turnover_24h >= 0",
+            name="ck_market_pairs_turnover_24h_non_negative",
+        ),
+        CheckConstraint("last_price IS NULL OR last_price > 0", name="ck_market_pairs_last_price_positive"),
+        CheckConstraint("mark_price IS NULL OR mark_price > 0", name="ck_market_pairs_mark_price_positive"),
+        CheckConstraint("bid_price IS NULL OR bid_price > 0", name="ck_market_pairs_bid_price_positive"),
+        CheckConstraint("ask_price IS NULL OR ask_price > 0", name="ck_market_pairs_ask_price_positive"),
+        CheckConstraint("spread_bps IS NULL OR spread_bps >= 0", name="ck_market_pairs_spread_bps_non_negative"),
+        CheckConstraint("liquidity_rank IS NULL OR liquidity_rank > 0", name="ck_market_pairs_liquidity_rank_positive"),
+        CheckConstraint(
+            "liquidity_tier IS NULL OR liquidity_tier IN ('high', 'medium', 'low', 'unknown')",
+            name="ck_market_pairs_liquidity_tier",
+        ),
         UniqueConstraint("exchange_id", "symbol", name="uq_market_pairs_exchange_symbol"),
+        Index("idx_market_pairs_exchange_category_rank", "exchange_id", "category", "liquidity_rank"),
+        Index("idx_market_pairs_exchange_quote_rank", "exchange_id", "quote_asset_id", "liquidity_rank"),
+        Index("idx_market_pairs_exchange_turnover", "exchange_id", "turnover_24h"),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -129,6 +154,22 @@ class MarketPair(Base):
     min_qty: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
     tick_size: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
     lot_size: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    market_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quote_volume_24h: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    base_volume_24h: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    turnover_24h: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    last_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    mark_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    bid_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    ask_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    spread_bps: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    funding_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 10), nullable=True)
+    liquidity_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    liquidity_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exchange_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    universe_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
         JSONB,

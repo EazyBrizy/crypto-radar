@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.exchanges.bybit import BybitApiError, fetch_bybit_instrument_rules
+from app.exchanges.bybit import BybitApiError, BybitInstrumentInfo, BybitInstrumentRule, fetch_bybit_instrument_rules
 from app.models.market import MarketExchange, MarketPair
 from app.models.risk import ExchangeInstrumentRule
 from app.schemas.exchange_connection import ExchangeInstrumentRuleResponse
@@ -51,44 +52,14 @@ class ExchangeInstrumentRuleService:
             responses: list[ExchangeInstrumentRuleResponse] = []
             for fetched in fetched_rules:
                 pair = _get_pair(session, exchange.id, fetched.symbol)
-                record = session.scalars(
-                    select(ExchangeInstrumentRule).where(
-                        ExchangeInstrumentRule.exchange_id == exchange.id,
-                        ExchangeInstrumentRule.category == fetched.category,
-                        ExchangeInstrumentRule.symbol == fetched.symbol,
-                    )
-                ).one_or_none()
-                values: dict[str, Any] = {
-                    "exchange_id": exchange.id,
-                    "pair_id": pair.id if pair is not None else None,
-                    "symbol": fetched.symbol,
-                    "category": fetched.category,
-                    "min_order_size": _decimal_or_none(fetched.min_order_size),
-                    "max_order_size": _decimal_or_none(fetched.max_order_size),
-                    "min_notional": _decimal_or_none(fetched.min_notional),
-                    "qty_step": _decimal_or_none(fetched.qty_step),
-                    "tick_size": _decimal_or_none(fetched.tick_size),
-                    "max_leverage": fetched.max_leverage,
-                    "funding_interval_minutes": fetched.funding_interval_minutes,
-                    "raw_payload": fetched.raw_payload,
-                    "source": "bybit_api",
-                    "fetched_at": now,
-                    "updated_at": now,
-                }
-                if record is None:
-                    record = ExchangeInstrumentRule(**values)
-                    session.add(record)
-                else:
-                    for key, value in values.items():
-                        setattr(record, key, value)
-                if pair is not None:
-                    if fetched.min_order_size is not None:
-                        pair.min_qty = _decimal_or_none(fetched.min_order_size)
-                    if fetched.qty_step is not None:
-                        pair.lot_size = _decimal_or_none(fetched.qty_step)
-                    if fetched.tick_size is not None:
-                        pair.tick_size = _decimal_or_none(fetched.tick_size)
-                session.flush()
+                record = upsert_bybit_instrument_rule(
+                    session,
+                    exchange=exchange,
+                    fetched=fetched,
+                    pair=pair,
+                    fetched_at=now,
+                    source="bybit_api",
+                )
                 responses.append(_rule_to_response(record, exchange.code))
             session.commit()
             return responses
@@ -117,6 +88,76 @@ class ExchangeInstrumentRuleService:
                 _rule_to_response(record, exchange.code)
                 for record in session.scalars(statement).all()
             ]
+
+
+def upsert_bybit_instrument_info_rule(
+    session: Session,
+    *,
+    exchange: MarketExchange,
+    instrument: BybitInstrumentInfo,
+    pair: MarketPair | None,
+    fetched_at: datetime | None = None,
+    source: str = "bybit_market_universe",
+) -> ExchangeInstrumentRule:
+    return upsert_bybit_instrument_rule(
+        session,
+        exchange=exchange,
+        fetched=_instrument_info_to_rule(instrument),
+        pair=pair,
+        fetched_at=fetched_at,
+        source=source,
+    )
+
+
+def upsert_bybit_instrument_rule(
+    session: Session,
+    *,
+    exchange: MarketExchange,
+    fetched: BybitInstrumentRule,
+    pair: MarketPair | None,
+    fetched_at: datetime | None = None,
+    source: str = "bybit_api",
+) -> ExchangeInstrumentRule:
+    now = fetched_at or datetime.now(timezone.utc)
+    record = session.scalars(
+        select(ExchangeInstrumentRule).where(
+            ExchangeInstrumentRule.exchange_id == exchange.id,
+            ExchangeInstrumentRule.category == fetched.category,
+            ExchangeInstrumentRule.symbol == fetched.symbol,
+        )
+    ).one_or_none()
+    values: dict[str, Any] = {
+        "exchange_id": exchange.id,
+        "pair_id": pair.id if pair is not None else None,
+        "symbol": fetched.symbol,
+        "category": fetched.category,
+        "min_order_size": _decimal_or_none(fetched.min_order_size),
+        "max_order_size": _decimal_or_none(fetched.max_order_size),
+        "min_notional": _decimal_or_none(fetched.min_notional),
+        "qty_step": _decimal_or_none(fetched.qty_step),
+        "tick_size": _decimal_or_none(fetched.tick_size),
+        "max_leverage": fetched.max_leverage,
+        "funding_interval_minutes": fetched.funding_interval_minutes,
+        "raw_payload": fetched.raw_payload,
+        "source": source,
+        "fetched_at": now,
+        "updated_at": now,
+    }
+    if record is None:
+        record = ExchangeInstrumentRule(id=uuid4(), **values)
+        session.add(record)
+    else:
+        for key, value in values.items():
+            setattr(record, key, value)
+    if pair is not None:
+        if fetched.min_order_size is not None:
+            pair.min_qty = _decimal_or_none(fetched.min_order_size)
+        if fetched.qty_step is not None:
+            pair.lot_size = _decimal_or_none(fetched.qty_step)
+        if fetched.tick_size is not None:
+            pair.tick_size = _decimal_or_none(fetched.tick_size)
+    session.flush()
+    return record
 
 
 def _get_rule(
@@ -158,14 +199,70 @@ def _get_pair(session: Session, exchange_id, symbol: str) -> MarketPair | None:
     ).one_or_none()
 
 
-def _decimal_or_none(value: float | int | str | None) -> Decimal | None:
+def _decimal_or_none(value: Any | None) -> Decimal | None:
     if value is None:
         return None
-    return Decimal(str(value))
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
 
 
-def _float_or_none(value: Decimal | None) -> float | None:
-    return float(value) if value is not None else None
+def _float_or_none(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: object) -> int | None:
+    parsed = _float_or_none(value)
+    return int(parsed) if parsed is not None else None
+
+
+def _first_decimal_or_none(*values: object) -> Decimal | None:
+    for value in values:
+        parsed = _decimal_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _instrument_info_to_rule(instrument: BybitInstrumentInfo) -> BybitInstrumentRule:
+    lot_filter = instrument.lot_size_filter if isinstance(instrument.lot_size_filter, dict) else {}
+    price_filter = instrument.price_filter if isinstance(instrument.price_filter, dict) else {}
+    leverage_filter = instrument.leverage_filter if isinstance(instrument.leverage_filter, dict) else {}
+    min_notional = _first_decimal_or_none(
+        lot_filter.get("minNotionalValue")
+        or lot_filter.get("minOrderAmt"),
+        lot_filter.get("minOrderValue"),
+    )
+    return BybitInstrumentRule(
+        category=instrument.category,
+        symbol=instrument.symbol,
+        min_order_size=_first_decimal_or_none(
+            lot_filter.get("minOrderQty")
+            or lot_filter.get("minTradingQty"),
+            instrument.raw_payload.get("minTradeQty"),
+        ),
+        max_order_size=_first_decimal_or_none(
+            lot_filter.get("maxOrderQty")
+            or lot_filter.get("maxTradingQty"),
+            instrument.raw_payload.get("maxTradeQty"),
+        ),
+        min_notional=min_notional,
+        qty_step=_first_decimal_or_none(lot_filter.get("qtyStep"), instrument.raw_payload.get("qtyStep")),
+        tick_size=_first_decimal_or_none(price_filter.get("tickSize"), instrument.raw_payload.get("tickSize")),
+        max_leverage=_int_or_none(leverage_filter.get("maxLeverage")),
+        funding_interval_minutes=_int_or_none(instrument.raw_payload.get("fundingInterval")),
+        raw_payload=instrument.raw_payload,
+    )
 
 
 def _rule_to_response(

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +39,8 @@ class Settings(BaseSettings):
     derivative_snapshot_sync_interval_seconds: int = 60
     derivative_snapshot_ttl_seconds: int = 120
     bybit_derivative_snapshot_categories: str = "linear"
+    market_universe_high_turnover_24h: Decimal = Decimal("100000000")
+    market_universe_medium_turnover_24h: Decimal = Decimal("10000000")
     orderbook_snapshot_sync_enabled: bool = True
     orderbook_snapshot_sync_interval_seconds: int = 10
     orderbook_snapshot_ttl_seconds: int = 15

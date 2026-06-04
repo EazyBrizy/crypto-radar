@@ -256,7 +256,7 @@ export interface SignalExitPlanSnapshot {
 
 export interface SignalAutoEntrySnapshot {
   enabled: boolean;
-  status: "pending" | "triggered" | "failed" | "cancelled";
+  status: "pending" | "triggered" | "failed" | "cancelled" | "requires_reconfirmation";
   mode: TradeMode;
   user_id: string;
   armed_at: string | null;

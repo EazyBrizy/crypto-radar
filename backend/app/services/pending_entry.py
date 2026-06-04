@@ -23,6 +23,7 @@ from app.schemas.risk import ResolvedExecutionProfile
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest
 from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
+from app.services.trade_plan_fingerprint import fingerprint_signal_trade_plan
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_management import (
     execution_profile_resolver,
@@ -34,6 +35,7 @@ from app.services.strategy_config_service import strategy_config_service
 SignalLoader = Callable[[str], RadarSignal | None]
 RiskSettingsProvider = Callable[[str], RiskManagementSettings]
 UserProfileProvider = Callable[[str], Any]
+AutoEntryUpdater = Callable[..., Any]
 
 
 class PendingEntryService:
@@ -79,6 +81,45 @@ class PendingEntryService:
     def lock_for_trigger(self, intent_id: str | UUID, *, session: Session) -> PendingEntryIntent | None:
         return self._repository.lock_for_trigger(intent_id, session=session)
 
+    def reconcile_signal_trade_plan(
+        self,
+        signal: RadarSignal,
+        *,
+        auto_entry_updater: AutoEntryUpdater | None = None,
+    ) -> list[PendingEntryIntentRead]:
+        list_active = getattr(self._repository, "list_active_for_signal", None)
+        if list_active is None:
+            return []
+        try:
+            current_hash = accepted_trade_plan_hash(signal)
+            hash_error: str | None = None
+        except ValueError as exc:
+            current_hash = None
+            hash_error = str(exc)
+
+        changed: list[PendingEntryIntentRead] = []
+        for intent in list_active(signal.id):
+            if intent.status == "requires_reconfirmation":
+                continue
+            if current_hash is not None and intent.accepted_trade_plan_hash == current_hash:
+                continue
+            reason = _reconfirmation_reason(hash_error)
+            updated = self.transition_status(
+                intent.id,
+                status="requires_reconfirmation",
+                failure_reason=reason,
+            )
+            if updated is not None:
+                changed.append(updated)
+
+        if changed and auto_entry_updater is not None:
+            auto_entry_updater(
+                str(signal.id),
+                status="requires_reconfirmation",
+                message=changed[0].failure_reason,
+            )
+        return changed
+
     def resolve_execution_profile(
         self,
         signal: RadarSignal,
@@ -117,7 +158,7 @@ class PendingEntryService:
         signal_uuid = _parse_uuid_or_raise(signal.id, "signal_id")
         request_snapshot = _request_snapshot(request, mode=mode)
         accepted_plan = _accepted_trade_plan(signal)
-        trade_plan_hash = _snapshot_hash(accepted_plan.snapshot)
+        trade_plan_hash = accepted_trade_plan_hash(signal)
         idempotency_key = _idempotency_key(
             user_id=user_uuid,
             signal_id=signal_uuid,
@@ -199,7 +240,7 @@ PendingEntryIntentService = PendingEntryService
 
 
 def accepted_trade_plan_hash(signal: RadarSignal) -> str:
-    return _snapshot_hash(_accepted_trade_plan(signal).snapshot)
+    return fingerprint_signal_trade_plan(signal).hash
 
 
 class _AcceptedTradePlan:
@@ -347,6 +388,12 @@ def _signal_fingerprint(signal: RadarSignal, trade_plan_hash: str) -> str:
         "expires_at": signal.expires_at.isoformat() if signal.expires_at is not None else None,
     }
     return _snapshot_hash(payload)
+
+
+def _reconfirmation_reason(hash_error: str | None) -> str:
+    if hash_error:
+        return f"Current trade plan requires reconfirmation: {hash_error}"
+    return "Accepted trade plan changed; please reconfirm current entry, stop, and targets."
 
 
 def _idempotency_key(

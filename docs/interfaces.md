@@ -424,6 +424,23 @@ PendingEntryIntent = {
 }
 ```
 
+`accepted_trade_plan_hash` is produced from a deterministic
+`TradePlanFingerprint` payload, not by hashing the raw JSON snapshot. The
+fingerprint includes only the accepted execution plan identity:
+
+- normalized `exchange`, `symbol`, and `side`;
+- normalized entry `price`, `min_price`, and `max_price`;
+- normalized `stop_loss`;
+- ordered target plan entries with normalized `label`, `price`, `action`, and
+  `close_percent`.
+
+Volatile or non-plan fields are excluded: `updated_at`, `created_at`,
+`detected_at`, `source_timestamp`, signal `score`, `confidence`, status,
+status reason, RR metrics, decision metadata, and strategy/source metadata. A
+score-only update keeps the same fingerprint and does not require
+reconfirmation. A change to entry, stop, target, side, symbol, or exchange
+changes the fingerprint and defaults to `requires_reconfirmation`.
+
 Pending entry permission is:
 
 ```text
@@ -473,7 +490,8 @@ Tick-driven trigger policy:
 and backward-compatible UI rendering. It is not the source of truth for new
 pending-entry workflows. New services must create and transition
 `PendingEntryIntent` records and may mirror a compact status into
-`features_snapshot.auto_entry` only for compatibility.
+`features_snapshot.auto_entry` only for compatibility. The mirror may expose
+`requires_reconfirmation` so the user can see that the accepted plan is stale.
 
 Radar `execution_ready` first applies `is_execution_candidate_status`, then
 uses a read-only RiskGate preview. Manual virtual/real confirmation must run

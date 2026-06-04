@@ -110,6 +110,11 @@ Tick-driven pending entry uses the following risk policy:
   trigger time.
 - Trade-plan hash changes are structural stale-snapshot failures and default to
   `requires_reconfirmation`.
+- The hash is a normalized `TradePlanFingerprint` over exchange, symbol, side,
+  entry, stop, and ordered target plan fields. Score/confidence/status,
+  timestamps, RR metrics, and strategy metadata are not part of the hash, so a
+  score-only refresh stays pending while an entry/stop/target change requires
+  user reconfirmation.
 - Terminal or invalidated signals default to `cancelled`.
 - Temporary market/account blockers, such as insufficient virtual balance,
   spread too wide, stale or missing orderbook, or missing market depth, default

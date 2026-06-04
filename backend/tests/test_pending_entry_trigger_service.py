@@ -116,6 +116,49 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(current.status if current else None, "requires_reconfirmation")
         self.assertEqual(self.virtual.calls, [])
 
+    def test_stop_hash_changed_requires_reconfirmation(self) -> None:
+        created = self.repository.create_intent(_intent_create(side="long"))
+        self.signals.signal = _signal(stop_loss=94.0)
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results[0].status, "requires_reconfirmation")
+        self.assertEqual(current.status if current else None, "requires_reconfirmation")
+        self.assertEqual(self.virtual.calls, [])
+
+    def test_target_hash_changed_requires_reconfirmation(self) -> None:
+        created = self.repository.create_intent(_intent_create(side="long"))
+        self.signals.signal = _signal(take_profit_1=111.0)
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results[0].status, "requires_reconfirmation")
+        self.assertEqual(current.status if current else None, "requires_reconfirmation")
+        self.assertEqual(self.virtual.calls, [])
+
+    def test_score_only_update_keeps_pending_when_entry_not_touched(self) -> None:
+        created = self.repository.create_intent(_intent_create(side="long"))
+        self.signals.signal = _signal(score=95)
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 102.0})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results[0].status, "pending")
+        self.assertEqual(current.status if current else None, "pending")
+        self.assertEqual(self.virtual.calls, [])
+
+    def test_requires_reconfirmation_intent_cannot_fill(self) -> None:
+        created = self.repository.create_intent(_intent_create(side="long", status="requires_reconfirmation"))
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results, [])
+        self.assertEqual(current.status if current else None, "requires_reconfirmation")
+        self.assertEqual(self.virtual.calls, [])
+
     def test_riskgate_failure_creates_no_trade_and_keeps_pending_for_temporary_reason(self) -> None:
         created = self.repository.create_intent(_intent_create(side="long"))
         self.virtual.failure = ValueError("Spread too wide for entry right now.")
@@ -187,6 +230,10 @@ def _signal(
     direction: str = "long",
     entry_min: float = 100.0,
     entry_max: float = 101.0,
+    stop_loss: float | None = None,
+    take_profit_1: float | None = None,
+    take_profit_2: float | None = None,
+    score: int = 82,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
@@ -198,13 +245,13 @@ def _signal(
         confidence=0.82,
         risk_reward=2.0,
         status=status,
-        score=82,
+        score=score,
         timeframe="15m",
         entry_min=entry_min,
         entry_max=entry_max,
-        stop_loss=95.0 if direction == "long" else 105.0,
-        take_profit_1=110.0 if direction == "long" else 90.0,
-        take_profit_2=115.0 if direction == "long" else 85.0,
+        stop_loss=stop_loss if stop_loss is not None else (95.0 if direction == "long" else 105.0),
+        take_profit_1=take_profit_1 if take_profit_1 is not None else (110.0 if direction == "long" else 90.0),
+        take_profit_2=take_profit_2 if take_profit_2 is not None else (115.0 if direction == "long" else 85.0),
         created_at=now,
         updated_at=now,
     )

@@ -181,6 +181,20 @@ class PendingEntryIntentRepositoryTest(unittest.TestCase):
 
         self.assertEqual([intent.id for intent in pending], [btc_pending.id])
 
+    def test_list_active_for_signal_excludes_terminal_intents(self) -> None:
+        self.repository.create_intent(_intent_create(status="filled", idempotency_key="intent:filled"))
+        pending = self.repository.create_intent(_intent_create(idempotency_key="intent:pending"))
+        self.repository.create_intent(
+            _intent_create(
+                signal_id=uuid4(),
+                idempotency_key="intent:other-signal",
+            )
+        )
+
+        active = self.repository.list_active_for_signal(SIGNAL_ID)
+
+        self.assertEqual([intent.id for intent in active], [pending.id])
+
     def test_transition_status_updates_state_and_reason(self) -> None:
         created = self.repository.create_intent(_intent_create())
         changed_at = datetime(2026, 6, 4, 12, 0, tzinfo=timezone.utc)

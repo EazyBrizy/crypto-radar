@@ -263,13 +263,22 @@ function AutoEntryBlock({ signal }: { signal: RadarSignal }) {
       <div className="section-title">
         <FileCheck2 size={18} />
         <h3>Auto Entry</h3>
-        <Badge tone={autoEntry.status === "pending" ? "blue" : autoEntry.status === "failed" ? "red" : "green"}>
+        <Badge tone={autoEntryTone(autoEntry.status)}>
           {autoEntry.status.replaceAll("_", " ")}
         </Badge>
       </div>
       <p>{autoEntry.message ?? `Auto ${autoEntry.mode} entry is ${autoEntry.status}.`}</p>
     </div>
   );
+}
+
+function autoEntryTone(
+  status: "pending" | "triggered" | "failed" | "cancelled" | "requires_reconfirmation"
+): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (status === "pending") return "blue";
+  if (status === "failed" || status === "cancelled") return "red";
+  if (status === "requires_reconfirmation") return "yellow";
+  return "green";
 }
 
 function PullbackGuidanceBlock({ signal }: { signal: RadarSignal }) {

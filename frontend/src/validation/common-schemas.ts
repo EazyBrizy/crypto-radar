@@ -223,7 +223,7 @@ export const RadarSignalSchema = z.object({
   trade_plan: TradePlanSchema.nullable().optional(),
   auto_entry: z.object({
     enabled: z.boolean(),
-    status: z.enum(["pending", "triggered", "failed", "cancelled"]),
+    status: z.enum(["pending", "triggered", "failed", "cancelled", "requires_reconfirmation"]),
     mode: z.enum(["virtual", "real"]),
     user_id: z.string(),
     armed_at: z.string().nullable().optional(),

@@ -9724,7 +9724,8 @@
               "pending",
               "triggered",
               "failed",
-              "cancelled"
+              "cancelled",
+              "requires_reconfirmation"
             ],
             "title": "Status",
             "default": "pending"

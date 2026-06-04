@@ -103,11 +103,83 @@ class PendingEntryServiceTest(unittest.TestCase):
         self.assertIn("terminal", str(exc.exception))
         self.assertEqual(repository.create_calls, 0)
 
+    def test_reconcile_same_plan_hash_keeps_pending_intent(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = PendingEntryService(
+            repository=repository,
+            signal_loader=lambda _signal_id: _signal(),
+        )
+        intent = service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+
+        changed = service.reconcile_signal_trade_plan(_signal(score=95, confidence=0.95))
+
+        self.assertEqual(changed, [])
+        self.assertEqual(repository.active.status if repository.active else None, intent.status)
+        self.assertEqual(repository.transitions, [])
+
+    def test_reconcile_changed_entry_requires_reconfirmation(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = PendingEntryService(repository=repository, signal_loader=lambda _signal_id: _signal())
+        service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        mirror_calls: list[dict[str, object]] = []
+
+        changed = service.reconcile_signal_trade_plan(
+            _signal(entry_min=99.0, entry_max=100.0),
+            auto_entry_updater=lambda signal_id, **kwargs: mirror_calls.append({"signal_id": signal_id, **kwargs}),
+        )
+
+        self.assertEqual(changed[0].status, "requires_reconfirmation")
+        self.assertEqual(repository.active.status if repository.active else None, "requires_reconfirmation")
+        self.assertEqual(mirror_calls[0]["status"], "requires_reconfirmation")
+
+    def test_reconcile_changed_stop_requires_reconfirmation(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = PendingEntryService(repository=repository, signal_loader=lambda _signal_id: _signal())
+        service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+
+        changed = service.reconcile_signal_trade_plan(_signal(stop_loss=94.0))
+
+        self.assertEqual(changed[0].status, "requires_reconfirmation")
+
+    def test_reconcile_changed_target_requires_reconfirmation(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = PendingEntryService(repository=repository, signal_loader=lambda _signal_id: _signal())
+        service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+
+        changed = service.reconcile_signal_trade_plan(_signal(take_profit_1=111.0))
+
+        self.assertEqual(changed[0].status, "requires_reconfirmation")
+
 
 class _FakePendingEntryRepository:
     def __init__(self) -> None:
         self.create_calls = 0
         self.active: PendingEntryIntentRead | None = None
+        self.transitions: list[tuple[UUID, str, str | None]] = []
 
     def get_active_for_user_signal_mode(
         self,
@@ -133,12 +205,43 @@ class _FakePendingEntryRepository:
         )
         return self.active
 
+    def list_active_for_signal(self, signal_id: str) -> list[PendingEntryIntentRead]:
+        if self.active is None or str(self.active.signal_id) != signal_id:
+            return []
+        return [self.active]
+
+    def transition_status(
+        self,
+        intent_id: UUID,
+        *,
+        status: str,
+        failure_reason: str | None = None,
+        filled_trade_id: UUID | None = None,
+        now: datetime | None = None,
+    ) -> PendingEntryIntentRead | None:
+        if self.active is None or self.active.id != intent_id:
+            return None
+        self.transitions.append((intent_id, status, failure_reason))
+        self.active = self.active.model_copy(
+            update={
+                "status": status,
+                "failure_reason": failure_reason,
+                "filled_trade_id": filled_trade_id,
+                "updated_at": now or datetime.now(timezone.utc),
+            }
+        )
+        return self.active
+
 
 def _signal(
     *,
     status: str = "active",
     entry_min: float | None = 100.0,
     entry_max: float | None = 101.0,
+    stop_loss: float = 95.0,
+    take_profit_1: float = 110.0,
+    score: int = 82,
+    confidence: float = 0.82,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
@@ -147,14 +250,14 @@ def _signal(
         exchange="bybit",
         strategy="trend_pullback_continuation",
         direction="long",
-        confidence=0.82,
+        confidence=confidence,
         status=status,
-        score=82,
+        score=score,
         timeframe="15m",
         entry_min=entry_min,
         entry_max=entry_max,
-        stop_loss=95.0,
-        take_profit_1=110.0,
+        stop_loss=stop_loss,
+        take_profit_1=take_profit_1,
         created_at=now,
         updated_at=now,
     )

@@ -976,11 +976,9 @@ def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str
     if not existing:
         return incoming
     merged = dict(incoming)
-    for key in ("auto_entry", "decision", "decision_snapshot", "lifecycle_events"):
+    for key in ("decision", "decision_snapshot", "lifecycle_events"):
         value = existing.get(key)
         if value is not None and key not in merged:
-            merged[key] = value
-        elif value is not None and key == "auto_entry":
             merged[key] = value
     if merged.get("edge") is None and existing.get("edge") is not None:
         merged["edge"] = existing["edge"]

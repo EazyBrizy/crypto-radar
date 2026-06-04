@@ -3935,7 +3935,7 @@ export interface components {
              * @default pending
              * @enum {string}
              */
-            status: "pending" | "triggered" | "failed" | "cancelled";
+            status: "pending" | "triggered" | "failed" | "cancelled" | "requires_reconfirmation";
             /**
              * Mode
              * @default virtual

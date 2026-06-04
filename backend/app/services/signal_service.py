@@ -177,6 +177,7 @@ class SignalService:
     def add_signal(self, signal: RadarSignal) -> RadarSignal:
         result = self._repository.add_signal(signal)
         self._after_write(result)
+        self._reconcile_pending_entry_trade_plan(result)
         return result.signal
 
     def add_strategy_signal(
@@ -204,6 +205,7 @@ class SignalService:
             explanation=explanation,
         )
         self._after_write(result)
+        self._reconcile_pending_entry_trade_plan(result)
         return result.signal, result.created
 
     def confirm_signal(
@@ -222,6 +224,7 @@ class SignalService:
         if result is None:
             return None
         self._after_write(result)
+        self._reconcile_pending_entry_trade_plan(result)
         return result.signal
 
     def reject_signal(
@@ -259,6 +262,7 @@ class SignalService:
         if result is None:
             return None
         self._after_write(result)
+        self._reconcile_pending_entry_trade_plan(result)
         return result.signal
 
     def arm_auto_entry(
@@ -353,6 +357,17 @@ class SignalService:
             self._hot_store.write_signal(result)
         except Exception as exc:
             logger.warning("Redis signal hot write failed: %s", exc)
+
+    def _reconcile_pending_entry_trade_plan(self, result: SignalWriteResult) -> None:
+        try:
+            from app.services.pending_entry import pending_entry_intent_service
+
+            pending_entry_intent_service.reconcile_signal_trade_plan(
+                result.signal,
+                auto_entry_updater=self.update_auto_entry,
+            )
+        except Exception as exc:
+            logger.warning("Pending entry trade-plan reconciliation failed: %s", exc)
 
 
 signal_service = SignalService()

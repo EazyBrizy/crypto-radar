@@ -243,6 +243,7 @@ class RealExecutionService:
                 spread_percent=market_data.spread_percent if market_data is not None else None,
                 spread_bps=market_data.spread_bps if market_data is not None else None,
                 orderbook_depth_usd=market_data.orderbook_depth_usd if market_data is not None else None,
+                orderbook_snapshot=market_data.orderbook_snapshot if market_data is not None else None,
                 market_data_status=market_data.market_data_status if market_data is not None else "unknown",
                 market_data_source=market_data.market_data_source if market_data is not None else None,
                 market_data_warnings=list(market_data.warnings) if market_data is not None else [],

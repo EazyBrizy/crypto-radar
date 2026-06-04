@@ -17,6 +17,7 @@ from app.exchanges.bybit import (
 from app.schemas.market import OrderBookSnapshot
 from app.services.exchange_connection_service import exchange_connection_service
 from app.services.market_persistence import orderbook_hot_key
+from app.services.orderbook_snapshot import build_orderbook_snapshot
 
 logger = logging.getLogger(__name__)
 PLACEHOLDER_ORDERBOOK_SOURCE = "orderbook_l2_not_available"
@@ -35,7 +36,6 @@ class BybitPositionProvider(Protocol):
 
 BybitTickerFetcher = Callable[..., list[BybitTicker]]
 BybitOrderBookFetcher = Callable[..., BybitOrderBookSnapshot]
-OrderBookLike = BybitOrderBookSnapshot | OrderBookSnapshot
 
 
 class RedisHotClient(Protocol):
@@ -58,6 +58,7 @@ class RiskMarketDataSnapshot:
     spread_percent: float | None = None
     spread_bps: float | None = None
     orderbook_depth_usd: float | None = None
+    orderbook_snapshot: OrderBookSnapshot | None = None
     liquidation_price: float | None = None
     market_data_status: str = "unknown"
     market_data_source: str | None = None
@@ -66,7 +67,7 @@ class RiskMarketDataSnapshot:
 
 @dataclass(frozen=True)
 class OrderBookReadResult:
-    snapshot: OrderBookLike | None
+    snapshot: OrderBookSnapshot | None
     status: str
     source: str | None
     warnings: tuple[str, ...] = ()
@@ -183,6 +184,7 @@ class RiskMarketDataService:
             spread_percent=spread_percent,
             spread_bps=spread_bps,
             orderbook_depth_usd=orderbook_depth_usd,
+            orderbook_snapshot=orderbook,
             liquidation_price=liquidation_price,
             market_data_status=orderbook_result.status,
             market_data_source=orderbook_result.source or "bybit_v5_tickers",
@@ -230,10 +232,15 @@ class RiskMarketDataService:
                 source=None,
                 warnings=("Bybit orderbook is unavailable.",),
             )
-        return OrderBookReadResult(
-            snapshot=orderbook,
-            status="fresh" if orderbook.bids and orderbook.asks else "missing",
+        snapshot = build_orderbook_snapshot(
+            orderbook,
             source="bybit_v5_orderbook_direct",
+        )
+        return OrderBookReadResult(
+            snapshot=snapshot if snapshot.bids and snapshot.asks else None,
+            status="fresh" if snapshot.bids and snapshot.asks else "missing",
+            source=snapshot.source,
+            warnings=() if snapshot.bids and snapshot.asks else ("Bybit L2 orderbook snapshot is empty.",),
         )
 
     def _read_hot_orderbook(self, *, exchange: str, symbol: str) -> OrderBookReadResult:
@@ -291,15 +298,16 @@ class RiskMarketDataService:
                 source=snapshot.source,
                 warnings=("Bybit L2 orderbook snapshot is empty.",),
             )
+        age_seconds = _orderbook_age_seconds(snapshot)
         if _is_orderbook_stale(snapshot, self._orderbook_max_age_seconds):
             return OrderBookReadResult(
-                snapshot=snapshot,
+                snapshot=_snapshot_with_freshness(snapshot, status="stale", age_seconds=age_seconds),
                 status="stale",
                 source=snapshot.source,
                 warnings=("Bybit L2 orderbook snapshot is stale.",),
             )
         return OrderBookReadResult(
-            snapshot=snapshot,
+            snapshot=_snapshot_with_freshness(snapshot, status="fresh", age_seconds=age_seconds),
             status="fresh",
             source=snapshot.source,
         )
@@ -368,43 +376,44 @@ def _spread_percent(best_bid: float | None, best_ask: float | None) -> float | N
     return (best_ask - best_bid) / mid * 100
 
 
-def _best_bid(orderbook: OrderBookLike | None) -> float | None:
+def _best_bid(orderbook: OrderBookSnapshot | None) -> float | None:
     if orderbook is None:
         return None
+    if orderbook.best_bid is not None:
+        return orderbook.best_bid
     if not orderbook.bids:
         return None
     level = orderbook.bids[0]
-    return float(level.price) if hasattr(level, "price") else level[0]
+    return float(level.price)
 
 
-def _best_ask(orderbook: OrderBookLike | None) -> float | None:
+def _best_ask(orderbook: OrderBookSnapshot | None) -> float | None:
     if orderbook is None:
         return None
+    if orderbook.best_ask is not None:
+        return orderbook.best_ask
     if not orderbook.asks:
         return None
     level = orderbook.asks[0]
-    return float(level.price) if hasattr(level, "price") else level[0]
+    return float(level.price)
 
 
-def _spread_bps_from_orderbook(orderbook: OrderBookLike | None) -> float | None:
+def _spread_bps_from_orderbook(orderbook: OrderBookSnapshot | None) -> float | None:
     if orderbook is None:
         return None
-    if isinstance(orderbook, OrderBookSnapshot) and orderbook.spread_bps is not None:
+    if orderbook.spread_bps is not None:
         return orderbook.spread_bps
     return _spread_bps(_best_bid(orderbook), _best_ask(orderbook))
 
 
-def _side_depth_usd(orderbook: OrderBookLike | None, side: str) -> float | None:
+def _side_depth_usd(orderbook: OrderBookSnapshot | None, side: str) -> float | None:
     if orderbook is None:
         return None
-    if isinstance(orderbook, OrderBookSnapshot):
-        return (
-            orderbook.ask_depth_usd_0_5_pct
-            if side == "long"
-            else orderbook.bid_depth_usd_0_5_pct
-        )
-    levels = orderbook.asks if side == "long" else orderbook.bids
-    return sum(price * quantity for price, quantity in levels if price > 0 and quantity > 0)
+    return (
+        orderbook.ask_depth_usd_0_5_pct
+        if side == "long"
+        else orderbook.bid_depth_usd_0_5_pct
+    )
 
 
 def _spread_bps(best_bid: float | None, best_ask: float | None) -> float | None:
@@ -415,8 +424,28 @@ def _spread_bps(best_bid: float | None, best_ask: float | None) -> float | None:
 def _is_orderbook_stale(snapshot: OrderBookSnapshot, max_age_seconds: int) -> bool:
     if max_age_seconds <= 0:
         return False
-    age_seconds = (int(time.time() * 1000) - snapshot.timestamp) / 1000
-    return age_seconds > max_age_seconds
+    age_seconds = _orderbook_age_seconds(snapshot)
+    return age_seconds is None or age_seconds > max_age_seconds
+
+
+def _orderbook_age_seconds(snapshot: OrderBookSnapshot) -> float | None:
+    if snapshot.timestamp <= 0:
+        return None
+    return max(0.0, (int(time.time() * 1000) - snapshot.timestamp) / 1000)
+
+
+def _snapshot_with_freshness(
+    snapshot: OrderBookSnapshot,
+    *,
+    status: str,
+    age_seconds: float | None,
+) -> OrderBookSnapshot:
+    return snapshot.model_copy(
+        update={
+            "freshness_status": status,
+            "age_seconds": age_seconds,
+        }
+    )
 
 
 def _bybit_position_side(value: str | None) -> str | None:

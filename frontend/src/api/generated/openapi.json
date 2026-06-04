@@ -6760,6 +6760,9 @@
             ],
             "title": "Fees"
           },
+          "lifecycle_trace": {
+            "$ref": "#/components/schemas/LifecycleTrace"
+          },
           "metadata": {
             "additionalProperties": true,
             "type": "object",
@@ -7233,6 +7236,89 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "LifecycleTrace": {
+        "properties": {
+          "signal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Id"
+          },
+          "pending_entry_intent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Entry Intent Id"
+          },
+          "risk_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Decision Id"
+          },
+          "audit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Id"
+          },
+          "virtual_trade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Trade Id"
+          },
+          "real_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Real Order Id"
+          },
+          "exit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Event Id"
+          }
+        },
+        "type": "object",
+        "title": "LifecycleTrace"
+      },
       "LiquidityMetrics": {
         "properties": {
           "spread_percent": {
@@ -7467,6 +7553,11 @@
             "minimum": 1,
             "title": "Max Open Positions",
             "default": 3
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
           }
         },
         "type": "object",
@@ -9178,6 +9269,9 @@
               }
             ],
             "title": "Display Reason"
+          },
+          "lifecycle_trace": {
+            "$ref": "#/components/schemas/LifecycleTrace"
           }
         },
         "type": "object",
@@ -9341,6 +9435,11 @@
             "title": "Max Open Positions",
             "default": 3
           },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
           "signal_id": {
             "type": "string",
             "minLength": 1,
@@ -9502,6 +9601,9 @@
             "type": "array",
             "title": "Planned Orders"
           },
+          "lifecycle_trace": {
+            "$ref": "#/components/schemas/LifecycleTrace"
+          },
           "metadata": {
             "additionalProperties": true,
             "type": "object",
@@ -9639,6 +9741,9 @@
             },
             "type": "array",
             "title": "Validation Errors"
+          },
+          "lifecycle_trace": {
+            "$ref": "#/components/schemas/LifecycleTrace"
           }
         },
         "type": "object",
@@ -10498,6 +10603,107 @@
             "minimum": 0,
             "title": "Max Orderbook Liquidity Ratio",
             "default": 1
+          },
+          "orderbook_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Source"
+          },
+          "orderbook_freshness_status": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "partial",
+              "missing",
+              "stale",
+              "unknown"
+            ],
+            "title": "Orderbook Freshness Status",
+            "default": "unknown"
+          },
+          "orderbook_fetched_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Fetched At"
+          },
+          "orderbook_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Age Seconds"
+          },
+          "orderbook_depth_levels": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Orderbook Depth Levels",
+            "default": 0
+          },
+          "orderbook_vwap_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Vwap Price"
+          },
+          "orderbook_vwap_impact_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Vwap Impact Bps"
+          },
+          "orderbook_slippage_bps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Slippage Bps"
+          },
+          "orderbook_fillable_notional_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orderbook Fillable Notional Usd"
           }
         },
         "type": "object",
@@ -10549,6 +10755,9 @@
           "can_enter": {
             "type": "boolean",
             "title": "Can Enter"
+          },
+          "lifecycle_trace": {
+            "$ref": "#/components/schemas/LifecycleTrace"
           },
           "risk_profile_source": {
             "type": "string",
@@ -11746,6 +11955,18 @@
             "type": "string",
             "minLength": 1,
             "title": "Signal Id"
+          },
+          "pending_entry_intent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Entry Intent Id"
           },
           "mode": {
             "type": "string",
@@ -17163,6 +17384,9 @@
               }
             ]
           },
+          "lifecycle_trace": {
+            "$ref": "#/components/schemas/LifecycleTrace"
+          },
           "simulated_path": {
             "anyOf": [
               {
@@ -17965,6 +18189,9 @@
             },
             "type": "array",
             "title": "Lifecycle Events"
+          },
+          "lifecycle_trace": {
+            "$ref": "#/components/schemas/LifecycleTrace"
           }
         },
         "type": "object",
@@ -17991,6 +18218,72 @@
       },
       "VirtualTradeLifecycleEvent": {
         "properties": {
+          "signal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Id"
+          },
+          "pending_entry_intent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Entry Intent Id"
+          },
+          "risk_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Decision Id"
+          },
+          "virtual_trade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Virtual Trade Id"
+          },
+          "real_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Real Order Id"
+          },
+          "exit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Event Id"
+          },
           "event_type": {
             "type": "string",
             "title": "Event Type"
@@ -18103,6 +18396,9 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "lifecycle_trace": {
+            "$ref": "#/components/schemas/LifecycleTrace"
           },
           "metadata": {
             "additionalProperties": true,

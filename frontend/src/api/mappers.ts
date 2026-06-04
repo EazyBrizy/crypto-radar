@@ -598,7 +598,17 @@ function normalizeRiskCheckResult(value: unknown): RiskCheckResult | null {
     orderbook_depth_usd: value.orderbook_depth_usd == null ? null : Number(value.orderbook_depth_usd),
     orderbook_can_fill: value.orderbook_can_fill == null ? null : Boolean(value.orderbook_can_fill),
     orderbook_liquidity_ratio: value.orderbook_liquidity_ratio == null ? null : Number(value.orderbook_liquidity_ratio),
-    max_orderbook_liquidity_ratio: Number(value.max_orderbook_liquidity_ratio ?? 1)
+    max_orderbook_liquidity_ratio: Number(value.max_orderbook_liquidity_ratio ?? 1),
+    orderbook_source: value.orderbook_source == null ? null : String(value.orderbook_source),
+    orderbook_freshness_status: normalizeMarketDataStatus(value.orderbook_freshness_status),
+    orderbook_fetched_at: value.orderbook_fetched_at == null ? null : String(value.orderbook_fetched_at),
+    orderbook_age_seconds: value.orderbook_age_seconds == null ? null : Number(value.orderbook_age_seconds),
+    orderbook_depth_levels: Number(value.orderbook_depth_levels ?? 0),
+    orderbook_vwap_price: value.orderbook_vwap_price == null ? null : Number(value.orderbook_vwap_price),
+    orderbook_vwap_impact_bps: value.orderbook_vwap_impact_bps == null ? null : Number(value.orderbook_vwap_impact_bps),
+    orderbook_slippage_bps: value.orderbook_slippage_bps == null ? null : Number(value.orderbook_slippage_bps),
+    orderbook_fillable_notional_usd:
+      value.orderbook_fillable_notional_usd == null ? null : Number(value.orderbook_fillable_notional_usd)
   };
 }
 
@@ -1367,7 +1377,7 @@ function normalizeExchangeRuleStatus(value: unknown) {
 }
 
 function normalizeMarketDataStatus(value: unknown): MarketDataStatus {
-  if (value === "fresh" || value === "partial" || value === "missing") return value;
+  if (value === "fresh" || value === "partial" || value === "missing" || value === "stale") return value;
   return "unknown";
 }
 

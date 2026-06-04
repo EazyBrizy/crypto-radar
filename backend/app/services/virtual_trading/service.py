@@ -1293,6 +1293,7 @@ def _market_context_kwargs(market_data: RiskMarketDataSnapshot) -> dict[str, Any
         "spread_percent": market_data.spread_percent,
         "spread_bps": market_data.spread_bps,
         "orderbook_depth_usd": market_data.orderbook_depth_usd,
+        "orderbook_snapshot": market_data.orderbook_snapshot,
         "market_data_status": market_data.market_data_status,
         "market_data_source": market_data.market_data_source,
         "market_data_warnings": list(market_data.warnings),

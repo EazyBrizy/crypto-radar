@@ -40,7 +40,8 @@ Real trading:
 - requires edge `sample_size >= edge_min_sample_size`;
 - requires `expectancy_after_costs_r` to be greater than the configured minimum;
 - requires fresh market data when `real_requires_fresh_market_data` is enabled;
-- requires a valid orderbook/depth snapshot for liquidity and spread checks;
+- requires a fresh valid orderbook/depth snapshot for liquidity, spread, and
+  level-by-level VWAP impact checks when the freshness policy is enabled;
 - requires fresh exchange rules and valid order-size/price constraints;
 - normalizes the requested execution plan by exchange rules before validation,
   then submits only the normalized quantities/prices;
@@ -378,14 +379,10 @@ while the module is being built step by step.
   position, and it still accepts a caller-provided liquidation price, but it does
   not yet calculate the exact post-order liquidation price by margin mode,
   maintenance tier, wallet balance, and existing exposure.
-- Move orderbook from REST snapshot to stream/cache for production latency.
-  The risk gate now consumes REST Bybit ticker/orderbook snapshots before the
-  decision, but there is no local hot cache or WebSocket orderbook stream wired
-  into this gate yet.
-- Add level-by-level orderbook VWAP/impact-price validation. The gate now blocks
-  insufficient visible depth and excessive configured slippage, but it does not
-  yet compute exact fill VWAP against every orderbook level or compare it with a
-  user limit price.
+- Add production WebSocket observability for orderbook cache health. The risk
+  gate now consumes the Redis hot L2 snapshot and can calculate level-by-level
+  VWAP impact from the cached book, but production monitoring/alerts for stale
+  cache refresh cycles are still pending.
 - Add an admin/user-facing fee cache status view.
 
 ### Stop-Loss And Take-Profit
@@ -595,9 +592,26 @@ Current behavior:
   source/warning metadata;
 - cached/synced Bybit fee-rate context feeds position sizing in preview, real
   confirm, and virtual confirm/open paths;
+- `RiskMarketDataService` reads the Redis hot L2 snapshot
+  `orderbook:{exchange}:{symbol}` before preview or pre-execution RiskGate. The
+  freshness TTL is `orderbook_snapshot_ttl_seconds`, defaulting to 15 seconds.
+  A snapshot older than that is `stale`; missing Redis data, malformed payloads,
+  empty books, or legacy `orderbook_l2_not_available` payloads are `missing`.
+- RiskGate receives the already-loaded `OrderBookSnapshot`; it must not make
+  network calls. The gate exposes snapshot source, freshness, fetched-at/age,
+  depth level count, entry-side visible depth, level-by-level VWAP price,
+  VWAP impact bps, and the orderbook slippage estimate in `RiskCheckResult`.
+- Virtual preview/pre-execution treats stale/missing orderbook data or missing
+  entry-side depth as research warnings by default, so virtual research is not
+  blocked by data-cache quality alone.
+- Real preview/pre-execution blocks stale/missing orderbook data, missing
+  entry-side depth, or an unfillable level-by-level VWAP path when
+  `real_requires_fresh_market_data=true`. If that setting is disabled, these
+  become explicit warnings while the rest of the risk, spread, slippage, RR,
+  account, fee, and exchange-rule gates still apply.
 - spread-too-high, expected-slippage-too-high, price-moved-too-far, and
-  insufficient visible orderbook liquidity are hard blockers in the backend
-  gate;
+  insufficient visible orderbook liquidity remain blockers in the backend gate
+  when their configured limits are enabled;
 - Settings `Simulation` / `virtual_simulation_level` does not change these
   hard blockers; it only controls virtual execution realism and Reality Check
   diagnostics;
@@ -755,18 +769,22 @@ Still missing for this point:
 
 Implemented for the current backend:
 
-- `RiskMarketDataService` collects Bybit V5 ticker, REST orderbook, and private
-  position-list data before `RiskGateService.evaluate`;
+- `RiskMarketDataService` collects Bybit V5 ticker, Redis hot L2 orderbook
+  snapshot, and private position-list data before `RiskGateService.evaluate`;
 - long entry uses best ask and short entry uses best bid when the user did not
   manually override entry price;
 - ticker spread is added to request slippage bps, so it increases
   `slippage_buffer_per_unit` and `effective_risk_per_unit`;
 - ticker `markPrice`, `fundingRate`, bid/ask, spread, visible orderbook depth,
+  orderbook freshness/source/age, level count, VWAP impact, orderbook slippage,
   and market-data status are returned inside `RiskCheckResult`;
 - one-interval funding buffer is included in position sizing through
   `funding_buffer_per_unit`;
 - visible orderbook depth is compared with calculated/checked notional, and the
   gate blocks when visible entry-side depth is insufficient;
+- level-by-level orderbook VWAP impact is calculated from the snapshot after
+  RiskGate sizing, so the decision can warn/block on unfillable depth or
+  excessive orderbook-derived slippage without making network calls;
 - configured `max_spread_bps`, `max_slippage_bps`,
   `max_price_deviation_bps`, and `max_orderbook_liquidity_ratio` are hard
   blockers, so a stale signal whose real bid/ask entry breaks the risk plan
@@ -775,7 +793,7 @@ Implemented for the current backend:
   existing dev secret-provider boundary, and a matching open position's live
   `liqPrice` is passed into the futures guard;
 - frontend risk cards render market-data status, bid/ask, mark price, spread,
-  depth, and funding buffer from backend response only.
+  depth, orderbook metrics, and funding buffer from backend response only.
 - Radar read-only `execution_ready` previews resolve `instrument_type` and
   leverage through the execution profile resolver instead of hardcoding an MVP
   futures context.
@@ -785,12 +803,12 @@ Implemented for the current backend:
 
 Still missing for this point:
 
-- WebSocket/orderbook-stream cache for lower-latency liquidity checks;
+- production WebSocket/orderbook cache observability and alerts for stale
+  refresh cycles;
 - projected liquidation-price calculation for the new order before it reaches an
   exchange adapter;
 - per-symbol overrides for spread/liquidity/price-drift thresholds;
-- exact level-by-level orderbook VWAP/impact-price validation against a user
-  limit price;
+- comparing level-by-level VWAP/impact with an explicit user limit price;
 - user-selectable instrument type/leverage in the pre-entry ticket instead of
   the current MVP frontend default of futures `3x`;
 - wiring preview-only cards to a simulated path, or hiding post-impact/decay

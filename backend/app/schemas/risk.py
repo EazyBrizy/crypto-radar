@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.lifecycle import LifecycleTrace
+from app.schemas.market import OrderBookSnapshot
 from app.schemas.signal import NoTradeFilterResult, SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan
 
@@ -304,6 +305,15 @@ class RiskCheckResult(BaseModel):
     orderbook_can_fill: bool | None = None
     orderbook_liquidity_ratio: float | None = Field(default=None, ge=0)
     max_orderbook_liquidity_ratio: float = Field(default=1.0, ge=0)
+    orderbook_source: str | None = None
+    orderbook_freshness_status: MarketDataStatus = "unknown"
+    orderbook_fetched_at: datetime | None = None
+    orderbook_age_seconds: float | None = Field(default=None, ge=0)
+    orderbook_depth_levels: int = Field(default=0, ge=0)
+    orderbook_vwap_price: float | None = Field(default=None, gt=0)
+    orderbook_vwap_impact_bps: float | None = Field(default=None, ge=0)
+    orderbook_slippage_bps: float | None = Field(default=None, ge=0)
+    orderbook_fillable_notional_usd: float | None = Field(default=None, ge=0)
 
 
 class StopLossPlan(BaseModel):
@@ -432,6 +442,7 @@ class RiskContext(BaseModel):
     spread_percent: float | None = Field(default=None, ge=0)
     spread_bps: float | None = Field(default=None, ge=0)
     orderbook_depth_usd: float | None = Field(default=None, ge=0)
+    orderbook_snapshot: OrderBookSnapshot | None = None
     market_data_status: MarketDataStatus = "unknown"
     market_data_source: str | None = None
     market_data_warnings: list[str] = Field(default_factory=list)

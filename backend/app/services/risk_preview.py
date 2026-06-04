@@ -194,6 +194,7 @@ class RiskPreviewService:
                 spread_percent=market_data.spread_percent,
                 spread_bps=market_data.spread_bps,
                 orderbook_depth_usd=market_data.orderbook_depth_usd,
+                orderbook_snapshot=market_data.orderbook_snapshot,
                 market_data_status=market_data.market_data_status,
                 market_data_source=market_data.market_data_source,
                 market_data_warnings=list(market_data.warnings),
@@ -256,6 +257,7 @@ class RiskPreviewService:
                 spread_percent=market_data.spread_percent,
                 spread_bps=market_data.spread_bps,
                 orderbook_depth_usd=market_data.orderbook_depth_usd,
+                orderbook_snapshot=market_data.orderbook_snapshot,
                 market_data_status=market_data.market_data_status,
                 market_data_source=market_data.market_data_source,
                 market_data_warnings=list(market_data.warnings),
@@ -289,7 +291,7 @@ class RiskPreviewService:
                 "flow": "risk.preview",
                 "request": request.model_dump(mode="json"),
                 "signal": signal.model_dump(mode="json"),
-                "market_data": asdict(market_data),
+                "market_data": _market_data_snapshot_payload(market_data),
                 "fee_rate": asdict(fee_rate),
                 "account_snapshot": (
                     account_snapshot.model_dump(mode="json")
@@ -311,6 +313,17 @@ class RiskPreviewService:
             pending_entry_intent_id=evaluation.decision.lifecycle_trace.pending_entry_intent_id,
             input_snapshot=evaluation.input_snapshot,
         )
+
+
+def _market_data_snapshot_payload(market_data: Any) -> dict[str, Any]:
+    payload = asdict(market_data)
+    orderbook_snapshot = getattr(market_data, "orderbook_snapshot", None)
+    payload["orderbook_snapshot"] = (
+        orderbook_snapshot.model_dump(mode="json")
+        if orderbook_snapshot is not None
+        else None
+    )
+    return payload
 
 
 def _manual_request(request: RiskPreviewRequest) -> ManualConfirmRequest:

@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.schemas.lifecycle import LifecycleTrace
+from app.schemas.market import OrderBookSnapshot
 from app.schemas.risk import (
     AccountRiskSnapshot,
     LEGACY_VIRTUAL_INSTRUMENT_WARNING,
@@ -73,6 +74,7 @@ class RiskContextService:
         spread_percent: float | None = None,
         spread_bps: float | None = None,
         orderbook_depth_usd: float | None = None,
+        orderbook_snapshot: OrderBookSnapshot | None = None,
         market_data_status: str = "unknown",
         market_data_source: str | None = None,
         market_data_warnings: list[str] | None = None,
@@ -142,6 +144,7 @@ class RiskContextService:
             spread_percent=spread_percent,
             spread_bps=spread_bps,
             orderbook_depth_usd=orderbook_depth_usd,
+            orderbook_snapshot=orderbook_snapshot,
             market_data_status=market_data_status,
             market_data_source=market_data_source,
             market_data_warnings=market_data_warnings or [],
@@ -198,6 +201,7 @@ class RiskContextService:
         spread_percent: float | None = None,
         spread_bps: float | None = None,
         orderbook_depth_usd: float | None = None,
+        orderbook_snapshot: OrderBookSnapshot | None = None,
         market_data_status: str = "unknown",
         market_data_source: str | None = None,
         market_data_warnings: list[str] | None = None,
@@ -283,6 +287,7 @@ class RiskContextService:
             spread_percent=spread_percent,
             spread_bps=spread_bps,
             orderbook_depth_usd=orderbook_depth_usd,
+            orderbook_snapshot=orderbook_snapshot,
             market_data_status=market_data_status,
             market_data_source=market_data_source,
             market_data_warnings=market_data_warnings or [],
@@ -421,6 +426,7 @@ class RiskGateService:
             spread_percent=context.spread_percent,
             spread_bps=context.spread_bps,
             orderbook_depth_usd=context.orderbook_depth_usd,
+            orderbook_snapshot=context.orderbook_snapshot,
             signal_entry_price=context.signal_entry_price,
             correlated_open_risk_amount=context.correlated_open_risk_amount,
             correlation_group=context.correlation_group,

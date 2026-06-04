@@ -57,7 +57,7 @@ export type RadarRiskRewardStatus = "passed" | "warning" | "failed" | "skipped" 
 export type RRGuardMode = "off" | "soft" | "hard";
 export type RiskProtectionMode = "normal" | "reduced" | "virtual_only" | "blocked";
 export type ExchangeRuleStatus = "fresh" | "missing" | "stale" | "unknown";
-export type MarketDataStatus = "fresh" | "partial" | "missing" | "unknown";
+export type MarketDataStatus = "fresh" | "partial" | "missing" | "stale" | "unknown";
 
 export interface OhlcvCandle {
   exchange: string;
@@ -523,6 +523,15 @@ export interface RiskCheckResult {
   orderbook_can_fill: boolean | null;
   orderbook_liquidity_ratio: number | null;
   max_orderbook_liquidity_ratio: number;
+  orderbook_source: string | null;
+  orderbook_freshness_status: MarketDataStatus;
+  orderbook_fetched_at: string | null;
+  orderbook_age_seconds: number | null;
+  orderbook_depth_levels: number;
+  orderbook_vwap_price: number | null;
+  orderbook_vwap_impact_bps: number | null;
+  orderbook_slippage_bps: number | null;
+  orderbook_fillable_notional_usd: number | null;
 }
 
 export interface RiskDecision {

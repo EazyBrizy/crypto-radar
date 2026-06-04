@@ -2447,11 +2447,17 @@ writes normalized hot L2 snapshots to Redis key
 `OrderBookSnapshot` fields:
 
 - `exchange`, `symbol`, `category`
+- `best_bid`, `best_ask`: top-of-book bid/ask derived from normalized levels
 - `bids`, `asks`: normalized levels with `price` and `quantity`
 - `timestamp`: source/fetch timestamp in milliseconds
+- `fetched_at`: ISO-8601 UTC fetch timestamp derived from `timestamp`
 - `ts`: ISO-8601 UTC timestamp for compatibility with existing hot payloads
+- `freshness_status`: `fresh`, `stale`, `missing`, or `unknown`; cache readers
+  must stamp this relative to the configured freshness TTL
+- `age_seconds`: reader-calculated age when known
 - `source`: `bybit_v5_orderbook` for real L2 snapshots
 - `spread_bps`
+- `bid_levels_count`, `ask_levels_count`, `depth_levels`
 - `bid_depth_usd_0_1_pct`, `ask_depth_usd_0_1_pct`
 - `bid_depth_usd_0_5_pct`, `ask_depth_usd_0_5_pct`
 - `bid_depth_usd_1_pct`, `ask_depth_usd_1_pct`
@@ -2461,8 +2467,8 @@ above `best_bid * (1 - band)`; asks include levels at or below
 `best_ask * (1 + band)`.
 
 `RiskMarketDataService` reads the Redis L2 snapshot for Bybit market context.
-It exposes `spread_bps`, entry-side `orderbook_depth_usd` from the 0.5% band,
-and `market_data_status`:
+It exposes the snapshot itself plus `spread_bps`, entry-side
+`orderbook_depth_usd` from the 0.5% band, and `market_data_status`:
 
 - `fresh`: a non-placeholder L2 snapshot is present and within the configured
   orderbook snapshot max age
@@ -2470,13 +2476,28 @@ and `market_data_status`:
 - `missing`: no usable L2 snapshot exists, including legacy
   `orderbook_l2_not_available` placeholder payloads
 
+`RiskCheckResult` records orderbook execution-quality metrics derived from the
+snapshot used by the decision:
+
+- `orderbook_source`, `orderbook_freshness_status`, `orderbook_fetched_at`,
+  `orderbook_age_seconds`, and `orderbook_depth_levels`
+- `orderbook_vwap_price`, `orderbook_vwap_impact_bps`,
+  `orderbook_slippage_bps`, and `orderbook_fillable_notional_usd`
+
+VWAP impact is calculated level-by-level on the entry side after RiskGate sizing
+is known. It is a decision metric and warning/block input; RiskGate does not
+fetch orderbooks directly.
+
 `RiskManagementSettings` adds:
 
 - `real_requires_fresh_market_data: bool = True`
 
 When `real_requires_fresh_market_data` is enabled, real entries are blocked for
-`missing` or `stale` market data. Virtual entries warn instead. If disabled,
-real entries also warn, while other risk checks still apply.
+`missing` or `stale` orderbook market data, missing entry-side depth, or a
+level-by-level VWAP path that cannot fill the calculated size. Virtual entries
+warn instead unless another explicitly documented hard blocker fails. If the
+freshness requirement is disabled, real entries also warn, while spread,
+slippage, depth-ratio, RR, account, and exchange-rule checks still apply.
 
 ## No-Trade Filters v1
 

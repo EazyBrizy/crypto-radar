@@ -24,6 +24,7 @@ from app.schemas.risk import (
     TrailingStopPlan,
     normalize_instrument_type,
 )
+from app.schemas.market import OrderBookSnapshot
 from app.schemas.signal import SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan, TradePlanTarget
 from app.schemas.user import RRGuardMode, RiskManagementPatch, RiskManagementSettings, RiskProfileName
@@ -279,6 +280,15 @@ class _RiskBudget:
     risk_cap_amount: float | None
     risk_cap_percent: float | None
     risk_amount_capped: bool
+
+
+@dataclass(frozen=True)
+class _OrderbookVwapImpact:
+    vwap_price: float | None
+    impact_bps: float | None
+    slippage_bps: float | None
+    fillable_notional_usd: float | None
+    missing_depth: bool
 
 
 class ExecutionProfileResolver:
@@ -721,6 +731,7 @@ def calculate_risk_check_result(
     spread_percent: float | None = None,
     spread_bps: float | None = None,
     orderbook_depth_usd: float | None = None,
+    orderbook_snapshot: OrderBookSnapshot | None = None,
     signal_entry_price: float | None = None,
     correlated_open_risk_amount: float = 0.0,
     correlation_group: str | None = None,
@@ -858,6 +869,23 @@ def calculate_risk_check_result(
         if _limit_enabled(settings.max_price_deviation_bps) and price_deviation_bps > settings.max_price_deviation_bps:
             blockers.append("Price moved too far from the signal entry.")
 
+    orderbook_freshness_status = _orderbook_freshness_status(
+        orderbook_snapshot,
+        market_data_status=market_data_status,
+    )
+    orderbook_vwap_impact = _orderbook_vwap_impact(
+        snapshot=orderbook_snapshot,
+        side=position_sizing.side,
+        quantity=position_sizing.position_size_base,
+        base_slippage_bps=position_sizing.slippage_bps,
+    )
+    if (
+        _limit_enabled(settings.max_slippage_bps)
+        and orderbook_vwap_impact.slippage_bps is not None
+        and orderbook_vwap_impact.slippage_bps > settings.max_slippage_bps
+    ):
+        blockers.append("Orderbook VWAP slippage is above the configured maximum.")
+
     effective_risk_amount = position_sizing.position_size_base * position_sizing.effective_risk_per_unit
     risk_limit_amount = (
         risk_adjustment.effective_risk_amount
@@ -881,11 +909,14 @@ def calculate_risk_check_result(
     if orderbook_depth_usd is None:
         if execution_mode == "real" and settings.real_requires_fresh_market_data:
             blockers.append("Orderbook liquidity is unavailable.")
-        elif market_data_status in {"missing", "stale"}:
+        elif market_data_status in {"fresh", "partial", "missing", "stale"}:
             warnings.append("Orderbook liquidity is unavailable.")
     elif orderbook_depth_usd <= 0:
         orderbook_can_fill = False
-        blockers.append("Orderbook liquidity is empty for the entry side.")
+        if execution_mode == "real" and settings.real_requires_fresh_market_data:
+            blockers.append("Orderbook liquidity is empty for the entry side.")
+        else:
+            warnings.append("Orderbook liquidity is empty for the entry side.")
     else:
         orderbook_liquidity_ratio = position_sizing.notional / orderbook_depth_usd
         orderbook_can_fill = (
@@ -897,6 +928,12 @@ def calculate_risk_check_result(
             blockers.append("Orderbook liquidity is insufficient for calculated position size.")
         elif orderbook_liquidity_ratio > 0.5:
             warnings.append("Calculated position would consume more than half of visible orderbook depth.")
+    if orderbook_vwap_impact.missing_depth:
+        message = "Orderbook depth cannot fill calculated position size."
+        if execution_mode == "real" and settings.real_requires_fresh_market_data:
+            blockers.append(message)
+        else:
+            warnings.append(message)
 
     daily_risk_used_percent = None
     if daily_loss_amount >= 0:
@@ -943,8 +980,8 @@ def calculate_risk_check_result(
 
     return RiskCheckResult(
         status="failed" if blockers else ("warning" if warnings else "passed"),
-        blockers=blockers,
-        warnings=warnings,
+        blockers=_dedupe(blockers),
+        warnings=_dedupe(warnings),
         rr=rr,
         min_rr_ratio=min_rr_ratio,
         risk_reward_guard_mode=rr_guard_mode,
@@ -1001,6 +1038,15 @@ def calculate_risk_check_result(
         orderbook_can_fill=orderbook_can_fill,
         orderbook_liquidity_ratio=orderbook_liquidity_ratio,
         max_orderbook_liquidity_ratio=settings.max_orderbook_liquidity_ratio,
+        orderbook_source=orderbook_snapshot.source if orderbook_snapshot is not None else None,
+        orderbook_freshness_status=orderbook_freshness_status,
+        orderbook_fetched_at=orderbook_snapshot.fetched_at if orderbook_snapshot is not None else None,
+        orderbook_age_seconds=orderbook_snapshot.age_seconds if orderbook_snapshot is not None else None,
+        orderbook_depth_levels=orderbook_snapshot.depth_levels if orderbook_snapshot is not None else 0,
+        orderbook_vwap_price=orderbook_vwap_impact.vwap_price,
+        orderbook_vwap_impact_bps=orderbook_vwap_impact.impact_bps,
+        orderbook_slippage_bps=orderbook_vwap_impact.slippage_bps,
+        orderbook_fillable_notional_usd=orderbook_vwap_impact.fillable_notional_usd,
     )
 
 
@@ -1887,6 +1933,80 @@ def _mapping_value_for_strategy(values: Mapping[str, Any], strategy: str) -> Any
 
 def _limit_enabled(value: float | int | None) -> bool:
     return value is not None and float(value) > 0
+
+
+def _orderbook_freshness_status(
+    snapshot: OrderBookSnapshot | None,
+    *,
+    market_data_status: str,
+) -> str:
+    if snapshot is not None and snapshot.freshness_status != "unknown":
+        return snapshot.freshness_status
+    if market_data_status in {"fresh", "partial", "missing", "stale"}:
+        return market_data_status
+    return "unknown"
+
+
+def _orderbook_vwap_impact(
+    *,
+    snapshot: OrderBookSnapshot | None,
+    side: str,
+    quantity: float,
+    base_slippage_bps: float,
+) -> _OrderbookVwapImpact:
+    if snapshot is None or quantity <= 0:
+        return _OrderbookVwapImpact(
+            vwap_price=None,
+            impact_bps=None,
+            slippage_bps=None,
+            fillable_notional_usd=None,
+            missing_depth=False,
+        )
+    levels = snapshot.asks if side == "long" else snapshot.bids
+    best_price = snapshot.best_ask if side == "long" else snapshot.best_bid
+    fillable_notional_usd = sum(level.price * level.quantity for level in levels)
+    if not levels or best_price is None:
+        return _OrderbookVwapImpact(
+            vwap_price=None,
+            impact_bps=None,
+            slippage_bps=None,
+            fillable_notional_usd=fillable_notional_usd,
+            missing_depth=True,
+        )
+
+    remaining_quantity = quantity
+    filled_quantity = 0.0
+    filled_notional = 0.0
+    for level in levels:
+        if remaining_quantity <= 0:
+            break
+        fill_quantity = min(level.quantity, remaining_quantity)
+        filled_quantity += fill_quantity
+        filled_notional += fill_quantity * level.price
+        remaining_quantity -= fill_quantity
+
+    if filled_quantity <= 0:
+        return _OrderbookVwapImpact(
+            vwap_price=None,
+            impact_bps=None,
+            slippage_bps=None,
+            fillable_notional_usd=fillable_notional_usd,
+            missing_depth=True,
+        )
+
+    vwap_price = filled_notional / filled_quantity
+    if side == "long":
+        impact_bps = max(0.0, (vwap_price - best_price) / best_price * 10_000)
+    else:
+        impact_bps = max(0.0, (best_price - vwap_price) / best_price * 10_000)
+    slippage_bps = base_slippage_bps + impact_bps
+    return _OrderbookVwapImpact(
+        vwap_price=vwap_price,
+        impact_bps=impact_bps,
+        slippage_bps=slippage_bps,
+        fillable_notional_usd=fillable_notional_usd,
+        missing_depth=filled_quantity + 0.000000001 < quantity,
+    )
 
 
 def _rr_policy_reason(

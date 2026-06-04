@@ -50,6 +50,11 @@ class RiskMarketDataOrderbookTest(unittest.TestCase):
         self.assertEqual(snapshot.best_ask, 100.1)
         self.assertEqual(snapshot.entry_price, 100.1)
         self.assertEqual(snapshot.orderbook_depth_usd, 400.4)
+        self.assertIsNotNone(snapshot.orderbook_snapshot)
+        self.assertEqual(snapshot.orderbook_snapshot.freshness_status, "fresh")
+        self.assertEqual(snapshot.orderbook_snapshot.best_bid, 100.0)
+        self.assertEqual(snapshot.orderbook_snapshot.best_ask, 100.1)
+        self.assertEqual(snapshot.orderbook_snapshot.depth_levels, 2)
         self.assertAlmostEqual(snapshot.spread_bps or 0, 9.995)
 
     def test_stale_orderbook_snapshot_is_explicit(self) -> None:
@@ -142,6 +147,56 @@ class RiskMarketDataOrderbookTest(unittest.TestCase):
         self.assertIn("Bybit market data is stale.", result.warnings)
         self.assertIn("Orderbook liquidity is unavailable.", result.warnings)
 
+    def test_fresh_orderbook_snapshot_vwap_passes(self) -> None:
+        orderbook = _orderbook_snapshot(
+            timestamp=int(time.time() * 1000),
+            asks=[
+                OrderBookLevel(price=100.1, quantity=30.0),
+                OrderBookLevel(price=100.2, quantity=30.0),
+            ],
+            bid_depth_usd_0_5_pct=100_000.0,
+            ask_depth_usd_0_5_pct=100_000.0,
+            freshness_status="fresh",
+        )
+        result = _risk_check(
+            execution_mode="virtual",
+            market_data_status="fresh",
+            orderbook_depth_usd=100_000.0,
+            real_requires_fresh_market_data=True,
+            orderbook_snapshot=orderbook,
+        )
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.orderbook_freshness_status, "fresh")
+        self.assertEqual(result.orderbook_source, "bybit_v5_orderbook")
+        self.assertEqual(result.orderbook_depth_levels, 3)
+        self.assertIsNotNone(result.orderbook_vwap_price)
+        self.assertIsNotNone(result.orderbook_vwap_impact_bps)
+        self.assertIsNotNone(result.orderbook_slippage_bps)
+
+    def test_missing_depth_warns_virtual(self) -> None:
+        result = _risk_check(
+            execution_mode="virtual",
+            market_data_status="fresh",
+            orderbook_depth_usd=None,
+            real_requires_fresh_market_data=True,
+        )
+
+        self.assertEqual(result.status, "warning")
+        self.assertIn("Orderbook liquidity is unavailable.", result.warnings)
+        self.assertEqual(result.blockers, [])
+
+    def test_missing_depth_blocks_real_when_fresh_data_required(self) -> None:
+        result = _risk_check(
+            execution_mode="real",
+            market_data_status="fresh",
+            orderbook_depth_usd=None,
+            real_requires_fresh_market_data=True,
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertIn("Orderbook liquidity is unavailable.", result.blockers)
+
 
 def _snapshot_json(
     *,
@@ -169,12 +224,41 @@ def _snapshot_json(
     return snapshot.model_dump_json(exclude_none=True)
 
 
+def _orderbook_snapshot(
+    *,
+    timestamp: int,
+    asks: list[OrderBookLevel],
+    bid_depth_usd_0_5_pct: float,
+    ask_depth_usd_0_5_pct: float,
+    freshness_status: str,
+) -> OrderBookSnapshot:
+    bids = [OrderBookLevel(price=100.0, quantity=10.0)]
+    return OrderBookSnapshot(
+        exchange="bybit",
+        symbol="BTCUSDT",
+        category="linear",
+        bids=bids,
+        asks=asks,
+        timestamp=timestamp,
+        source="bybit_v5_orderbook",
+        freshness_status=freshness_status,
+        spread_bps=9.995,
+        bid_depth_usd_0_1_pct=bid_depth_usd_0_5_pct,
+        ask_depth_usd_0_1_pct=ask_depth_usd_0_5_pct,
+        bid_depth_usd_0_5_pct=bid_depth_usd_0_5_pct,
+        ask_depth_usd_0_5_pct=ask_depth_usd_0_5_pct,
+        bid_depth_usd_1_pct=bid_depth_usd_0_5_pct,
+        ask_depth_usd_1_pct=ask_depth_usd_0_5_pct,
+    )
+
+
 def _risk_check(
     *,
     execution_mode: str,
     market_data_status: str,
     orderbook_depth_usd: float | None,
     real_requires_fresh_market_data: bool,
+    orderbook_snapshot: OrderBookSnapshot | None = None,
 ):
     settings = RiskManagementSettings(
         take_profit_required=False,
@@ -205,6 +289,7 @@ def _risk_check(
         best_bid=99.9,
         best_ask=100.1,
         orderbook_depth_usd=orderbook_depth_usd,
+        orderbook_snapshot=orderbook_snapshot,
     )
 
 

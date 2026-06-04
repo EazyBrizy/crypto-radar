@@ -2164,6 +2164,7 @@ export interface components {
             remaining_qty?: number | null;
             /** Fees */
             fees?: number | null;
+            lifecycle_trace?: components["schemas"]["LifecycleTrace"];
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -2337,6 +2338,23 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** LifecycleTrace */
+        LifecycleTrace: {
+            /** Signal Id */
+            signal_id?: string | null;
+            /** Pending Entry Intent Id */
+            pending_entry_intent_id?: string | null;
+            /** Risk Decision Id */
+            risk_decision_id?: string | null;
+            /** Audit Id */
+            audit_id?: string | null;
+            /** Virtual Trade Id */
+            virtual_trade_id?: string | null;
+            /** Real Order Id */
+            real_order_id?: string | null;
+            /** Exit Event Id */
+            exit_event_id?: string | null;
+        };
         /** LiquidityMetrics */
         LiquidityMetrics: {
             /**
@@ -2474,6 +2492,10 @@ export interface components {
              * @default 3
              */
             max_open_positions: number;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
         };
         /** ManualDecisionResponse */
         ManualDecisionResponse: {
@@ -3079,6 +3101,7 @@ export interface components {
             can_enter?: boolean | null;
             /** Display Reason */
             display_reason?: string | null;
+            lifecycle_trace?: components["schemas"]["LifecycleTrace"];
         };
         /** RealConfirmRequest */
         RealConfirmRequest: {
@@ -3153,6 +3176,10 @@ export interface components {
              * @default 3
              */
             max_open_positions: number;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
             /** Signal Id */
             signal_id: string;
         };
@@ -3201,6 +3228,7 @@ export interface components {
             protective_order_strategy: "bracket" | "oco" | "sequential_dry_run" | "unsupported";
             /** Planned Orders */
             planned_orders?: components["schemas"]["ExecutionPlannedOrder"][];
+            lifecycle_trace?: components["schemas"]["LifecycleTrace"];
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -3250,6 +3278,7 @@ export interface components {
             warnings?: string[];
             /** Validation Errors */
             validation_errors?: string[];
+            lifecycle_trace?: components["schemas"]["LifecycleTrace"];
         };
         /** RealTradeImportNotReadyResponse */
         RealTradeImportNotReadyResponse: {
@@ -3597,6 +3626,31 @@ export interface components {
              * @default 1
              */
             max_orderbook_liquidity_ratio: number;
+            /** Orderbook Source */
+            orderbook_source?: string | null;
+            /**
+             * Orderbook Freshness Status
+             * @default unknown
+             * @enum {string}
+             */
+            orderbook_freshness_status: "fresh" | "partial" | "missing" | "stale" | "unknown";
+            /** Orderbook Fetched At */
+            orderbook_fetched_at?: string | null;
+            /** Orderbook Age Seconds */
+            orderbook_age_seconds?: number | null;
+            /**
+             * Orderbook Depth Levels
+             * @default 0
+             */
+            orderbook_depth_levels: number;
+            /** Orderbook Vwap Price */
+            orderbook_vwap_price?: number | null;
+            /** Orderbook Vwap Impact Bps */
+            orderbook_vwap_impact_bps?: number | null;
+            /** Orderbook Slippage Bps */
+            orderbook_slippage_bps?: number | null;
+            /** Orderbook Fillable Notional Usd */
+            orderbook_fillable_notional_usd?: number | null;
         };
         /** RiskDecision */
         RiskDecision: {
@@ -3617,6 +3671,7 @@ export interface components {
             status: "passed" | "warning" | "failed";
             /** Can Enter */
             can_enter: boolean;
+            lifecycle_trace?: components["schemas"]["LifecycleTrace"];
             /**
              * Risk Profile Source
              * @default unknown
@@ -3833,6 +3888,8 @@ export interface components {
         RiskPreviewRequest: {
             /** Signal Id */
             signal_id: string;
+            /** Pending Entry Intent Id */
+            pending_entry_intent_id?: string | null;
             /**
              * Mode
              * @default virtual
@@ -5885,6 +5942,7 @@ export interface components {
             breakeven_plan?: components["schemas"]["BreakevenPlan"] | null;
             trailing_stop_plan?: components["schemas"]["TrailingStopPlan"] | null;
             futures_risk_plan?: components["schemas"]["FuturesRiskPlan"] | null;
+            lifecycle_trace?: components["schemas"]["LifecycleTrace"];
             simulated_path?: components["schemas"]["VirtualSimulatedPositionPath"] | null;
             /** Rejected Reason */
             rejected_reason?: string | null;
@@ -6188,9 +6246,22 @@ export interface components {
             target_states?: components["schemas"]["VirtualTradeTargetState"][];
             /** Lifecycle Events */
             lifecycle_events?: components["schemas"]["VirtualTradeLifecycleEvent"][];
+            lifecycle_trace?: components["schemas"]["LifecycleTrace"];
         };
         /** VirtualTradeLifecycleEvent */
         VirtualTradeLifecycleEvent: {
+            /** Signal Id */
+            signal_id?: string | null;
+            /** Pending Entry Intent Id */
+            pending_entry_intent_id?: string | null;
+            /** Risk Decision Id */
+            risk_decision_id?: string | null;
+            /** Virtual Trade Id */
+            virtual_trade_id?: string | null;
+            /** Real Order Id */
+            real_order_id?: string | null;
+            /** Exit Event Id */
+            exit_event_id?: string | null;
             /** Event Type */
             event_type: string;
             /** Reason */
@@ -6214,6 +6285,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            lifecycle_trace?: components["schemas"]["LifecycleTrace"];
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;

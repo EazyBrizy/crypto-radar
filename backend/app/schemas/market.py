@@ -1,6 +1,7 @@
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 CandleState = Literal["open", "closed"]
 TradeSide = Literal["buy", "sell"]
@@ -8,6 +9,7 @@ DepthWallSide = Literal["bid", "ask", "none"]
 DeltaDivergence = Literal["bullish_divergence", "bearish_divergence"]
 VwapAcceptance = Literal["above_vwap", "below_vwap", "at_vwap", "rejected_from_vwap"]
 LiquidityPoolSide = Literal["above", "below", "neutral"]
+OrderBookFreshnessStatus = Literal["fresh", "stale", "missing", "unknown"]
 
 
 class MarketData(BaseModel):
@@ -30,18 +32,42 @@ class OrderBookSnapshot(BaseModel):
     exchange: str = "bybit"
     symbol: str
     category: Optional[str] = None
+    best_bid: Optional[float] = Field(default=None, gt=0)
+    best_ask: Optional[float] = Field(default=None, gt=0)
     bids: list[OrderBookLevel] = Field(default_factory=list)
     asks: list[OrderBookLevel] = Field(default_factory=list)
     timestamp: int = Field(..., ge=0)
+    fetched_at: Optional[datetime] = None
     ts: Optional[str] = None
+    freshness_status: OrderBookFreshnessStatus = "unknown"
+    age_seconds: Optional[float] = Field(default=None, ge=0)
     source: str
     spread_bps: Optional[float] = Field(default=None, ge=0)
+    bid_levels_count: int = Field(default=0, ge=0)
+    ask_levels_count: int = Field(default=0, ge=0)
+    depth_levels: int = Field(default=0, ge=0)
     bid_depth_usd_0_1_pct: float = Field(default=0.0, ge=0)
     ask_depth_usd_0_1_pct: float = Field(default=0.0, ge=0)
     bid_depth_usd_0_5_pct: float = Field(default=0.0, ge=0)
     ask_depth_usd_0_5_pct: float = Field(default=0.0, ge=0)
     bid_depth_usd_1_pct: float = Field(default=0.0, ge=0)
     ask_depth_usd_1_pct: float = Field(default=0.0, ge=0)
+
+    @model_validator(mode="after")
+    def populate_orderbook_derived_fields(self) -> "OrderBookSnapshot":
+        if self.bids:
+            self.best_bid = self.best_bid or self.bids[0].price
+        if self.asks:
+            self.best_ask = self.best_ask or self.asks[0].price
+        self.bid_levels_count = len(self.bids)
+        self.ask_levels_count = len(self.asks)
+        self.depth_levels = self.bid_levels_count + self.ask_levels_count
+        if self.fetched_at is None and self.timestamp > 0:
+            self.fetched_at = datetime.fromtimestamp(
+                self.timestamp / 1000,
+                tz=timezone.utc,
+            )
+        return self
 
 
 class RecentTrade(BaseModel):

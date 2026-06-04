@@ -31,6 +31,10 @@ class OrderbookSnapshotWorkerTest(unittest.TestCase):
 
         self.assertEqual([level.price for level in snapshot.bids], [100.0, 99.95, 99.4, 98.0])
         self.assertEqual([level.price for level in snapshot.asks], [100.1, 100.15, 100.8, 102.0])
+        self.assertEqual(snapshot.best_bid, 100.0)
+        self.assertEqual(snapshot.best_ask, 100.1)
+        self.assertEqual(snapshot.freshness_status, "fresh")
+        self.assertEqual(snapshot.depth_levels, 8)
         self.assertAlmostEqual(snapshot.spread_bps or 0, (100.1 - 100.0) / 100.05 * 10_000)
         self.assertAlmostEqual(snapshot.bid_depth_usd_0_1_pct, 100.0 * 1.0 + 99.95 * 2.0)
         self.assertAlmostEqual(snapshot.ask_depth_usd_0_1_pct, 100.1 * 1.0 + 100.15 * 2.0)

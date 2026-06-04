@@ -24,6 +24,19 @@ import {
   normalizeWatchlistResponse,
 } from "./mappers";
 
+export type MarketUniverseLimit = "top_100" | "top_200" | "top_500" | "all";
+
+export interface MarketPairsQuery {
+  exchange?: string;
+  category?: string;
+  quote?: string;
+  limit?: MarketUniverseLimit;
+  search?: string;
+  sort?: string;
+  liquidity_tier?: string;
+  status?: string;
+}
+
 export const settingsApi = {
   async config(): Promise<RadarConfig> {
     return normalizeConfig(await request(() => openApiClient.GET("/api/v1/radar/config")));
@@ -34,8 +47,14 @@ export const settingsApi = {
   async watchlist(): Promise<Watchlist> {
     return normalizeWatchlistResponse(await request(() => openApiClient.GET("/api/v1/watchlists/default")));
   },
-  async marketPairs(): Promise<MarketPairOption[]> {
-    const response = await request(() => openApiClient.GET("/api/v1/market-pairs"));
+  async marketPairs(query: MarketPairsQuery = {}): Promise<MarketPairOption[]> {
+    const params = marketPairsQueryParams(query);
+    const response = await request(() =>
+      openApiClient.GET(
+        "/api/v1/market-pairs",
+        Object.keys(params).length ? { params: { query: params } } : undefined
+      )
+    );
     return response.map(normalizeMarketPair);
   },
   async strategyConfigs(): Promise<StrategyConfig[]> {
@@ -167,6 +186,12 @@ export const settingsApi = {
     return billingApi.subscription();
   }
 };
+
+function marketPairsQueryParams(query: MarketPairsQuery): Partial<MarketPairsQuery> {
+  return Object.fromEntries(
+    Object.entries(query).filter(([, value]) => value !== undefined && value !== null && value !== "")
+  ) as Partial<MarketPairsQuery>;
+}
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {

@@ -415,6 +415,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/market-universe/pairs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Market Universe Pairs */
+        get: operations["list_market_universe_pairs_api_v1_market_universe_pairs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/market-universe/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync Market Universe */
+        post: operations["sync_market_universe_api_v1_market_universe_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notifications": {
         parameters: {
             query?: never;
@@ -2808,6 +2842,111 @@ export interface components {
             score_adjustment: number;
             /** Checks */
             checks?: components["schemas"]["SignalLayerCheck"][];
+        };
+        /** MarketUniversePairResponse */
+        MarketUniversePairResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+            /** Base Asset */
+            base_asset: string;
+            /** Quote Asset */
+            quote_asset: string;
+            /** Status */
+            status: string;
+            /** Category */
+            category: string | null;
+            /** Market Type */
+            market_type: string | null;
+            /** Turnover 24H */
+            turnover_24h: string | null;
+            /** Volume 24H */
+            volume_24h: string | null;
+            /** Last Price */
+            last_price: string | null;
+            /** Mark Price */
+            mark_price: string | null;
+            /** Bid Price */
+            bid_price: string | null;
+            /** Ask Price */
+            ask_price: string | null;
+            /** Spread Bps */
+            spread_bps: string | null;
+            /** Funding Rate */
+            funding_rate: string | null;
+            /** Liquidity Rank */
+            liquidity_rank: number | null;
+            /** Liquidity Tier */
+            liquidity_tier: string | null;
+            /** Synced At */
+            synced_at: string | null;
+        };
+        /** MarketUniverseSyncRequest */
+        MarketUniverseSyncRequest: {
+            /**
+             * Exchange
+             * @default bybit
+             */
+            exchange: string;
+            /**
+             * Category
+             * @default linear
+             */
+            category: string;
+            /**
+             * Quote
+             * @default USDT
+             */
+            quote: string;
+            /**
+             * Limit
+             * @default top_200
+             * @enum {string}
+             */
+            limit: "top_100" | "top_200" | "top_500" | "all";
+            /**
+             * Sort
+             * @default turnover_24h_desc
+             */
+            sort: string;
+            /**
+             * Persist
+             * @default true
+             */
+            persist: boolean;
+        };
+        /** MarketUniverseSyncResponse */
+        MarketUniverseSyncResponse: {
+            /** Exchange */
+            exchange: string;
+            /** Category */
+            category: string;
+            /** Quote */
+            quote: string;
+            /**
+             * Requested Limit
+             * @enum {string}
+             */
+            requested_limit: "top_100" | "top_200" | "top_500" | "all";
+            /** Synced Count */
+            synced_count: number;
+            /** Total Available Count */
+            total_available_count: number;
+            /** Skipped Count */
+            skipped_count: number;
+            /**
+             * Synced At
+             * Format: date-time
+             */
+            synced_at: string;
+            /** Warnings */
+            warnings?: string[];
         };
         /** NoTradeFilterResult */
         NoTradeFilterResult: {
@@ -7661,6 +7800,77 @@ export interface operations {
             };
         };
     };
+    list_market_universe_pairs_api_v1_market_universe_pairs_get: {
+        parameters: {
+            query?: {
+                exchange?: string;
+                category?: string;
+                quote?: string;
+                limit?: "top_100" | "top_200" | "top_500" | "all";
+                search?: string | null;
+                sort?: string;
+                liquidity_tier?: string | null;
+                status?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketUniversePairResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_market_universe_api_v1_market_universe_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarketUniverseSyncRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketUniverseSyncResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_notifications_api_v1_notifications_get: {
         parameters: {
             query?: {
@@ -9373,7 +9583,16 @@ export interface operations {
     };
     list_market_pairs_api_v1_market_pairs_get: {
         parameters: {
-            query?: never;
+            query?: {
+                exchange?: string | null;
+                category?: string | null;
+                quote?: string | null;
+                limit?: "top_100" | "top_200" | "top_500" | "all";
+                search?: string | null;
+                sort?: string;
+                liquidity_tier?: string | null;
+                status?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -9387,6 +9606,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarketPairOption"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

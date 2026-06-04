@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
+from app.schemas.market import MarketUniverseLimit
 from app.schemas.watchlist import (
     AlertRuleCreateRequest,
     AlertRuleResponse,
@@ -11,6 +12,7 @@ from app.schemas.watchlist import (
     WatchlistResponse,
     WatchlistUpdateRequest,
 )
+from app.services.market_universe_service import DEFAULT_SORT
 from app.services.notification_service import notification_service
 from app.services.watchlist_service import watchlist_service
 
@@ -24,8 +26,29 @@ def _http_error(exc: Exception) -> HTTPException:
 
 
 @router.get("/market-pairs", response_model=list[MarketPairOption])
-async def list_market_pairs() -> list[MarketPairOption]:
-    return watchlist_service.list_available_pairs()
+async def list_market_pairs(
+    exchange: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    quote: str | None = Query(default=None),
+    limit: MarketUniverseLimit = Query(default="all"),
+    search: str | None = Query(default=None),
+    sort: str = Query(default=DEFAULT_SORT),
+    liquidity_tier: str | None = Query(default=None),
+    status_filter: str | None = Query(default="active/trading", alias="status"),
+) -> list[MarketPairOption]:
+    try:
+        return watchlist_service.list_available_pairs(
+            exchange=exchange,
+            category=category,
+            quote=quote,
+            limit=limit,
+            search=search,
+            sort=sort,
+            liquidity_tier=liquidity_tier,
+            status=status_filter,
+        )
+    except ValueError as exc:
+        raise _http_error(exc) from exc
 
 
 @router.get("/watchlists", response_model=list[WatchlistResponse])

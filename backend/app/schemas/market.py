@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -10,6 +12,50 @@ DeltaDivergence = Literal["bullish_divergence", "bearish_divergence"]
 VwapAcceptance = Literal["above_vwap", "below_vwap", "at_vwap", "rejected_from_vwap"]
 LiquidityPoolSide = Literal["above", "below", "neutral"]
 OrderBookFreshnessStatus = Literal["fresh", "stale", "missing", "unknown"]
+MarketUniverseLimit = Literal["top_100", "top_200", "top_500", "all"]
+
+
+class MarketUniverseSyncRequest(BaseModel):
+    exchange: str = "bybit"
+    category: str = "linear"
+    quote: str = "USDT"
+    limit: MarketUniverseLimit = "top_200"
+    sort: str = "turnover_24h_desc"
+    persist: bool = True
+
+
+class MarketUniversePairResponse(BaseModel):
+    id: UUID
+    exchange: str
+    symbol: str
+    base_asset: str
+    quote_asset: str
+    status: str
+    category: str | None
+    market_type: str | None
+    turnover_24h: Decimal | None
+    volume_24h: Decimal | None
+    last_price: Decimal | None
+    mark_price: Decimal | None
+    bid_price: Decimal | None
+    ask_price: Decimal | None
+    spread_bps: Decimal | None
+    funding_rate: Decimal | None
+    liquidity_rank: int | None
+    liquidity_tier: str | None
+    synced_at: datetime | None
+
+
+class MarketUniverseSyncResponse(BaseModel):
+    exchange: str
+    category: str
+    quote: str
+    requested_limit: MarketUniverseLimit
+    synced_count: int
+    total_available_count: int
+    skipped_count: int
+    synced_at: datetime
+    warnings: list[str] = Field(default_factory=list)
 
 
 class MarketData(BaseModel):

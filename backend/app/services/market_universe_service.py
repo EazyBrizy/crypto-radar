@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.core.config import settings
 from app.exchanges.bybit import (
@@ -19,9 +19,8 @@ from app.exchanges.bybit import (
     fetch_bybit_market_universe,
 )
 from app.models.market import MarketAsset, MarketDerivativeSnapshot, MarketExchange, MarketPair
+from app.schemas.market import MarketUniverseLimit
 from app.services.exchange_instrument_service import upsert_bybit_instrument_info_rule
-
-MarketUniverseLimit = Literal["top_100", "top_200", "top_500", "all"]
 
 SUPPORTED_EXCHANGE = "bybit"
 SUPPORTED_CATEGORY = "linear"
@@ -60,6 +59,7 @@ def sync_exchange_universe(
     quote: str,
     limit: MarketUniverseLimit,
     sort: str = DEFAULT_SORT,
+    persist: bool = True,
 ) -> MarketUniverseSyncResult:
     normalized_exchange = exchange.strip().lower()
     normalized_category = category.strip().lower()
@@ -90,44 +90,49 @@ def sync_exchange_universe(
     synced_at = datetime.now(timezone.utc)
     warnings: list[str] = []
 
-    exchange_record = _upsert_exchange(session, normalized_exchange)
     synced_count = 0
-    for rank, item in enumerate(selected_universe, start=1):
-        base_symbol = _base_symbol(item, normalized_quote)
-        quote_symbol = (item.quote_coin or normalized_quote).strip().upper()
-        if not base_symbol or not quote_symbol:
-            warnings.append(f"Skipped {item.symbol}: base/quote asset is missing.")
-            continue
+    if persist:
+        exchange_record = _upsert_exchange(session, normalized_exchange)
+        for rank, item in enumerate(selected_universe, start=1):
+            base_symbol = _base_symbol(item, normalized_quote)
+            quote_symbol = (item.quote_coin or normalized_quote).strip().upper()
+            if not base_symbol or not quote_symbol:
+                warnings.append(f"Skipped {item.symbol}: base/quote asset is missing.")
+                continue
 
-        base_asset = _upsert_asset(session, base_symbol)
-        quote_asset = _upsert_asset(session, quote_symbol)
-        pair = _upsert_pair(
-            session,
-            exchange=exchange_record,
-            base_asset=base_asset,
-            quote_asset=quote_asset,
-            item=item,
-            rank=rank,
-            synced_at=synced_at,
-        )
-        upsert_bybit_instrument_info_rule(
-            session,
-            exchange=exchange_record,
-            instrument=item.instrument,
-            pair=pair,
-            fetched_at=synced_at,
-            source=INSTRUMENT_RULE_SOURCE,
-        )
-        _upsert_derivative_snapshot(
-            session,
-            exchange=exchange_record,
-            pair=pair,
-            item=item,
-            fetched_at=synced_at,
-        )
-        synced_count += 1
+            base_asset = _upsert_asset(session, base_symbol)
+            quote_asset = _upsert_asset(session, quote_symbol)
+            pair = _upsert_pair(
+                session,
+                exchange=exchange_record,
+                base_asset=base_asset,
+                quote_asset=quote_asset,
+                item=item,
+                rank=rank,
+                synced_at=synced_at,
+            )
+            upsert_bybit_instrument_info_rule(
+                session,
+                exchange=exchange_record,
+                instrument=item.instrument,
+                pair=pair,
+                fetched_at=synced_at,
+                source=INSTRUMENT_RULE_SOURCE,
+            )
+            _upsert_derivative_snapshot(
+                session,
+                exchange=exchange_record,
+                pair=pair,
+                item=item,
+                fetched_at=synced_at,
+            )
+            synced_count += 1
 
-    session.commit()
+        session.commit()
+    else:
+        synced_count = len(selected_universe)
+        warnings.append("persist=false: market universe fetched without database writes.")
+
     return MarketUniverseSyncResult(
         exchange=normalized_exchange,
         category=normalized_category,
@@ -139,6 +144,82 @@ def sync_exchange_universe(
         synced_at=synced_at,
         warnings=warnings,
     )
+
+
+def list_persisted_market_pairs(
+    session: Session,
+    *,
+    exchange: str = SUPPORTED_EXCHANGE,
+    category: str | None = SUPPORTED_CATEGORY,
+    quote: str | None = SUPPORTED_QUOTE,
+    limit: MarketUniverseLimit = "top_200",
+    search: str | None = None,
+    sort: str = DEFAULT_SORT,
+    liquidity_tier: str | None = None,
+    status: str | None = "active/trading",
+) -> list[MarketPair]:
+    _validate_list_request(limit=limit, sort=sort)
+    base_asset = aliased(MarketAsset)
+    quote_asset = aliased(MarketAsset)
+    statement = (
+        select(MarketPair)
+        .join(MarketPair.exchange)
+        .join(base_asset, MarketPair.base_asset)
+        .join(quote_asset, MarketPair.quote_asset)
+        .options(
+            joinedload(MarketPair.exchange),
+            joinedload(MarketPair.base_asset),
+            joinedload(MarketPair.quote_asset),
+        )
+    )
+
+    normalized_exchange = exchange.strip().lower()
+    if normalized_exchange:
+        statement = statement.where(func.lower(MarketExchange.code) == normalized_exchange)
+
+    normalized_category = category.strip().lower() if category else ""
+    if normalized_category:
+        statement = statement.where(func.lower(MarketPair.category) == normalized_category)
+
+    normalized_quote = quote.strip().upper() if quote else ""
+    if normalized_quote:
+        statement = statement.where(func.upper(quote_asset.symbol) == normalized_quote)
+
+    normalized_tier = liquidity_tier.strip().lower() if liquidity_tier else ""
+    if normalized_tier:
+        statement = statement.where(func.lower(MarketPair.liquidity_tier) == normalized_tier)
+
+    search_term = search.strip().lower() if search else ""
+    if search_term:
+        pattern = f"%{search_term}%"
+        statement = statement.where(
+            or_(
+                func.lower(MarketPair.symbol).like(pattern),
+                func.lower(base_asset.symbol).like(pattern),
+                func.lower(quote_asset.symbol).like(pattern),
+            )
+        )
+
+    status_tokens = _status_tokens(status)
+    if status_tokens:
+        statement = statement.where(
+            or_(
+                func.lower(MarketPair.status).in_(status_tokens),
+                func.lower(MarketPair.exchange_status).in_(status_tokens),
+            )
+        )
+
+    statement = statement.order_by(
+        MarketPair.liquidity_rank.is_(None),
+        MarketPair.liquidity_rank.asc(),
+        MarketPair.turnover_24h.is_(None),
+        MarketPair.turnover_24h.desc(),
+        MarketPair.symbol.asc(),
+    )
+    size = _limit_size(limit)
+    if size is not None:
+        statement = statement.limit(size)
+    return list(session.scalars(statement).unique().all())
 
 
 def _validate_request(
@@ -159,6 +240,34 @@ def _validate_request(
         raise ValueError("Market universe limit must be top_100, top_200, top_500, or all.")
     if sort != DEFAULT_SORT:
         raise ValueError("Market universe sort supports only turnover_24h_desc.")
+
+
+def _validate_list_request(
+    *,
+    limit: str,
+    sort: str,
+) -> None:
+    if limit not in _LIMIT_SIZES:
+        raise ValueError("Market universe limit must be top_100, top_200, top_500, or all.")
+    if sort != DEFAULT_SORT:
+        raise ValueError("Market universe sort supports only turnover_24h_desc.")
+
+
+def _limit_size(limit: MarketUniverseLimit) -> int | None:
+    return _LIMIT_SIZES[limit]
+
+
+def _status_tokens(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    normalized = value.strip().lower()
+    if not normalized or normalized == "all":
+        return []
+    return [
+        token.strip()
+        for token in normalized.replace(",", "/").split("/")
+        if token.strip()
+    ]
 
 
 def _sort_universe(

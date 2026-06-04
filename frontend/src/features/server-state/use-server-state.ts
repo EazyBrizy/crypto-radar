@@ -285,7 +285,7 @@ export function useWatchlistQuery() {
 export function useMarketPairsQuery() {
   return useQuery({
     queryKey: serverStateKeys.watchlist.pairs(),
-    queryFn: api.marketPairs,
+    queryFn: () => api.marketPairs(),
     staleTime: serverStatePolicy.staticStaleTimeMs
   });
 }

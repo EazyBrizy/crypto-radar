@@ -1484,6 +1484,189 @@
         }
       }
     },
+    "/api/v1/market-universe/pairs": {
+      "get": {
+        "tags": [
+          "market-universe"
+        ],
+        "summary": "List Market Universe Pairs",
+        "operationId": "list_market_universe_pairs_api_v1_market_universe_pairs_get",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "bybit",
+              "title": "Exchange"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "linear",
+              "title": "Category"
+            }
+          },
+          {
+            "name": "quote",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "USDT",
+              "title": "Quote"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "top_100",
+                "top_200",
+                "top_500",
+                "all"
+              ],
+              "type": "string",
+              "default": "top_200",
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "turnover_24h_desc",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "liquidity_tier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Liquidity Tier"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "active/trading",
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MarketUniversePairResponse"
+                  },
+                  "title": "Response List Market Universe Pairs Api V1 Market Universe Pairs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market-universe/sync": {
+      "post": {
+        "tags": [
+          "market-universe"
+        ],
+        "summary": "Sync Market Universe",
+        "operationId": "sync_market_universe_api_v1_market_universe_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketUniverseSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketUniverseSyncResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "tags": [
@@ -4292,17 +4475,152 @@
         ],
         "summary": "List Market Pairs",
         "operationId": "list_market_pairs_api_v1_market_pairs_get",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exchange"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "name": "quote",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Quote"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "top_100",
+                "top_200",
+                "top_500",
+                "all"
+              ],
+              "type": "string",
+              "default": "all",
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "turnover_24h_desc",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "liquidity_tier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Liquidity Tier"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "active/trading",
+              "title": "Status"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/MarketPairOption"
                   },
-                  "type": "array",
                   "title": "Response List Market Pairs Api V1 Market Pairs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -8684,6 +9002,314 @@
         },
         "type": "object",
         "title": "MarketRegimeSnapshot"
+      },
+      "MarketUniversePairResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "base_asset": {
+            "type": "string",
+            "title": "Base Asset"
+          },
+          "quote_asset": {
+            "type": "string",
+            "title": "Quote Asset"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "market_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Type"
+          },
+          "turnover_24h": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turnover 24H"
+          },
+          "volume_24h": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume 24H"
+          },
+          "last_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Price"
+          },
+          "mark_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mark Price"
+          },
+          "bid_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bid Price"
+          },
+          "ask_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Price"
+          },
+          "spread_bps": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spread Bps"
+          },
+          "funding_rate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funding Rate"
+          },
+          "liquidity_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidity Rank"
+          },
+          "liquidity_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidity Tier"
+          },
+          "synced_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Synced At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "exchange",
+          "symbol",
+          "base_asset",
+          "quote_asset",
+          "status",
+          "category",
+          "market_type",
+          "turnover_24h",
+          "volume_24h",
+          "last_price",
+          "mark_price",
+          "bid_price",
+          "ask_price",
+          "spread_bps",
+          "funding_rate",
+          "liquidity_rank",
+          "liquidity_tier",
+          "synced_at"
+        ],
+        "title": "MarketUniversePairResponse"
+      },
+      "MarketUniverseSyncRequest": {
+        "properties": {
+          "exchange": {
+            "type": "string",
+            "title": "Exchange",
+            "default": "bybit"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "default": "linear"
+          },
+          "quote": {
+            "type": "string",
+            "title": "Quote",
+            "default": "USDT"
+          },
+          "limit": {
+            "type": "string",
+            "enum": [
+              "top_100",
+              "top_200",
+              "top_500",
+              "all"
+            ],
+            "title": "Limit",
+            "default": "top_200"
+          },
+          "sort": {
+            "type": "string",
+            "title": "Sort",
+            "default": "turnover_24h_desc"
+          },
+          "persist": {
+            "type": "boolean",
+            "title": "Persist",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "MarketUniverseSyncRequest"
+      },
+      "MarketUniverseSyncResponse": {
+        "properties": {
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "quote": {
+            "type": "string",
+            "title": "Quote"
+          },
+          "requested_limit": {
+            "type": "string",
+            "enum": [
+              "top_100",
+              "top_200",
+              "top_500",
+              "all"
+            ],
+            "title": "Requested Limit"
+          },
+          "synced_count": {
+            "type": "integer",
+            "title": "Synced Count"
+          },
+          "total_available_count": {
+            "type": "integer",
+            "title": "Total Available Count"
+          },
+          "skipped_count": {
+            "type": "integer",
+            "title": "Skipped Count"
+          },
+          "synced_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Synced At"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "exchange",
+          "category",
+          "quote",
+          "requested_limit",
+          "synced_count",
+          "total_available_count",
+          "skipped_count",
+          "synced_at"
+        ],
+        "title": "MarketUniverseSyncResponse"
       },
       "NoTradeFilterResult": {
         "properties": {

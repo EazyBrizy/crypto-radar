@@ -10,6 +10,7 @@ from app.models.market import MarketExchange, MarketPair
 from app.models.strategy import StrategyVersion
 from app.models.user import AppUser
 from app.models.watchlist import UserAlertRule, UserWatchlist, UserWatchlistPair
+from app.schemas.market import MarketUniverseLimit
 from app.schemas.watchlist import (
     AlertRuleCreateRequest,
     AlertRuleResponse,
@@ -23,6 +24,7 @@ from app.schemas.watchlist import (
     WatchlistUpdateRequest,
 )
 from app.services.bootstrap_service import DEFAULT_WATCHLIST_NAME
+from app.services.market_universe_service import DEFAULT_SORT, list_persisted_market_pairs
 from app.services.user_identity import resolve_app_user
 
 
@@ -30,9 +32,30 @@ class WatchlistService:
     def __init__(self, session_factory: sessionmaker[Session] = SessionLocal) -> None:
         self._session_factory = session_factory
 
-    def list_available_pairs(self) -> list[MarketPairOption]:
+    def list_available_pairs(
+        self,
+        *,
+        exchange: str | None = None,
+        category: str | None = None,
+        quote: str | None = None,
+        limit: MarketUniverseLimit = "all",
+        search: str | None = None,
+        sort: str = DEFAULT_SORT,
+        liquidity_tier: str | None = None,
+        status: str | None = "active/trading",
+    ) -> list[MarketPairOption]:
         with self._session_factory() as session:
-            pairs = session.scalars(_pair_select().order_by(MarketExchange.code, MarketPair.symbol)).all()
+            pairs = list_persisted_market_pairs(
+                session,
+                exchange=exchange or "",
+                category=category,
+                quote=quote,
+                limit=limit,
+                search=search,
+                sort=sort,
+                liquidity_tier=liquidity_tier,
+                status=status,
+            )
             return [_pair_to_option(pair) for pair in pairs]
 
     def list_watchlists(self, user_id: str = "demo_user") -> list[WatchlistResponse]:

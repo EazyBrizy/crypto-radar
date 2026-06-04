@@ -7,8 +7,9 @@ import logging
 import time
 import urllib.parse
 import urllib.request
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, List, Optional
 
 import websockets
@@ -24,6 +25,7 @@ BYBIT_API_URL = "https://api.bybit.com"
 BYBIT_INSTRUMENTS_URL = "https://api.bybit.com/v5/market/instruments-info"
 BYBIT_KLINE_URL = "https://api.bybit.com/v5/market/kline"
 BYBIT_FEE_RATE_PATH = "/v5/account/fee-rate"
+BYBIT_WALLET_BALANCE_PATH = "/v5/account/wallet-balance"
 BYBIT_TICKERS_PATH = "/v5/market/tickers"
 BYBIT_ORDERBOOK_PATH = "/v5/market/orderbook"
 BYBIT_POSITION_LIST_PATH = "/v5/position/list"
@@ -60,6 +62,37 @@ class BybitFeeRate:
     symbol: str | None
     maker_fee_rate: float
     taker_fee_rate: float
+
+
+@dataclass(frozen=True)
+class BybitCoinBalance:
+    coin: str
+    equity: Decimal | None
+    usd_value: Decimal | None
+    wallet_balance: Decimal | None
+    available_to_withdraw: Decimal | None
+    locked: Decimal | None
+    borrow_amount: Decimal | None
+    accrued_interest: Decimal | None
+    total_order_im: Decimal | None
+    total_position_im: Decimal | None
+    total_position_mm: Decimal | None
+    unrealised_pnl: Decimal | None
+    raw_payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class BybitWalletBalance:
+    account_type: str
+    total_equity: Decimal | None
+    total_wallet_balance: Decimal | None
+    total_margin_balance: Decimal | None
+    total_available_balance: Decimal | None
+    total_initial_margin: Decimal | None
+    total_maintenance_margin: Decimal | None
+    total_perp_upl: Decimal | None
+    coins: tuple[BybitCoinBalance, ...]
+    raw_payload: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -247,6 +280,85 @@ def fetch_bybit_fee_rates(
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Skipping malformed Bybit fee-rate row: %s", exc)
     return rates
+
+
+def fetch_bybit_wallet_balance(
+    *,
+    api_key: str,
+    api_secret: str,
+    account_type: str = "UNIFIED",
+    coin: str | None = "USDT",
+    base_url: str = BYBIT_API_URL,
+    recv_window: int = 5_000,
+    timestamp_ms: int | None = None,
+    urlopen=urllib.request.urlopen,
+) -> BybitWalletBalance:
+    normalized_account_type = account_type.strip()
+    params = {"accountType": normalized_account_type}
+    if coin is not None and coin.strip():
+        params["coin"] = coin.strip()
+    payload = _get_private_json(
+        api_key=api_key,
+        api_secret=api_secret,
+        base_url=base_url,
+        path=BYBIT_WALLET_BALANCE_PATH,
+        params=params,
+        recv_window=recv_window,
+        timestamp_ms=timestamp_ms,
+        urlopen=urlopen,
+        label="wallet-balance",
+    )
+    result = payload.get("result", {})
+    result_payload: Mapping[str, Any] = result if isinstance(result, Mapping) else {}
+    rows = result_payload.get("list", [])
+    if not isinstance(rows, list) or not rows:
+        return BybitWalletBalance(
+            account_type=normalized_account_type,
+            total_equity=None,
+            total_wallet_balance=None,
+            total_margin_balance=None,
+            total_available_balance=None,
+            total_initial_margin=None,
+            total_maintenance_margin=None,
+            total_perp_upl=None,
+            coins=(),
+            raw_payload=result_payload,
+        )
+    wallet_payload = rows[0]
+    if not isinstance(wallet_payload, Mapping):
+        return BybitWalletBalance(
+            account_type=normalized_account_type,
+            total_equity=None,
+            total_wallet_balance=None,
+            total_margin_balance=None,
+            total_available_balance=None,
+            total_initial_margin=None,
+            total_maintenance_margin=None,
+            total_perp_upl=None,
+            coins=(),
+            raw_payload=result_payload,
+        )
+    coins: list[BybitCoinBalance] = []
+    coin_rows = wallet_payload.get("coin", [])
+    if isinstance(coin_rows, list):
+        for coin_payload in coin_rows:
+            if isinstance(coin_payload, Mapping):
+                parsed_coin = _parse_coin_balance(coin_payload)
+                if parsed_coin is not None:
+                    coins.append(parsed_coin)
+    row_account_type = wallet_payload.get("accountType")
+    return BybitWalletBalance(
+        account_type=str(row_account_type) if row_account_type else normalized_account_type,
+        total_equity=_decimal_or_none(wallet_payload.get("totalEquity")),
+        total_wallet_balance=_decimal_or_none(wallet_payload.get("totalWalletBalance")),
+        total_margin_balance=_decimal_or_none(wallet_payload.get("totalMarginBalance")),
+        total_available_balance=_decimal_or_none(wallet_payload.get("totalAvailableBalance")),
+        total_initial_margin=_decimal_or_none(wallet_payload.get("totalInitialMargin")),
+        total_maintenance_margin=_decimal_or_none(wallet_payload.get("totalMaintenanceMargin")),
+        total_perp_upl=_decimal_or_none(wallet_payload.get("totalPerpUPL")),
+        coins=tuple(coins),
+        raw_payload=wallet_payload,
+    )
 
 
 def fetch_bybit_instrument_rules(
@@ -638,6 +750,27 @@ def _parse_book_side(value: object) -> list[tuple[float, float]]:
     return levels
 
 
+def _parse_coin_balance(row: Mapping[str, Any]) -> BybitCoinBalance | None:
+    coin = row.get("coin")
+    if not isinstance(coin, str) or not coin:
+        return None
+    return BybitCoinBalance(
+        coin=coin,
+        equity=_decimal_or_none(row.get("equity")),
+        usd_value=_decimal_or_none(row.get("usdValue")),
+        wallet_balance=_decimal_or_none(row.get("walletBalance")),
+        available_to_withdraw=_decimal_or_none(row.get("availableToWithdraw")),
+        locked=_decimal_or_none(row.get("locked")),
+        borrow_amount=_decimal_or_none(row.get("borrowAmount")),
+        accrued_interest=_decimal_or_none(row.get("accruedInterest")),
+        total_order_im=_decimal_or_none(row.get("totalOrderIM")),
+        total_position_im=_decimal_or_none(row.get("totalPositionIM")),
+        total_position_mm=_decimal_or_none(row.get("totalPositionMM")),
+        unrealised_pnl=_decimal_or_none(row.get("unrealisedPnl")),
+        raw_payload=row,
+    )
+
+
 def _normalize_trade_side(value: object) -> TradeSide | None:
     if not isinstance(value, str):
         return None
@@ -655,6 +788,19 @@ def _float_or_none(value: object) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
         return None
 
 

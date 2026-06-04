@@ -1,4 +1,5 @@
 import { Metric } from "@/components/Metric";
+import { isTerminalTradeStatus } from "@/domain/trade-status";
 import type { TradeJournalEntry } from "@/types";
 import { formatPercent } from "@/utils";
 
@@ -7,7 +8,7 @@ interface TradesAnalyticsPanelProps {
 }
 
 export function TradesAnalyticsPanel({ trades }: TradesAnalyticsPanelProps) {
-  const closedTrades = trades.filter((trade) => trade.status !== "open");
+  const closedTrades = trades.filter((trade) => isTerminalTradeStatus(trade.status));
   const winners = closedTrades.filter((trade) => trade.result === "win").length;
   const winRate = closedTrades.length ? (winners / closedTrades.length) * 100 : 0;
   const netPnl = trades.reduce((sum, trade) => sum + (trade.pnl_percent ?? 0), 0);

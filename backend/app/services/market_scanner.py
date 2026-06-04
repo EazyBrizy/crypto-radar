@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
+from app.domain.virtual_trade_status import is_terminal_virtual_trade_status
 from app.exchanges.bybit import BybitAdapter, fetch_bybit_klines
 from app.schemas.candle import OHLCVCandle
 from app.schemas.market import AlphaMarketContext, Features, MarketData, RecentTrade
@@ -68,6 +69,14 @@ DEFAULT_SYMBOLS = [
 
 class VirtualTradingPriceUpdater(Protocol):
     def update_market_price(self, exchange: str, symbol: str, price: float) -> list[VirtualTrade]:
+        ...
+
+    def process_virtual_positions_tick(
+        self,
+        exchange: str,
+        symbol: str,
+        market_tick_or_candle: object,
+    ) -> list[VirtualTrade]:
         ...
 
 
@@ -159,11 +168,7 @@ class MarketScanner:
 
         self._record_recent_trade(data)
         await self._persist_market_tick(data)
-        updated_trades = (
-            self._virtual_trading.update_market_price(data.exchange, data.symbol, data.price)
-            if self._virtual_trading is not None
-            else []
-        )
+        updated_trades = await self._process_virtual_positions(data)
         if updated_trades:
             await self._publish_trade_updates(updated_trades)
         await self._process_pending_entry_triggers(data)
@@ -263,6 +268,33 @@ class MarketScanner:
                 data.symbol,
                 exc,
             )
+
+    async def _process_virtual_positions(self, data: MarketData) -> list[VirtualTrade]:
+        if self._virtual_trading is None:
+            return []
+        try:
+            processor = getattr(self._virtual_trading, "process_virtual_positions_tick", None)
+            if processor is not None:
+                return await asyncio.to_thread(
+                    processor,
+                    data.exchange,
+                    data.symbol,
+                    data,
+                )
+            return await asyncio.to_thread(
+                self._virtual_trading.update_market_price,
+                data.exchange,
+                data.symbol,
+                data.price,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Virtual position lifecycle failed for %s:%s: %s",
+                data.exchange,
+                data.symbol,
+                exc,
+            )
+            return []
 
     async def _persist_market_candles(self, candles: list[OHLCVCandle]) -> None:
         if self._market_persistence is None or not candles:
@@ -537,7 +569,7 @@ class MarketScanner:
     async def _publish_trade_updates(self, trades: list[VirtualTrade]) -> None:
         now = time.monotonic()
         for trade in trades:
-            if trade.status == "closed":
+            if is_terminal_virtual_trade_status(trade.status):
                 self._last_trade_update_event_monotonic.pop(trade.id, None)
                 await realtime_event_broker.publish(trade_closed_event(trade))
                 if trade.close_reason == "take_profit":

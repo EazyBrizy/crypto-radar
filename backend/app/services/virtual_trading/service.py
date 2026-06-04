@@ -21,9 +21,15 @@ from typing import Any, Protocol
 from typing import Optional
 from uuid import uuid4
 
-from app.domain.signal_status import is_execution_candidate_status
 from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
+from app.domain.signal_status import is_execution_candidate_status
+from app.domain.virtual_trade_status import (
+    ACTIVE_VIRTUAL_TRADE_STATUSES,
+    TERMINAL_VIRTUAL_TRADE_STATUSES,
+    is_active_virtual_trade_status,
+    is_terminal_virtual_trade_status,
+)
 from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import RadarSignal
 from app.schemas.risk import ResolvedExecutionProfile, RiskDecision
@@ -61,6 +67,7 @@ from app.services.trade_repository import (
     VirtualTradePersistenceEvent,
 )
 from app.services.virtual_trade_lifecycle import (
+    apply_virtual_trade_candle,
     apply_virtual_trade_market_price,
     arm_virtual_trade_time_stop,
     close_virtual_trade_lifecycle,
@@ -84,6 +91,15 @@ class _VirtualEntrySimulation:
     account: VirtualAccount
     side: str
     stop_loss: float
+
+
+@dataclass(frozen=True)
+class _VirtualLifecycleCandle:
+    high: float
+    low: float
+    close: float
+    open_time: int | None = None
+    close_time: int | None = None
 
 
 class SignalWriteSideEffect(Protocol):
@@ -139,6 +155,21 @@ class VirtualTradingService:
         status: Optional[str] = None,
         signal_id: Optional[str] = None,
     ) -> list[VirtualTrade]:
+        if status == "open":
+            trades = self._list_active_virtual_trades()
+            if signal_id is not None:
+                trades = [trade for trade in trades if trade.signal_id == signal_id]
+            return sorted(trades, key=lambda trade: trade.opened_at, reverse=True)
+        if status == "closed":
+            trades_by_id: dict[str, VirtualTrade] = {}
+            for terminal_status in TERMINAL_VIRTUAL_TRADE_STATUSES:
+                for trade in self._repository.list_virtual_trades(
+                    status=terminal_status,
+                    signal_id=signal_id,
+                ):
+                    if is_terminal_virtual_trade_status(trade.status):
+                        trades_by_id[trade.id] = trade
+            return sorted(trades_by_id.values(), key=lambda trade: trade.opened_at, reverse=True)
         return self._repository.list_virtual_trades(
             status=status,
             signal_id=signal_id,
@@ -146,6 +177,14 @@ class VirtualTradingService:
 
     def get_virtual_trade(self, trade_id: str) -> Optional[VirtualTrade]:
         return self._repository.get_virtual_trade(trade_id)
+
+    def _list_active_virtual_trades(self) -> list[VirtualTrade]:
+        trades_by_id: dict[str, VirtualTrade] = {}
+        for status in ACTIVE_VIRTUAL_TRADE_STATUSES:
+            for trade in self._repository.list_virtual_trades(status=status):
+                if is_active_virtual_trade_status(trade.status):
+                    trades_by_id[trade.id] = trade
+        return list(trades_by_id.values())
 
     def list_real_trades(
         self,
@@ -172,11 +211,15 @@ class VirtualTradingService:
         status: Optional[str] = None,
         signal_id: Optional[str] = None,
     ) -> list[TradeJournalEntry]:
-        return self._repository.list_journal(
-            mode=mode,
-            status=status,
-            signal_id=signal_id,
-        )
+        trades: list[TradeJournalEntry] = []
+        if mode in {None, "virtual"}:
+            trades.extend(
+                TradeJournalEntry.model_validate(trade.model_dump())
+                for trade in self.list_virtual_trades(status=status, signal_id=signal_id)
+            )
+        if mode in {None, "real"}:
+            trades.extend(self.list_real_trades(status=status, signal_id=signal_id))
+        return sorted(trades, key=lambda trade: trade.opened_at, reverse=True)
 
     def get_virtual_account(self, user_id: str = "demo_user") -> VirtualAccount:
         repository_account = getattr(self._repository, "get_virtual_account", None)
@@ -205,8 +248,8 @@ class VirtualTradingService:
         )
         open_trades = [
             trade
-            for trade in self._repository.list_virtual_trades(status="open")
-            if trade.user_id == user_id and trade.status == "open"
+            for trade in self._list_active_virtual_trades()
+            if trade.user_id == user_id
         ]
         open_realized_pnl = sum(trade.realized_pnl for trade in open_trades)
         unrealized_pnl = sum(
@@ -386,8 +429,8 @@ class VirtualTradingService:
     ) -> VirtualTrade:
         open_user_positions = [
             trade
-            for trade in self._repository.list_virtual_trades(status="open")
-            if trade.user_id == request.user_id and trade.status == "open"
+            for trade in self._list_active_virtual_trades()
+            if trade.user_id == request.user_id
         ]
         if len(open_user_positions) >= request.max_open_positions:
             raise ValueError("Достигнут лимит открытых виртуальных позиций")
@@ -408,8 +451,8 @@ class VirtualTradingService:
         if enforce_position_limit:
             open_user_positions = [
                 trade
-                for trade in self._repository.list_virtual_trades(status="open")
-                if trade.user_id == request.user_id and trade.status == "open"
+                for trade in self._list_active_virtual_trades()
+                if trade.user_id == request.user_id
             ]
             if len(open_user_positions) >= request.max_open_positions:
                 raise ValueError("Maximum open virtual positions limit reached")
@@ -781,8 +824,8 @@ class VirtualTradingService:
         account = self.get_virtual_account(gate_request.user_id)
         open_user_positions = [
             trade
-            for trade in self._repository.list_virtual_trades(status="open")
-            if trade.user_id == gate_request.user_id and trade.status == "open"
+            for trade in self._list_active_virtual_trades()
+            if trade.user_id == gate_request.user_id
         ]
         reference = self._risk_reference(
             user_id=gate_request.user_id,
@@ -1106,23 +1149,50 @@ class VirtualTradingService:
         symbol: str,
         price: float,
     ) -> list[VirtualTrade]:
+        return self.process_virtual_positions_tick(
+            exchange,
+            symbol,
+            {"price": price},
+        )
+
+    def process_virtual_positions_tick(
+        self,
+        exchange: str,
+        symbol: str,
+        market_tick_or_candle: Any,
+    ) -> list[VirtualTrade]:
+        candle = _virtual_lifecycle_candle(market_tick_or_candle)
+        price = _virtual_lifecycle_price(market_tick_or_candle)
+        if candle is None and price is None:
+            return []
+
         updated: list[VirtualTrade] = []
-        for trade in self._repository.list_virtual_trades(status="open"):
-            if trade.status != "open":
-                continue
-            if trade.exchange != exchange or trade.symbol != symbol:
+        for trade in self._list_active_virtual_trades():
+            if not _same_market(trade.exchange, trade.symbol, exchange, symbol):
                 continue
 
-            now = datetime.now(timezone.utc)
-            simulated_price = self._private_simulated_price(trade, price, now)
-            lifecycle_result = apply_virtual_trade_market_price(
-                trade,
-                simulated_price,
-                now,
-            )
+            now = _market_event_time(market_tick_or_candle)
+            if candle is not None:
+                lifecycle_result = apply_virtual_trade_candle(
+                    trade,
+                    high=candle.high,
+                    low=candle.low,
+                    close=candle.close,
+                    now=now,
+                    candle_open_time=candle.open_time,
+                    candle_close_time=candle.close_time,
+                )
+            else:
+                assert price is not None
+                simulated_price = self._private_simulated_price(trade, price, now)
+                lifecycle_result = apply_virtual_trade_market_price(
+                    trade,
+                    simulated_price,
+                    now,
+                )
             updated_trade = self._repository.save_virtual_trade(lifecycle_result.trade)
-            if lifecycle_result.closed:
-                self._after_virtual_trade_events(self._consume_repository_events())
+            self._after_virtual_trade_events(self._consume_repository_events())
+            if lifecycle_result.closed or is_terminal_virtual_trade_status(updated_trade.status):
                 self._apply_account_close(updated_trade, updated_trade.pnl or 0.0)
             updated.append(updated_trade)
         return updated
@@ -1133,7 +1203,7 @@ class VirtualTradingService:
         exit_price: float,
         reason: CloseReason,
     ) -> VirtualTrade:
-        if trade.status != "open":
+        if not is_active_virtual_trade_status(trade.status):
             return trade
         lifecycle_result = close_virtual_trade_lifecycle(
             trade,
@@ -1251,6 +1321,76 @@ class VirtualTradingService:
         if trade.side == "long":
             return (price - trade.entry_price) * quantity
         return (trade.entry_price - price) * quantity
+
+
+def _virtual_lifecycle_candle(value: Any) -> _VirtualLifecycleCandle | None:
+    high = _positive_market_float(value, "high")
+    low = _positive_market_float(value, "low")
+    close = _positive_market_float(value, "close", "price")
+    if high is None or low is None or close is None:
+        return None
+    return _VirtualLifecycleCandle(
+        high=max(high, low, close),
+        low=min(high, low, close),
+        close=close,
+        open_time=_optional_market_int(value, "open_time"),
+        close_time=_optional_market_int(value, "close_time"),
+    )
+
+
+def _virtual_lifecycle_price(value: Any) -> float | None:
+    return _positive_market_float(value, "price", "last", "close")
+
+
+def _positive_market_float(value: Any, *names: str) -> float | None:
+    for name in names:
+        raw = _market_value(value, name)
+        if raw is None:
+            continue
+        try:
+            number = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            return number
+    return None
+
+
+def _optional_market_int(value: Any, name: str) -> int | None:
+    raw = _market_value(value, name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _market_value(value: Any, name: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _market_event_time(value: Any) -> datetime:
+    timestamp = _optional_market_int(value, "close_time") or _optional_market_int(value, "timestamp")
+    if timestamp is None:
+        return datetime.now(timezone.utc)
+    if timestamp > 10_000_000_000:
+        timestamp = timestamp // 1000
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+
+def _same_market(
+    trade_exchange: str,
+    trade_symbol: str,
+    exchange: str,
+    symbol: str,
+) -> bool:
+    return (
+        trade_exchange.strip().lower() == exchange.strip().lower()
+        and trade_symbol.strip().upper() == symbol.strip().upper()
+    )
 
 
 virtual_trading_service = VirtualTradingService(

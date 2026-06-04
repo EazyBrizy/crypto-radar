@@ -24,7 +24,14 @@ export type PendingEntryIntentStatus =
   | "expired"
   | "requires_reconfirmation";
 export type TradeSource = "virtual" | "real" | "backtest";
-export type TradeStatus = "open" | "closed" | "cancelled";
+export type TradeStatus =
+  | "open"
+  | "partially_closed"
+  | "closed"
+  | "stopped"
+  | "invalidated"
+  | "expired"
+  | "cancelled";
 export type TradeCloseReason =
   | "take_profit"
   | "stop_loss"

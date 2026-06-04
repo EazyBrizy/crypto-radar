@@ -103,6 +103,27 @@ describe("TradeJournalTable", () => {
     expect(onSelectTrade).not.toHaveBeenCalled();
   });
 
+  it("allows market close for partially closed virtual positions", async () => {
+    const user = userEvent.setup();
+    const onCloseMarket = vi.fn();
+    const partialTrade: TradeJournalEntry = {
+      ...baseTrade,
+      status: "partially_closed",
+      close_reason: "partial_take_profit",
+      remaining_quantity: 0.025,
+      closed_quantity: 0.022
+    };
+
+    render(<TradeJournalTable onCloseMarket={onCloseMarket} trades={[partialTrade]} />);
+
+    const closeButton = screen.getByLabelText("Close ETHUSDT at market");
+    expect(closeButton).toBeEnabled();
+
+    await user.click(closeButton);
+
+    expect(onCloseMarket).toHaveBeenCalledWith(partialTrade);
+  });
+
   it("shows backtest source and disables market close", async () => {
     const user = userEvent.setup();
     const onCloseMarket = vi.fn();

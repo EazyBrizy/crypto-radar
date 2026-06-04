@@ -5,6 +5,11 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Any
 
+from app.domain.virtual_trade_status import (
+    is_active_virtual_trade_status,
+    is_terminal_virtual_trade_status,
+    virtual_trade_status_for_close_reason,
+)
 from app.schemas.trade import (
     CloseReason,
     TradeResult,
@@ -36,11 +41,11 @@ def initialize_virtual_trade_lifecycle(trade: VirtualTrade) -> VirtualTrade:
     initial_size_usd = _initial_size_usd(trade)
     remaining_size_usd = _size_for_quantity(trade.entry_price, remaining_quantity)
     realized_pnl = trade.realized_pnl
-    if trade.status == "closed" and trade.pnl is not None and abs(realized_pnl) <= _EPSILON:
+    if is_terminal_virtual_trade_status(trade.status) and trade.pnl is not None and abs(realized_pnl) <= _EPSILON:
         realized_pnl = trade.pnl
     unrealized_pnl = (
         0.0
-        if trade.status == "closed"
+        if is_terminal_virtual_trade_status(trade.status)
         else _gross_pnl(
             side=trade.side,
             entry_price=trade.entry_price,
@@ -94,7 +99,7 @@ def apply_virtual_trade_market_price(
 ) -> VirtualTradeLifecycleResult:
     updated = _mark_price(initialize_virtual_trade_lifecycle(trade), price, now)
     updated = update_trailing_stop_on_mark(updated, price, now)
-    if updated.status != "open":
+    if not is_active_virtual_trade_status(updated.status):
         return VirtualTradeLifecycleResult(trade=updated)
 
     if _time_stop_reached(updated, now):
@@ -141,7 +146,7 @@ def apply_virtual_trade_candle(
     candle_close_time: int | None = None,
 ) -> VirtualTradeLifecycleResult:
     working = initialize_virtual_trade_lifecycle(trade)
-    if working.status != "open":
+    if not is_active_virtual_trade_status(working.status):
         return VirtualTradeLifecycleResult(trade=working)
 
     stop_price = working.current_stop_loss or working.stop_loss
@@ -195,7 +200,7 @@ def update_trailing_stop_on_mark(
     price: float,
     now: datetime,
 ) -> VirtualTrade:
-    if trade.status != "open" or not trade.trailing_active:
+    if not is_active_virtual_trade_status(trade.status) or not trade.trailing_active:
         return trade
     trailing_distance = _trailing_distance(trade)
     if trailing_distance is None:
@@ -245,7 +250,7 @@ def close_virtual_trade_lifecycle(
     now: datetime,
 ) -> VirtualTradeLifecycleResult:
     updated = _mark_price(initialize_virtual_trade_lifecycle(trade), exit_price, now)
-    if updated.status != "open":
+    if not is_active_virtual_trade_status(updated.status):
         return VirtualTradeLifecycleResult(trade=updated)
     return _close_remaining(updated, exit_price, reason, now)
 
@@ -294,7 +299,7 @@ def _hit_target(
         }
     )
     updated = _set_target_state(close_result.trade, target_index, updated_target)
-    if updated.status == "open":
+    if is_active_virtual_trade_status(updated.status):
         updated = _apply_target_action(updated, target, now)
     return VirtualTradeLifecycleResult(
         trade=updated,
@@ -314,7 +319,7 @@ def _close_remaining(
     if remaining_quantity <= _EPSILON:
         closed = trade.model_copy(
             update={
-                "status": "closed",
+                "status": virtual_trade_status_for_close_reason(reason),
                 "remaining_quantity": 0.0,
                 "remaining_size_usd": 0.0,
                 "unrealized_pnl": 0.0,
@@ -434,7 +439,7 @@ def _close_quantity(
         updates.update(
             {
                 "exit_price": slipped_exit,
-                "status": "closed",
+                "status": virtual_trade_status_for_close_reason(reason),
                 "result": _result(realized_pnl),
                 "pnl": realized_pnl,
                 "pnl_percent": realized_pnl / _initial_size_usd(trade) * 100
@@ -443,6 +448,8 @@ def _close_quantity(
                 "closed_at": now,
             }
         )
+    elif closed_quantity > _EPSILON:
+        updates["status"] = "partially_closed"
     updated = trade.model_copy(update=updates)
     return VirtualTradeLifecycleResult(
         trade=_mark_extremes(updated),
@@ -543,7 +550,7 @@ def _apply_virtual_trade_ordered_candle_path(
     first_mark = low if working.side == "long" else high
     second_mark = high if working.side == "long" else low
     for price in (first_mark, second_mark, close):
-        if working.status != "open":
+        if not is_active_virtual_trade_status(working.status):
             break
         result = apply_virtual_trade_market_price(working, price, now)
         working = result.trade
@@ -557,7 +564,7 @@ def _apply_virtual_trade_ordered_candle_path(
     return VirtualTradeLifecycleResult(
         trade=working,
         realized_pnl_delta=realized_delta,
-        closed=working.status == "closed",
+        closed=is_terminal_virtual_trade_status(working.status),
     )
 
 
@@ -627,6 +634,8 @@ def _append_intrabar_ambiguity_event(
         "target_price": target.price if target is not None else None,
         "target_label": target.label if target is not None else None,
     }
+    if policy == "conservative_stop_first" and action == "stop":
+        metadata["ambiguous_candle_conservative_resolution"] = "stop_loss_first"
     return _append_event(
         trade,
         VirtualTradeLifecycleEvent(
@@ -645,7 +654,7 @@ def _mark_price(trade: VirtualTrade, price: float, now: datetime) -> VirtualTrad
     remaining_quantity = _remaining_quantity(trade, initial_quantity)
     unrealized_pnl = (
         0.0
-        if trade.status == "closed"
+        if is_terminal_virtual_trade_status(trade.status)
         else _gross_pnl(
             side=trade.side,
             entry_price=trade.entry_price,
@@ -748,7 +757,7 @@ def _initial_quantity(trade: VirtualTrade) -> float:
 def _remaining_quantity(trade: VirtualTrade, initial_quantity: float) -> float:
     if trade.remaining_quantity is not None:
         return trade.remaining_quantity
-    return 0.0 if trade.status == "closed" else initial_quantity
+    return 0.0 if is_terminal_virtual_trade_status(trade.status) else initial_quantity
 
 
 def _initial_size_usd(trade: VirtualTrade) -> float:

@@ -1,6 +1,7 @@
 import { Clock3, History } from "lucide-react";
 
 import { Badge } from "./Badge";
+import { isActiveTradeStatus } from "../domain/trade-status";
 import type { TradeJournalEntry } from "../types";
 import {
   formatPercent,
@@ -28,7 +29,7 @@ export function TradeRow({ trade }: TradeRowProps) {
     <div className="trade-row">
       <div className="trade-main">
         <div className="trade-icon">
-          {trade.status === "open" ? <Clock3 size={18} /> : <History size={18} />}
+          {isActiveTradeStatus(trade.status) ? <Clock3 size={18} /> : <History size={18} />}
         </div>
         <div>
           <div className="pair-row">

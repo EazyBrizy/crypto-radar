@@ -9,6 +9,13 @@ from sqlalchemy.orm import Session, joinedload, object_session, sessionmaker
 
 from app.core.database import SessionLocal
 from app.domain.signal_status import is_terminal_signal_status
+from app.domain.virtual_trade_status import (
+    ACTIVE_VIRTUAL_TRADE_STATUSES,
+    TERMINAL_VIRTUAL_TRADE_STATUSES,
+    VIRTUAL_TRADE_STATUSES,
+    is_active_virtual_trade_status,
+    is_terminal_virtual_trade_status,
+)
 from app.models.audit import AuditLog
 from app.models.external_exchange import ExternalExchangeTrade
 from app.models.market import MarketAsset, MarketPair
@@ -131,7 +138,7 @@ class PostgresVirtualTradeRepository:
                 self._events.append(event)
                 return persisted_trade
 
-            if trade.status == "closed" and position.status == "open":
+            if is_terminal_virtual_trade_status(trade.status) and is_active_virtual_trade_status(position.status):
                 updated, event = self._close_position(session, position, trade)
                 session.commit()
                 self._events.append(event)
@@ -258,7 +265,7 @@ class PostgresVirtualTradeRepository:
                 _position_select().where(
                     Position.user_id == user.id,
                     Position.mode == "virtual",
-                    Position.status == "open",
+                    Position.status.in_(ACTIVE_VIRTUAL_TRADE_STATUSES),
                 )
             ).all()
             open_trades = [_position_to_virtual_trade(position) for position in open_positions]
@@ -266,7 +273,7 @@ class PostgresVirtualTradeRepository:
                 _position_select().where(
                     Position.user_id == user.id,
                     Position.mode == "virtual",
-                    Position.status == "closed",
+                    Position.status.in_(TERMINAL_VIRTUAL_TRADE_STATUSES),
                 )
             ).all()
             unrealized_pnl = sum(
@@ -319,8 +326,14 @@ class PostgresVirtualTradeRepository:
         with self._session_factory() as session:
             statement = _position_select().where(Position.mode == "virtual")
             if status is not None:
-                db_status = "open" if status == "open" else "closed"
-                statement = statement.where(Position.status == db_status)
+                if status == "open":
+                    statement = statement.where(Position.status.in_(ACTIVE_VIRTUAL_TRADE_STATUSES))
+                elif status == "closed":
+                    statement = statement.where(Position.status.in_(TERMINAL_VIRTUAL_TRADE_STATUSES))
+                elif status in VIRTUAL_TRADE_STATUSES:
+                    statement = statement.where(Position.status == status)
+                else:
+                    return []
             if signal_id is not None:
                 signal_uuid = _parse_uuid(signal_id)
                 if signal_uuid is None:
@@ -628,7 +641,7 @@ class PostgresVirtualTradeRepository:
                 )
             )
 
-        position.status = "closed"
+        position.status = trade.status
         position.exit_avg_price = _decimal(trade.exit_price or trade.current_price)
         position.closed_at = now
         position.realized_pnl = _decimal(trade.pnl or 0)
@@ -702,6 +715,11 @@ class PostgresVirtualTradeRepository:
             "mfe": trade.mfe,
             "mae": trade.mae,
         }
+        if is_active_virtual_trade_status(trade.status):
+            position.status = trade.status
+        position.stop_loss = _decimal(trade.current_stop_loss or trade.stop_loss)
+        position.realized_pnl = _decimal(trade.realized_pnl)
+        position.fees_total = _decimal(trade.fees)
         position.updated_at = trade.updated_at
         return trade
 
@@ -971,7 +989,7 @@ def _count_open_positions(session: Session, user_id: UUID) -> int:
             select(func.count()).select_from(Position).where(
                 Position.user_id == user_id,
                 Position.mode == "virtual",
-                Position.status == "open",
+                Position.status.in_(ACTIVE_VIRTUAL_TRADE_STATUSES),
             )
         )
         or 0
@@ -1236,10 +1254,11 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
         initial_quantity = quantity
     remaining_quantity = _optional_float(snapshot.get("remaining_quantity"))
     if remaining_quantity is None:
-        remaining_quantity = 0.0 if position.status == "closed" else quantity
+        remaining_quantity = 0.0 if is_terminal_virtual_trade_status(position.status) else quantity
     closed_quantity = _optional_float(snapshot.get("closed_quantity"))
     if closed_quantity is None:
         closed_quantity = max(initial_quantity - remaining_quantity, 0.0)
+    status = _virtual_trade_status_from_position(position, snapshot, closed_quantity)
     size_usd = _optional_float(snapshot.get("size_usd"))
     if size_usd is None:
         size_usd = entry_price * quantity
@@ -1249,7 +1268,7 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
     remaining_size_usd = _optional_float(snapshot.get("remaining_size_usd"))
     if remaining_size_usd is None:
         remaining_size_usd = entry_price * remaining_quantity
-    pnl = float(position.realized_pnl or 0) if position.status == "closed" else None
+    pnl = float(position.realized_pnl or 0) if is_terminal_virtual_trade_status(status) else None
     pnl_percent = snapshot.get("pnl_percent")
     if pnl_percent is None and pnl is not None and size_usd:
         pnl_percent = pnl / size_usd * 100
@@ -1300,7 +1319,7 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
         risk_percent=float(snapshot.get("risk_percent") or 0),
         risk_amount=float(snapshot.get("risk_amount") or 0),
         risk_reward=float(snapshot.get("risk_reward") or 3),
-        stop_loss=float(position.stop_loss or 0),
+        stop_loss=_optional_float(snapshot.get("stop_loss")) or float(position.stop_loss or 0),
         current_stop_loss=current_stop_loss,
         stop_moved_to_breakeven=bool(snapshot.get("stop_moved_to_breakeven") or False),
         trailing_active=bool(snapshot.get("trailing_active") or False),
@@ -1331,8 +1350,8 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
         ),
         unfilled_size_usd=float(snapshot.get("unfilled_size_usd") or 0),
         execution=snapshot.get("execution"),
-        status="open" if position.status == "open" else "closed",
-        result=_trade_result(position.realized_pnl) if position.status == "closed" else None,
+        status=status,
+        result=_trade_result(position.realized_pnl) if is_terminal_virtual_trade_status(status) else None,
         close_reason=snapshot.get("close_reason"),
         pnl=pnl,
         pnl_percent=float(pnl_percent) if pnl_percent is not None else None,
@@ -1347,6 +1366,23 @@ def _position_to_virtual_trade(position: Position) -> VirtualTrade:
         lifecycle_events=snapshot.get("lifecycle_events") or [],
         lifecycle_trace=lifecycle_trace,
     )
+
+
+def _virtual_trade_status_from_position(
+    position: Position,
+    snapshot: dict[str, Any],
+    closed_quantity: float,
+) -> str:
+    snapshot_status = snapshot.get("status")
+    if is_active_virtual_trade_status(position.status):
+        if snapshot_status in ACTIVE_VIRTUAL_TRADE_STATUSES:
+            return str(snapshot_status)
+        return "partially_closed" if closed_quantity > 0 else "open"
+    if position.status in TERMINAL_VIRTUAL_TRADE_STATUSES:
+        return position.status
+    if snapshot_status in VIRTUAL_TRADE_STATUSES:
+        return str(snapshot_status)
+    return "closed"
 
 
 def _origin_from_snapshot(

@@ -4,6 +4,10 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
+from app.domain.virtual_trade_status import (
+    is_active_virtual_trade_status,
+    is_terminal_virtual_trade_status,
+)
 from app.schemas.external_exchange import (
     ExternalExchangeOrderResponse,
     ExternalExchangeTradeResponse,
@@ -260,7 +264,7 @@ async def close_market_trade(
             if request.reason == "invalidation"
             else None
         )
-        was_open = virtual_trade.status == "open"
+        was_open = is_active_virtual_trade_status(virtual_trade.status)
         closed_trade = virtual_trading_service.close_virtual_trade(
             trade_id,
             CloseVirtualTradeRequest(reason=request.reason),
@@ -337,7 +341,7 @@ async def close_virtual_trade(
 
 
 async def _publish_virtual_close_events(trade: VirtualTrade) -> None:
-    if trade.status != "closed":
+    if not is_terminal_virtual_trade_status(trade.status):
         return
     await realtime_event_broker.publish(trade_closed_event(trade))
     if trade.close_reason == "take_profit":

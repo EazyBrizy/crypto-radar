@@ -16603,7 +16603,11 @@
             "type": "string",
             "enum": [
               "open",
+              "partially_closed",
               "closed",
+              "stopped",
+              "invalidated",
+              "expired",
               "cancelled"
             ],
             "title": "Status"
@@ -17848,6 +17852,21 @@
               }
             ]
           },
+          "fill_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VirtualFillResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "raw_inputs_snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Raw Inputs Snapshot"
+          },
           "rejected_reason": {
             "anyOf": [
               {
@@ -17869,6 +17888,90 @@
         },
         "type": "object",
         "title": "VirtualExecutionReport"
+      },
+      "VirtualFillResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "filled",
+              "partial_filled",
+              "blocked",
+              "rejected"
+            ],
+            "title": "Status"
+          },
+          "requested_notional": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Requested Notional",
+            "default": 0
+          },
+          "filled_notional": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Filled Notional",
+            "default": 0
+          },
+          "avg_fill_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Fill Price"
+          },
+          "estimated_slippage_bps": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Estimated Slippage Bps",
+            "default": 0
+          },
+          "spread_bps": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Spread Bps",
+            "default": 0
+          },
+          "market_impact_bps": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Market Impact Bps",
+            "default": 0
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "raw_inputs_snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Raw Inputs Snapshot"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "VirtualFillResult"
       },
       "VirtualImpactCandle": {
         "properties": {
@@ -18554,7 +18657,11 @@
             "type": "string",
             "enum": [
               "open",
+              "partially_closed",
               "closed",
+              "stopped",
+              "invalidated",
+              "expired",
               "cancelled"
             ],
             "title": "Status",

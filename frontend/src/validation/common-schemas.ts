@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SIGNAL_STATUSES } from "@/domain/signal-status";
+import { TRADE_STATUSES } from "@/domain/trade-status";
 
 export const TimeframeSchema = z.enum(["1m", "5m", "15m", "1h", "4h", "1d"]);
 export const SignalDirectionSchema = z.enum(["long", "short"]);
@@ -17,7 +18,7 @@ export const PendingEntryIntentStatusSchema = z.enum([
   "requires_reconfirmation"
 ]);
 export const TradeSourceSchema = z.enum(["virtual", "real", "backtest"]);
-export const TradeStatusSchema = z.enum(["open", "closed", "cancelled"]);
+export const TradeStatusSchema = z.enum(TRADE_STATUSES);
 export const TradeCloseReasonSchema = z.enum([
   "take_profit",
   "stop_loss",

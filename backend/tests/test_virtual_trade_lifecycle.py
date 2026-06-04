@@ -9,6 +9,7 @@ from app.schemas.risk import RiskOverride
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
     CloseMarketTradeRequest,
+    CloseVirtualTradeRequest,
     ManualConfirmRequest,
     RealTrade,
     TradeJournalEntry,
@@ -215,7 +216,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
         updated = service.update_market_price("bybit", "BTCUSDT", 110.0)[0]
 
-        self.assertEqual(updated.status, "open")
+        self.assertEqual(updated.status, "partially_closed")
         self.assertEqual(updated.close_reason, "partial_take_profit")
         expected_closed_quantity = (trade.initial_quantity or trade.quantity) * 0.30
         self.assertAlmostEqual(updated.closed_quantity, expected_closed_quantity)
@@ -228,6 +229,80 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         account = service.get_virtual_account()
         self.assertAlmostEqual(account.realized_pnl, updated.realized_pnl)
         self.assertAlmostEqual(account.equity, 100 + updated.realized_pnl + updated.unrealized_pnl)
+        self.assertEqual([trade.status for trade in service.list_virtual_trades(status="open")], ["partially_closed"])
+
+    def test_short_tp1_partially_closes_position(self) -> None:
+        service = self._service()
+        trade = service.open_virtual_trade(
+            self._signal(direction="short", stop_loss=110.0),
+            ManualConfirmRequest(),
+        )
+
+        updated = service.update_market_price("bybit", "BTCUSDT", 90.0)[0]
+
+        self.assertEqual(updated.status, "partially_closed")
+        self.assertEqual(updated.close_reason, "partial_take_profit")
+        expected_closed_quantity = (trade.initial_quantity or trade.quantity) * 0.30
+        self.assertAlmostEqual(updated.closed_quantity, expected_closed_quantity)
+        self.assertAlmostEqual(
+            updated.remaining_quantity or 0.0,
+            (trade.initial_quantity or trade.quantity) - expected_closed_quantity,
+        )
+        self.assertTrue(updated.target_states[0].hit)
+        self.assertFalse(updated.target_states[1].hit)
+
+    def test_process_virtual_positions_tick_applies_candle_lifecycle(self) -> None:
+        service = self._service()
+        service.open_virtual_trade(
+            self._signal(direction="long", stop_loss=90.0),
+            ManualConfirmRequest(),
+        )
+
+        updated = service.process_virtual_positions_tick(
+            "bybit",
+            "BTCUSDT",
+            {
+                "high": 110.0,
+                "low": 90.0,
+                "close": 105.0,
+                "open_time": 1_779_796_800_000,
+                "close_time": 1_779_796_859_999,
+            },
+        )
+
+        self.assertEqual(len(updated), 1)
+        self.assertEqual(updated[0].status, "stopped")
+        self.assertEqual(updated[0].close_reason, "stop_loss")
+        ambiguity = next(
+            event
+            for event in updated[0].lifecycle_events
+            if event.event_type == "intrabar_ambiguous"
+        )
+        self.assertEqual(
+            ambiguity.metadata["ambiguous_candle_conservative_resolution"],
+            "stop_loss_first",
+        )
+
+    def test_manual_close_still_closes_partially_closed_position(self) -> None:
+        service = self._service()
+        trade = service.open_virtual_trade(
+            self._signal(direction="long", stop_loss=90.0),
+            ManualConfirmRequest(),
+        )
+        partial = service.update_market_price("bybit", "BTCUSDT", 110.0)[0]
+
+        closed = service.close_virtual_trade(
+            trade.id,
+            CloseVirtualTradeRequest(exit_price=112.0, reason="manual_close"),
+        )
+
+        self.assertIsNotNone(closed)
+        assert closed is not None
+        self.assertEqual(partial.status, "partially_closed")
+        self.assertEqual(closed.status, "closed")
+        self.assertEqual(closed.close_reason, "manual_close")
+        self.assertAlmostEqual(closed.remaining_quantity or 0.0, 0.0)
+        self.assertGreater(closed.closed_quantity, partial.closed_quantity)
 
     def test_virtual_close_event_can_be_traced_back_to_signal(self) -> None:
         now = datetime.now(timezone.utc)
@@ -244,7 +319,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
         closed = apply_virtual_trade_market_price(trade, 94.0, now).trade
 
-        self.assertEqual(closed.status, "closed")
+        self.assertEqual(closed.status, "stopped")
         event = closed.lifecycle_events[-1]
         self.assertEqual(event.signal_id, "signal_long")
         self.assertEqual(event.pending_entry_intent_id, "intent-123")
@@ -280,7 +355,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
             for event in updated.lifecycle_events
             if event.reason == "partial_take_profit"
         ]
-        self.assertEqual(updated.status, "open")
+        self.assertEqual(updated.status, "partially_closed")
         self.assertEqual(len(partial_events), 1)
         self.assertAlmostEqual(updated.realized_pnl, 10.0)
         self.assertAlmostEqual(updated.target_states[0].realized_pnl, 10.0)
@@ -350,7 +425,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
             after_tp1.current_stop_loss or after_tp1.entry_price,
         )[0]
 
-        self.assertEqual(updated.status, "closed")
+        self.assertEqual(updated.status, "stopped")
         self.assertEqual(updated.close_reason, "breakeven_stop")
         self.assertAlmostEqual(updated.remaining_quantity or 0.0, 0.0)
         self.assertGreater(updated.realized_pnl, 0.0)
@@ -378,7 +453,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
         self.assertTrue(after_tp.stop_moved_to_breakeven)
         self.assertAlmostEqual(after_tp.current_stop_loss or 0.0, 100.0)
-        self.assertEqual(closed.status, "closed")
+        self.assertEqual(closed.status, "stopped")
         self.assertEqual(closed.close_reason, "breakeven_stop")
         self.assertAlmostEqual(closed.remaining_quantity or 0.0, 0.0)
         self.assertAlmostEqual(closed.realized_pnl, 10.0)
@@ -446,7 +521,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
         updated = service.update_market_price("bybit", "BTCUSDT", 90.0)
 
-        self.assertEqual(updated[0].status, "closed")
+        self.assertEqual(updated[0].status, "stopped")
         self.assertEqual(updated[0].close_reason, "stop_loss")
         self.assertAlmostEqual(updated[0].pnl or 0.0, -7.5)
 
@@ -464,7 +539,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
         updated = service.update_market_price("bybit", "BTCUSDT", 110.0)[0]
 
-        self.assertEqual(updated.status, "closed")
+        self.assertEqual(updated.status, "stopped")
         self.assertEqual(updated.close_reason, "stop_loss")
         self.assertEqual(updated.result, "loss")
         self.assertAlmostEqual(updated.remaining_quantity or 0.0, 0.0)
@@ -550,7 +625,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
 
         updated = service.update_market_price("bybit", "BTCUSDT", 101.0)[0]
 
-        self.assertEqual(updated.status, "closed")
+        self.assertEqual(updated.status, "expired")
         self.assertEqual(updated.close_reason, "time_stop")
         self.assertAlmostEqual(updated.exit_price or 0.0, 101.0)
 
@@ -739,7 +814,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         result = apply_virtual_trade_market_price(trade, 104.0, now)
 
         self.assertTrue(result.closed)
-        self.assertEqual(result.trade.status, "closed")
+        self.assertEqual(result.trade.status, "stopped")
         self.assertEqual(result.trade.close_reason, "trailing_stop")
         self.assertAlmostEqual(result.trade.exit_price or 0.0, 104.0)
         self.assertAlmostEqual(result.trade.pnl or 0.0, 4.0)
@@ -768,6 +843,7 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         after_trailing_update = apply_virtual_trade_market_price(after_target, 112.0, now).trade
 
         self.assertTrue(after_target.trailing_active)
+        self.assertEqual(after_target.status, "partially_closed")
         self.assertAlmostEqual(after_target.remaining_quantity or 0.0, 1.0)
         self.assertAlmostEqual(after_target.closed_quantity, 1.0)
         self.assertAlmostEqual(after_target.current_stop_loss or 0.0, 105.0)
@@ -799,9 +875,10 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         closed = apply_virtual_trade_market_price(after_target, 96.0, now).trade
 
         self.assertTrue(after_target.trailing_active)
+        self.assertEqual(after_target.status, "partially_closed")
         self.assertAlmostEqual(after_target.current_stop_loss or 0.0, 95.0)
         self.assertAlmostEqual(after_target.remaining_quantity or 0.0, 1.0)
-        self.assertEqual(closed.status, "closed")
+        self.assertEqual(closed.status, "stopped")
         self.assertEqual(closed.close_reason, "trailing_stop")
         self.assertAlmostEqual(closed.exit_price or 0.0, 96.0)
         self.assertAlmostEqual(closed.remaining_quantity or 0.0, 0.0)
@@ -834,13 +911,17 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         )
 
         self.assertTrue(result.closed)
-        self.assertEqual(result.trade.status, "closed")
+        self.assertEqual(result.trade.status, "stopped")
         self.assertEqual(result.trade.close_reason, "stop_loss")
         self.assertAlmostEqual(result.trade.pnl or 0.0, -10.0)
         ambiguity = result.trade.lifecycle_events[0]
         self.assertEqual(ambiguity.event_type, "intrabar_ambiguous")
         self.assertEqual(ambiguity.metadata["policy"], "conservative_stop_first")
         self.assertEqual(ambiguity.metadata["action"], "stop")
+        self.assertEqual(
+            ambiguity.metadata["ambiguous_candle_conservative_resolution"],
+            "stop_loss_first",
+        )
 
     def test_long_ambiguous_candle_target_first_closes_profit(self) -> None:
         now = datetime.now(timezone.utc)
@@ -1041,6 +1122,29 @@ class TradeApiMarketCloseTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(result.trade.fees, trade.fees)
         self.assertEqual([event["type"] for event in broker.events], ["trade.closed"])
 
+    async def test_market_close_endpoint_closes_partially_closed_virtual_trade(self) -> None:
+        service = VirtualTradeLifecycleTest._service()
+        trade = service.open_virtual_trade(
+            VirtualTradeLifecycleTest._signal(direction="long", stop_loss=90.0),
+            ManualConfirmRequest(fee_rate=0.001),
+        )
+        partial = service.update_market_price("bybit", "BTCUSDT", 110.0)[0]
+        broker = CapturingBroker()
+
+        with (
+            patch("app.api.v1.trades.virtual_trading_service", service),
+            patch("app.api.v1.trades.realtime_event_broker", broker),
+        ):
+            result = await close_market_trade(trade.id, CloseMarketTradeRequest())
+
+        self.assertEqual(partial.status, "partially_closed")
+        self.assertEqual(result.status, "closed")
+        self.assertIsNotNone(result.trade)
+        assert result.trade is not None
+        self.assertEqual(result.trade.status, "closed")
+        self.assertEqual(result.trade.close_reason, "manual_close")
+        self.assertEqual([event["type"] for event in broker.events], ["trade.closed"])
+
     async def test_market_close_endpoint_preserves_invalidation_close_reason(self) -> None:
         service = VirtualTradeLifecycleTest._service()
         trade = service.open_virtual_trade(
@@ -1059,6 +1163,7 @@ class TradeApiMarketCloseTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "closed")
         self.assertIsNotNone(result.trade)
         assert result.trade is not None
+        self.assertEqual(result.trade.status, "invalidated")
         self.assertEqual(result.trade.close_reason, "invalidation")
         self.assertIn("invalidated", result.message)
 

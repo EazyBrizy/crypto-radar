@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { isActiveTradeStatus } from "@/domain/trade-status";
 import { TradesPage } from "@/features/app-shell/TradesPage";
 import { useCloseMarketTradeMutation, useTradeInvalidationActionMutation, useTradeInvalidationQuery, useTradesQuery } from "@/hooks/use-radar-queries";
 import { useUiStore } from "@/stores/ui-store";
@@ -22,11 +23,11 @@ export function TradesRoute({ tab }: { tab: TradeTab }) {
   const invalidationActionMutation = useTradeInvalidationActionMutation();
   const trades = useMemo(() => tradesQuery.data?.trades ?? [], [tradesQuery.data?.trades]);
   const selectedTrade = useMemo(
-    () => trades.find((trade) => trade.id === selectedTradeId) ?? trades.find((trade) => trade.status === "open") ?? null,
+    () => trades.find((trade) => trade.id === selectedTradeId) ?? trades.find((trade) => isActiveTradeStatus(trade.status)) ?? null,
     [selectedTradeId, trades]
   );
   const invalidationQuery = useTradeInvalidationQuery(selectedTrade?.id ?? null, {
-    enabled: tab === "active" && selectedTrade?.status === "open",
+    enabled: tab === "active" && selectedTrade != null && isActiveTradeStatus(selectedTrade.status),
     refetchInterval: false
   });
   const invalidationAlert = (
@@ -46,7 +47,7 @@ export function TradesRoute({ tab }: { tab: TradeTab }) {
   }, [selectedTradeId, setSelectedTradeId, tab, trades]);
 
   const handleCloseMarket = useCallback(async (trade: TradeJournalEntry, reason: TradeCloseReason = "manual_close") => {
-    if (trade.status !== "open") return;
+    if (!isActiveTradeStatus(trade.status)) return;
     try {
       setActionError(null);
       const result = await closeMarketTradeMutation.mutateAsync({

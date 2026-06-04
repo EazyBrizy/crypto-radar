@@ -219,7 +219,10 @@ class Position(Base):
     __table_args__ = (
         CheckConstraint("mode IN ('virtual', 'live')", name="ck_positions_mode"),
         CheckConstraint("side IN ('long', 'short')", name="ck_positions_side"),
-        CheckConstraint("status IN ('open', 'closed', 'liquidated')", name="ck_positions_status"),
+        CheckConstraint(
+            "status IN ('open', 'partially_closed', 'closed', 'stopped', 'invalidated', 'expired', 'cancelled', 'liquidated')",
+            name="ck_positions_status",
+        ),
         CheckConstraint("quantity > 0", name="ck_positions_quantity_positive"),
         CheckConstraint("entry_avg_price > 0", name="ck_positions_entry_avg_price_positive"),
     )

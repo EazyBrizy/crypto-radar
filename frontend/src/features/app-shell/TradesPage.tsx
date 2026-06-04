@@ -2,6 +2,7 @@ import dynamic from "next/dynamic";
 import { BarChart3, History, ListFilter } from "lucide-react";
 
 import { Metric } from "@/components/Metric";
+import { isActiveTradeStatus } from "@/domain/trade-status";
 import type { TradeCloseReason, TradeInvalidationAlert, TradeJournalEntry, VirtualAccount } from "@/types";
 
 const LazyTradeJournalTable = dynamic(
@@ -48,7 +49,7 @@ export function TradesPage({
   selectedTradeId = null,
   trades
 }: TradesPageProps) {
-  const activeTrade = selectedTrade ?? trades.find((trade) => trade.status === "open") ?? null;
+  const activeTrade = selectedTrade ?? trades.find((trade) => isActiveTradeStatus(trade.status)) ?? null;
   const openPositions = account?.open_positions ?? (activeTrade ? 1 : 0);
 
   return (

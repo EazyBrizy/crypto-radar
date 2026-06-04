@@ -24,7 +24,15 @@ from app.schemas.signal import RadarSignal
 ExecutionMode = Literal["virtual", "real"]
 TradeSource = Literal["virtual", "real", "backtest"]
 TradeSide = Literal["long", "short"]
-TradeStatus = Literal["open", "closed", "cancelled"]
+TradeStatus = Literal[
+    "open",
+    "partially_closed",
+    "closed",
+    "stopped",
+    "invalidated",
+    "expired",
+    "cancelled",
+]
 TradeResult = Literal["win", "loss", "breakeven"]
 CloseReason = Literal[
     "take_profit",

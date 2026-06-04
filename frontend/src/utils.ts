@@ -1,5 +1,6 @@
 import type { RadarSignal, TradeJournalEntry, VirtualTradeTargetState } from "./types";
 import { isFormingCandleSignal, isMarketOpportunity, isOpenCandleActionableAllowed } from "./domain/signal-status";
+import { isActiveTradeStatus, isTerminalTradeStatus } from "./domain/trade-status";
 
 export function formatPrice(value: number | null | undefined): string {
   if (value == null) return "-";
@@ -149,17 +150,19 @@ export function tradeTargetStates(trade: TradeJournalEntry): VirtualTradeTargetS
   if (trade.target_states?.length) return trade.target_states;
   const finalTarget = trade.take_profit.length ? trade.take_profit[trade.take_profit.length - 1] : null;
   if (finalTarget == null) return [];
+  const terminal = isTerminalTradeStatus(trade.status);
+  const takeProfitClosed = trade.status === "closed" && trade.close_reason === "take_profit";
   return [
     {
       label: "Final",
       price: finalTarget,
       close_percent: 100,
       action: "full_close",
-      hit: trade.status === "closed" && trade.close_reason === "take_profit",
-      hit_at: trade.close_reason === "take_profit" ? trade.closed_at : null,
-      closed_quantity: trade.status === "closed" ? trade.quantity : 0,
-      closed_size_usd: trade.status === "closed" ? trade.size_usd : 0,
-      realized_pnl: trade.status === "closed" ? trade.pnl ?? 0 : 0,
+      hit: takeProfitClosed,
+      hit_at: takeProfitClosed ? trade.closed_at : null,
+      closed_quantity: terminal ? trade.quantity : 0,
+      closed_size_usd: terminal ? trade.size_usd : 0,
+      realized_pnl: terminal ? trade.pnl ?? 0 : 0,
       exit_fee: 0
     }
   ];
@@ -167,7 +170,7 @@ export function tradeTargetStates(trade: TradeJournalEntry): VirtualTradeTargetS
 
 export function tradeRemainingQuantity(trade: TradeJournalEntry): number {
   if (trade.remaining_quantity != null) return trade.remaining_quantity;
-  return trade.status === "closed" ? 0 : trade.quantity;
+  return isTerminalTradeStatus(trade.status) ? 0 : trade.quantity;
 }
 
 export function tradeCurrentStop(trade: TradeJournalEntry): number {
@@ -176,12 +179,12 @@ export function tradeCurrentStop(trade: TradeJournalEntry): number {
 
 export function tradeRealizedPnl(trade: TradeJournalEntry): number {
   if (trade.realized_pnl != null) return trade.realized_pnl;
-  return trade.status === "closed" ? trade.pnl ?? 0 : 0;
+  return isTerminalTradeStatus(trade.status) ? trade.pnl ?? 0 : 0;
 }
 
 export function tradeUnrealizedPnl(trade: TradeJournalEntry): number {
   if (trade.unrealized_pnl != null) return trade.unrealized_pnl;
-  return trade.status === "open" ? trade.pnl ?? 0 : 0;
+  return isActiveTradeStatus(trade.status) ? trade.pnl ?? 0 : 0;
 }
 
 export function signalAge(signal: RadarSignal): string {

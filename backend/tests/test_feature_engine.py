@@ -256,6 +256,52 @@ class FeatureDerivativeEnrichmentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("forming_candle", signals[0].status_reason or "")
         self.assertFalse(signals[0].auto_entry.enabled if signals[0].auto_entry else True)
 
+    async def test_market_scanner_keeps_generating_signals_when_virtual_lifecycle_fails(self) -> None:
+        candle_store = CandleService(timeframes=["1m"])
+        start = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp() * 1000)
+        candle_store.seed_history(
+            [
+                _candle(
+                    start + index * 60_000,
+                    high=101.0,
+                    low=99.0,
+                    close=100.0,
+                    volume=100.0,
+                )
+                for index in range(70)
+            ]
+        )
+        virtual_trading = _FailingVirtualTrading()
+        scanner = MarketScanner(
+            symbols=["BTCUSDT"],
+            exchanges=["bybit"],
+            candle_store=candle_store,
+            market_persistence=None,
+            market_quality=None,
+            support_resistance=None,
+            signal_lifecycle=None,
+            signal_outcomes=None,
+            trade_invalidation=None,
+            strategy_configs=None,
+            virtual_trading=virtual_trading,
+            derivative_market=None,
+            alpha_market_context=None,
+        )
+        scanner._strategy_engine = _PreviewStrategyEngine()  # noqa: SLF001
+
+        signals = await scanner.process_tick(
+            MarketData(
+                exchange="bybit",
+                symbol="BTCUSDT",
+                timestamp=start + 70 * 60_000,
+                price=100.5,
+                volume=5.0,
+            )
+        )
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(virtual_trading.calls, [("bybit", "BTCUSDT")])
+
 
 class _FakeDerivativeMarket:
     def hot_snapshot(self, *, exchange: str, symbol: str) -> DerivativeMarketSnapshot:
@@ -266,6 +312,15 @@ class _FakeDerivativeMarket:
             oi_change=-0.04,
             fetched_at=datetime.now(timezone.utc),
         )
+
+
+class _FailingVirtualTrading:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def process_virtual_positions_tick(self, exchange: str, symbol: str, _market_tick: MarketData) -> list[object]:
+        self.calls.append((exchange, symbol))
+        raise RuntimeError("virtual lifecycle boom")
 
 
 class _PreviewStrategyEngine:

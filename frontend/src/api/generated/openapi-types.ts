@@ -5621,7 +5621,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "open" | "closed" | "cancelled";
+            status: "open" | "partially_closed" | "closed" | "stopped" | "invalidated" | "expired" | "cancelled";
             /** Result */
             result?: ("win" | "loss" | "breakeven") | null;
             /** Close Reason */
@@ -6042,10 +6042,58 @@ export interface components {
             futures_risk_plan?: components["schemas"]["FuturesRiskPlan"] | null;
             lifecycle_trace?: components["schemas"]["LifecycleTrace"];
             simulated_path?: components["schemas"]["VirtualSimulatedPositionPath"] | null;
+            fill_result?: components["schemas"]["VirtualFillResult"] | null;
+            /** Raw Inputs Snapshot */
+            raw_inputs_snapshot?: {
+                [key: string]: unknown;
+            };
             /** Rejected Reason */
             rejected_reason?: string | null;
             /** Notes */
             notes?: string[];
+        };
+        /** VirtualFillResult */
+        VirtualFillResult: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "filled" | "partial_filled" | "blocked" | "rejected";
+            /**
+             * Requested Notional
+             * @default 0
+             */
+            requested_notional: number;
+            /**
+             * Filled Notional
+             * @default 0
+             */
+            filled_notional: number;
+            /** Avg Fill Price */
+            avg_fill_price?: number | null;
+            /**
+             * Estimated Slippage Bps
+             * @default 0
+             */
+            estimated_slippage_bps: number;
+            /**
+             * Spread Bps
+             * @default 0
+             */
+            spread_bps: number;
+            /**
+             * Market Impact Bps
+             * @default 0
+             */
+            market_impact_bps: number;
+            /** Reason */
+            reason?: string | null;
+            /** Warnings */
+            warnings?: string[];
+            /** Raw Inputs Snapshot */
+            raw_inputs_snapshot?: {
+                [key: string]: unknown;
+            };
         };
         /** VirtualImpactCandle */
         VirtualImpactCandle: {
@@ -6312,7 +6360,7 @@ export interface components {
              * @default open
              * @enum {string}
              */
-            status: "open" | "closed" | "cancelled";
+            status: "open" | "partially_closed" | "closed" | "stopped" | "invalidated" | "expired" | "cancelled";
             /** Result */
             result?: ("win" | "loss" | "breakeven") | null;
             /** Close Reason */

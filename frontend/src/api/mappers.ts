@@ -72,6 +72,7 @@ import type {
   VirtualSimulatedPositionPath
 } from "@/types";
 import { SIGNAL_STATUSES } from "@/domain/signal-status";
+import { isActiveTradeStatus, isTerminalTradeStatus } from "@/domain/trade-status";
 import type { OhlcvCandleDto, RadarConfigDto, RadarSignalDto, TradeJournalEntryDto } from "./generated/schemas";
 
 type TradeJournalEntryExtra = TradeJournalEntryDto & Partial<Pick<
@@ -213,12 +214,14 @@ export function normalizeTrade(trade: TradeJournalEntryDto): TradeJournalEntry {
   const enriched = trade as TradeJournalEntryExtra;
   const takeProfit = trade.take_profit ?? [];
   const initialQuantity = enriched.initial_quantity ?? trade.quantity;
-  const remainingQuantity = enriched.remaining_quantity ?? (trade.status === "closed" ? 0 : trade.quantity);
+  const terminal = isTerminalTradeStatus(trade.status);
+  const active = isActiveTradeStatus(trade.status);
+  const remainingQuantity = enriched.remaining_quantity ?? (terminal ? 0 : trade.quantity);
   const closedQuantity = enriched.closed_quantity ?? Math.max(initialQuantity - remainingQuantity, 0);
   const initialSizeUsd = enriched.initial_size_usd ?? trade.size_usd;
-  const remainingSizeUsd = enriched.remaining_size_usd ?? (trade.status === "closed" ? 0 : trade.size_usd);
-  const realizedPnl = enriched.realized_pnl ?? (trade.status === "closed" ? trade.pnl ?? 0 : 0);
-  const unrealizedPnl = enriched.unrealized_pnl ?? (trade.status === "open" ? trade.pnl ?? 0 : 0);
+  const remainingSizeUsd = enriched.remaining_size_usd ?? (terminal ? 0 : trade.size_usd);
+  const realizedPnl = enriched.realized_pnl ?? (terminal ? trade.pnl ?? 0 : 0);
+  const unrealizedPnl = enriched.unrealized_pnl ?? (active ? trade.pnl ?? 0 : 0);
   const origin = normalizeTradeOrigin(enriched.origin);
   return {
     id: trade.id,
@@ -425,17 +428,19 @@ function normalizeTargetStates(
   }
   if (!takeProfit.length) return [];
   const finalPrice = takeProfit[takeProfit.length - 1];
+  const terminal = isTerminalTradeStatus(trade.status);
+  const takeProfitClosed = trade.status === "closed" && trade.close_reason === "take_profit";
   return [
     {
       label: "Final",
       price: finalPrice,
       close_percent: 100,
       action: "full_close",
-      hit: trade.status === "closed" && trade.close_reason === "take_profit",
-      hit_at: trade.status === "closed" && trade.close_reason === "take_profit" ? trade.closed_at ?? null : null,
-      closed_quantity: trade.status === "closed" ? trade.quantity : 0,
-      closed_size_usd: trade.status === "closed" ? trade.size_usd : 0,
-      realized_pnl: trade.status === "closed" ? trade.pnl ?? 0 : 0,
+      hit: takeProfitClosed,
+      hit_at: takeProfitClosed ? trade.closed_at ?? null : null,
+      closed_quantity: terminal ? trade.quantity : 0,
+      closed_size_usd: terminal ? trade.size_usd : 0,
+      realized_pnl: terminal ? trade.pnl ?? 0 : 0,
       exit_fee: 0
     }
   ];

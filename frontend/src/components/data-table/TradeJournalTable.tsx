@@ -6,6 +6,7 @@ import { CircleStop } from "lucide-react";
 
 import { Badge } from "@/components/Badge";
 import { DataTable } from "@/components/data-table/DataTable";
+import { isActiveTradeStatus } from "@/domain/trade-status";
 import type { TradeJournalEntry } from "@/types";
 import {
   formatPercent,
@@ -144,7 +145,7 @@ export function TradeJournalTable({
           cell: ({ row }) => {
             const trade = row.original;
             const closing = closingTradeId === trade.id;
-            const disabled = trade.status !== "open" || trade.source === "backtest" || closing;
+            const disabled = !isActiveTradeStatus(trade.status) || trade.source === "backtest" || closing;
             return (
               <div className="table-action-cell">
                 <button

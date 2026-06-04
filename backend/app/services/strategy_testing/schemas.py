@@ -10,7 +10,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
 StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
-StrategyTestSameCandlePolicy = Literal["stop_first", "target_first", "ignore_ambiguous"]
+StrategyTestSameCandlePolicy = Literal[
+    "conservative_stop_first",
+    "target_first",
+    "intrabar_unknown",
+    "stop_first",
+    "ignore_ambiguous",
+]
 StrategyTestSignalSelectionPolicy = Literal[
     "first_actionable",
     "highest_score",
@@ -51,7 +57,7 @@ class StrategyTestRunRequest(BaseModel):
     initial_capital: Decimal = Field(default=Decimal("1000"), gt=0)
     fee_rate: Decimal = Field(default=Decimal("0.001"), ge=0)
     slippage_bps: Decimal = Field(default=Decimal("0"), ge=0)
-    same_candle_policy: StrategyTestSameCandlePolicy = "stop_first"
+    same_candle_policy: StrategyTestSameCandlePolicy = "conservative_stop_first"
     params: dict[str, Any] = Field(default_factory=dict)
     metric_set: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=lambda: ["backtest"])

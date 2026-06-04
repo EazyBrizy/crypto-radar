@@ -17,7 +17,13 @@ SignalOutcomeStatus = Literal[
     "time_stop",
 ]
 SignalOutcomeResult = Literal["win", "loss", "breakeven", "expired", "invalidated", "open"]
-SameCandleResolution = Literal["stop_first", "target_first", "ignore_ambiguous"]
+SameCandleResolution = Literal[
+    "conservative_stop_first",
+    "target_first",
+    "intrabar_unknown",
+    "stop_first",
+    "ignore_ambiguous",
+]
 
 
 class SignalOutcomeTarget(BaseModel):

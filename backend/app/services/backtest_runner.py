@@ -16,11 +16,12 @@ from app.schemas.risk import RiskDecision
 from app.schemas.signal import RadarSignal, StrategySignal
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualExecutionReport, VirtualTrade
 from app.schemas.user import RiskManagementSettings
+from app.services.execution_ambiguity import normalize_virtual_execution_ambiguity_policy
 from app.services.feature_engine import FeatureEngine
 from app.services.historical_candle_provider import ClickHouseHistoricalCandleProvider, HistoricalCandleProvider
 from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.virtual_trade_lifecycle import (
-    apply_virtual_trade_market_price,
+    apply_virtual_trade_candle,
     arm_virtual_trade_time_stop,
     close_virtual_trade_lifecycle,
     initialize_virtual_trade_lifecycle,
@@ -242,29 +243,25 @@ class BacktestExecutionSimulator:
             return position
 
         now = _datetime_from_ms(candle.close_time)
-        working = trade
-        if _stop_touched(working, candle):
-            stop_price = working.current_stop_loss or working.stop_loss
-            result = apply_virtual_trade_market_price(working, stop_price, now)
-            return _replace_position(
-                position,
-                trade=result.trade,
-                bars_in_trade=position.bars_in_trade + 1,
-            )
-
-        if working.side == "long":
-            working = apply_virtual_trade_market_price(working, candle.low, now).trade
-            if working.status == "open":
-                working = apply_virtual_trade_market_price(working, candle.high, now).trade
-        else:
-            working = apply_virtual_trade_market_price(working, candle.high, now).trade
-            if working.status == "open":
-                working = apply_virtual_trade_market_price(working, candle.low, now).trade
-        if working.status == "open":
-            working = apply_virtual_trade_market_price(working, candle.close, now).trade
+        assumptions = position.features_snapshot.get("strategy_test_assumptions")
+        policy = (
+            assumptions.get("same_candle_policy")
+            if isinstance(assumptions, Mapping)
+            else None
+        )
+        result = apply_virtual_trade_candle(
+            trade,
+            high=candle.high,
+            low=candle.low,
+            close=candle.close,
+            now=now,
+            ambiguity_policy=policy,
+            candle_open_time=candle.open_time,
+            candle_close_time=candle.close_time,
+        )
         return _replace_position(
             position,
-            trade=working,
+            trade=result.trade,
             bars_in_trade=position.bars_in_trade + 1,
         )
 
@@ -662,7 +659,17 @@ def _assumptions_for_backtest(
     values.setdefault("fee_rate", str(request.fee_rate))
     values.setdefault("slippage_bps", str(request.slippage_bps))
     values.setdefault("initial_capital", str(request.initial_capital))
-    values.setdefault("same_candle_policy", request.params.get("same_candle_policy") or "stop_first")
+    requested_same_candle_policy = (
+        request.params.get("same_candle_policy")
+        or values.get("same_candle_policy")
+        or "conservative_stop_first"
+    )
+    normalized_same_candle_policy = normalize_virtual_execution_ambiguity_policy(
+        str(requested_same_candle_policy)
+    )
+    values["same_candle_policy"] = normalized_same_candle_policy
+    if str(requested_same_candle_policy) != normalized_same_candle_policy:
+        values["same_candle_policy_requested"] = str(requested_same_candle_policy)
     values.setdefault("candle_state", "closed")
     values.setdefault("alpha_context_available", False)
     values.setdefault(
@@ -1670,13 +1677,6 @@ def _entry_price(signal: StrategySignal) -> float | None:
     if signal.entry_min is not None:
         return signal.entry_min
     return signal.entry_max
-
-
-def _stop_touched(trade: VirtualTrade, candle: OHLCVCandle) -> bool:
-    stop = trade.current_stop_loss or trade.stop_loss
-    if trade.side == "long":
-        return candle.low <= stop
-    return candle.high >= stop
 
 
 def _replace_position(

@@ -19,7 +19,10 @@ from app.schemas.user import RiskManagementSettings
 from app.services.risk_fee_rate import RiskFeeRateSnapshot
 from app.services.risk_market_data import RiskMarketDataSnapshot
 from app.services.trade_service import TradeService
-from app.services.virtual_trade_lifecycle import apply_virtual_trade_market_price
+from app.services.virtual_trade_lifecycle import (
+    apply_virtual_trade_candle,
+    apply_virtual_trade_market_price,
+)
 
 
 class EphemeralTradeRepository:
@@ -572,6 +575,132 @@ class VirtualTradeLifecycleTest(unittest.TestCase):
         self.assertAlmostEqual(after_trailing_update.remaining_quantity or 0.0, 1.0)
         self.assertAlmostEqual(after_trailing_update.closed_quantity, 1.0)
         self.assertAlmostEqual(after_trailing_update.current_stop_loss or 0.0, 107.0)
+
+    def test_long_ambiguous_candle_default_stop_first_closes_loss(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="long",
+            stop_loss=90.0,
+            now=now,
+            target_states=[
+                VirtualTradeTargetState(
+                    label="TP1",
+                    price=110.0,
+                    close_percent=100.0,
+                    action="full_close",
+                )
+            ],
+        )
+
+        result = apply_virtual_trade_candle(
+            trade,
+            high=112.0,
+            low=89.0,
+            close=105.0,
+            now=now,
+            candle_open_time=1,
+            candle_close_time=2,
+        )
+
+        self.assertTrue(result.closed)
+        self.assertEqual(result.trade.status, "closed")
+        self.assertEqual(result.trade.close_reason, "stop_loss")
+        self.assertAlmostEqual(result.trade.pnl or 0.0, -10.0)
+        ambiguity = result.trade.lifecycle_events[0]
+        self.assertEqual(ambiguity.event_type, "intrabar_ambiguous")
+        self.assertEqual(ambiguity.metadata["policy"], "conservative_stop_first")
+        self.assertEqual(ambiguity.metadata["action"], "stop")
+
+    def test_long_ambiguous_candle_target_first_closes_profit(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="long",
+            stop_loss=90.0,
+            now=now,
+            target_states=[
+                VirtualTradeTargetState(
+                    label="TP1",
+                    price=110.0,
+                    close_percent=100.0,
+                    action="full_close",
+                )
+            ],
+        )
+
+        result = apply_virtual_trade_candle(
+            trade,
+            high=112.0,
+            low=89.0,
+            close=105.0,
+            now=now,
+            ambiguity_policy="target_first",
+        )
+
+        self.assertTrue(result.closed)
+        self.assertEqual(result.trade.status, "closed")
+        self.assertEqual(result.trade.close_reason, "take_profit")
+        self.assertAlmostEqual(result.trade.pnl or 0.0, 10.0)
+        self.assertTrue(result.trade.target_states[0].hit)
+        self.assertEqual(result.trade.lifecycle_events[0].metadata["action"], "target")
+
+    def test_long_ambiguous_candle_intrabar_unknown_stays_open_with_metadata(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="long",
+            stop_loss=90.0,
+            now=now,
+            target_states=[
+                VirtualTradeTargetState(
+                    label="TP1",
+                    price=110.0,
+                    close_percent=100.0,
+                    action="full_close",
+                )
+            ],
+        )
+
+        result = apply_virtual_trade_candle(
+            trade,
+            high=112.0,
+            low=89.0,
+            close=105.0,
+            now=now,
+            ambiguity_policy="intrabar_unknown",
+        )
+
+        self.assertFalse(result.closed)
+        self.assertEqual(result.trade.status, "open")
+        self.assertIsNone(result.trade.close_reason)
+        self.assertAlmostEqual(result.trade.current_price, 105.0)
+        self.assertFalse(result.trade.target_states[0].hit)
+        ambiguity = result.trade.lifecycle_events[-1]
+        self.assertEqual(ambiguity.event_type, "intrabar_ambiguous")
+        self.assertEqual(ambiguity.metadata["policy"], "intrabar_unknown")
+        self.assertEqual(ambiguity.metadata["action"], "unknown")
+
+    def test_tick_update_keeps_simple_last_price_logic(self) -> None:
+        now = datetime.now(timezone.utc)
+        trade = self._lifecycle_trade(
+            side="long",
+            stop_loss=90.0,
+            now=now,
+            target_states=[
+                VirtualTradeTargetState(
+                    label="TP1",
+                    price=110.0,
+                    close_percent=100.0,
+                    action="full_close",
+                )
+            ],
+        )
+
+        result = apply_virtual_trade_market_price(trade, 110.0, now)
+
+        self.assertTrue(result.closed)
+        self.assertEqual(result.trade.close_reason, "take_profit")
+        self.assertFalse(
+            any(event.event_type == "intrabar_ambiguous" for event in result.trade.lifecycle_events)
+        )
 
     @staticmethod
     def _service(

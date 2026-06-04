@@ -281,14 +281,17 @@ or simulated conservatively. Silent future-data fills are forbidden.
 When entry, stop, and target can all be touched inside the same candle, the
 backtest must use the configured conservative policy.
 
-Supported policy names:
+Canonical supported policy names:
 
-- `stop_first`: assume stop-loss happens before target;
+- `conservative_stop_first`: assume stop-loss happens before target;
 - `target_first`: assume target happens before stop;
-- `ignore_ambiguous`: do not score ambiguous same-candle outcomes as wins.
+- `intrabar_unknown`: do not score or close ambiguous same-candle outcomes by
+  guessing the unknown intrabar order.
 
-The default v1 policy is `stop_first`. Reports must expose the chosen policy so
-performance comparisons are reproducible.
+The default v1 policy is `conservative_stop_first`. Legacy inputs may still use
+`stop_first` and `ignore_ambiguous`; they normalize to
+`conservative_stop_first` and `intrabar_unknown`. Reports must expose the chosen
+policy so performance comparisons are reproducible.
 
 ## Fees, Slippage, And Funding
 

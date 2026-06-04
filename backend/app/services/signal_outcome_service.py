@@ -15,11 +15,15 @@ from app.models.signal import SignalOutcome, TradingSignal
 from app.models.strategy import StrategyVersion
 from app.schemas.candle import OHLCVCandle
 from app.schemas.signal_outcome import SameCandleResolution
+from app.services.execution_ambiguity import (
+    detect_stop_target_candle_touch,
+    normalize_virtual_execution_ambiguity_policy,
+    resolve_stop_target_ambiguity,
+)
 
 logger = logging.getLogger(__name__)
 
 TARGET_STATUSES = ("tp1", "tp2", "tp3")
-SAME_CANDLE_POLICIES = {"stop_first", "target_first", "ignore_ambiguous"}
 TIME_STOP_KEYS = ("time_stop", "time_stop_at", "expires_at", "at", "max_holding_seconds")
 
 
@@ -56,11 +60,8 @@ class SignalOutcomeService:
             else int(tracking_min_score)
         )
         configured_policy = same_candle_resolution or settings.signal_outcome_same_candle_resolution
-        self._same_candle_resolution = (
-            configured_policy
-            if configured_policy in SAME_CANDLE_POLICIES
-            else "stop_first"
-        )
+        self._same_candle_resolution_requested = configured_policy
+        self._same_candle_resolution = normalize_virtual_execution_ambiguity_policy(configured_policy)
 
     def create_tracking_for_signal(
         self,
@@ -268,21 +269,32 @@ class SignalOutcomeService:
             for index, target in enumerate(targets[: len(TARGET_STATUSES)])
             if _target_hit(outcome, candle, target)
         ]
-        stop_hit = _stop_hit(outcome, candle)
-        selected_target_hit = selected_target_index in hit_target_indexes
+        selected_target = targets[selected_target_index]
+        selected_touch = detect_stop_target_candle_touch(
+            side=outcome.direction,
+            candle_high=float(candle.high),
+            candle_low=float(candle.low),
+            stop_price=float(_decimal(outcome.stop_loss)),
+            target_price=float(selected_target.price),
+        )
+        selected_decision = resolve_stop_target_ambiguity(
+            touch=selected_touch,
+            policy=self._same_candle_resolution,
+        )
+        stop_hit = selected_touch.stop_touched
 
-        if stop_hit and selected_target_hit:
+        if selected_decision.ambiguous:
             metadata["same_candle_ambiguous"] = {
-                "policy": self._same_candle_resolution,
+                "policy": self._same_candle_resolution_requested,
+                "canonical_policy": selected_decision.policy,
                 "candle_open_time": candle.open_time,
                 "candle_close_time": candle.close_time,
-                "selected_target": targets[selected_target_index].label,
+                "selected_target": selected_target.label,
             }
-            if self._same_candle_resolution == "ignore_ambiguous":
+            if selected_decision.action == "unknown":
                 return None
-            if self._same_candle_resolution == "target_first":
-                target = targets[selected_target_index]
-                return TARGET_STATUSES[selected_target_index], target.r_multiple
+            if selected_decision.action == "target":
+                return TARGET_STATUSES[selected_target_index], selected_target.r_multiple
             return "stop_loss", Decimal("-1")
 
         if stop_hit:

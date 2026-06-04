@@ -940,7 +940,9 @@ StrategyTestAssumptions = {
     "mode": StrategyTestMode,
     "fee_rate": Decimal,
     "slippage_bps": Decimal,
-    "same_candle_policy": "stop_first" | "target_first" | "ignore_ambiguous",
+    "same_candle_policy": (
+        "conservative_stop_first" | "target_first" | "intrabar_unknown"
+    ),
     "initial_capital": Decimal,
     "rr_hard_gate_enabled": bool,
     "risk_gate_enabled": bool,
@@ -1730,6 +1732,35 @@ exit slippage model.
 Lifecycle state is persisted through the virtual trade metadata snapshot stored
 on the entry order. No database migration is required for v1.
 
+### Virtual Lifecycle Candle Ambiguity v1
+
+Live virtual lifecycle updates that receive only a last/tick price use the
+simple deterministic mark-price path. No same-candle ambiguity policy is applied
+to tick/last-price updates because the observed update has a single price.
+
+When a virtual lifecycle consumer evaluates an OHLC candle, the candle path must
+apply an explicit ambiguity policy if the same candle high/low touches both the
+current stop and an executable target:
+
+```python
+VirtualExecutionAmbiguityPolicy = (
+    "conservative_stop_first" | "target_first" | "intrabar_unknown"
+)
+```
+
+Policy meanings:
+
+- `conservative_stop_first`: close at the current stop before applying any
+  target hit. This is the default for risk simulation and candle backtests.
+- `target_first`: apply the selected/reached target before the stop.
+- `intrabar_unknown`: record ambiguity metadata and leave the trade open for
+  deterministic lifecycle simulation rather than guessing the intrabar order.
+
+The virtual lifecycle and signal outcome labeling must normalize policy aliases
+through the same helper. Legacy analytics/backtest inputs may still pass
+`stop_first` as an alias for `conservative_stop_first` and
+`ignore_ambiguous` as an alias for `intrabar_unknown`.
+
 ## Signal Outcome Labeling v1
 
 `SignalOutcome` records the observed result of every relevant strategy signal,
@@ -1771,10 +1802,13 @@ for both long and short signals. After entry is touched, MFE and MAE are stored
 in R units using the persisted entry price and stop distance. `bars_to_entry`
 and `bars_to_outcome` count processed closed candles since tracking started.
 
-Target/stop collisions inside the same candle use
-`settings.signal_outcome_same_candle_resolution`. The v1 default is
-`stop_first`; supported values are `stop_first`, `target_first`, and
-`ignore_ambiguous`.
+Target/stop collisions inside the same candle use the same ambiguity helper as
+the virtual OHLC lifecycle path. `settings.signal_outcome_same_candle_resolution`
+defaults to `conservative_stop_first`. Supported canonical values are
+`conservative_stop_first`, `target_first`, and `intrabar_unknown`; legacy
+aliases `stop_first` and `ignore_ambiguous` remain accepted for backward
+compatibility. Outcome metadata records both the requested policy and the
+canonical virtual policy when an ambiguous candle is observed.
 
 Expiry before entry closes the outcome as `expired` with `realized_r = 0`.
 Time stop metadata may be supplied by `trade_plan.metadata`,

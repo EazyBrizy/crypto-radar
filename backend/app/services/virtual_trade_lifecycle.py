@@ -11,6 +11,12 @@ from app.schemas.trade import (
     VirtualTradeLifecycleEvent,
     VirtualTradeTargetState,
 )
+from app.services.execution_ambiguity import (
+    DEFAULT_VIRTUAL_EXECUTION_AMBIGUITY_POLICY,
+    VirtualExecutionAmbiguityPolicy,
+    detect_stop_target_candle_touch,
+    resolve_stop_target_ambiguity,
+)
 
 _EPSILON = 1e-9
 
@@ -119,6 +125,67 @@ def apply_virtual_trade_market_price(
         trade=working,
         realized_pnl_delta=realized_delta,
         closed=False,
+    )
+
+
+def apply_virtual_trade_candle(
+    trade: VirtualTrade,
+    *,
+    high: float,
+    low: float,
+    close: float,
+    now: datetime,
+    ambiguity_policy: VirtualExecutionAmbiguityPolicy | str | None = DEFAULT_VIRTUAL_EXECUTION_AMBIGUITY_POLICY,
+    candle_open_time: int | None = None,
+    candle_close_time: int | None = None,
+) -> VirtualTradeLifecycleResult:
+    working = initialize_virtual_trade_lifecycle(trade)
+    if working.status != "open":
+        return VirtualTradeLifecycleResult(trade=working)
+
+    stop_price = working.current_stop_loss or working.stop_loss
+    first_target = _first_candle_target_hit(working, high=high, low=low)
+    target = first_target[1] if first_target is not None else None
+    touch = detect_stop_target_candle_touch(
+        side=working.side,
+        candle_high=high,
+        candle_low=low,
+        stop_price=stop_price,
+        target_price=target.price if target is not None else None,
+    )
+    decision = resolve_stop_target_ambiguity(touch=touch, policy=ambiguity_policy)
+    if decision.ambiguous:
+        working = _append_intrabar_ambiguity_event(
+            working,
+            now=now,
+            policy=decision.policy,
+            requested_policy=decision.requested_policy,
+            action=decision.action,
+            high=high,
+            low=low,
+            close=close,
+            stop_price=stop_price,
+            target=target,
+            candle_open_time=candle_open_time,
+            candle_close_time=candle_close_time,
+        )
+        if decision.action == "unknown":
+            return VirtualTradeLifecycleResult(trade=_mark_price(working, close, now))
+        if decision.action == "target":
+            return _apply_ambiguous_target_first_candle(
+                working,
+                high=high,
+                low=low,
+                now=now,
+            )
+        return apply_virtual_trade_market_price(working, stop_price, now)
+
+    return _apply_virtual_trade_ordered_candle_path(
+        working,
+        high=high,
+        low=low,
+        close=close,
+        now=now,
     )
 
 
@@ -434,6 +501,120 @@ def _apply_target_action(
     return updated
 
 
+def _apply_virtual_trade_ordered_candle_path(
+    trade: VirtualTrade,
+    *,
+    high: float,
+    low: float,
+    close: float,
+    now: datetime,
+) -> VirtualTradeLifecycleResult:
+    if _candle_stop_touched(trade, high=high, low=low):
+        stop_price = trade.current_stop_loss or trade.stop_loss
+        return apply_virtual_trade_market_price(trade, stop_price, now)
+
+    realized_delta = 0.0
+    working = trade
+    first_mark = low if working.side == "long" else high
+    second_mark = high if working.side == "long" else low
+    for price in (first_mark, second_mark, close):
+        if working.status != "open":
+            break
+        result = apply_virtual_trade_market_price(working, price, now)
+        working = result.trade
+        realized_delta += result.realized_pnl_delta
+        if result.closed:
+            return VirtualTradeLifecycleResult(
+                trade=working,
+                realized_pnl_delta=realized_delta,
+                closed=True,
+            )
+    return VirtualTradeLifecycleResult(
+        trade=working,
+        realized_pnl_delta=realized_delta,
+        closed=working.status == "closed",
+    )
+
+
+def _apply_ambiguous_target_first_candle(
+    trade: VirtualTrade,
+    *,
+    high: float,
+    low: float,
+    now: datetime,
+) -> VirtualTradeLifecycleResult:
+    realized_delta = 0.0
+    target_result = apply_virtual_trade_market_price(
+        trade,
+        _favorable_candle_price(trade.side, high=high, low=low),
+        now,
+    )
+    working = target_result.trade
+    realized_delta += target_result.realized_pnl_delta
+    if target_result.closed:
+        return VirtualTradeLifecycleResult(
+            trade=working,
+            realized_pnl_delta=realized_delta,
+            closed=True,
+        )
+
+    if _candle_stop_touched(working, high=high, low=low):
+        stop_price = working.current_stop_loss or working.stop_loss
+        stop_result = apply_virtual_trade_market_price(working, stop_price, now)
+        return VirtualTradeLifecycleResult(
+            trade=stop_result.trade,
+            realized_pnl_delta=realized_delta + stop_result.realized_pnl_delta,
+            closed=stop_result.closed,
+        )
+
+    return VirtualTradeLifecycleResult(
+        trade=working,
+        realized_pnl_delta=realized_delta,
+        closed=False,
+    )
+
+
+def _append_intrabar_ambiguity_event(
+    trade: VirtualTrade,
+    *,
+    now: datetime,
+    policy: str,
+    requested_policy: str | None,
+    action: str,
+    high: float,
+    low: float,
+    close: float,
+    stop_price: float,
+    target: VirtualTradeTargetState | None,
+    candle_open_time: int | None,
+    candle_close_time: int | None,
+) -> VirtualTrade:
+    metadata = {
+        "policy": policy,
+        "requested_policy": requested_policy,
+        "action": action,
+        "candle_open_time": candle_open_time,
+        "candle_close_time": candle_close_time,
+        "candle_high": high,
+        "candle_low": low,
+        "candle_close": close,
+        "stop_price": stop_price,
+        "target_price": target.price if target is not None else None,
+        "target_label": target.label if target is not None else None,
+    }
+    return _append_event(
+        trade,
+        VirtualTradeLifecycleEvent(
+            event_type="intrabar_ambiguous",
+            target_label=target.label if target is not None else None,
+            price=close,
+            stop_loss=stop_price,
+            created_at=now,
+            metadata={key: value for key, value in metadata.items() if value is not None},
+        ),
+    )
+
+
 def _mark_price(trade: VirtualTrade, price: float, now: datetime) -> VirtualTrade:
     initial_quantity = _initial_quantity(trade)
     remaining_quantity = _remaining_quantity(trade, initial_quantity)
@@ -560,6 +741,36 @@ def _stop_reached(side: str, price: float, stop_price: float) -> bool:
     if side == "long":
         return price <= stop_price
     return price >= stop_price
+
+
+def _first_candle_target_hit(
+    trade: VirtualTrade,
+    *,
+    high: float,
+    low: float,
+) -> tuple[int, VirtualTradeTargetState] | None:
+    favorable_price = _favorable_candle_price(trade.side, high=high, low=low)
+    for index, target in enumerate(trade.target_states):
+        if target.hit:
+            continue
+        if _target_reached(trade.side, favorable_price, target.price):
+            return index, target
+    return None
+
+
+def _candle_stop_touched(
+    trade: VirtualTrade,
+    *,
+    high: float,
+    low: float,
+) -> bool:
+    stop_price = trade.current_stop_loss or trade.stop_loss
+    stop_probe = low if trade.side == "long" else high
+    return _stop_reached(trade.side, stop_probe, stop_price)
+
+
+def _favorable_candle_price(side: str, *, high: float, low: float) -> float:
+    return high if side == "long" else low
 
 
 def _stop_reason(trade: VirtualTrade, stop_price: float) -> CloseReason:

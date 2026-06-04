@@ -48,6 +48,39 @@ Future extraction point:
 - output events: `virtual_trade.opened`, `virtual_trade.updated`, `virtual_trade.closed`;
 - process dependencies: PostgreSQL repository, ClickHouse analytics writer, Redis portfolio publisher, signal hot-store side effects.
 
+## Same-Candle Ambiguity
+
+Virtual lifecycle has two market-update contracts:
+
+- tick/last-price updates carry one observed price and keep the existing simple
+  stop/target checks;
+- OHLC candle updates carry `high` and `low`, so the same candle can touch both
+  stop and target without revealing which happened first.
+
+OHLC lifecycle consumers must use `VirtualExecutionAmbiguityPolicy`:
+
+```python
+VirtualExecutionAmbiguityPolicy = (
+    "conservative_stop_first" | "target_first" | "intrabar_unknown"
+)
+```
+
+Default for risk simulation and candle backtests:
+`conservative_stop_first`.
+
+Policy behavior:
+
+- `conservative_stop_first`: if stop and target are both touched, close at stop.
+- `target_first`: if stop and target are both touched, process the target first.
+- `intrabar_unknown`: if stop and target are both touched, append explicit
+  ambiguity metadata and do not deterministically close that candle from the
+  ambiguous stop/target pair.
+
+This policy applies only to OHLC/candle evaluation. It must not be applied to
+ordinary last-price/tick updates. Signal outcome analytics and virtual lifecycle
+must normalize policy aliases through the same helper so their reported meaning
+does not diverge.
+
 ## Levels
 
 ### MVP

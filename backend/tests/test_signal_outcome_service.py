@@ -55,7 +55,7 @@ class SignalOutcomeServiceTest(unittest.TestCase):
         self.assertEqual(outcome.outcome, "loss")
         self.assertEqual(float(outcome.realized_r), -1.0)
 
-    def test_same_candle_tp_and_sl_uses_stop_first_by_default(self) -> None:
+    def test_same_candle_tp_and_sl_uses_conservative_stop_first_by_default(self) -> None:
         outcome = _outcome(direction="long", selected_rr=1, selected_rr_target="nearest")
         service = SignalOutcomeService(tracking_min_score=0)
 
@@ -64,7 +64,48 @@ class SignalOutcomeServiceTest(unittest.TestCase):
         self.assertEqual(outcome.status, "stop_loss")
         self.assertEqual(outcome.outcome, "loss")
         self.assertEqual(float(outcome.realized_r), -1.0)
-        self.assertEqual(outcome.metadata_["same_candle_ambiguous"]["policy"], "stop_first")
+        self.assertEqual(
+            outcome.metadata_["same_candle_ambiguous"]["policy"],
+            "conservative_stop_first",
+        )
+        self.assertEqual(
+            outcome.metadata_["same_candle_ambiguous"]["canonical_policy"],
+            "conservative_stop_first",
+        )
+
+    def test_same_candle_tp_and_sl_target_first_closes_win(self) -> None:
+        outcome = _outcome(direction="long", selected_rr=1, selected_rr_target="nearest")
+        service = SignalOutcomeService(
+            tracking_min_score=0,
+            same_candle_resolution="target_first",
+        )
+
+        service.update_with_closed_candle(outcome, _candle(high=102.4, low=97.6, close=101.0))
+
+        self.assertEqual(outcome.status, "tp1")
+        self.assertEqual(outcome.outcome, "win")
+        self.assertEqual(float(outcome.realized_r), 1.0)
+        self.assertEqual(
+            outcome.metadata_["same_candle_ambiguous"]["canonical_policy"],
+            "target_first",
+        )
+
+    def test_same_candle_tp_and_sl_intrabar_unknown_stays_open(self) -> None:
+        outcome = _outcome(direction="long", selected_rr=1, selected_rr_target="nearest")
+        service = SignalOutcomeService(
+            tracking_min_score=0,
+            same_candle_resolution="intrabar_unknown",
+        )
+
+        service.update_with_closed_candle(outcome, _candle(high=102.4, low=97.6, close=101.0))
+
+        self.assertEqual(outcome.status, "entry_touched")
+        self.assertEqual(outcome.outcome, "open")
+        self.assertEqual(float(outcome.realized_r), 0.0)
+        self.assertEqual(
+            outcome.metadata_["same_candle_ambiguous"]["canonical_policy"],
+            "intrabar_unknown",
+        )
 
     def test_expired_outcome_before_entry(self) -> None:
         close_time = 1_779_796_800_000

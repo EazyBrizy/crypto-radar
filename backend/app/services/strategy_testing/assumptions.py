@@ -15,7 +15,7 @@ class StrategyTestAssumptions(BaseModel):
     mode: BacktestMode
     fee_rate: Decimal = Field(ge=0)
     slippage_bps: Decimal = Field(ge=0)
-    same_candle_policy: StrategyTestSameCandlePolicy = "stop_first"
+    same_candle_policy: StrategyTestSameCandlePolicy = "conservative_stop_first"
     initial_capital: Decimal = Field(gt=0)
     rr_hard_gate_enabled: bool
     risk_gate_enabled: bool

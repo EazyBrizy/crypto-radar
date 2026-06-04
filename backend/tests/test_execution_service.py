@@ -2,6 +2,11 @@ import unittest
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from app.exchanges.bybit import (
+    BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON,
+    LIVE_ORDER_PLACEMENT_DISABLED_REASON,
+    BybitRealExecutionAdapter,
+)
 from app.schemas.risk import (
     AccountRiskSnapshot,
     BreakevenPlan,
@@ -184,6 +189,14 @@ class _NoProtectiveGuaranteeAdapter(_FakeExecutionAdapter):
     protective_order_guarantee = False
 
 
+@dataclass(frozen=True)
+class _LiveTradingSettings:
+    enable_live_trading: bool = False
+    enable_bybit_live_order_placement: bool = False
+    enable_bybit_mainnet_order_placement: bool = False
+    require_protective_stop_for_live_entry: bool = True
+
+
 def _order_key(order: ExecutionPlannedOrder) -> tuple[str, str, str]:
     return (
         order.exchange.strip().lower(),
@@ -276,6 +289,25 @@ class _FakeFeeRateService:
         )
 
 
+class _TrackingMarketDataService(_FakeMarketDataService):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def build_snapshot(self, *args, **kwargs) -> RiskMarketDataSnapshot:
+        self.calls += 1
+        return super().build_snapshot(*args, **kwargs)
+
+
+class _TrackingFeeRateService(_FakeFeeRateService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def resolve(self, *args, **kwargs) -> RiskFeeRateSnapshot:
+        self.calls += 1
+        return super().resolve(*args, **kwargs)
+
+
 class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_dry_run_returns_full_order_plan(self) -> None:
         service = _service(_decision())
@@ -337,6 +369,90 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.execution_allowed)
         self.assertIn("not implemented", result.message)
         self.assertEqual(adapter.calls, [])
+
+    async def test_bybit_live_order_flags_default_block_before_http_boundaries(self) -> None:
+        adapter = BybitRealExecutionAdapter(
+            connection_metadata={"testnet": True},
+            settings_override=_LiveTradingSettings(),
+        )
+        gate = _FakeRiskGateService(_decision())
+        market_data = _TrackingMarketDataService()
+        fee_rates = _TrackingFeeRateService()
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=_FakeRiskState(_Reference()),
+            market_data_service=market_data,
+            fee_rate_service=fee_rates,
+            execution_adapter=adapter,
+            risk_settings_provider=lambda _user_id: _risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "not_implemented")
+        self.assertFalse(result.execution_allowed)
+        self.assertEqual(result.message, LIVE_ORDER_PLACEMENT_DISABLED_REASON)
+        self.assertEqual(result.validation_errors, [LIVE_ORDER_PLACEMENT_DISABLED_REASON])
+        self.assertEqual(result.planned_orders, [])
+        self.assertEqual(gate.calls, 0)
+        self.assertEqual(market_data.calls, 0)
+        self.assertEqual(fee_rates.calls, 0)
+
+    async def test_bybit_testnet_live_flags_reach_adapter_implementation_blocker(self) -> None:
+        adapter = BybitRealExecutionAdapter(
+            connection_metadata={"testnet": True},
+            settings_override=_LiveTradingSettings(
+                enable_live_trading=True,
+                enable_bybit_live_order_placement=True,
+            ),
+        )
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "not_implemented")
+        self.assertTrue(result.execution_allowed)
+        self.assertIn("not implemented", result.message)
+        self.assertNotEqual(result.message, LIVE_ORDER_PLACEMENT_DISABLED_REASON)
+
+    async def test_bybit_mainnet_live_order_flag_blocks_before_http_boundaries(self) -> None:
+        adapter = BybitRealExecutionAdapter(
+            connection_metadata={"testnet": False},
+            settings_override=_LiveTradingSettings(
+                enable_live_trading=True,
+                enable_bybit_live_order_placement=True,
+            ),
+        )
+        gate = _FakeRiskGateService(_decision())
+        market_data = _TrackingMarketDataService()
+        fee_rates = _TrackingFeeRateService()
+        service = RealExecutionService(
+            risk_gate_service=gate,
+            risk_audit=None,
+            risk_state=_FakeRiskState(_Reference()),
+            market_data_service=market_data,
+            fee_rate_service=fee_rates,
+            execution_adapter=adapter,
+            risk_settings_provider=lambda _user_id: _risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "not_implemented")
+        self.assertFalse(result.execution_allowed)
+        self.assertEqual(result.message, BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON)
+        self.assertEqual(result.validation_errors, [BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON])
+        self.assertEqual(result.planned_orders, [])
+        self.assertEqual(gate.calls, 0)
+        self.assertEqual(market_data.calls, 0)
+        self.assertEqual(fee_rates.calls, 0)
 
     async def test_protective_stop_is_included_and_reduce_only(self) -> None:
         service = _service(_decision())

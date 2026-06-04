@@ -14,6 +14,7 @@ from typing import Any, List, Optional
 
 import websockets
 
+from app.core.config import settings as default_settings
 from app.schemas.candle import OHLCVCandle, Timeframe
 from app.schemas.market import MarketData, TradeSide
 from app.schemas.trade import ExecutionPlannedOrder
@@ -29,6 +30,10 @@ BYBIT_WALLET_BALANCE_PATH = "/v5/account/wallet-balance"
 BYBIT_TICKERS_PATH = "/v5/market/tickers"
 BYBIT_ORDERBOOK_PATH = "/v5/market/orderbook"
 BYBIT_POSITION_LIST_PATH = "/v5/position/list"
+LIVE_ORDER_PLACEMENT_DISABLED_REASON = "Live order placement is disabled by backend configuration."
+BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON = (
+    "Bybit mainnet order placement is disabled by backend configuration."
+)
 DEFAULT_SYMBOLS = ("DOGEUSDT",)
 LINEAR_SYMBOL_ALIASES = {"PEPEUSDT": "1000PEPEUSDT"}
 RECONNECT_DELAY_SEC = 5.0
@@ -161,13 +166,38 @@ class BybitRealExecutionAdapter:
     guarantees_protective_after_entry = False
     supports_reduce_only = False
 
+    def __init__(
+        self,
+        *,
+        connection_metadata: Mapping[str, Any] | None = None,
+        settings_override: Any | None = None,
+    ) -> None:
+        self.connection_metadata = dict(connection_metadata or {})
+        self._settings = settings_override or default_settings
+
+    def live_order_placement_safety_reason(self) -> str | None:
+        if not (
+            _truthy_setting(self._settings, "enable_live_trading")
+            and _truthy_setting(self._settings, "enable_bybit_live_order_placement")
+        ):
+            return LIVE_ORDER_PLACEMENT_DISABLED_REASON
+        if not self._metadata_is_testnet() and not _truthy_setting(
+            self._settings,
+            "enable_bybit_mainnet_order_placement",
+        ):
+            return BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON
+        return None
+
     async def place_order(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
+        self._raise_order_placement_blocker()
         raise NotImplementedError("Bybit real order submission is not implemented")
 
     async def place_protective_stop(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
+        self._raise_order_placement_blocker()
         raise NotImplementedError("Bybit protective stop submission is not implemented")
 
     async def place_take_profit(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
+        self._raise_order_placement_blocker()
         raise NotImplementedError("Bybit take-profit submission is not implemented")
 
     async def cancel_order(
@@ -185,6 +215,7 @@ class BybitRealExecutionAdapter:
         current_client_order_id: str,
         replacement: ExecutionPlannedOrder,
     ) -> ExecutionPlannedOrder:
+        self._raise_order_placement_blocker()
         raise NotImplementedError("Bybit real order replace is not implemented")
 
     async def get_order(
@@ -211,6 +242,40 @@ class BybitRealExecutionAdapter:
         symbol: str,
     ) -> dict[str, Any] | None:
         raise NotImplementedError("Bybit real position lookup is not implemented")
+
+    def _raise_order_placement_blocker(self) -> None:
+        reason = self.live_order_placement_safety_reason()
+        if reason is not None:
+            raise NotImplementedError(reason)
+
+    def _metadata_is_testnet(self) -> bool:
+        testnet_value = self.connection_metadata.get("testnet")
+        if _truthy_metadata_value(testnet_value):
+            return True
+        environment = (
+            self.connection_metadata.get("environment")
+            or self.connection_metadata.get("network")
+        )
+        if isinstance(environment, str) and environment.strip().lower() == "testnet":
+            return True
+        return False
+
+
+def _truthy_setting(settings_obj: Any, name: str) -> bool:
+    value = getattr(settings_obj, name, False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)
+
+
+def _truthy_metadata_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled", "testnet"}
+    return bool(value)
 
 
 def fetch_bybit_fee_rates(

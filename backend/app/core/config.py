@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     prometheus_metrics_enabled: bool = True
 
+    enable_live_trading: bool = False
+    enable_bybit_live_order_placement: bool = False
+    enable_bybit_mainnet_order_placement: bool = False
+    require_protective_stop_for_live_entry: bool = True
+
     exchange_instrument_sync_enabled: bool = True
     exchange_instrument_sync_interval_seconds: int = 21_600
     exchange_instrument_rules_ttl_seconds: int = 86_400

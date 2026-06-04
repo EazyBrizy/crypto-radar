@@ -2300,11 +2300,21 @@ adapter placement unless all live-readiness requirements pass:
 - `real_execution_enabled: bool = False`
 - `real_fee_rate_ttl_seconds: int = 86400`
 
+Backend environment settings add a separate live-order kill switch layer:
+
+- `ENABLE_LIVE_TRADING=false`
+- `ENABLE_BYBIT_LIVE_ORDER_PLACEMENT=false`
+- `ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT=false`
+- `REQUIRE_PROTECTIVE_STOP_FOR_LIVE_ENTRY=true`
+
 `real_execution_enabled=false` blocks non-dry-run live placement. It does not
 disable virtual execution and does not prevent `DryRunExecutionAdapter` from
 returning an auditable dry-run plan. A non-dry-run adapter must never submit a
 naked entry. If the adapter cannot guarantee bracket/OCO/protective placement,
 live execution is blocked before any adapter placement method is called.
+For Bybit, live order placement also requires both `ENABLE_LIVE_TRADING` and
+`ENABLE_BYBIT_LIVE_ORDER_PLACEMENT`. Mainnet order placement is blocked unless
+`ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT=true`; testnet metadata must be explicit.
 Duplicate calls with the same order intent must reuse existing orders by
 `client_order_id`/`idempotency_key` rather than submitting duplicates.
 

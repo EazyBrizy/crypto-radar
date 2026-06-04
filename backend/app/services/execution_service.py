@@ -96,6 +96,23 @@ class RealExecutionService:
         signal: RadarSignal,
         request: ManualConfirmRequest,
     ) -> RealExecutionResult:
+        backend_configuration_blocker = _adapter_live_order_placement_safety_reason(
+            self._execution_adapter
+        )
+        if backend_configuration_blocker is not None:
+            lifecycle_trace = _request_lifecycle_trace(signal, request)
+            return RealExecutionResult(
+                status="not_implemented",
+                signal_valid=True,
+                execution_allowed=False,
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                message=backend_configuration_blocker,
+                adapter=getattr(self._execution_adapter, "name", None),
+                validation_errors=[backend_configuration_blocker],
+                lifecycle_trace=lifecycle_trace,
+            )
+
         risk_settings = self._risk_settings_provider(request.user_id)
         instrument_type = "futures" if _request_profile_leverage(request) > 1 else "spot"
         strategy_risk_settings, strategy_risk_settings_source = _strategy_risk_settings(
@@ -595,6 +612,9 @@ def _adapter_not_implemented_reason(adapter: Any | None) -> str | None:
         return "Real trade execution adapter is not configured. No exchange order was sent."
     if bool(getattr(adapter, "is_dry_run", False)):
         return None
+    safety_reason = _adapter_live_order_placement_safety_reason(adapter)
+    if safety_reason is not None:
+        return safety_reason
     implemented = getattr(adapter, "live_order_placement_implemented", None)
     if implemented is False:
         adapter_name = getattr(adapter, "name", "unknown")
@@ -602,6 +622,16 @@ def _adapter_not_implemented_reason(adapter: Any | None) -> str | None:
             f"Live real execution adapter {adapter_name!r} is not implemented. "
             "No exchange order was sent."
         )
+    return None
+
+
+def _adapter_live_order_placement_safety_reason(adapter: Any | None) -> str | None:
+    if adapter is None or bool(getattr(adapter, "is_dry_run", False)):
+        return None
+    checker = getattr(adapter, "live_order_placement_safety_reason", None)
+    reason = checker() if callable(checker) else checker
+    if isinstance(reason, str) and reason.strip():
+        return reason.strip()
     return None
 
 

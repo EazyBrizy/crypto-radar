@@ -1,11 +1,25 @@
 import unittest
+from dataclasses import dataclass
 
+from app.core.config import Settings
 from app.exchanges.base import DryRunExecutionAdapter, exchange_execution_capabilities
-from app.exchanges.bybit import BybitRealExecutionAdapter
+from app.exchanges.bybit import (
+    BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON,
+    LIVE_ORDER_PLACEMENT_DISABLED_REASON,
+    BybitRealExecutionAdapter,
+)
 from app.schemas.trade import ExecutionPlannedOrder
 
 
 class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
+    async def test_backend_live_trading_settings_default_to_safe_values(self) -> None:
+        fields = Settings.model_fields
+
+        self.assertFalse(fields["enable_live_trading"].default)
+        self.assertFalse(fields["enable_bybit_live_order_placement"].default)
+        self.assertFalse(fields["enable_bybit_mainnet_order_placement"].default)
+        self.assertTrue(fields["require_protective_stop_for_live_entry"].default)
+
     async def test_dry_run_adapter_returns_planned_order_without_submission(self) -> None:
         adapter = DryRunExecutionAdapter()
         order = _planned_order(role="entry", client_order_id="entry-1")
@@ -36,6 +50,70 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(bybit.supports_oco)
         self.assertFalse(bybit.guarantees_protective_after_entry)
         self.assertFalse(bybit.supports_reduce_only)
+
+    async def test_bybit_live_order_defaults_block_submission(self) -> None:
+        adapter = BybitRealExecutionAdapter(settings_override=_live_trading_settings())
+
+        self.assertEqual(
+            adapter.live_order_placement_safety_reason(),
+            LIVE_ORDER_PLACEMENT_DISABLED_REASON,
+        )
+        with self.assertRaises(NotImplementedError) as raised:
+            await adapter.place_order(_planned_order(role="entry", client_order_id="entry-disabled"))
+
+        self.assertEqual(str(raised.exception), LIVE_ORDER_PLACEMENT_DISABLED_REASON)
+
+    async def test_bybit_testnet_requires_both_live_flags(self) -> None:
+        metadata = {"testnet": True}
+
+        for settings in (
+            _live_trading_settings(enable_live_trading=True),
+            _live_trading_settings(enable_bybit_live_order_placement=True),
+        ):
+            adapter = BybitRealExecutionAdapter(
+                connection_metadata=metadata,
+                settings_override=settings,
+            )
+            self.assertEqual(
+                adapter.live_order_placement_safety_reason(),
+                LIVE_ORDER_PLACEMENT_DISABLED_REASON,
+            )
+
+        adapter = BybitRealExecutionAdapter(
+            connection_metadata=metadata,
+            settings_override=_live_trading_settings(
+                enable_live_trading=True,
+                enable_bybit_live_order_placement=True,
+            ),
+        )
+
+        self.assertIsNone(adapter.live_order_placement_safety_reason())
+
+    async def test_bybit_mainnet_requires_separate_order_placement_flag(self) -> None:
+        enabled_testnet_flags = _live_trading_settings(
+            enable_live_trading=True,
+            enable_bybit_live_order_placement=True,
+        )
+        adapter = BybitRealExecutionAdapter(
+            connection_metadata={"testnet": False},
+            settings_override=enabled_testnet_flags,
+        )
+
+        self.assertEqual(
+            adapter.live_order_placement_safety_reason(),
+            BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON,
+        )
+
+        mainnet_adapter = BybitRealExecutionAdapter(
+            connection_metadata={"environment": "mainnet"},
+            settings_override=_live_trading_settings(
+                enable_live_trading=True,
+                enable_bybit_live_order_placement=True,
+                enable_bybit_mainnet_order_placement=True,
+            ),
+        )
+
+        self.assertIsNone(mainnet_adapter.live_order_placement_safety_reason())
 
     async def test_dry_run_adapter_handles_protective_and_take_profit_orders(self) -> None:
         adapter = DryRunExecutionAdapter()
@@ -123,10 +201,41 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_bybit_real_adapter_skeleton_does_not_submit_orders(self) -> None:
-        adapter = BybitRealExecutionAdapter()
+        adapter = BybitRealExecutionAdapter(
+            settings_override=_live_trading_settings(
+                enable_live_trading=True,
+                enable_bybit_live_order_placement=True,
+                enable_bybit_mainnet_order_placement=True,
+            )
+        )
 
-        with self.assertRaises(NotImplementedError):
+        with self.assertRaises(NotImplementedError) as raised:
             await adapter.place_order(_planned_order(role="entry", client_order_id="entry-3"))
+
+        self.assertEqual(str(raised.exception), "Bybit real order submission is not implemented")
+
+
+@dataclass(frozen=True)
+class _LiveTradingSettings:
+    enable_live_trading: bool = False
+    enable_bybit_live_order_placement: bool = False
+    enable_bybit_mainnet_order_placement: bool = False
+    require_protective_stop_for_live_entry: bool = True
+
+
+def _live_trading_settings(
+    *,
+    enable_live_trading: bool = False,
+    enable_bybit_live_order_placement: bool = False,
+    enable_bybit_mainnet_order_placement: bool = False,
+    require_protective_stop_for_live_entry: bool = True,
+) -> _LiveTradingSettings:
+    return _LiveTradingSettings(
+        enable_live_trading=enable_live_trading,
+        enable_bybit_live_order_placement=enable_bybit_live_order_placement,
+        enable_bybit_mainnet_order_placement=enable_bybit_mainnet_order_placement,
+        require_protective_stop_for_live_entry=require_protective_stop_for_live_entry,
+    )
 
 
 def _planned_order(

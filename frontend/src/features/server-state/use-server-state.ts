@@ -1,6 +1,7 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api";
+import { isActivePendingEntryStatus } from "@/domain/pending-entry-status";
 import { isExecutionCandidateStatus } from "@/domain/signal-status";
 import type {
   StrategyTestReport,
@@ -706,8 +707,5 @@ function filterSignals(signals: RadarSignal[], filters?: SignalHistoryFilters): 
 }
 
 function isActivePendingEntryIntent(intent: PendingEntryIntent): boolean {
-  return intent.status === "pending"
-    || intent.status === "triggered"
-    || intent.status === "filling"
-    || intent.status === "requires_reconfirmation";
+  return isActivePendingEntryStatus(intent.status);
 }

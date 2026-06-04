@@ -25,6 +25,7 @@ import {
   isOpenCandleActionableAllowed,
   isWaitingEntry
 } from "@/domain/signal-status";
+import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
 import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
@@ -98,7 +99,7 @@ export function RadarRoute() {
     enabled: selectedSignal != null && signalView === "open"
   });
   const selectedPendingEntry = useMemo(
-    () => (pendingEntryQuery.data ?? []).find(isActivePendingEntryIntent) ?? null,
+    () => selectPendingEntryForDetails(pendingEntryQuery.data ?? []),
     [pendingEntryQuery.data]
   );
   const loading = [healthQuery, radarStatusQuery, radarQuery].some((query) => query.isLoading)
@@ -261,17 +262,29 @@ export function canArmAutoEntry(signal: RadarSignal | null): boolean {
   return isWaitingEntry(signal.status);
 }
 
+export function selectPendingEntryForDetails(intents: PendingEntryIntent[]): PendingEntryIntent | null {
+  const activeIntent = intents.find(isActivePendingEntryIntent);
+  if (activeIntent) return activeIntent;
+  return latestTerminalPendingEntryIntent(intents);
+}
+
 function errorMessage(exc: unknown, fallback: string): string {
   return exc instanceof Error && exc.message ? exc.message : fallback;
 }
 
-function isActivePendingEntryStatus(status: PendingEntryIntent["status"]): boolean {
-  return status === "pending"
-    || status === "triggered"
-    || status === "filling"
-    || status === "requires_reconfirmation";
-}
-
 function isActivePendingEntryIntent(intent: PendingEntryIntent): boolean {
   return isActivePendingEntryStatus(intent.status);
+}
+
+function latestTerminalPendingEntryIntent(intents: PendingEntryIntent[]): PendingEntryIntent | null {
+  return intents
+    .filter((intent) => isTerminalPendingEntryStatus(intent.status))
+    .sort((left, right) => pendingEntryUpdatedAt(right) - pendingEntryUpdatedAt(left))[0] ?? null;
+}
+
+function pendingEntryUpdatedAt(intent: PendingEntryIntent): number {
+  const updatedAt = Date.parse(intent.updated_at);
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const createdAt = Date.parse(intent.created_at);
+  return Number.isFinite(createdAt) ? createdAt : 0;
 }

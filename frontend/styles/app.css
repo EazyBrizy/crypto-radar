@@ -868,6 +868,24 @@ h3 { font-size: 15px; line-height: 1.3; }
   line-height: 1.45;
 }
 
+.pending-entry-history-block {
+  border-color: #334155;
+  background: #0f172a;
+}
+
+.pending-entry-history-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.pending-entry-history-summary .section-title {
+  display: inline-flex;
+}
+
 .execution-quality-block .section-title {
   justify-content: flex-start;
 }

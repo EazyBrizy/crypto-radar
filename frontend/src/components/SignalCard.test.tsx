@@ -247,4 +247,27 @@ describe("SignalCard", () => {
 
     expect(screen.getByText("Requires reconfirmation")).toBeInTheDocument();
   });
+
+  it("hides terminal auto-entry mirror status on the radar card", () => {
+    const signal: RadarSignal = {
+      ...baseSignal,
+      auto_entry: {
+        enabled: true,
+        status: "cancelled",
+        mode: "virtual",
+        user_id: "user_1",
+        armed_at: "2026-05-31T07:00:00.000Z",
+        triggered_at: null,
+        message: "AutoEntry cancelled",
+        request: {},
+        trade_id: null,
+        real_execution: null
+      }
+    };
+
+    render(<SignalCard signal={signal} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.queryByText("cancelled")).not.toBeInTheDocument();
+    expect(screen.queryByText("AutoEntry cancelled")).not.toBeInTheDocument();
+  });
 });

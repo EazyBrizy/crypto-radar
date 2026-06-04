@@ -354,11 +354,63 @@ describe("SignalDetails", () => {
       />
     );
 
+    expect(screen.getByRole("heading", { name: "Pending Entry" })).toBeInTheDocument();
     expect(screen.getAllByText("Waiting entry").length).toBeGreaterThan(0);
+    expect(screen.getByText("Ожидание входа активно: backend trigger service ждёт касание зоны входа.")).toBeInTheDocument();
     expect(screen.getByText("100 - 101")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Принять и ждать вход/u })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /Cancel waiting/u }));
     expect(onCancelPendingEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders cancelled pending intent only as collapsed history", () => {
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        pendingEntry={pendingIntent({
+          status: "cancelled",
+          failure_reason: "Cancelled by user.",
+          updated_at: "2026-05-31T07:15:00.000Z"
+        })}
+        signal={{ ...signal, status: "ready", no_trade_filter: null }}
+      />
+    );
+
+    expect(screen.queryByRole("heading", { name: "Pending Entry" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Accepted setup is waiting for the backend trigger service to detect the entry zone.")).not.toBeInTheDocument();
+    expect(screen.getByText("История ожидания входа")).toBeInTheDocument();
+    expect(screen.getAllByText("cancelled").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText("История ожидания входа"));
+    expect(screen.getByText("Cancelled by user.")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-31 07:15:00Z")).toBeInTheDocument();
+  });
+
+  it("does not render cancelled legacy auto-entry as an active pending card", () => {
+    render(
+      <SignalDetails
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={{
+          ...signal,
+          status: "ready",
+          no_trade_filter: null,
+          auto_entry: autoEntry({
+            status: "cancelled",
+            message: "AutoEntry cancelled"
+          })
+        }}
+      />
+    );
+
+    expect(screen.queryByRole("heading", { name: "Pending Entry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Legacy auto-entry state" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Accepted setup is waiting for the backend trigger service to detect the entry zone.")).not.toBeInTheDocument();
+    expect(screen.getByText("Auto-entry diagnostics")).toBeInTheDocument();
   });
 
   it("shows requires reconfirmation banner", () => {
@@ -377,8 +429,8 @@ describe("SignalDetails", () => {
     );
 
     expect(screen.getAllByText("Requires reconfirmation").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("План изменился. Нужно подтвердить ожидание входа заново.").length).toBeGreaterThan(0);
     expect(screen.getByText(/Accepted trade plan changed/u)).toBeInTheDocument();
-    expect(screen.getByText(/Reconfirmation is required/u)).toBeInTheDocument();
   });
 });
 
@@ -413,6 +465,24 @@ function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntr
     filled_at: null,
     filled_trade_id: null,
     failure_reason: null,
+    ...overrides
+  };
+}
+
+function autoEntry(
+  overrides: Partial<NonNullable<RadarSignal["auto_entry"]>> = {}
+): NonNullable<RadarSignal["auto_entry"]> {
+  return {
+    enabled: true,
+    status: "pending",
+    mode: "virtual",
+    user_id: "user_1",
+    armed_at: "2026-05-31T07:00:00.000Z",
+    triggered_at: null,
+    message: null,
+    request: {},
+    trade_id: null,
+    real_execution: null,
     ...overrides
   };
 }

@@ -12,6 +12,7 @@ import {
   statusBadgeLabel,
   statusBadgeTone
 } from "@/domain/signal-status";
+import { isActivePendingEntryStatus } from "@/domain/pending-entry-status";
 import { useSignalPrice } from "@/stores/price-store";
 import { useSignalStore } from "@/stores/signal-store";
 import type { DecisionReason, PendingEntryIntentStatus, RadarSignal, SignalEdgeStatus } from "../types";
@@ -86,7 +87,9 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
         <Badge tone={marketOpportunityTone(signal)}>{marketOpportunityLabel(signal)}</Badge>
         {signal.risk_gate_status ? <Badge tone={riskGateTone(signal.risk_gate_status)}>RiskGate {signal.risk_gate_status}</Badge> : null}
         {signal.risk_gate_status === "failed" || signal.can_enter === false ? <Badge tone="red">Risk blocked</Badge> : null}
-        {signal.auto_entry ? <Badge tone={pendingEntryTone(signal.auto_entry.status)}>{pendingEntryLabel(signal.auto_entry.status)}</Badge> : null}
+        {signal.auto_entry && isActivePendingEntryStatus(signal.auto_entry.status) ? (
+          <Badge tone={pendingEntryTone(signal.auto_entry.status)}>{pendingEntryLabel(signal.auto_entry.status)}</Badge>
+        ) : null}
         {decisionBadge ? <Badge tone={decisionBadge.tone}>{decisionBadge.label}</Badge> : null}
         {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
         <Badge tone={edge.tone}>{edge.label}</Badge>

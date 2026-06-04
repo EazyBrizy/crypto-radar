@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { RadarSignal, SignalStatus } from "@/types";
-import { canArmAutoEntry, canSendPaperTrade, shouldRequestExecutionPreview } from "./RadarRoute";
+import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
+import { canArmAutoEntry, canSendPaperTrade, selectPendingEntryForDetails, shouldRequestExecutionPreview } from "./RadarRoute";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() })
@@ -129,3 +129,62 @@ describe("paper trade eligibility", () => {
     })).toBe(false);
   });
 });
+
+describe("pending entry selection", () => {
+  it("prefers active pending intents over terminal history", () => {
+    const active = pendingIntent({ id: "active", status: "pending" });
+    const terminal = pendingIntent({ id: "terminal", status: "cancelled" });
+
+    expect(selectPendingEntryForDetails([terminal, active])).toBe(active);
+  });
+
+  it("falls back to the latest terminal pending intent", () => {
+    const oldTerminal = pendingIntent({
+      id: "old",
+      status: "expired",
+      updated_at: "2026-05-31T07:05:00.000Z"
+    });
+    const latestTerminal = pendingIntent({
+      id: "latest",
+      status: "cancelled",
+      updated_at: "2026-05-31T07:15:00.000Z"
+    });
+
+    expect(selectPendingEntryForDetails([oldTerminal, latestTerminal])).toBe(latestTerminal);
+  });
+});
+
+function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntryIntent {
+  return {
+    id: "intent_1",
+    user_id: "user_1",
+    signal_id: baseSignal.id,
+    strategy_id: null,
+    mode: "virtual",
+    status: "pending",
+    exchange: baseSignal.exchange,
+    symbol: baseSignal.symbol,
+    side: baseSignal.direction,
+    entry_min: 100,
+    entry_max: 101,
+    entry_price_policy: "accepted_entry_zone",
+    stop_loss: 98,
+    targets_snapshot: [{ label: "TP1", price: "110" }],
+    accepted_trade_plan_snapshot: { entry: { min_price: "100", max_price: "101" } },
+    accepted_trade_plan_hash: "sha256:test",
+    accepted_signal_status: "ready",
+    accepted_signal_version: null,
+    accepted_signal_fingerprint: null,
+    execution_profile_snapshot: {},
+    request_snapshot: {},
+    idempotency_key: "pending-entry:test",
+    expires_at: null,
+    created_at: "2026-05-31T07:00:00.000Z",
+    updated_at: "2026-05-31T07:00:00.000Z",
+    triggered_at: null,
+    filled_at: null,
+    filled_trade_id: null,
+    failure_reason: null,
+    ...overrides
+  };
+}

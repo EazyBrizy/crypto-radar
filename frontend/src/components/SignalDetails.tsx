@@ -18,6 +18,7 @@ import {
   marketOpportunityTone,
   riskGateTone
 } from "@/domain/signal-status";
+import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
 import type { DecisionReason, ExecutionGateStatus, ImpactRisk, PendingEntryIntent, RadarSignal, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
 import {
   entryZone,
@@ -89,16 +90,24 @@ export function SignalDetails({
   const openCandleAllowed = isOpenCandleActionableAllowed(signal);
   const formingReason = formingCandleReason(signal);
   const statusAllowsTrade = canShowEnterButton(signal) && (!formingCandle || openCandleAllowed);
-  const pendingStatus = pendingEntry?.status ?? signal.auto_entry?.status ?? null;
-  const activePendingStatus = pendingStatus ? isActivePendingEntryStatus(pendingStatus) : false;
   const activePendingEntry = pendingEntry && isActivePendingEntryStatus(pendingEntry.status) ? pendingEntry : null;
-  const autoEntryPending = pendingStatus === "pending";
-  const requiresReconfirmation = pendingStatus === "requires_reconfirmation";
-  const entryActionDisabled = busy || tradingActionsDisabled || autoEntryPending || strategyRiskBlocked || !statusAllowsTrade || riskFailed;
+  const terminalPendingEntry = pendingEntry && isTerminalPendingEntryStatus(pendingEntry.status) ? pendingEntry : null;
+  const hasPendingEntryIntent = pendingEntry != null;
+  const activeLegacyAutoEntry = !hasPendingEntryIntent && signal.auto_entry && isActivePendingEntryStatus(signal.auto_entry.status)
+    ? signal.auto_entry
+    : null;
+  const terminalLegacyAutoEntry = !hasPendingEntryIntent && signal.auto_entry && isTerminalPendingEntryStatus(signal.auto_entry.status)
+    ? signal.auto_entry
+    : null;
+  const activePendingStatus = activePendingEntry?.status ?? activeLegacyAutoEntry?.status ?? null;
+  const hasActivePendingStatus = activePendingStatus != null;
+  const autoEntryPending = activePendingStatus === "pending";
+  const requiresReconfirmation = activePendingStatus === "requires_reconfirmation";
+  const entryActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || strategyRiskBlocked || !statusAllowsTrade || riskFailed;
   const acceptPendingDisabled = busy
     || tradingActionsDisabled
     || pendingEntryLoading
-    || activePendingStatus
+    || hasActivePendingStatus
     || !isMarketOpportunity(signal.status)
     || statusAllowsTrade;
   const cancelPendingDisabled = busy || tradingActionsDisabled || !activePendingEntry;
@@ -124,7 +133,7 @@ export function SignalDetails({
           {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
           <Badge tone="yellow">Risk {riskLabel(signal)}</Badge>
           <Badge tone={marketOpportunityTone(signal)}>{formingReason ? "preview" : marketOpportunityLabel(signal)}</Badge>
-          {pendingStatus ? <Badge tone={pendingEntryTone(pendingStatus)}>{pendingEntryLabel(pendingStatus)}</Badge> : null}
+          {activePendingStatus ? <Badge tone={pendingEntryTone(activePendingStatus)}>{pendingEntryLabel(activePendingStatus)}</Badge> : null}
           {signal.risk_gate_status ? <Badge tone={riskGateTone(signal.risk_gate_status)}>RiskGate {signal.risk_gate_status}</Badge> : null}
         </div>
       </div>
@@ -140,12 +149,13 @@ export function SignalDetails({
       <BreakoutEntryPlanBlock signal={signal} />
       <LiquiditySweepPlanBlock signal={signal} />
       <PendingEntryBlock
-        pendingEntry={pendingEntry}
-        pendingStatus={pendingStatus}
+        pendingEntry={activePendingEntry}
         onReconfirmPendingEntry={onReconfirmPendingEntry}
         busy={busy || tradingActionsDisabled}
       />
-      <AutoEntryBlock signal={signal} />
+      <PendingEntryHistoryCollapsed pendingEntry={terminalPendingEntry} />
+      <AutoEntryBlock autoEntry={activeLegacyAutoEntry} />
+      <AutoEntryDiagnosticsCollapsed autoEntry={terminalLegacyAutoEntry} />
 
       <div className="trade-setup">
         <div><span>Entry</span><strong>{tradePlan.entryType} | {tradePlan.entryZone}</strong></div>
@@ -237,7 +247,7 @@ export function SignalDetails({
         <p className="form-description">Trading actions disabled until realtime data is current.</p>
       ) : null}
       {requiresReconfirmation ? (
-        <p className="form-description">Accepted entry plan changed. Reconfirmation is required before this pending entry can continue.</p>
+        <p className="form-description">План изменился. Нужно подтвердить ожидание входа заново.</p>
       ) : null}
       {riskFailed ? (
         <p className="form-description">Entry is blocked by backend risk gate.</p>
@@ -293,14 +303,13 @@ function RadarAnnotationBlock({ signal }: { signal: RadarSignal }) {
   );
 }
 
-function AutoEntryBlock({ signal }: { signal: RadarSignal }) {
-  const autoEntry = signal.auto_entry;
+function AutoEntryBlock({ autoEntry }: { autoEntry: RadarSignal["auto_entry"] }) {
   if (!autoEntry) return null;
   return (
     <div className="auto-entry-block">
       <div className="section-title">
         <FileCheck2 size={18} />
-        <h3>Auto Entry</h3>
+        <h3>Legacy auto-entry state</h3>
         <Badge tone={autoEntryTone(autoEntry.status)}>
           {autoEntry.status.replaceAll("_", " ")}
         </Badge>
@@ -312,17 +321,15 @@ function AutoEntryBlock({ signal }: { signal: RadarSignal }) {
 
 function PendingEntryBlock({
   pendingEntry,
-  pendingStatus,
   onReconfirmPendingEntry,
   busy
 }: {
   pendingEntry: PendingEntryIntent | null;
-  pendingStatus: PendingEntryIntent["status"] | null;
   onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
   busy: boolean;
 }) {
-  if (!pendingEntry && !pendingStatus) return null;
-  const status = pendingEntry?.status ?? pendingStatus ?? "pending";
+  if (!pendingEntry) return null;
+  const status = pendingEntry.status;
   return (
     <div className="auto-entry-block">
       <div className="section-title">
@@ -331,17 +338,22 @@ function PendingEntryBlock({
         <Badge tone={pendingEntryTone(status)}>{pendingEntryLabel(status)}</Badge>
       </div>
       {status === "requires_reconfirmation" ? (
-        <div className="risk-blocker-list">
-          <span>{pendingEntry?.failure_reason ?? "Accepted entry, stop or target changed; reconfirm the current plan before waiting continues."}</span>
-        </div>
+        <>
+          <p>План изменился. Нужно подтвердить ожидание входа заново.</p>
+          {pendingEntry.failure_reason ? (
+            <div className="risk-blocker-list">
+              <span>{pendingEntry.failure_reason}</span>
+            </div>
+          ) : null}
+        </>
       ) : (
-        <p>Accepted setup is waiting for the backend trigger service to detect the entry zone.</p>
+        <p>{pendingEntryActiveDescription(status)}</p>
       )}
       <div className="risk-reward-detail-grid">
-        <MetricLine label="Entry zone" value={pendingEntry ? `${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}` : "-"} />
-        <MetricLine label="Stop" value={pendingEntry ? formatPrice(pendingEntry.stop_loss) : "-"} />
-        <MetricLine label="Mode" value={pendingEntry?.mode ?? "-"} />
-        <MetricLine label="Accepted status" value={pendingEntry?.accepted_signal_status?.replaceAll("_", " ") ?? "-"} />
+        <MetricLine label="Entry zone" value={`${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
+        <MetricLine label="Stop" value={formatPrice(pendingEntry.stop_loss)} />
+        <MetricLine label="Mode" value={pendingEntry.mode} />
+        <MetricLine label="Accepted status" value={pendingEntry.accepted_signal_status.replaceAll("_", " ")} />
       </div>
       {status === "requires_reconfirmation" && pendingEntry && onReconfirmPendingEntry ? (
         <div className="detail-actions">
@@ -352,6 +364,60 @@ function PendingEntryBlock({
       ) : null}
     </div>
   );
+}
+
+function PendingEntryHistoryCollapsed({ pendingEntry }: { pendingEntry: PendingEntryIntent | null }) {
+  if (!pendingEntry) return null;
+  return (
+    <details className="risk-reward-detail-block pending-entry-history-block">
+      <summary className="pending-entry-history-summary">
+        <span className="section-title">
+          <FileCheck2 size={18} />
+          <h3>История ожидания входа</h3>
+        </span>
+        <Badge tone={pendingEntryTone(pendingEntry.status)}>{pendingEntryLabel(pendingEntry.status)}</Badge>
+      </summary>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Status" value={pendingEntry.status.replaceAll("_", " ")} />
+        <MetricLine label="Reason" value={pendingEntry.failure_reason ?? "-"} />
+        <MetricLine label="Updated" value={formatPendingEntryTimestamp(pendingEntry.updated_at)} />
+      </div>
+    </details>
+  );
+}
+
+function AutoEntryDiagnosticsCollapsed({ autoEntry }: { autoEntry: RadarSignal["auto_entry"] }) {
+  if (!autoEntry) return null;
+  return (
+    <details className="risk-reward-detail-block pending-entry-history-block">
+      <summary className="pending-entry-history-summary">
+        <span className="section-title">
+          <FileCheck2 size={18} />
+          <h3>Auto-entry diagnostics</h3>
+        </span>
+        <Badge tone={autoEntryTone(autoEntry.status)}>{autoEntry.status.replaceAll("_", " ")}</Badge>
+      </summary>
+      <p>{autoEntry.message ?? `Legacy auto-entry mirror is ${autoEntry.status}.`}</p>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Status" value={autoEntry.status.replaceAll("_", " ")} />
+        <MetricLine label="Mode" value={autoEntry.mode} />
+        <MetricLine label="Armed" value={formatPendingEntryTimestamp(autoEntry.armed_at)} />
+        <MetricLine label="Triggered" value={formatPendingEntryTimestamp(autoEntry.triggered_at)} />
+        <MetricLine label="Trade" value={autoEntry.trade_id ?? "-"} />
+      </div>
+    </details>
+  );
+}
+
+function pendingEntryActiveDescription(status: PendingEntryIntent["status"]): string {
+  if (status === "triggered") return "Зона входа сработала, backend готовит исполнение.";
+  if (status === "filling") return "Исполнение начато, ожидаем заполнение заявки.";
+  return "Ожидание входа активно: backend trigger service ждёт касание зоны входа.";
+}
+
+function formatPendingEntryTimestamp(value: string | null | undefined): string {
+  if (!value) return "-";
+  return value.replace("T", " ").replace(".000Z", "Z");
 }
 
 function autoEntryTone(
@@ -377,13 +443,6 @@ function pendingEntryLabel(status: PendingEntryIntent["status"]): string {
   if (status === "pending") return "Waiting entry";
   if (status === "requires_reconfirmation") return "Requires reconfirmation";
   return status.replaceAll("_", " ");
-}
-
-function isActivePendingEntryStatus(status: PendingEntryIntent["status"]): boolean {
-  return status === "pending"
-    || status === "triggered"
-    || status === "filling"
-    || status === "requires_reconfirmation";
 }
 
 function PullbackGuidanceBlock({ signal }: { signal: RadarSignal }) {

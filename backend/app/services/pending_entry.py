@@ -198,6 +198,10 @@ class PendingEntryService:
 PendingEntryIntentService = PendingEntryService
 
 
+def accepted_trade_plan_hash(signal: RadarSignal) -> str:
+    return _snapshot_hash(_accepted_trade_plan(signal).snapshot)
+
+
 class _AcceptedTradePlan:
     def __init__(
         self,

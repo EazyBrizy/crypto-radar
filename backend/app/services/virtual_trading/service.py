@@ -1361,8 +1361,6 @@ def _market_snapshot_reference_price(
         best_bid = max(level.price for level in snapshot.bids)
     if best_ask is None and snapshot.asks:
         best_ask = min(level.price for level in snapshot.asks)
-    if best_bid is not None and best_ask is not None:
-        return (best_bid + best_ask) / 2
     if side == "long":
         return best_ask or best_bid
     return best_bid or best_ask

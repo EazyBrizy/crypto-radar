@@ -4,10 +4,8 @@ import logging
 import time
 from typing import Optional
 
-from app.domain.signal_status import is_execution_candidate_status
 from app.services.market_scanner import MarketScanner
 from app.services.candle_service import candle_service
-from app.services.auto_entry import auto_entry_service
 from app.services.message_broker import realtime_event_broker
 from app.services.notification_service import notification_service
 from app.services.radar_config_service import radar_config_service
@@ -152,8 +150,6 @@ class ScannerRunner:
                             radar_signal.symbol,
                             radar_signal.direction,
                         )
-                if is_execution_candidate_status(radar_signal.status):
-                    await auto_entry_service.execute_if_ready(radar_signal)
                 await asyncio.sleep(0)
         except asyncio.CancelledError:
             raise

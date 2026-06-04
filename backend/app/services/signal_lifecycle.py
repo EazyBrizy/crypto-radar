@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.domain.signal_status import is_execution_candidate_status
 from app.repositories.signal_repository import SIGNAL_INVALIDATED_EVENT, SIGNAL_UPDATED_EVENT
 from app.schemas.market import Features
 from app.schemas.signal import RadarSignal
@@ -55,10 +54,6 @@ class SignalLifecycleWorker:
     ) -> None:
         self._signals = signals or signal_service
         self._publisher = publisher or realtime_event_broker
-        if auto_entry is None:
-            from app.services.auto_entry import auto_entry_service
-
-            auto_entry = auto_entry_service
         self._auto_entry = auto_entry
 
     async def process_closed_candle(self, features: Features) -> list[SignalLifecycleTransition]:
@@ -99,8 +94,6 @@ class SignalLifecycleWorker:
             )
             transitions.append(transition)
             await self._publish_transition(transition)
-            if is_execution_candidate_status(updated.status):
-                await self._auto_entry.execute_if_ready(updated)
         return transitions
 
     async def _publish_transition(self, transition: SignalLifecycleTransition) -> None:

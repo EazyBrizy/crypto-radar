@@ -28,6 +28,7 @@ from app.services.market_persistence import (
     market_data_persistence_service,
 )
 from app.services.market_quality import MarketQualityData, MarketQualityService, market_quality_service
+from app.services.pending_entry_trigger import pending_entry_trigger_service
 from app.services.message_broker import realtime_event_broker
 from app.services.realtime_events import (
     stop_loss_hit_event,
@@ -70,6 +71,11 @@ class VirtualTradingPriceUpdater(Protocol):
         ...
 
 
+class PendingEntryTriggerProcessor(Protocol):
+    def process_market_tick(self, exchange: str, symbol: str, market_tick: MarketData) -> list[object]:
+        ...
+
+
 @dataclass
 class ScannerRuntimeStats:
     ticks_processed: int = 0
@@ -104,6 +110,7 @@ class MarketScanner:
         trade_invalidation: TradeInvalidationMonitor | None = trade_invalidation_monitor,
         strategy_configs: StrategyConfigService | None = strategy_config_service,
         virtual_trading: VirtualTradingPriceUpdater | None = virtual_trading_service,
+        pending_entry_trigger: PendingEntryTriggerProcessor | None = pending_entry_trigger_service,
         derivative_market: DerivativeMarketSnapshotService | None = derivative_market_snapshot_service,
         alpha_market_context: AlphaMarketContextService | None = alpha_market_context_service,
     ) -> None:
@@ -119,6 +126,7 @@ class MarketScanner:
         self._trade_invalidation = trade_invalidation
         self._strategy_configs = strategy_configs
         self._virtual_trading = virtual_trading
+        self._pending_entry_trigger = pending_entry_trigger
         self._derivative_market = derivative_market
         self._alpha_market_context = alpha_market_context
         self._feature_engine = FeatureEngine()
@@ -158,6 +166,7 @@ class MarketScanner:
         )
         if updated_trades:
             await self._publish_trade_updates(updated_trades)
+        await self._process_pending_entry_triggers(data)
         updated_candles = self._candle_store.update_from_tick(data)
         await self._persist_market_candles(updated_candles)
         self._stats.candles_updated += len(updated_candles)
@@ -275,6 +284,32 @@ class MarketScanner:
                 features.symbol,
                 features.timeframe,
                 exc,
+            )
+
+    async def _process_pending_entry_triggers(self, data: MarketData) -> None:
+        if self._pending_entry_trigger is None:
+            return
+        try:
+            results = await asyncio.to_thread(
+                self._pending_entry_trigger.process_market_tick,
+                data.exchange,
+                data.symbol,
+                data,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Pending entry trigger failed for %s:%s: %s",
+                data.exchange,
+                data.symbol,
+                exc,
+            )
+            return
+        if results:
+            logger.info(
+                "Pending entry trigger processed for %s:%s: %s",
+                data.exchange,
+                data.symbol,
+                len(results),
             )
 
     async def _context_features_for(self, candle: OHLCVCandle) -> dict[str, Features]:

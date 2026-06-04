@@ -75,7 +75,7 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.signals[signal.id].entry_max, 101.8)
         self.assertEqual(publisher.events[0]["type"], "signal.updated")
 
-    async def test_auto_entry_runs_after_confirmation_transition(self) -> None:
+    async def test_auto_entry_does_not_run_after_confirmation_transition(self) -> None:
         signal = _signal(
             status="ready",
             auto_entry=SignalAutoEntrySnapshot(
@@ -94,8 +94,7 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
             _features(close=101.8, open=100.8, low=100.4, high=102.0, previous_high=101.4, volume_spike=1.2)
         )
 
-        self.assertEqual(len(auto_entry.signals), 1)
-        self.assertEqual(auto_entry.signals[0].status, "actionable")
+        self.assertEqual(auto_entry.signals, [])
 
     async def test_low_rr_warning_does_not_block_actionable_transition(self) -> None:
         signal = _signal(
@@ -121,7 +120,7 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(transitions), 1)
         self.assertEqual(store.signals[signal.id].status, "actionable")
-        self.assertEqual(len(auto_entry.signals), 1)
+        self.assertEqual(auto_entry.signals, [])
 
     async def test_ready_signal_waits_without_micro_break(self) -> None:
         signal = _signal(status="ready")

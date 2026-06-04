@@ -1,6 +1,5 @@
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 from app.api.v1.signals import _signal_can_enter_now
 from app.domain.signal_status import (
@@ -46,11 +45,7 @@ class SignalStatusContractTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        with patch(
-            "app.services.auto_entry.virtual_trading_service.confirm_signal",
-            side_effect=AssertionError("active must not reach virtual execution"),
-        ):
-            result = await service.execute_if_ready(signal)
+        result = await service.execute_if_ready(signal)
 
         self.assertIsNone(result)
 

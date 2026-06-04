@@ -433,6 +433,42 @@ AND RiskGate preview/confirm passes on fresh account and market context
 AND real execution readiness passes before any real adapter order
 ```
 
+Tick-driven trigger policy:
+
+- `PendingEntryTriggerService.process_market_tick(exchange, symbol, tick)` is
+  the canonical trigger path. It checks only `PendingEntryIntent.status =
+  "pending"` rows for the tick market.
+- Entry is triggered by price touching the accepted entry zone, not by signal
+  status promotion to `active`, `actionable`, or another lifecycle state.
+- Long intents use `ask` as the preferred touch price. Short intents use `bid`.
+  When the preferred bid/ask is unavailable, `last` may be used and the trigger
+  records an explicit warning. Candle `close` is a lower-priority fallback for
+  candle-shaped inputs and must also be recorded as the price source.
+- The accepted entry zone is inclusive: `entry_min <= touch_price <= entry_max`.
+- Before fill, the service locks and reloads the intent, reloads the signal,
+  rejects terminal signals, and compares `accepted_trade_plan_hash` with the
+  current trade-plan hash.
+- Default stale-plan policy: a hash mismatch transitions the intent to
+  `requires_reconfirmation`. It must not fill from the stale accepted snapshot.
+- Default invalidated-signal policy: terminal signal statuses transition the
+  intent to `cancelled` with an explicit reason.
+- On touch, the intent transitions `pending -> triggered`, then the execution
+  service must run a fresh RiskGate using current account, market/orderbook,
+  exchange-rule, fee, and signal data before any virtual fill or real order
+  path.
+- If fresh RiskGate passes for virtual mode, virtual entry must be created
+  through `VirtualTradingService` rather than by inserting a trade directly,
+  and the intent transitions to `filled` with `filled_trade_id`.
+- Temporary RiskGate blocks keep the intent `pending` by default with
+  `failure_reason` describing the current blocker; examples include
+  insufficient virtual balance right now, excessive spread, stale orderbook, or
+  missing market depth. Structural blocks transition to `failed`; examples
+  include invalid trade plan, signal invalidation, stale hash, and
+  reconfirmation-required snapshots.
+- One intent may fill only once. Implementations must use row locking or an
+  equivalent idempotent transition so concurrent ticks cannot create duplicate
+  virtual trades.
+
 `features_snapshot.auto_entry` may remain as a read mirror for legacy signals
 and backward-compatible UI rendering. It is not the source of truth for new
 pending-entry workflows. New services must create and transition

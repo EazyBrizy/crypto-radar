@@ -99,6 +99,29 @@ Manual confirm responses that arm a deferred entry include the created or
 idempotently reused `pending_entry_intent`; they do not create a virtual trade
 or send a real order while the entry zone has not been touched.
 
+Tick-driven pending entry uses the following risk policy:
+
+- `PendingEntryTriggerService` is the only backend service that may trigger a
+  pending intent from market ticks. Signal status alone is never enough.
+- The service treats accepted entry-zone touch as a precondition only. It then
+  re-runs the same fresh RiskGate/virtual execution path used by manual virtual
+  confirm, so current balance, current market/orderbook, fresh exchange rules,
+  fee context, signal state, and the accepted execution profile are evaluated at
+  trigger time.
+- Trade-plan hash changes are structural stale-snapshot failures and default to
+  `requires_reconfirmation`.
+- Terminal or invalidated signals default to `cancelled`.
+- Temporary market/account blockers, such as insufficient virtual balance,
+  spread too wide, stale or missing orderbook, or missing market depth, default
+  to staying `pending` with an explicit `failure_reason`. The next relevant tick
+  may retry.
+- Structural blockers, such as invalid trade plan, invalid signal, stale hash,
+  or execution snapshot validation failure, default to `failed` or
+  `requires_reconfirmation` according to the lifecycle contract.
+- A passed virtual trigger must create the simulated position only through
+  `VirtualTradingService`; it must not insert orders, fills, or positions
+  directly.
+
 ## Storage
 
 PostgreSQL remains the source of truth:

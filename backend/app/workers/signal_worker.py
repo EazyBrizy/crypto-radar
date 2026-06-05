@@ -182,7 +182,7 @@ class ScannerRunner:
         timeframes = radar_config_service.selected_timeframes()
         candle_service.configure_timeframes(timeframes)
         try:
-            scanner_universe = radar_config_service.scanner_universe()
+            scanner_universe = radar_config_service.scanner_universe(truncate_over_limit=True)
         except ScannerUniverseLimitError as exc:
             logger.warning("Scanner universe blocked by pair guard: %s", exc)
             return MarketScanner(
@@ -207,7 +207,8 @@ class ScannerRunner:
     @staticmethod
     def _scanner_subscription_hash_for_current_config() -> str:
         try:
-            return radar_config_service.scanner_subscription_hash()
+            universe = radar_config_service.scanner_universe(truncate_over_limit=True)
+            return radar_config_service.scanner_subscription_hash(universe)
         except ScannerUniverseLimitError as exc:
             digest = hashlib.sha256(str(exc).encode("utf-8")).hexdigest()[:16]
             return f"blocked:{digest}"

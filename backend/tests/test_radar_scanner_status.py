@@ -1,7 +1,9 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from app.api.v1.radar import _scanner_status, start_scanner
+from app.api.v1.radar import _scanner_config_status, _scanner_status, start_scanner
+from app.services.radar_config_service import ScannerUniverse
 from app.workers.signal_worker import ScannerRunner
 
 
@@ -95,10 +97,61 @@ class RadarScannerStatusTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status["market_data_status"], "stale")
 
+    def test_runner_builds_truncated_universe_instead_of_blocked_empty_scanner(self) -> None:
+        config = FakeRadarConfigService()
+
+        with patch("app.workers.signal_worker.radar_config_service", config):
+            runner = ScannerRunner()
+
+        status = runner.scanner_status
+        self.assertEqual(status["scanner_pairs_count"], 2)
+        self.assertEqual(status["scan_pairs"], ["bybit:BTCUSDT", "bybit:ETHUSDT"])
+        self.assertEqual(status["scanner_universe_source"], "explicit pairs")
+        self.assertIn("truncated", status["scanner_universe_warning"])
+        self.assertTrue(config.truncate_requested)
+
+    def test_status_summary_uses_truncated_universe_instead_of_blocked_empty_scanner(self) -> None:
+        config = FakeRadarConfigService()
+
+        with patch("app.api.v1.radar.radar_config_service", config):
+            status = _scanner_config_status()
+
+        self.assertEqual(status["scanner_pairs_count"], 2)
+        self.assertEqual(status["scan_pairs"], ["bybit:BTCUSDT", "bybit:ETHUSDT"])
+        self.assertIn("truncated", status["scanner_universe_warning"])
+        self.assertTrue(config.truncate_requested)
+
     def _running_runner(self, stats: dict[str, object]) -> ScannerRunner:
         runner = ScannerRunner(scanner=FakeScanner(stats))  # type: ignore[arg-type]
         runner._task = FakeRunningTask()  # type: ignore[assignment]
         return runner
+
+
+class FakeRadarConfigService:
+    def __init__(self) -> None:
+        self.truncate_requested = False
+
+    def selected_timeframes(self) -> list[str]:
+        return ["1m"]
+
+    def scanner_universe(self, *, truncate_over_limit: bool = False) -> ScannerUniverse:
+        self.truncate_requested = truncate_over_limit
+        if not truncate_over_limit:
+            raise AssertionError("runtime scanner should truncate over-limit universes")
+        return ScannerUniverse(
+            pairs=(("bybit", "BTCUSDT"), ("bybit", "ETHUSDT")),
+            source="explicit pairs",
+            max_pairs=2,
+            truncated=True,
+            warning="Scanner universe has 100 pairs, max_scanner_pairs=2. Universe was truncated to 2 pairs.",
+            estimated_strategy_checks=4,
+        )
+
+    def scanner_subscription_hash(self, universe: ScannerUniverse | None = None) -> str:
+        return "hash-truncated"
+
+    def strategy_config_hash(self) -> str:
+        return "strategy-hash"
 
 
 if __name__ == "__main__":

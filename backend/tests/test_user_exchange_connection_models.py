@@ -20,6 +20,9 @@ class UserExchangeConnectionModelsTest(unittest.TestCase):
     def test_status_constraint_is_present(self) -> None:
         constraint_names = {constraint.name for constraint in UserExchangeConnection.__table__.constraints}
         self.assertIn("ck_user_exchange_connections_status", constraint_names)
+        self.assertIn("ck_user_exchange_connections_environment", constraint_names)
+        self.assertIn("ck_user_exchange_connections_order_placement_mode", constraint_names)
+        self.assertIn("ck_user_exchange_connections_account_snapshot_status", constraint_names)
 
     def test_soft_delete_columns_are_present(self) -> None:
         column_names = set(UserExchangeConnection.__table__.c.keys())
@@ -27,6 +30,11 @@ class UserExchangeConnectionModelsTest(unittest.TestCase):
         self.assertIn("revoked_at", column_names)
         self.assertIn("deleted_at", column_names)
         self.assertIn("deletion_reason", column_names)
+        self.assertIn("environment", column_names)
+        self.assertIn("order_placement_mode", column_names)
+        self.assertIn("mainnet_explicitly_enabled", column_names)
+        self.assertIn("last_account_snapshot_at", column_names)
+        self.assertIn("account_snapshot_status", column_names)
 
     def test_user_foreign_key_cascades_on_delete(self) -> None:
         user_id_column = UserExchangeConnection.__table__.c.user_id

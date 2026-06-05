@@ -1626,6 +1626,7 @@ export function normalizeExchangeConnections(catalog: ExchangeCatalog): Exchange
 
 export function normalizeExchangeConnection(value: unknown): ExchangeConnection {
   const connection = value as Partial<ExchangeConnection>;
+  const metadata = isRecord(connection.metadata) ? connection.metadata : {};
   return {
     id: String(connection.id ?? ""),
     user_id: String(connection.user_id ?? "demo_user"),
@@ -1637,11 +1638,18 @@ export function normalizeExchangeConnection(value: unknown): ExchangeConnection 
     key_ref: String(connection.key_ref ?? ""),
     permissions: isRecord(connection.permissions) ? connection.permissions : {},
     status: normalizeExchangeConnectionStatus(connection.status),
+    environment: normalizeExchangeConnectionEnvironment(connection.environment),
+    order_placement_mode: normalizeExchangeOrderPlacementMode(connection.order_placement_mode),
+    can_place_orders: Boolean(connection.can_place_orders),
+    safety_blockers: normalizeStringArray(connection.safety_blockers),
+    mainnet_explicitly_enabled: Boolean(connection.mainnet_explicitly_enabled),
     last_sync_at: connection.last_sync_at == null ? null : String(connection.last_sync_at),
+    last_account_snapshot_at: connection.last_account_snapshot_at == null ? null : String(connection.last_account_snapshot_at),
+    account_snapshot_status: normalizeAccountSnapshotStatus(connection.account_snapshot_status),
     revoked_at: connection.revoked_at == null ? null : String(connection.revoked_at),
     deleted_at: connection.deleted_at == null ? null : String(connection.deleted_at),
     deletion_reason: connection.deletion_reason == null ? null : String(connection.deletion_reason),
-    metadata: isRecord(connection.metadata) ? connection.metadata : {},
+    metadata,
     created_at: String(connection.created_at ?? new Date().toISOString())
   };
 }
@@ -1649,6 +1657,16 @@ export function normalizeExchangeConnection(value: unknown): ExchangeConnection 
 function normalizeExchangeConnectionStatus(value: unknown): ExchangeConnection["status"] {
   if (value === "disabled" || value === "revoked" || value === "deleted") return value;
   return "active";
+}
+
+function normalizeExchangeConnectionEnvironment(value: unknown): ExchangeConnection["environment"] {
+  if (value === "testnet" || value === "mainnet") return value;
+  return "testnet";
+}
+
+function normalizeExchangeOrderPlacementMode(value: unknown): ExchangeConnection["order_placement_mode"] {
+  if (value === "disabled" || value === "live") return value;
+  return "dry_run";
 }
 
 export function normalizeHealth(value: unknown): HealthStatus {
@@ -1820,6 +1838,10 @@ function normalizeMetadata(value: unknown): Record<string, unknown> {
 function normalizeStringRecord(value: unknown): Record<string, string> {
   if (!isRecord(value)) return {};
   return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, String(entry)]));
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
 
 function optionalNumber(value: unknown): number | null {

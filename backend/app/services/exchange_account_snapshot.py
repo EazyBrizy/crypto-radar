@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.exchanges.bybit import (
     BYBIT_API_URL,
+    BYBIT_TESTNET_API_URL,
     BybitCoinBalance,
     BybitPositionInfo,
     BybitWalletBalance,
@@ -140,21 +141,27 @@ class ExchangeAccountSnapshotService:
 
             credentials = self._credential_provider.load_credentials(connection.key_ref)
             if credentials is None:
-                return self._failure_snapshot(
+                snapshot = self._failure_snapshot(
                     cache_key,
                     cached,
                     warnings=[
                         "Exchange credentials are not available in the configured secret provider."
                     ],
                 )
+                _record_account_snapshot_status(session, connection, snapshot.status, snapshot.fetched_at)
+                session.commit()
+                return snapshot
             api_key = credentials.get("api_key")
             api_secret = credentials.get("api_secret")
             if not api_key or not api_secret:
-                return self._failure_snapshot(
+                snapshot = self._failure_snapshot(
                     cache_key,
                     cached,
                     warnings=["Bybit account snapshot requires api_key and api_secret."],
                 )
+                _record_account_snapshot_status(session, connection, snapshot.status, snapshot.fetched_at)
+                session.commit()
+                return snapshot
 
             try:
                 wallet = self._bybit_wallet_fetcher(
@@ -171,11 +178,14 @@ class ExchangeAccountSnapshotService:
                     connection.id,
                     exc,
                 )
-                return self._failure_snapshot(
+                snapshot = self._failure_snapshot(
                     cache_key,
                     cached,
                     warnings=[f"Bybit wallet balance is unavailable: {exc}"],
                 )
+                _record_account_snapshot_status(session, connection, snapshot.status, snapshot.fetched_at)
+                session.commit()
+                return snapshot
 
             snapshot = self._snapshot_from_bybit_wallet(
                 connection=connection,
@@ -198,6 +208,8 @@ class ExchangeAccountSnapshotService:
                 ),
                 stored_at_monotonic=time.monotonic(),
             )
+            _record_account_snapshot_status(session, connection, snapshot.status, snapshot.fetched_at)
+            session.commit()
             return snapshot
 
     def get_wallet_balance(
@@ -257,7 +269,7 @@ class ExchangeAccountSnapshotService:
 
             credentials = self._credential_provider.load_credentials(connection.key_ref)
             if credentials is None:
-                return self._failure_wallet_balance(
+                response = self._failure_wallet_balance(
                     cache_key,
                     cached,
                     connection=connection,
@@ -266,16 +278,22 @@ class ExchangeAccountSnapshotService:
                         "Exchange credentials are not available in the configured secret provider."
                     ],
                 )
+                _record_account_snapshot_status(session, connection, response.status, response.fetched_at)
+                session.commit()
+                return response
             api_key = credentials.get("api_key")
             api_secret = credentials.get("api_secret")
             if not api_key or not api_secret:
-                return self._failure_wallet_balance(
+                response = self._failure_wallet_balance(
                     cache_key,
                     cached,
                     connection=connection,
                     account_type=account_type,
                     warnings=["Bybit wallet balance requires api_key and api_secret."],
                 )
+                _record_account_snapshot_status(session, connection, response.status, response.fetched_at)
+                session.commit()
+                return response
 
             try:
                 wallet = self._bybit_wallet_fetcher(
@@ -292,13 +310,16 @@ class ExchangeAccountSnapshotService:
                     connection.id,
                     exc,
                 )
-                return self._failure_wallet_balance(
+                response = self._failure_wallet_balance(
                     cache_key,
                     cached,
                     connection=connection,
                     account_type=account_type,
                     warnings=[f"Bybit wallet balance is unavailable: {exc}"],
                 )
+                _record_account_snapshot_status(session, connection, response.status, response.fetched_at)
+                session.commit()
+                return response
 
             response = _wallet_response_from_bybit(
                 connection=connection,
@@ -311,6 +332,8 @@ class ExchangeAccountSnapshotService:
                 wallet_balance=response.model_copy(deep=True),
                 stored_at_monotonic=time.monotonic(),
             )
+            _record_account_snapshot_status(session, connection, response.status, response.fetched_at)
+            session.commit()
             return response
 
     def get_real_account_snapshot(
@@ -320,6 +343,7 @@ class ExchangeAccountSnapshotService:
         exchange: str,
         mode: str,
         live_adapter: bool,
+        connection_id: UUID | str | None = None,
         request_account_balance: float | Decimal | None = None,
         reference: object | None = None,
     ) -> AccountRiskSnapshot:
@@ -334,11 +358,15 @@ class ExchangeAccountSnapshotService:
                 request_account_balance=request_account_balance,
                 reference=reference,
             )
-        connection_id = _reference_uuid(reference, "exchange_connection_id", "connection_id")
+        resolved_connection_id = _coerce_uuid(connection_id) or _reference_uuid(
+            reference,
+            "exchange_connection_id",
+            "connection_id",
+        )
         return self.get_snapshot(
             user_id=user_id,
             exchange=exchange,
-            connection_id=connection_id,
+            connection_id=resolved_connection_id,
             mode="real",
         )
 
@@ -546,13 +574,25 @@ def _position_category(connection: UserExchangeConnection) -> str:
 
 
 def _bybit_base_url(connection: UserExchangeConnection) -> str:
-    metadata = _metadata_dict(connection)
-    if metadata.get("testnet") is True:
-        return "https://api-testnet.bybit.com"
+    if _connection_environment(connection) == "testnet":
+        return BYBIT_TESTNET_API_URL
     api_base_url = connection.exchange.api_base_url
     if isinstance(api_base_url, str) and api_base_url:
         return api_base_url.rstrip("/")
     return BYBIT_API_URL
+
+
+def _connection_environment(connection: UserExchangeConnection) -> Literal["testnet", "mainnet"]:
+    environment = str(getattr(connection, "environment", "") or "").strip().lower()
+    if environment in {"testnet", "mainnet"}:
+        return environment  # type: ignore[return-value]
+    metadata = _metadata_dict(connection)
+    if _truthy_metadata_value(metadata.get("testnet")):
+        return "testnet"
+    metadata_environment = metadata.get("environment") or metadata.get("network")
+    if isinstance(metadata_environment, str) and metadata_environment.strip().lower() == "testnet":
+        return "testnet"
+    return "mainnet"
 
 
 def _wallet_response_from_bybit(
@@ -776,6 +816,26 @@ def _missing_wallet_balance(
     )
 
 
+def _record_account_snapshot_status(
+    session: Session,
+    connection: UserExchangeConnection,
+    status: Literal["fresh", "stale", "missing"],
+    fetched_at: datetime | None,
+) -> None:
+    connection.account_snapshot_status = status
+    if fetched_at is not None:
+        connection.last_account_snapshot_at = fetched_at
+    session.add(connection)
+
+
+def _truthy_metadata_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled", "testnet"}
+    return bool(value)
+
+
 def _reference_uuid(reference: object | None, *names: str) -> UUID | None:
     if reference is None:
         return None
@@ -790,6 +850,17 @@ def _reference_uuid(reference: object | None, *names: str) -> UUID | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _coerce_uuid(value: UUID | str | None) -> UUID | None:
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _dedupe(values: list[str]) -> list[str]:

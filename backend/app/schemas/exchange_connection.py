@@ -6,6 +6,9 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 ExchangeConnectionStatus = Literal["active", "disabled", "revoked", "deleted"]
+ExchangeConnectionEnvironment = Literal["testnet", "mainnet"]
+ExchangeOrderPlacementMode = Literal["disabled", "dry_run", "live"]
+ExchangeAccountSnapshotStatus = Literal["fresh", "stale", "missing"]
 
 
 class ExchangeConnectionResponse(BaseModel):
@@ -19,7 +22,14 @@ class ExchangeConnectionResponse(BaseModel):
     key_ref: str
     permissions: dict[str, Any]
     status: ExchangeConnectionStatus
+    environment: ExchangeConnectionEnvironment
+    order_placement_mode: ExchangeOrderPlacementMode
+    can_place_orders: bool
+    safety_blockers: list[str] = Field(default_factory=list)
+    mainnet_explicitly_enabled: bool
     last_sync_at: datetime | None
+    last_account_snapshot_at: datetime | None = None
+    account_snapshot_status: ExchangeAccountSnapshotStatus = "missing"
     revoked_at: datetime | None = None
     deleted_at: datetime | None = None
     deletion_reason: str | None = None
@@ -36,6 +46,9 @@ class ExchangeConnectionCreateRequest(BaseModel):
     api_secret: str | None = None
     api_passphrase: str | None = None
     permissions: dict[str, Any] = Field(default_factory=dict)
+    environment: ExchangeConnectionEnvironment = "testnet"
+    order_placement_mode: ExchangeOrderPlacementMode = "dry_run"
+    mainnet_explicitly_enabled: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -47,6 +60,9 @@ class ExchangeConnectionUpdateRequest(BaseModel):
     api_passphrase: str | None = None
     permissions: dict[str, Any] | None = None
     status: ExchangeConnectionStatus | None = None
+    environment: ExchangeConnectionEnvironment | None = None
+    order_placement_mode: ExchangeOrderPlacementMode | None = None
+    mainnet_explicitly_enabled: bool | None = None
     metadata: dict[str, Any] | None = None
 
 

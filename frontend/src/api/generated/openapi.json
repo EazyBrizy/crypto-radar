@@ -1988,6 +1988,99 @@
         }
       }
     },
+    "/api/v1/pending-entry": {
+      "get": {
+        "tags": [
+          "pending-entry"
+        ],
+        "summary": "List Pending Entries",
+        "operationId": "list_pending_entries_api_v1_pending_entry_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "demo_user",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "active",
+                "history"
+              ],
+              "type": "string",
+              "default": "active",
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "virtual",
+                    "real"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PendingEntryIntentRead"
+                  },
+                  "title": "Response List Pending Entries Api V1 Pending Entry Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/signals/{signal_id}/pending-entry": {
       "post": {
         "tags": [
@@ -2850,6 +2943,130 @@
         }
       }
     },
+    "/api/v1/signals/{signal_id}/action-state": {
+      "get": {
+        "tags": [
+          "signals"
+        ],
+        "summary": "Get Signal Action State",
+        "operationId": "get_signal_action_state_api_v1_signals__signal_id__action_state_get",
+        "parameters": [
+          {
+            "name": "signal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Signal Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "virtual",
+                "real"
+              ],
+              "type": "string",
+              "default": "virtual",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalActionState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signals/{signal_id}/actions": {
+      "post": {
+        "tags": [
+          "signals"
+        ],
+        "summary": "Send Signal Action",
+        "operationId": "send_signal_action_api_v1_signals__signal_id__actions_post",
+        "parameters": [
+          {
+            "name": "signal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Signal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalActionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/signals/{signal_id}/confirm": {
       "post": {
         "tags": [
@@ -2857,6 +3074,7 @@
         ],
         "summary": "Confirm Signal",
         "operationId": "confirm_signal_api_v1_signals__signal_id__confirm_post",
+        "deprecated": true,
         "parameters": [
           {
             "name": "signal_id",
@@ -6777,6 +6995,30 @@
             "type": "object",
             "title": "Permissions"
           },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ],
+            "title": "Environment",
+            "default": "testnet"
+          },
+          "order_placement_mode": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "dry_run",
+              "live"
+            ],
+            "title": "Order Placement Mode",
+            "default": "dry_run"
+          },
+          "mainnet_explicitly_enabled": {
+            "type": "boolean",
+            "title": "Mainnet Explicitly Enabled",
+            "default": false
+          },
           "metadata": {
             "additionalProperties": true,
             "type": "object",
@@ -6834,7 +7076,45 @@
           },
           "status": {
             "type": "string",
+            "enum": [
+              "active",
+              "disabled",
+              "revoked",
+              "deleted"
+            ],
             "title": "Status"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ],
+            "title": "Environment"
+          },
+          "order_placement_mode": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "dry_run",
+              "live"
+            ],
+            "title": "Order Placement Mode"
+          },
+          "can_place_orders": {
+            "type": "boolean",
+            "title": "Can Place Orders"
+          },
+          "safety_blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Safety Blockers"
+          },
+          "mainnet_explicitly_enabled": {
+            "type": "boolean",
+            "title": "Mainnet Explicitly Enabled"
           },
           "last_sync_at": {
             "anyOf": [
@@ -6847,6 +7127,63 @@
               }
             ],
             "title": "Last Sync At"
+          },
+          "last_account_snapshot_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Account Snapshot At"
+          },
+          "account_snapshot_status": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale",
+              "missing"
+            ],
+            "title": "Account Snapshot Status",
+            "default": "missing"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "deletion_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletion Reason"
           },
           "metadata": {
             "additionalProperties": true,
@@ -6871,6 +7208,10 @@
           "key_ref",
           "permissions",
           "status",
+          "environment",
+          "order_placement_mode",
+          "can_place_orders",
+          "mainnet_explicitly_enabled",
           "last_sync_at",
           "metadata",
           "created_at"
@@ -6950,13 +7291,61 @@
           "status": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "active",
+                  "disabled",
+                  "revoked",
+                  "deleted"
+                ]
               },
               {
                 "type": "null"
               }
             ],
             "title": "Status"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "testnet",
+                  "mainnet"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Environment"
+          },
+          "order_placement_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "dry_run",
+                  "live"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Placement Mode"
+          },
+          "mainnet_explicitly_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mainnet Explicitly Enabled"
           },
           "metadata": {
             "anyOf": [
@@ -8597,6 +8986,17 @@
             "type": "string",
             "title": "User Id",
             "default": "demo_user"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
           },
           "auto_enter_on_confirmation": {
             "type": "boolean",
@@ -10921,6 +11321,17 @@
             "title": "User Id",
             "default": "demo_user"
           },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
           "auto_enter_on_confirmation": {
             "type": "boolean",
             "title": "Auto Enter On Confirmation",
@@ -11348,6 +11759,66 @@
               }
             ],
             "title": "Adapter"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "testnet",
+                  "mainnet"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Environment"
+          },
+          "order_placement_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "dry_run",
+                  "live"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Placement Mode"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reason Codes"
           },
           "warnings": {
             "items": {
@@ -14114,6 +14585,258 @@
           "created_at"
         ],
         "title": "SignalAIExplanationResponse"
+      },
+      "SignalActionBlocker": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Code"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "warning",
+              "info"
+            ],
+            "title": "Severity",
+            "default": "blocker"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "display_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Label"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "SignalActionBlocker"
+      },
+      "SignalActionRequest": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "enter_now",
+              "arm_pending_entry",
+              "cancel_pending_entry",
+              "reconfirm_pending_entry"
+            ],
+            "title": "Kind"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "real"
+            ],
+            "title": "Mode",
+            "default": "virtual"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "SignalActionRequest"
+      },
+      "SignalActionResponse": {
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/SignalActionState"
+          },
+          "signal": {
+            "$ref": "#/components/schemas/RadarSignal"
+          },
+          "virtual_trade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VirtualTrade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "real_execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RealExecutionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "real_execution_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RealExecutionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_entry_intent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PendingEntryIntentRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "signal",
+          "message"
+        ],
+        "title": "SignalActionResponse"
+      },
+      "SignalActionState": {
+        "properties": {
+          "can_enter_now": {
+            "type": "boolean",
+            "title": "Can Enter Now",
+            "default": false
+          },
+          "can_arm_pending": {
+            "type": "boolean",
+            "title": "Can Arm Pending",
+            "default": false
+          },
+          "can_reconfirm": {
+            "type": "boolean",
+            "title": "Can Reconfirm",
+            "default": false
+          },
+          "can_cancel": {
+            "type": "boolean",
+            "title": "Can Cancel",
+            "default": false
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "real"
+            ],
+            "title": "Mode",
+            "default": "virtual"
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment",
+            "default": "virtual"
+          },
+          "primary_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "enter_now",
+                  "arm_pending_entry",
+                  "cancel_pending_entry",
+                  "reconfirm_pending_entry"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Action"
+          },
+          "disabled_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason Code"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/SignalActionBlocker"
+            },
+            "type": "array",
+            "title": "Blockers"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/SignalActionBlocker"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "accepted_trade_plan_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Trade Plan Snapshot"
+          },
+          "display_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Display Labels"
+          }
+        },
+        "type": "object",
+        "title": "SignalActionState"
       },
       "SignalAutoEntrySnapshot": {
         "properties": {
@@ -18958,6 +19681,26 @@
             "type": "array",
             "title": "Planned Capabilities"
           },
+          "execution_profile": {
+            "type": "string",
+            "enum": [
+              "realistic",
+              "relaxed_paper",
+              "deterministic_test"
+            ],
+            "title": "Execution Profile",
+            "default": "realistic"
+          },
+          "fill_policy": {
+            "type": "string",
+            "enum": [
+              "strict_orderbook",
+              "relaxed_market_fallback",
+              "deterministic_market_fill"
+            ],
+            "title": "Fill Policy",
+            "default": "strict_orderbook"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -19010,6 +19753,18 @@
               }
             ],
             "title": "Average Price"
+          },
+          "estimated_fill_price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Fill Price"
           },
           "entry_slippage_bps": {
             "type": "number",
@@ -19199,6 +19954,38 @@
               }
             ],
             "title": "Rejected Reason"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blockers"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reason Codes"
           },
           "notes": {
             "items": {

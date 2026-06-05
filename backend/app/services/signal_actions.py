@@ -30,7 +30,15 @@ from app.schemas.trade import (
 )
 from app.schemas.user import RiskManagementSettings
 from app.services.exchange_account_snapshot import exchange_account_snapshot_service
-from app.services.exchange_connection_service import exchange_connection_service
+from app.services.exchange_connection_service import (
+    ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE,
+    ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE,
+    ENABLE_LIVE_TRADING_FALSE_REASON_CODE,
+    MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE,
+    ORDER_PLACEMENT_DISABLED_REASON_CODE,
+    ORDER_PLACEMENT_DRY_RUN_REASON_CODE,
+    exchange_connection_service,
+)
 from app.services.execution_service import real_execution_service
 from app.services.message_broker import realtime_event_broker
 from app.services.pending_entry import pending_entry_intent_service
@@ -49,6 +57,9 @@ from app.services.virtual_execution_profile import (
 
 class SignalActionUnavailable(ValueError):
     pass
+
+
+REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE = "REAL_PENDING_NOT_IMPLEMENTED"
 
 
 @dataclass(frozen=True)
@@ -182,6 +193,16 @@ class SignalActionService:
             can_arm_pending = is_waiting_entry_status(signal.status)
             if not can_enter_now and not can_arm_pending:
                 blockers.extend(_signal_action_blockers(signal, mode=mode))
+
+        if mode == "real" and can_arm_pending:
+            can_arm_pending = False
+            blockers.append(
+                _blocker(
+                    REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE,
+                    "Tick-driven real pending entry execution is not implemented.",
+                    display_label="Real pending is not implemented",
+                )
+            )
 
         primary_action = _primary_action(
             can_enter_now=can_enter_now,
@@ -406,7 +427,11 @@ class SignalActionService:
             )
 
         if mode == "real":
-            real_execution = await self._real_execution.place_order(signal, request)
+            real_execution = await self._real_execution.place_order(
+                signal,
+                request,
+                connection_id=connection_id,
+            )
             return SignalActionResponse(
                 state=state,
                 signal=signal,
@@ -557,14 +582,35 @@ class SignalActionService:
                         )
                     )
             if connection is not None:
-                connection_metadata = dict(connection.metadata or {})
-                environment = "testnet" if connection_metadata.get("testnet") is True else "mainnet"
+                connection_metadata = {
+                    "id": str(connection.id),
+                    "exchange_code": connection.exchange_code,
+                    "environment": connection.environment,
+                    "order_placement_mode": connection.order_placement_mode,
+                    "can_place_orders": connection.can_place_orders,
+                    "mainnet_explicitly_enabled": connection.mainnet_explicitly_enabled,
+                    "safety_blockers": list(connection.safety_blockers),
+                }
+                environment = connection.environment
                 if str(connection.status).strip().lower() not in {"active", "connected"}:
                     blockers.append(
                         _blocker(
                             "exchange_connection_inactive",
                             "Exchange connection is not active.",
                             display_label="Exchange connection inactive",
+                        )
+                    )
+                for blocker_code in _real_connection_action_blockers(connection):
+                    blockers.append(
+                        _blocker(
+                            blocker_code,
+                            _real_connection_blocker_message(blocker_code),
+                            display_label=_real_connection_blocker_label(blocker_code),
+                            metadata={
+                                "connection_id": str(connection.id),
+                                "environment": connection.environment,
+                                "order_placement_mode": connection.order_placement_mode,
+                            },
                         )
                     )
                 snapshot = self._real_account_snapshot(
@@ -583,7 +629,8 @@ class SignalActionService:
                                 display_label="Account snapshot warning",
                             )
                         )
-            blockers.extend(_real_environment_blockers(environment))
+            if connection is None:
+                blockers.extend(_real_environment_blockers(environment))
 
         instrument_type = _instrument_type_for_signal(signal, risk_settings)
         leverage = _leverage_for_instrument(instrument_type, risk_settings)
@@ -625,6 +672,7 @@ class SignalActionService:
         request = ManualConfirmRequest(
             mode=mode,
             user_id=user_id,
+            connection_id=connection_id,
             auto_enter_on_confirmation=False,
             account_balance=max(account_balance, 1.0),
             execution_profile=execution_settings,
@@ -729,6 +777,15 @@ class SignalActionService:
             can_arm_pending = is_waiting_entry_status(signal.status)
             if not can_enter_now and not can_arm_pending:
                 blockers.extend(_signal_action_blockers(signal, mode=mode))
+        if mode == "real" and can_arm_pending:
+            can_arm_pending = False
+            blockers.append(
+                _blocker(
+                    REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE,
+                    "Tick-driven real pending entry execution is not implemented.",
+                    display_label="Real pending is not implemented",
+                )
+            )
         primary_action = _primary_action(
             can_enter_now=can_enter_now,
             can_arm_pending=can_arm_pending,
@@ -1048,6 +1105,40 @@ def _signal_action_blockers(signal: RadarSignal, *, mode: SignalActionMode) -> l
             )
         )
     return blockers
+
+
+def _real_connection_action_blockers(connection: Any) -> list[str]:
+    blockers = list(getattr(connection, "safety_blockers", []) or [])
+    order_mode = str(getattr(connection, "order_placement_mode", "") or "").strip().lower()
+    if order_mode == "dry_run":
+        return []
+    return [code for code in blockers if code != ORDER_PLACEMENT_DRY_RUN_REASON_CODE]
+
+
+def _real_connection_blocker_message(code: str) -> str:
+    return {
+        ORDER_PLACEMENT_DISABLED_REASON_CODE: "Order placement is disabled for this exchange connection.",
+        ENABLE_LIVE_TRADING_FALSE_REASON_CODE: "ENABLE_LIVE_TRADING=false blocks live order placement.",
+        ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE: (
+            "ENABLE_BYBIT_LIVE_ORDER_PLACEMENT=false blocks Bybit live order placement."
+        ),
+        ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE: (
+            "ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT=false blocks Bybit mainnet order placement."
+        ),
+        MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE: (
+            "Mainnet live order placement requires explicit connection opt-in."
+        ),
+    }.get(code, code)
+
+
+def _real_connection_blocker_label(code: str) -> str:
+    return {
+        ORDER_PLACEMENT_DISABLED_REASON_CODE: "Order placement disabled",
+        ENABLE_LIVE_TRADING_FALSE_REASON_CODE: "Live trading disabled",
+        ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE: "Bybit live disabled",
+        ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE: "Bybit mainnet disabled",
+        MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE: "Mainnet opt-in required",
+    }.get(code, "Exchange safety blocker")
 
 
 def _real_environment_blockers(environment: str) -> list[SignalActionBlocker]:

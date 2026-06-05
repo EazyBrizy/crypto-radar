@@ -97,6 +97,12 @@ export function SettingsRoute() {
       onDeleteAlert={(alertId) => deleteAlertRuleMutation.mutateAsync(alertId)}
       onTestAlert={(alertId) => testAlertRuleMutation.mutateAsync(alertId)}
       onCreateExchangeConnection={(draft: ExchangeConnectionDraft) => createExchangeConnectionMutation.mutateAsync(draft)}
+      onUpdateExchangeConnection={(connectionId, patch) =>
+        updateExchangeConnectionMutation.mutateAsync({
+          connectionId,
+          patch
+        })
+      }
       onToggleExchangeConnection={(connectionId, isActive) =>
         updateExchangeConnectionMutation.mutateAsync({
           connectionId,

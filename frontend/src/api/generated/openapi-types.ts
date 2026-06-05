@@ -520,6 +520,23 @@ export interface paths {
         patch: operations["update_notification_api_v1_notifications__notification_id__patch"];
         trace?: never;
     };
+    "/api/v1/pending-entry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pending Entries */
+        get: operations["list_pending_entries_api_v1_pending_entry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/signals/{signal_id}/pending-entry": {
         parameters: {
             query?: never;
@@ -794,6 +811,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/signals/{signal_id}/action-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Signal Action State */
+        get: operations["get_signal_action_state_api_v1_signals__signal_id__action_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/signals/{signal_id}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send Signal Action */
+        post: operations["send_signal_action_api_v1_signals__signal_id__actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/signals/{signal_id}/confirm": {
         parameters: {
             query?: never;
@@ -803,7 +854,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Confirm Signal */
+        /**
+         * Confirm Signal
+         * @deprecated
+         */
         post: operations["confirm_signal_api_v1_signals__signal_id__confirm_post"];
         delete?: never;
         options?: never;
@@ -2078,6 +2132,23 @@ export interface components {
             permissions?: {
                 [key: string]: unknown;
             };
+            /**
+             * Environment
+             * @default testnet
+             * @enum {string}
+             */
+            environment: "testnet" | "mainnet";
+            /**
+             * Order Placement Mode
+             * @default dry_run
+             * @enum {string}
+             */
+            order_placement_mode: "disabled" | "dry_run" | "live";
+            /**
+             * Mainnet Explicitly Enabled
+             * @default false
+             */
+            mainnet_explicitly_enabled: boolean;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -2114,10 +2185,43 @@ export interface components {
             permissions: {
                 [key: string]: unknown;
             };
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "disabled" | "revoked" | "deleted";
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "testnet" | "mainnet";
+            /**
+             * Order Placement Mode
+             * @enum {string}
+             */
+            order_placement_mode: "disabled" | "dry_run" | "live";
+            /** Can Place Orders */
+            can_place_orders: boolean;
+            /** Safety Blockers */
+            safety_blockers?: string[];
+            /** Mainnet Explicitly Enabled */
+            mainnet_explicitly_enabled: boolean;
             /** Last Sync At */
             last_sync_at: string | null;
+            /** Last Account Snapshot At */
+            last_account_snapshot_at?: string | null;
+            /**
+             * Account Snapshot Status
+             * @default missing
+             * @enum {string}
+             */
+            account_snapshot_status: "fresh" | "stale" | "missing";
+            /** Revoked At */
+            revoked_at?: string | null;
+            /** Deleted At */
+            deleted_at?: string | null;
+            /** Deletion Reason */
+            deletion_reason?: string | null;
             /** Metadata */
             metadata: {
                 [key: string]: unknown;
@@ -2145,7 +2249,13 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Status */
-            status?: string | null;
+            status?: ("active" | "disabled" | "revoked" | "deleted") | null;
+            /** Environment */
+            environment?: ("testnet" | "mainnet") | null;
+            /** Order Placement Mode */
+            order_placement_mode?: ("disabled" | "dry_run" | "live") | null;
+            /** Mainnet Explicitly Enabled */
+            mainnet_explicitly_enabled?: boolean | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -2676,6 +2786,8 @@ export interface components {
              * @default demo_user
              */
             user_id: string;
+            /** Connection Id */
+            connection_id?: string | null;
             /**
              * Auto Enter On Confirmation
              * @default false
@@ -3494,6 +3606,8 @@ export interface components {
              * @default demo_user
              */
             user_id: string;
+            /** Connection Id */
+            connection_id?: string | null;
             /**
              * Auto Enter On Confirmation
              * @default false
@@ -3652,6 +3766,16 @@ export interface components {
             idempotency_key?: string | null;
             /** Adapter */
             adapter?: string | null;
+            /** Connection Id */
+            connection_id?: string | null;
+            /** Environment */
+            environment?: ("testnet" | "mainnet") | null;
+            /** Order Placement Mode */
+            order_placement_mode?: ("disabled" | "dry_run" | "live") | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Reason Codes */
+            reason_codes?: string[];
             /** Warnings */
             warnings?: string[];
             /** Validation Errors */
@@ -4515,6 +4639,102 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** SignalActionBlocker */
+        SignalActionBlocker: {
+            /** Code */
+            code: string;
+            /**
+             * Severity
+             * @default blocker
+             * @enum {string}
+             */
+            severity: "blocker" | "warning" | "info";
+            /** Message */
+            message?: string | null;
+            /** Display Label */
+            display_label?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /** SignalActionRequest */
+        SignalActionRequest: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "enter_now" | "arm_pending_entry" | "cancel_pending_entry" | "reconfirm_pending_entry";
+            /**
+             * Mode
+             * @default virtual
+             * @enum {string}
+             */
+            mode: "virtual" | "real";
+            /** Connection Id */
+            connection_id?: string | null;
+        };
+        /** SignalActionResponse */
+        SignalActionResponse: {
+            state: components["schemas"]["SignalActionState"];
+            signal: components["schemas"]["RadarSignal"];
+            virtual_trade?: components["schemas"]["VirtualTrade"] | null;
+            real_execution?: components["schemas"]["RealExecutionResult"] | null;
+            real_execution_result?: components["schemas"]["RealExecutionResult"] | null;
+            pending_entry_intent?: components["schemas"]["PendingEntryIntentRead"] | null;
+            /** Message */
+            message: string;
+        };
+        /** SignalActionState */
+        SignalActionState: {
+            /**
+             * Can Enter Now
+             * @default false
+             */
+            can_enter_now: boolean;
+            /**
+             * Can Arm Pending
+             * @default false
+             */
+            can_arm_pending: boolean;
+            /**
+             * Can Reconfirm
+             * @default false
+             */
+            can_reconfirm: boolean;
+            /**
+             * Can Cancel
+             * @default false
+             */
+            can_cancel: boolean;
+            /**
+             * Mode
+             * @default virtual
+             * @enum {string}
+             */
+            mode: "virtual" | "real";
+            /**
+             * Environment
+             * @default virtual
+             */
+            environment: string;
+            /** Primary Action */
+            primary_action?: ("enter_now" | "arm_pending_entry" | "cancel_pending_entry" | "reconfirm_pending_entry") | null;
+            /** Disabled Reason Code */
+            disabled_reason_code?: string | null;
+            /** Blockers */
+            blockers?: components["schemas"]["SignalActionBlocker"][];
+            /** Warnings */
+            warnings?: components["schemas"]["SignalActionBlocker"][];
+            /** Accepted Trade Plan Snapshot */
+            accepted_trade_plan_snapshot?: {
+                [key: string]: unknown;
+            } | null;
+            /** Display Labels */
+            display_labels?: {
+                [key: string]: string;
+            };
         };
         /** SignalAutoEntrySnapshot */
         SignalAutoEntrySnapshot: {
@@ -6289,6 +6509,18 @@ export interface components {
             /** Planned Capabilities */
             planned_capabilities?: string[];
             /**
+             * Execution Profile
+             * @default realistic
+             * @enum {string}
+             */
+            execution_profile: "realistic" | "relaxed_paper" | "deterministic_test";
+            /**
+             * Fill Policy
+             * @default strict_orderbook
+             * @enum {string}
+             */
+            fill_policy: "strict_orderbook" | "relaxed_market_fallback" | "deterministic_market_fill";
+            /**
              * Status
              * @default filled
              * @enum {string}
@@ -6321,6 +6553,8 @@ export interface components {
             reference_price: number;
             /** Average Price */
             average_price?: number | null;
+            /** Estimated Fill Price */
+            estimated_fill_price?: number | null;
             /**
              * Entry Slippage Bps
              * @default 0
@@ -6362,6 +6596,14 @@ export interface components {
             };
             /** Rejected Reason */
             rejected_reason?: string | null;
+            /** Warnings */
+            warnings?: string[];
+            /** Blockers */
+            blockers?: string[];
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Reason Codes */
+            reason_codes?: string[];
             /** Notes */
             notes?: string[];
         };
@@ -8098,6 +8340,40 @@ export interface operations {
             };
         };
     };
+    list_pending_entries_api_v1_pending_entry_get: {
+        parameters: {
+            query?: {
+                user_id?: string;
+                scope?: "active" | "history";
+                mode?: ("virtual" | "real") | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingEntryIntentRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_active_pending_entry_for_signal_api_v1_signals__signal_id__pending_entry_get: {
         parameters: {
             query?: {
@@ -8592,6 +8868,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RadarSignal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_signal_action_state_api_v1_signals__signal_id__action_state_get: {
+        parameters: {
+            query?: {
+                mode?: "virtual" | "real";
+                connection_id?: string | null;
+            };
+            header?: never;
+            path: {
+                signal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalActionState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_signal_action_api_v1_signals__signal_id__actions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                signal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignalActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalActionResponse"];
                 };
             };
             /** @description Validation Error */

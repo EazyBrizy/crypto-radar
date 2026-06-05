@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Text
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -25,6 +25,18 @@ class UserExchangeConnection(Base):
         CheckConstraint(
             "status IN ('active', 'disabled', 'revoked', 'deleted')",
             name="ck_user_exchange_connections_status",
+        ),
+        CheckConstraint(
+            "environment IN ('testnet', 'mainnet')",
+            name="ck_user_exchange_connections_environment",
+        ),
+        CheckConstraint(
+            "order_placement_mode IN ('disabled', 'dry_run', 'live')",
+            name="ck_user_exchange_connections_order_placement_mode",
+        ),
+        CheckConstraint(
+            "account_snapshot_status IN ('fresh', 'stale', 'missing')",
+            name="ck_user_exchange_connections_account_snapshot_status",
         ),
         Index(
             "uq_user_exchange_connections_active_label",
@@ -58,7 +70,24 @@ class UserExchangeConnection(Base):
         server_default=text("'{}'::jsonb"),
     )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"), index=True)
+    environment: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'testnet'"))
+    order_placement_mode: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'dry_run'"),
+    )
+    mainnet_explicitly_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_account_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    account_snapshot_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'missing'"),
+    )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deletion_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

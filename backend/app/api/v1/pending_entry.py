@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from app.schemas.pending_entry import PendingEntryIntentMode, PendingEntryIntentRead
 from app.schemas.trade import ManualConfirmRequest
-from app.services.pending_entry import pending_entry_intent_service
+from app.services.pending_entry import RealPendingEntryNotImplemented, pending_entry_intent_service
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.signal_service import signal_service
 
@@ -64,6 +64,11 @@ async def arm_pending_entry(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=exc.reason,
+        ) from exc
+    except RealPendingEntryNotImplemented as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": str(exc), "reason_code": exc.reason_code},
         ) from exc
     except LookupError as exc:
         raise HTTPException(
@@ -169,6 +174,11 @@ async def reconfirm_pending_entry(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=exc.reason,
+        ) from exc
+    except RealPendingEntryNotImplemented as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": str(exc), "reason_code": exc.reason_code},
         ) from exc
     except LookupError as exc:
         raise HTTPException(

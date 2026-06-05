@@ -34,7 +34,13 @@ class _FakeRealExecutionService:
         self.result = result
         self.calls = 0
 
-    async def place_order(self, signal: RadarSignal, request: ManualConfirmRequest) -> RealExecutionResult:
+    async def place_order(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        *,
+        connection_id: str | None = None,
+    ) -> RealExecutionResult:
         self.calls += 1
         return self.result
 

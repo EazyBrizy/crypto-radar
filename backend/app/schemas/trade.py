@@ -296,6 +296,7 @@ class VirtualExecutionReport(BaseModel):
 class ManualConfirmRequest(BaseModel):
     mode: ExecutionMode = "virtual"
     user_id: str = "demo_user"
+    connection_id: Optional[str] = None
     auto_enter_on_confirmation: bool = False
     account_balance: float = Field(default=100.0, gt=0)
     risk_percent: float | None = Field(default=None, gt=0, le=100)
@@ -498,6 +499,11 @@ class RealExecutionResult(BaseModel):
     planned_orders: list[ExecutionPlannedOrder] = Field(default_factory=list)
     idempotency_key: Optional[str] = None
     adapter: Optional[str] = None
+    connection_id: Optional[str] = None
+    environment: Optional[Literal["testnet", "mainnet"]] = None
+    order_placement_mode: Optional[Literal["disabled", "dry_run", "live"]] = None
+    reason_code: Optional[str] = None
+    reason_codes: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     validation_errors: list[str] = Field(default_factory=list)
     lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)

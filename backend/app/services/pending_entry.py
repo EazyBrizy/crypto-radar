@@ -53,6 +53,14 @@ AutoEntryArm = Callable[..., Any]
 TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON = (
     "Trade plan changed after acceptance; reconfirmation required."
 )
+REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE = "REAL_PENDING_NOT_IMPLEMENTED"
+
+
+class RealPendingEntryNotImplemented(ValueError):
+    reason_code = REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE
+
+    def __init__(self) -> None:
+        super().__init__("Tick-driven real pending entry execution is not implemented.")
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +221,8 @@ class PendingEntryService:
         request_model = _manual_confirm_request(request)
         raw_mode = str(request_model.mode or "virtual").strip().lower()
         mode: PendingEntryIntentMode = "real" if raw_mode == "real" else "virtual"
+        if mode == "real":
+            raise RealPendingEntryNotImplemented()
         signal = self._load_signal(signal_id)
         if signal is None:
             raise LookupError("Signal is not found")
@@ -243,6 +253,8 @@ class PendingEntryService:
     ) -> PendingEntryIntentRead:
         request_model = _manual_confirm_request(request)
         intent = self._get_visible_intent(intent_id, user_id=request_model.user_id)
+        if intent.mode == "real":
+            raise RealPendingEntryNotImplemented()
         if intent.status != "requires_reconfirmation":
             if is_terminal_pending_entry_intent_status(intent.status):
                 existing = self._get_active_intent(
@@ -421,6 +433,8 @@ class PendingEntryService:
         signal = self._load_signal(signal_id)
         if signal is None:
             raise LookupError("Signal is not found")
+        if mode == "real":
+            raise RealPendingEntryNotImplemented()
         if is_terminal_signal_status(signal.status):
             raise ValueError("Signal cannot be armed for pending entry in terminal status")
         if not is_market_opportunity_status(signal.status):

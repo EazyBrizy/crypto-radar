@@ -152,6 +152,7 @@ export function SignalDetails({
     ? viewModel.canEnterNow === true
     : Boolean(realActionState?.can_enter_now || realActionState?.can_arm_pending);
   const realActionDisabled = busy || tradingActionsDisabled || !realActionAvailable || !onConfirmRealTrade;
+  const realExecutionEnvironment = realExecutionEnvironmentLabel(realTradeContext?.connection ?? null, realActionState);
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const tradePlan = viewModel.tradePlanSummary;
   const topBlockers = (backendTopBlockers ?? viewModel.topBlockers).slice(0, 3);
@@ -214,6 +215,7 @@ export function SignalDetails({
         onReject={() => onReject(signal)}
         onToggleChart={() => setChartOpen((open) => !open)}
         realActionDisabled={realActionDisabled}
+        realExecutionEnvironment={realExecutionEnvironment}
         rejectDisabled={rejectDisabled}
         setRealConfirmationOpen={setRealConfirmationOpen}
         statusAllowsTrade={statusAllowsTrade}
@@ -439,6 +441,7 @@ function ActionsBlock({
   onReject,
   onToggleChart,
   realActionDisabled,
+  realExecutionEnvironment,
   rejectDisabled,
   setRealConfirmationOpen,
   statusAllowsTrade,
@@ -457,6 +460,7 @@ function ActionsBlock({
   onReject: () => void;
   onToggleChart: () => void;
   realActionDisabled: boolean;
+  realExecutionEnvironment: string;
   rejectDisabled: boolean;
   setRealConfirmationOpen: (open: boolean) => void;
   statusAllowsTrade: boolean;
@@ -473,6 +477,7 @@ function ActionsBlock({
           {canEnterNowLabel(canEnterNow)}
         </Badge>
       </div>
+      <p className="compact-action-note">Execution environment: {realExecutionEnvironment}</p>
       <div className="detail-actions compact-actions">
         <button className="secondary-action" onClick={onAcceptPendingEntry} disabled={acceptPendingDisabled} type="button">
           <FileCheck2 size={17} /> Virtual wait entry
@@ -731,6 +736,7 @@ function RealTradeConfirmationModal({
   const riskCheck = execution?.risk_check ?? null;
   const sizing = execution?.position_sizing ?? riskDecision?.checked_position_sizing ?? null;
   const environment = connectionEnvironment(connection);
+  const environmentLabel = realExecutionEnvironmentLabel(connection, undefined);
   const blockers = realTradeBlockers(signal, context, execution);
   const warnings = realTradeWarnings(signal, context, execution);
   const confirmDisabled = busy || blockers.length > 0;
@@ -756,7 +762,7 @@ function RealTradeConfirmationModal({
           </div>
           <div className="details-badges">
             <Badge tone={environment === "testnet" ? "blue" : environment === "mainnet" ? "red" : "yellow"}>
-              {environment === "testnet" ? "Testnet" : environment === "mainnet" ? "Mainnet" : "Unknown net"}
+              {environmentLabel}
             </Badge>
             <Badge tone={snapshotStatusTone(snapshot?.status ?? "missing")}>{snapshot?.status ?? "missing"}</Badge>
           </div>
@@ -852,7 +858,8 @@ function realTradeBlockers(
     ...(riskCheck?.close_only || riskState?.close_only ? ["Risk state находится в close-only режиме."] : []),
     ...(connectionEnvironment(context?.connection ?? null) === "mainnet" && !mainnetExplicitlyEnabled(context?.connection ?? null)
       ? ["Mainnet требует отдельного явного включения."]
-      : [])
+      : []),
+    ...((context?.connection?.safety_blockers ?? []).filter((code) => code !== "ORDER_PLACEMENT_DRY_RUN"))
   ];
   return dedupe([
     ...blockers,
@@ -912,31 +919,28 @@ function riskGateStatusLabel(signal: RadarSignal, execution: VirtualExecutionRep
 
 function connectionEnvironment(connection: ExchangeConnection | null): "testnet" | "mainnet" | "unknown" {
   if (!connection) return "unknown";
-  const metadata = connection.metadata;
-  if (isTruthyMetadataValue(metadata.testnet)) return "testnet";
-  const environment = typeof metadata.environment === "string" ? metadata.environment.trim().toLowerCase() : "";
-  if (environment === "testnet") return "testnet";
-  return "mainnet";
+  return connection.environment;
 }
 
 function mainnetExplicitlyEnabled(connection: ExchangeConnection | null): boolean {
   if (!connection) return false;
-  const metadata = connection.metadata;
-  return [
-    metadata.enable_mainnet_order_placement,
-    metadata.mainnet_order_placement_enabled,
-    metadata.allow_mainnet_order_placement,
-    metadata.mainnet_enabled,
-    metadata.enable_live_mainnet,
-    metadata.explicit_mainnet_enabled
-  ].some(isTruthyMetadataValue);
+  return connection.mainnet_explicitly_enabled;
 }
 
-function isTruthyMetadataValue(value: unknown): boolean {
-  if (value === true) return true;
-  if (typeof value === "number") return value === 1;
-  if (typeof value !== "string") return false;
-  return ["1", "true", "yes", "on", "enabled"].includes(value.trim().toLowerCase());
+function realExecutionEnvironmentLabel(
+  connection: ExchangeConnection | null,
+  state: SignalActionState | null | undefined
+): string {
+  if (connection) {
+    if (connection.environment === "testnet") {
+      return connection.order_placement_mode === "live" && connection.can_place_orders
+        ? "Testnet live"
+        : "Testnet dry-run";
+    }
+    return connection.can_place_orders ? "Mainnet live enabled" : "Mainnet blocked";
+  }
+  const environment = state?.environment;
+  return environment && environment !== "real_unresolved" ? environment : "No exchange connection";
 }
 
 function snapshotStatusTone(status: AccountRiskSnapshot["status"]): "green" | "red" | "yellow" | "blue" {

@@ -61,6 +61,7 @@ interface SettingsPageProps {
   onDeleteAlert: (alertId: string) => Promise<unknown>;
   onTestAlert: (alertId: string) => Promise<unknown>;
   onCreateExchangeConnection: (draft: ExchangeConnectionDraft) => Promise<unknown>;
+  onUpdateExchangeConnection: (connectionId: string, patch: Partial<ExchangeConnectionDraft> & { status?: string }) => Promise<unknown>;
   onToggleExchangeConnection: (connectionId: string, isActive: boolean) => Promise<unknown>;
   onDeleteExchangeConnection: (connectionId: string) => Promise<unknown>;
   onRefreshExchangeBalance: (connectionId: string) => Promise<unknown>;
@@ -712,6 +713,7 @@ export function SettingsPage({
   onDeleteAlert,
   onTestAlert,
   onCreateExchangeConnection,
+  onUpdateExchangeConnection,
   onToggleExchangeConnection,
   onDeleteExchangeConnection,
   onRefreshExchangeBalance,
@@ -737,6 +739,9 @@ export function SettingsPage({
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [apiPassphrase, setApiPassphrase] = useState("");
+  const [connectionEnvironment, setConnectionEnvironment] = useState<ExchangeConnection["environment"]>("testnet");
+  const [connectionOrderMode, setConnectionOrderMode] = useState<ExchangeConnection["order_placement_mode"]>("dry_run");
+  const [mainnetExplicitConfirm, setMainnetExplicitConfirm] = useState(false);
   const [connectionDeleteCandidate, setConnectionDeleteCandidate] = useState<ExchangeConnection | null>(null);
   const [connectionDeleteError, setConnectionDeleteError] = useState<string | null>(null);
   const [riskTab, setRiskTab] = useState<RiskSettingsTab>("profile");
@@ -926,12 +931,18 @@ export function SettingsPage({
       api_key: apiKey,
       api_secret: apiSecret,
       api_passphrase: apiPassphrase || null,
-      permissions: { read: true, trade: false }
+      permissions: { read: true, trade: connectionOrderMode === "live" },
+      environment: connectionEnvironment,
+      order_placement_mode: connectionOrderMode,
+      mainnet_explicitly_enabled: connectionEnvironment === "mainnet" && connectionOrderMode === "live" && mainnetExplicitConfirm
     });
     setConnectionLabel("");
     setApiKey("");
     setApiSecret("");
     setApiPassphrase("");
+    setConnectionEnvironment("testnet");
+    setConnectionOrderMode("dry_run");
+    setMainnetExplicitConfirm(false);
   }
 
   function requestDeleteExchangeConnection(connection: ExchangeConnection) {
@@ -1147,6 +1158,31 @@ export function SettingsPage({
               placeholder="Label"
               value={connectionLabel}
             />
+            <select
+              aria-label="Connection environment"
+              disabled={busy}
+              onChange={(event) => {
+                setConnectionEnvironment(event.target.value === "mainnet" ? "mainnet" : "testnet");
+                setMainnetExplicitConfirm(false);
+              }}
+              value={connectionEnvironment}
+            >
+              <option value="testnet">Testnet</option>
+              <option value="mainnet">Mainnet</option>
+            </select>
+            <select
+              aria-label="Order placement mode"
+              disabled={busy}
+              onChange={(event) => {
+                setConnectionOrderMode(normalizeOrderPlacementMode(event.target.value));
+                setMainnetExplicitConfirm(false);
+              }}
+              value={connectionOrderMode}
+            >
+              <option value="disabled">Disabled</option>
+              <option value="dry_run">Dry-run</option>
+              <option value="live">Live</option>
+            </select>
             <input
               aria-label="API key"
               disabled={busy}
@@ -1170,9 +1206,26 @@ export function SettingsPage({
               type="password"
               value={apiPassphrase}
             />
+            {connectionEnvironment === "mainnet" && connectionOrderMode === "live" ? (
+              <label className="toggle-row compact-toggle mainnet-confirm-toggle">
+                <input
+                  checked={mainnetExplicitConfirm}
+                  disabled={busy}
+                  onChange={(event) => setMainnetExplicitConfirm(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Confirm mainnet live</span>
+              </label>
+            ) : null}
             <button
               className="primary-action"
-              disabled={busy || !connectionLabel || !apiKey || !apiSecret}
+              disabled={
+                busy
+                || !connectionLabel
+                || !apiKey
+                || !apiSecret
+                || (connectionEnvironment === "mainnet" && connectionOrderMode === "live" && !mainnetExplicitConfirm)
+              }
               onClick={handleCreateExchangeConnection}
               type="button"
             >
@@ -1187,6 +1240,7 @@ export function SettingsPage({
               const accountSnapshot = exchangeAccountSnapshots[connection.id] ?? null;
               const balancePending = Boolean(exchangeBalanceLoading[connection.id]);
               const snapshotStatus = accountSnapshot?.status ?? walletBalance?.status ?? "missing";
+              const connectionBadge = exchangeConnectionExecutionBadge(connection);
               const balanceWarnings = uniqueStrings([
                 ...(accountSnapshot?.warnings ?? []),
                 ...(walletBalance?.warnings ?? [])
@@ -1195,7 +1249,8 @@ export function SettingsPage({
                 <div className="connection-row" key={connection.id}>
                   <div className="connection-main">
                     <strong>{connection.label}</strong>
-                    <span>{connection.exchange_code}:{connection.account_type}</span>
+                    <span>{connection.exchange_code}:{connection.account_type} / {connection.environment}</span>
+                    <span>{orderPlacementModeLabel(connection.order_placement_mode)}</span>
                     <code>{shortKeyRef(connection.key_ref)}</code>
                   </div>
                   <div className="connection-balance-panel">
@@ -1225,7 +1280,38 @@ export function SettingsPage({
                       </div>
                     ) : null}
                   </div>
+                  <div className="connection-safety-panel">
+                    <Badge tone={connectionBadge.tone}>{connectionBadge.label}</Badge>
+                    <span>{connection.can_place_orders ? "Orders enabled" : safetyBlockerSummary(connection)}</span>
+                  </div>
                   <Badge tone={connection.status === "active" ? "green" : "red"}>{connection.status}</Badge>
+                  <select
+                    aria-label={`Order placement mode for ${connection.label}`}
+                    className="compact-select"
+                    disabled={busy}
+                    onChange={(event) => onUpdateExchangeConnection(connection.id, {
+                      order_placement_mode: normalizeOrderPlacementMode(event.target.value),
+                      ...(normalizeOrderPlacementMode(event.target.value) !== "live" ? { mainnet_explicitly_enabled: false } : {})
+                    })}
+                    value={connection.order_placement_mode}
+                  >
+                    <option value="disabled">Disabled</option>
+                    <option value="dry_run">Dry-run</option>
+                    <option value="live">Live</option>
+                  </select>
+                  {connection.environment === "mainnet" ? (
+                    <label className="toggle-row compact-toggle mainnet-confirm-toggle">
+                      <input
+                        checked={connection.mainnet_explicitly_enabled}
+                        disabled={busy || connection.order_placement_mode !== "live"}
+                        onChange={(event) => onUpdateExchangeConnection(connection.id, {
+                          mainnet_explicitly_enabled: event.target.checked
+                        })}
+                        type="checkbox"
+                      />
+                      <span>Mainnet live</span>
+                    </label>
+                  ) : null}
                   <label className="toggle-row compact-toggle">
                     <input
                       checked={connection.status === "active"}
@@ -3184,6 +3270,37 @@ function exchangeConnectionDeleteErrorMessage(error: unknown): string {
 
 function isVisibleExchangeConnection(connection: ExchangeConnection): boolean {
   return connection.status !== "deleted" && connection.status !== "revoked";
+}
+
+function normalizeOrderPlacementMode(value: string): ExchangeConnection["order_placement_mode"] {
+  if (value === "disabled" || value === "live") return value;
+  return "dry_run";
+}
+
+function orderPlacementModeLabel(mode: ExchangeConnection["order_placement_mode"]): string {
+  if (mode === "disabled") return "Order placement disabled";
+  if (mode === "live") return "Order placement live";
+  return "Order placement dry-run";
+}
+
+function exchangeConnectionExecutionBadge(connection: ExchangeConnection): { label: string; tone: "blue" | "green" | "red" | "yellow" } {
+  if (connection.environment === "testnet") {
+    if (connection.order_placement_mode === "live" && connection.can_place_orders) {
+      return { label: "Testnet live", tone: "green" };
+    }
+    return { label: "Testnet dry-run", tone: "blue" };
+  }
+  if (connection.can_place_orders) {
+    return { label: "Mainnet live enabled", tone: "green" };
+  }
+  return { label: "Mainnet blocked", tone: "red" };
+}
+
+function safetyBlockerSummary(connection: ExchangeConnection): string {
+  if (connection.order_placement_mode === "dry_run") return "No exchange order will be sent";
+  if (connection.order_placement_mode === "disabled") return "Order placement disabled";
+  if (connection.safety_blockers.length === 0) return "Live safety pending";
+  return connection.safety_blockers.slice(0, 2).join(", ");
 }
 
 function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {

@@ -2,12 +2,15 @@ import json
 import unittest
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from app.exchanges.bybit import (
     BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON,
+    BYBIT_TESTNET_API_URL,
     LIVE_ORDER_PLACEMENT_DISABLED_REASON,
     BybitRealExecutionAdapter,
 )
+from app.schemas.exchange_connection import ExchangeConnectionResponse
 from app.schemas.risk import (
     AccountRiskSnapshot,
     BreakevenPlan,
@@ -33,6 +36,10 @@ from app.schemas.trade_plan import (
 )
 from app.schemas.user import RiskManagementSettings
 from app.services.execution_service import RealExecutionService
+from app.services.exchange_connection_service import (
+    ENABLE_LIVE_TRADING_FALSE_REASON_CODE,
+    MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE,
+)
 from app.services.real_execution_readiness import RealExecutionReadinessService
 from app.services.risk_fee_rate import RiskFeeRateSnapshot
 from app.services.risk_market_data import RiskMarketDataSnapshot
@@ -264,6 +271,25 @@ class _FakeRiskState:
             open_risk_amount=self.reference.open_risk_amount,
             source=self.reference.real_account_snapshot_source,
         )
+
+
+class _FakeExchangeConnectionService:
+    def __init__(
+        self,
+        connection: ExchangeConnectionResponse,
+        *,
+        credentials: dict[str, str] | None = None,
+    ) -> None:
+        self.connection = connection
+        self.credentials = credentials or {"api_key": "api_key", "api_secret": "api_secret"}
+
+    def get_connection_for_user(self, connection_id: str, *, user_id: str = "demo_user") -> ExchangeConnectionResponse:
+        if connection_id != str(self.connection.id):
+            raise LookupError("Exchange connection is not found.")
+        return self.connection
+
+    def load_credentials(self, _key_ref: str) -> dict[str, str]:
+        return dict(self.credentials)
 
 
 class _FakeMarketDataService:
@@ -509,6 +535,103 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gate.calls, 0)
         self.assertEqual(market_data.calls, 0)
         self.assertEqual(fee_rates.calls, 0)
+
+    async def test_connection_testnet_live_resolves_bybit_testnet_adapter(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        captured: dict[str, object] = {}
+
+        def factory(**kwargs):
+            captured.update(kwargs)
+            return adapter
+
+        connection = _exchange_connection_response(
+            environment="testnet",
+            order_placement_mode="live",
+            can_place_orders=True,
+        )
+        service = _service(
+            _decision(),
+            exchange_connections=_FakeExchangeConnectionService(connection),
+            settings_obj=_LiveTradingSettings(
+                enable_live_trading=True,
+                enable_bybit_live_order_placement=True,
+            ),
+            bybit_adapter_factory=factory,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request(), connection_id=str(connection.id))
+
+        self.assertEqual(captured["base_url"], BYBIT_TESTNET_API_URL)
+        self.assertEqual(captured["connection"], connection)
+        self.assertEqual(result.status, "submitted")
+        self.assertTrue(result.execution_allowed)
+        self.assertEqual(result.connection_id, str(connection.id))
+        self.assertEqual(result.environment, "testnet")
+        self.assertEqual(result.order_placement_mode, "live")
+        self.assertEqual(adapter.calls[0][0], "entry")
+
+    async def test_connection_mainnet_live_blocks_when_global_flags_are_false(self) -> None:
+        factory_calls: list[dict[str, object]] = []
+        connection = _exchange_connection_response(
+            environment="mainnet",
+            order_placement_mode="live",
+            mainnet_explicitly_enabled=True,
+        )
+        service = _service(
+            _decision(),
+            exchange_connections=_FakeExchangeConnectionService(connection),
+            settings_obj=_LiveTradingSettings(),
+            bybit_adapter_factory=lambda **kwargs: factory_calls.append(kwargs) or _FakeExecutionAdapter(),
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request(), connection_id=str(connection.id))
+
+        self.assertEqual(result.status, "not_implemented")
+        self.assertFalse(result.execution_allowed)
+        self.assertEqual(result.reason_code, ENABLE_LIVE_TRADING_FALSE_REASON_CODE)
+        self.assertIn(ENABLE_LIVE_TRADING_FALSE_REASON_CODE, result.reason_codes)
+        self.assertEqual(result.connection_id, str(connection.id))
+        self.assertEqual(result.environment, "mainnet")
+        self.assertEqual(result.order_placement_mode, "live")
+        self.assertEqual(factory_calls, [])
+
+    async def test_connection_mainnet_live_blocks_without_explicit_connection_opt_in(self) -> None:
+        factory_calls: list[dict[str, object]] = []
+        connection = _exchange_connection_response(
+            environment="mainnet",
+            order_placement_mode="live",
+            mainnet_explicitly_enabled=False,
+        )
+        service = _service(
+            _decision(),
+            exchange_connections=_FakeExchangeConnectionService(connection),
+            settings_obj=_LiveTradingSettings(
+                enable_live_trading=True,
+                enable_bybit_live_order_placement=True,
+                enable_bybit_mainnet_order_placement=True,
+            ),
+            bybit_adapter_factory=lambda **kwargs: factory_calls.append(kwargs) or _FakeExecutionAdapter(),
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request(), connection_id=str(connection.id))
+
+        self.assertEqual(result.status, "not_implemented")
+        self.assertFalse(result.execution_allowed)
+        self.assertEqual(result.reason_code, MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE)
+        self.assertEqual(result.reason_codes, [MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE])
+        self.assertEqual(result.connection_id, str(connection.id))
+        self.assertEqual(result.environment, "mainnet")
+        self.assertEqual(result.order_placement_mode, "live")
+        self.assertEqual(factory_calls, [])
 
     async def test_protective_stop_is_included_and_reduce_only(self) -> None:
         service = _service(_decision())
@@ -1224,7 +1347,7 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
 
         result = await service.place_order(
             _signal(trade_plan=_low_rr_trade_plan()),
-            _request(),
+            _request(user_id="unit_rr_hard_user"),
         )
 
         self.assertEqual(result.status, "risk_failed")
@@ -1256,7 +1379,7 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
 
         result = await service.place_order(
             _signal(trade_plan=_low_rr_trade_plan()),
-            _request(),
+            _request(user_id="unit_rr_soft_user"),
         )
 
         self.assertEqual(result.status, "dry_run")
@@ -1302,10 +1425,19 @@ def _service(
     market_data_service=None,
     fee_rate_service=None,
     risk_settings: RiskManagementSettings | None = None,
+    exchange_connections=None,
+    settings_obj=None,
+    bybit_adapter_factory=None,
 ) -> RealExecutionService:
     kwargs = {}
     if execution_adapter is not ...:
         kwargs["execution_adapter"] = execution_adapter
+    if exchange_connections is not None:
+        kwargs["exchange_connections"] = exchange_connections
+    if settings_obj is not None:
+        kwargs["settings_obj"] = settings_obj
+    if bybit_adapter_factory is not None:
+        kwargs["bybit_adapter_factory"] = bybit_adapter_factory
     risk_gate_service = _FakeRiskGateService(decision) if decision is not None else None
     return RealExecutionService(
         risk_gate_service=risk_gate_service,
@@ -1315,6 +1447,42 @@ def _service(
         fee_rate_service=fee_rate_service,
         risk_settings_provider=lambda _user_id: risk_settings or _risk_settings(),
         **kwargs,
+    )
+
+
+def _exchange_connection_response(
+    *,
+    environment: str = "testnet",
+    order_placement_mode: str = "dry_run",
+    can_place_orders: bool = False,
+    mainnet_explicitly_enabled: bool = False,
+    safety_blockers: list[str] | None = None,
+) -> ExchangeConnectionResponse:
+    now = datetime.now(timezone.utc)
+    return ExchangeConnectionResponse(
+        id=UUID("ba520631-d035-4f95-a4c0-3b40553dd540"),
+        user_id=UUID("ba520631-d035-4f95-a4c0-3b40553dd524"),
+        exchange_id=UUID("ba520631-d035-4f95-a4c0-3b40553dd525"),
+        exchange_code="bybit",
+        exchange_name="Bybit",
+        label="Bybit connection",
+        account_type="linear",
+        key_ref="vault://stub/exchange/demo/bybit/main/abcdef123456",
+        permissions={"read": True, "trade": order_placement_mode == "live"},
+        status="active",
+        environment=environment,
+        order_placement_mode=order_placement_mode,
+        can_place_orders=can_place_orders,
+        safety_blockers=safety_blockers or [],
+        mainnet_explicitly_enabled=mainnet_explicitly_enabled,
+        last_sync_at=None,
+        last_account_snapshot_at=None,
+        account_snapshot_status="missing",
+        revoked_at=None,
+        deleted_at=None,
+        deletion_reason=None,
+        metadata={},
+        created_at=now,
     )
 
 
@@ -1437,10 +1605,15 @@ def _missing_structural_trade_plan() -> TradePlan:
     return plan.model_copy(update={"stop_loss": None})
 
 
-def _request(*, leverage: int = 1, account_balance: float = 1_000.0) -> ManualConfirmRequest:
+def _request(
+    *,
+    leverage: int = 1,
+    account_balance: float = 1_000.0,
+    user_id: str = "demo_user",
+) -> ManualConfirmRequest:
     return ManualConfirmRequest(
         mode="real",
-        user_id="demo_user",
+        user_id=user_id,
         account_balance=account_balance,
         risk_percent=1.0,
         leverage=leverage,

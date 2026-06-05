@@ -41,6 +41,9 @@ export const exchangesApi = {
             api_secret: draft.api_secret ?? null,
             api_passphrase: draft.api_passphrase ?? null,
             permissions: draft.permissions ?? {},
+            environment: draft.environment ?? "testnet",
+            order_placement_mode: draft.order_placement_mode ?? "dry_run",
+            mainnet_explicitly_enabled: Boolean(draft.mainnet_explicitly_enabled),
             metadata: draft.metadata ?? {}
           }
         })

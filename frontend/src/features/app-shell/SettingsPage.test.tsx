@@ -333,6 +333,7 @@ function renderSettingsPage(options: RenderSettingsPageOptions = {}) {
         onTestExchangeConnection={vi.fn<SettingsPagePropsForTest["onTestExchangeConnection"]>().mockResolvedValue(null)}
         onToggleAlert={vi.fn<SettingsPagePropsForTest["onToggleAlert"]>().mockResolvedValue(null)}
         onToggleExchangeConnection={vi.fn<SettingsPagePropsForTest["onToggleExchangeConnection"]>().mockResolvedValue(null)}
+        onUpdateExchangeConnection={vi.fn<SettingsPagePropsForTest["onUpdateExchangeConnection"]>().mockResolvedValue(null)}
         onUpdateRiskManagement={onUpdateRiskManagement}
         onUpdateStrategyConfig={onUpdateStrategyConfig}
       />
@@ -354,6 +355,7 @@ type SettingsPagePropsForTest = {
   onTestExchangeConnection: (connectionId: string) => Promise<unknown>;
   onToggleAlert: (alertId: string, isEnabled: boolean) => Promise<unknown>;
   onToggleExchangeConnection: (connectionId: string, isActive: boolean) => Promise<unknown>;
+  onUpdateExchangeConnection: (connectionId: string, patch: Partial<ExchangeConnectionDraft> & { status?: string }) => Promise<unknown>;
   onUpdateRiskManagement: (patch: UserSettingsPatch) => Promise<unknown>;
   onUpdateStrategyConfig: (configId: string, patch: StrategyConfigPatch) => Promise<unknown>;
 };
@@ -444,7 +446,14 @@ function exchangeConnection(overrides: Partial<ExchangeConnection> = {}): Exchan
     key_ref: "vault://stub/exchange/demo/bybit/main/abcdef123456",
     label: "Main Bybit",
     last_sync_at: null,
+    last_account_snapshot_at: null,
     metadata: {},
+    environment: "testnet",
+    order_placement_mode: "dry_run",
+    can_place_orders: false,
+    safety_blockers: ["ORDER_PLACEMENT_DRY_RUN"],
+    mainnet_explicitly_enabled: false,
+    account_snapshot_status: "missing",
     permissions: { read: true, trade: false },
     revoked_at: null,
     status: "active",

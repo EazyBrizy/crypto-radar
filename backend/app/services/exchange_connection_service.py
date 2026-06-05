@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.external_exchange import ExternalExchangeOrder, ExternalExchangeTrade
 from app.models.exchange_connection import UserExchangeConnection
@@ -17,13 +18,23 @@ from app.exchanges.bybit import BybitApiError, BybitPositionInfo, fetch_bybit_fe
 from app.schemas.exchange_connection import (
     ExchangeConnectionActionResponse,
     ExchangeConnectionCreateRequest,
+    ExchangeConnectionEnvironment,
     ExchangeFeeRateResponse,
     ExchangeConnectionResponse,
     ExchangeConnectionUpdateRequest,
+    ExchangeOrderPlacementMode,
 )
 from app.services.user_identity import resolve_app_user
 
 DELETED_CONNECTION_STATUSES = ("deleted", "revoked")
+ORDER_PLACEMENT_DISABLED_REASON_CODE = "ORDER_PLACEMENT_DISABLED"
+ORDER_PLACEMENT_DRY_RUN_REASON_CODE = "ORDER_PLACEMENT_DRY_RUN"
+EXCHANGE_CONNECTION_INACTIVE_REASON_CODE = "EXCHANGE_CONNECTION_INACTIVE"
+EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE = "EXCHANGE_ADAPTER_UNSUPPORTED"
+ENABLE_LIVE_TRADING_FALSE_REASON_CODE = "ENABLE_LIVE_TRADING_FALSE"
+ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE = "ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE"
+ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE = "ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE"
+MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE = "MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED"
 
 
 class ExchangeConnectionServiceError(Exception):
@@ -147,6 +158,9 @@ class ExchangeConnectionService:
                 key_ref=key_ref,
                 permissions=request.permissions,
                 status="active",
+                environment=_normalize_environment(request.environment, metadata=request.metadata),
+                order_placement_mode=_normalize_order_placement_mode(request.order_placement_mode),
+                mainnet_explicitly_enabled=bool(request.mainnet_explicitly_enabled),
                 metadata_={
                     **request.metadata,
                     "secret_provider": "stub",
@@ -194,6 +208,12 @@ class ExchangeConnectionService:
                 connection.permissions = request.permissions
             if request.status is not None:
                 connection.status = request.status.strip()
+            if request.environment is not None:
+                connection.environment = _normalize_environment(request.environment)
+            if request.order_placement_mode is not None:
+                connection.order_placement_mode = _normalize_order_placement_mode(request.order_placement_mode)
+            if request.mainnet_explicitly_enabled is not None:
+                connection.mainnet_explicitly_enabled = bool(request.mainnet_explicitly_enabled)
             if request.metadata is not None:
                 connection.metadata_ = {**connection.metadata_, **request.metadata}
 
@@ -549,9 +569,85 @@ def _account_type_matches_category(account_type: str, category: str) -> bool:
     return _default_fee_category(account_type) == category.strip().lower()
 
 
+def _normalize_environment(
+    value: str | None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> ExchangeConnectionEnvironment:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"testnet", "mainnet"}:
+        return normalized  # type: ignore[return-value]
+    metadata = metadata or {}
+    if _truthy_metadata_value(metadata.get("testnet")):
+        return "testnet"
+    metadata_environment = metadata.get("environment") or metadata.get("network")
+    if isinstance(metadata_environment, str) and metadata_environment.strip().lower() == "mainnet":
+        return "mainnet"
+    return "testnet"
+
+
+def _normalize_order_placement_mode(value: str | None) -> ExchangeOrderPlacementMode:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"disabled", "dry_run", "live"}:
+        return normalized  # type: ignore[return-value]
+    return "dry_run"
+
+
+def _connection_environment(connection: UserExchangeConnection) -> ExchangeConnectionEnvironment:
+    return _normalize_environment(connection.environment, metadata=connection.metadata_ or {})
+
+
+def _connection_order_placement_mode(connection: UserExchangeConnection) -> ExchangeOrderPlacementMode:
+    return _normalize_order_placement_mode(connection.order_placement_mode)
+
+
+def exchange_connection_safety_blockers(
+    connection: UserExchangeConnection,
+    *,
+    settings_obj: Any = settings,
+) -> list[str]:
+    blockers: list[str] = []
+    if connection.status.strip().lower() != "active":
+        blockers.append(EXCHANGE_CONNECTION_INACTIVE_REASON_CODE)
+
+    order_placement_mode = _connection_order_placement_mode(connection)
+    if order_placement_mode == "disabled":
+        blockers.append(ORDER_PLACEMENT_DISABLED_REASON_CODE)
+        return _dedupe(blockers)
+    if order_placement_mode == "dry_run":
+        blockers.append(ORDER_PLACEMENT_DRY_RUN_REASON_CODE)
+        return _dedupe(blockers)
+
+    exchange_code = connection.exchange.code.strip().lower()
+    if exchange_code != "bybit":
+        blockers.append(EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE)
+        return _dedupe(blockers)
+
+    if not _truthy_setting(settings_obj, "enable_live_trading"):
+        blockers.append(ENABLE_LIVE_TRADING_FALSE_REASON_CODE)
+    if not _truthy_setting(settings_obj, "enable_bybit_live_order_placement"):
+        blockers.append(ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE)
+    if _connection_environment(connection) == "mainnet":
+        if not _truthy_setting(settings_obj, "enable_bybit_mainnet_order_placement"):
+            blockers.append(ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE)
+        if not bool(connection.mainnet_explicitly_enabled):
+            blockers.append(MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE)
+    return _dedupe(blockers)
+
+
+def exchange_connection_can_place_orders(
+    connection: UserExchangeConnection,
+    *,
+    settings_obj: Any = settings,
+) -> bool:
+    return (
+        _connection_order_placement_mode(connection) == "live"
+        and not exchange_connection_safety_blockers(connection, settings_obj=settings_obj)
+    )
+
+
 def _bybit_base_url(connection: UserExchangeConnection) -> str:
-    metadata = connection.metadata_ or {}
-    if metadata.get("testnet") is True:
+    if _connection_environment(connection) == "testnet":
         return "https://api-testnet.bybit.com"
     api_base_url = connection.exchange.api_base_url
     if isinstance(api_base_url, str) and api_base_url:
@@ -639,6 +735,34 @@ def _soft_delete_metadata(
     }
 
 
+def _truthy_setting(settings_obj: Any, name: str) -> bool:
+    value = getattr(settings_obj, name, False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)
+
+
+def _truthy_metadata_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled", "testnet"}
+    return bool(value)
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
 def _parse_uuid(value: str | UUID) -> UUID | None:
     if isinstance(value, UUID):
         return value
@@ -649,6 +773,9 @@ def _parse_uuid(value: str | UUID) -> UUID | None:
 
 
 def _connection_to_response(connection: UserExchangeConnection) -> ExchangeConnectionResponse:
+    environment = _connection_environment(connection)
+    order_placement_mode = _connection_order_placement_mode(connection)
+    safety_blockers = exchange_connection_safety_blockers(connection)
     return ExchangeConnectionResponse(
         id=connection.id,
         user_id=connection.user_id,
@@ -660,7 +787,14 @@ def _connection_to_response(connection: UserExchangeConnection) -> ExchangeConne
         key_ref=connection.key_ref,
         permissions=connection.permissions,
         status=connection.status,
+        environment=environment,
+        order_placement_mode=order_placement_mode,
+        can_place_orders=order_placement_mode == "live" and not safety_blockers,
+        safety_blockers=safety_blockers,
+        mainnet_explicitly_enabled=bool(connection.mainnet_explicitly_enabled),
         last_sync_at=connection.last_sync_at,
+        last_account_snapshot_at=connection.last_account_snapshot_at,
+        account_snapshot_status=connection.account_snapshot_status or "missing",
         revoked_at=connection.revoked_at,
         deleted_at=connection.deleted_at,
         deletion_reason=connection.deletion_reason,

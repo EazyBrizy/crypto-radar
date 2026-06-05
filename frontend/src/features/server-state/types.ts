@@ -2,6 +2,8 @@ export type SubscriptionTier = "free" | "pro" | "team";
 export type SubscriptionState = "active" | "trialing" | "past_due" | "canceled" | "none";
 export type ExchangeConnectionState = "available" | "connected" | "disconnected" | "error";
 export type ExchangeConnectionLifecycleStatus = "active" | "disabled" | "revoked" | "deleted";
+export type ExchangeConnectionEnvironment = "testnet" | "mainnet";
+export type ExchangeOrderPlacementMode = "disabled" | "dry_run" | "live";
 export type VirtualSimulationLevel = "mvp" | "advanced" | "pro";
 export type VirtualSimulationLevelStatus = "active" | "stub";
 export type RiskProfileName = "conservative" | "balanced" | "aggressive" | "custom";
@@ -357,7 +359,14 @@ export interface ExchangeConnection {
   key_ref: string;
   permissions: Record<string, unknown>;
   status: ExchangeConnectionLifecycleStatus;
+  environment: ExchangeConnectionEnvironment;
+  order_placement_mode: ExchangeOrderPlacementMode;
+  can_place_orders: boolean;
+  safety_blockers: string[];
+  mainnet_explicitly_enabled: boolean;
   last_sync_at: string | null;
+  last_account_snapshot_at: string | null;
+  account_snapshot_status: AccountSnapshotStatus;
   revoked_at: string | null;
   deleted_at: string | null;
   deletion_reason: string | null;
@@ -446,5 +455,8 @@ export interface ExchangeConnectionDraft {
   api_secret?: string | null;
   api_passphrase?: string | null;
   permissions?: Record<string, unknown>;
+  environment?: ExchangeConnectionEnvironment;
+  order_placement_mode?: ExchangeOrderPlacementMode;
+  mainnet_explicitly_enabled?: boolean;
   metadata?: Record<string, unknown>;
 }

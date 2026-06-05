@@ -1,14 +1,19 @@
 import hashlib
 import json
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
+from uuid import UUID
 
+from app.core.config import settings
 from app.exchanges.base import (
     DryRunExecutionAdapter,
     ExchangeExecutionAdapter,
     exchange_execution_capabilities,
     protective_order_strategy_for_adapter,
 )
+from app.exchanges.bybit import BYBIT_API_URL, BYBIT_TESTNET_API_URL, BybitRealExecutionAdapter
+from app.schemas.exchange_connection import ExchangeConnectionResponse
 from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.risk import AccountRiskSnapshot, RiskDecision
 from app.schemas.signal import RadarSignal
@@ -40,12 +45,44 @@ from app.services.real_execution_readiness import (
     real_execution_readiness_service,
 )
 from app.services.exchange_account_snapshot import exchange_account_snapshot_service
+from app.services.exchange_connection_service import (
+    ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE,
+    ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE,
+    ENABLE_LIVE_TRADING_FALSE_REASON_CODE,
+    EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE,
+    EXCHANGE_CONNECTION_INACTIVE_REASON_CODE,
+    MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE,
+    ORDER_PLACEMENT_DISABLED_REASON_CODE,
+    ORDER_PLACEMENT_DRY_RUN_REASON_CODE,
+    exchange_connection_service,
+)
 from app.services.risk_state import RiskStateService, risk_state_service
 from app.services.strategy_config_service import strategy_config_service
 
 
 _DEFAULT_EXECUTION_ADAPTER = object()
 RiskSettingsProvider = Callable[[str], RiskManagementSettings]
+BybitExecutionAdapterFactory = Callable[..., ExchangeExecutionAdapter]
+
+REAL_EXECUTION_CONNECTION_REQUIRED_REASON_CODE = "EXCHANGE_CONNECTION_REQUIRED"
+EXCHANGE_CONNECTION_FORBIDDEN_REASON_CODE = "EXCHANGE_CONNECTION_FORBIDDEN"
+EXCHANGE_CONNECTION_NOT_FOUND_REASON_CODE = "EXCHANGE_CONNECTION_NOT_FOUND"
+EXCHANGE_CONNECTION_EXCHANGE_MISMATCH_REASON_CODE = "EXCHANGE_CONNECTION_EXCHANGE_MISMATCH"
+EXCHANGE_CREDENTIALS_UNAVAILABLE_REASON_CODE = "EXCHANGE_CREDENTIALS_UNAVAILABLE"
+BYBIT_API_CREDENTIALS_REQUIRED_REASON_CODE = "BYBIT_API_CREDENTIALS_REQUIRED"
+PROTECTIVE_STOP_REQUIRED_REASON_CODE = "PROTECTIVE_STOP_REQUIRED"
+
+
+@dataclass(frozen=True)
+class _ResolvedExecutionAdapter:
+    adapter: ExchangeExecutionAdapter | None
+    connection: ExchangeConnectionResponse | None = None
+    environment: str | None = None
+    order_placement_mode: str | None = None
+    reason_code: str | None = None
+    reason_codes: list[str] | None = None
+    message: str | None = None
+    validation_errors: list[str] | None = None
 
 
 class RealExecutionService:
@@ -69,6 +106,9 @@ class RealExecutionService:
         execution_adapter: ExchangeExecutionAdapter | None | object = _DEFAULT_EXECUTION_ADAPTER,
         risk_settings_provider: RiskSettingsProvider | None = None,
         account_snapshot_provider: Any | None = None,
+        exchange_connections: Any | None = None,
+        settings_obj: Any | None = None,
+        bybit_adapter_factory: BybitExecutionAdapterFactory | None = None,
     ) -> None:
         self._risk_context_service = risk_context_service or RiskContextService()
         self._risk_gate_service = risk_gate_service or RiskGateService()
@@ -84,6 +124,9 @@ class RealExecutionService:
             else execution_adapter
         )
         self._risk_settings_provider = risk_settings_provider or get_user_risk_management_settings
+        self._exchange_connections = exchange_connections or exchange_connection_service
+        self._settings = settings_obj or settings
+        self._bybit_adapter_factory = bybit_adapter_factory or _default_bybit_execution_adapter
         if account_snapshot_provider is not None:
             self._account_snapshot_provider = account_snapshot_provider
         elif self._risk_state is not None:
@@ -95,9 +138,33 @@ class RealExecutionService:
         self,
         signal: RadarSignal,
         request: ManualConfirmRequest,
+        *,
+        connection_id: str | UUID | None = None,
     ) -> RealExecutionResult:
+        adapter_resolution = self._resolve_execution_adapter(
+            signal=signal,
+            request=request,
+            connection_id=connection_id,
+        )
+        execution_adapter = adapter_resolution.adapter
+        if adapter_resolution.reason_code is not None:
+            lifecycle_trace = _request_lifecycle_trace(signal, request)
+            return _blocked_real_execution_result(
+                signal=signal,
+                status="not_implemented",
+                message=adapter_resolution.message or "Real execution is not available.",
+                reason_code=adapter_resolution.reason_code,
+                reason_codes=adapter_resolution.reason_codes or [adapter_resolution.reason_code],
+                adapter=getattr(execution_adapter, "name", None),
+                connection=adapter_resolution.connection,
+                environment=adapter_resolution.environment,
+                order_placement_mode=adapter_resolution.order_placement_mode,
+                validation_errors=adapter_resolution.validation_errors,
+                lifecycle_trace=lifecycle_trace,
+            )
+        request = _request_with_connection_context(request, adapter_resolution.connection)
         backend_configuration_blocker = _adapter_live_order_placement_safety_reason(
-            self._execution_adapter
+            execution_adapter
         )
         if backend_configuration_blocker is not None:
             lifecycle_trace = _request_lifecycle_trace(signal, request)
@@ -108,8 +175,13 @@ class RealExecutionService:
                 exchange=signal.exchange,
                 symbol=signal.symbol,
                 message=backend_configuration_blocker,
-                adapter=getattr(self._execution_adapter, "name", None),
+                adapter=getattr(execution_adapter, "name", None),
                 validation_errors=[backend_configuration_blocker],
+                reason_code=_reason_code_for_adapter_safety_message(backend_configuration_blocker),
+                reason_codes=[_reason_code_for_adapter_safety_message(backend_configuration_blocker)],
+                environment=adapter_resolution.environment,
+                connection_id=_connection_id(adapter_resolution.connection),
+                order_placement_mode=adapter_resolution.order_placement_mode,
                 lifecycle_trace=lifecycle_trace,
             )
 
@@ -199,10 +271,10 @@ class RealExecutionService:
             if self._risk_state is not None
             else None
         )
-        not_implemented_reason = _adapter_not_implemented_reason(self._execution_adapter)
+        not_implemented_reason = _adapter_not_implemented_reason(execution_adapter)
         live_adapter = (
-            self._execution_adapter is not None
-            and not bool(getattr(self._execution_adapter, "is_dry_run", False))
+            execution_adapter is not None
+            and not bool(getattr(execution_adapter, "is_dry_run", False))
             and not_implemented_reason is None
         )
         account_snapshot = self._get_real_account_snapshot(
@@ -210,6 +282,7 @@ class RealExecutionService:
             exchange=signal.exchange,
             mode="real",
             live_adapter=live_adapter,
+            connection_id=_connection_id(adapter_resolution.connection),
             request_account_balance=request.account_balance,
             reference=reference,
         )
@@ -224,6 +297,11 @@ class RealExecutionService:
                 symbol=signal.symbol,
                 message="Real execution account snapshot failed: " + "; ".join(account_snapshot_blockers),
                 validation_errors=account_snapshot_blockers,
+                reason_code="ACCOUNT_SNAPSHOT_UNAVAILABLE",
+                reason_codes=["ACCOUNT_SNAPSHOT_UNAVAILABLE"],
+                environment=adapter_resolution.environment,
+                connection_id=_connection_id(adapter_resolution.connection),
+                order_placement_mode=adapter_resolution.order_placement_mode,
                 lifecycle_trace=lifecycle_trace,
             )
         risk_decision = self._risk_gate_service.evaluate(
@@ -321,7 +399,7 @@ class RealExecutionService:
             request=request,
             risk_decision=risk_decision,
             lifecycle_trace=lifecycle_trace,
-            adapter=self._execution_adapter,
+            adapter=execution_adapter,
             account_snapshot=account_snapshot,
         )
         normalization = self._order_plan_normalizer.normalize_order_plan(
@@ -336,6 +414,7 @@ class RealExecutionService:
         )
         validation_errors = _dedupe([*normalization.errors, *validation_errors])
         if validation_errors:
+            reason_code = _validation_reason_code(validation_errors, live_adapter=live_adapter)
             return RealExecutionResult(
                 status="risk_failed",
                 signal_valid=True,
@@ -350,6 +429,11 @@ class RealExecutionService:
                 idempotency_key=execution_plan.idempotency_key,
                 warnings=normalization.warnings,
                 validation_errors=validation_errors,
+                reason_code=reason_code,
+                reason_codes=[reason_code],
+                environment=adapter_resolution.environment,
+                connection_id=_connection_id(adapter_resolution.connection),
+                order_placement_mode=adapter_resolution.order_placement_mode,
                 lifecycle_trace=execution_plan.lifecycle_trace,
             )
         if not_implemented_reason is not None:
@@ -365,8 +449,13 @@ class RealExecutionService:
                 execution_plan=execution_plan,
                 planned_orders=execution_plan.planned_orders,
                 idempotency_key=execution_plan.idempotency_key,
-                adapter=getattr(self._execution_adapter, "name", None),
+                adapter=getattr(execution_adapter, "name", None),
                 warnings=normalization.warnings,
+                reason_code="ADAPTER_NOT_IMPLEMENTED",
+                reason_codes=["ADAPTER_NOT_IMPLEMENTED"],
+                environment=adapter_resolution.environment,
+                connection_id=_connection_id(adapter_resolution.connection),
+                order_placement_mode=adapter_resolution.order_placement_mode,
                 lifecycle_trace=execution_plan.lifecycle_trace,
             )
 
@@ -379,7 +468,7 @@ class RealExecutionService:
             reference=reference,
             fee_rate=fee_rate,
             account_snapshot=account_snapshot,
-            adapter=self._execution_adapter,
+            adapter=execution_adapter,
         )
         execution_plan = _execution_plan_with_readiness(execution_plan, readiness)
         if not readiness.ready:
@@ -397,22 +486,27 @@ class RealExecutionService:
                 idempotency_key=execution_plan.idempotency_key,
                 warnings=_dedupe([*normalization.warnings, *readiness.warnings]),
                 validation_errors=readiness.blockers,
+                reason_code="READINESS_FAILED",
+                reason_codes=["READINESS_FAILED"],
+                environment=adapter_resolution.environment,
+                connection_id=_connection_id(adapter_resolution.connection),
+                order_placement_mode=adapter_resolution.order_placement_mode,
                 lifecycle_trace=execution_plan.lifecycle_trace,
             )
 
         planned_orders = await _place_execution_plan(
             execution_plan,
-            self._execution_adapter,
+            execution_adapter,
         )
-        adapter_name = getattr(self._execution_adapter, "name", "unknown")
+        adapter_name = getattr(execution_adapter, "name", "unknown")
         result_status = _real_execution_status_from_orders(
-            adapter_is_dry_run=getattr(self._execution_adapter, "is_dry_run", False),
+            adapter_is_dry_run=getattr(execution_adapter, "is_dry_run", False),
             planned_orders=planned_orders,
         )
         execution_plan = _execution_plan_with_placed_orders(
             execution_plan,
             planned_orders=planned_orders,
-            adapter_is_dry_run=getattr(self._execution_adapter, "is_dry_run", False),
+            adapter_is_dry_run=getattr(execution_adapter, "is_dry_run", False),
         )
         lifecycle_trace = execution_plan.lifecycle_trace
         return RealExecutionResult(
@@ -429,6 +523,11 @@ class RealExecutionService:
             idempotency_key=execution_plan.idempotency_key,
             adapter=adapter_name,
             warnings=_dedupe([*normalization.warnings, *readiness.warnings]),
+            reason_code=ORDER_PLACEMENT_DRY_RUN_REASON_CODE if result_status == "dry_run" else None,
+            reason_codes=[ORDER_PLACEMENT_DRY_RUN_REASON_CODE] if result_status == "dry_run" else [],
+            environment=adapter_resolution.environment,
+            connection_id=_connection_id(adapter_resolution.connection),
+            order_placement_mode=adapter_resolution.order_placement_mode,
             lifecycle_trace=lifecycle_trace,
         )
 
@@ -472,6 +571,7 @@ class RealExecutionService:
         exchange: str,
         mode: str,
         live_adapter: bool,
+        connection_id: str | None,
         request_account_balance: float,
         reference: Any,
     ) -> AccountRiskSnapshot:
@@ -482,6 +582,7 @@ class RealExecutionService:
                 exchange=exchange,
                 mode=mode,
                 live_adapter=live_adapter,
+                connection_id=connection_id,
                 request_account_balance=request_account_balance,
                 reference=reference,
             )
@@ -489,6 +590,7 @@ class RealExecutionService:
             return provider.get_snapshot(
                 user_id=user_id,
                 exchange=exchange,
+                connection_id=_parse_uuid(connection_id),
                 mode="real",
             )
         return RiskStateService().get_real_account_snapshot(
@@ -499,6 +601,334 @@ class RealExecutionService:
             request_account_balance=request_account_balance,
             reference=reference,
         )
+
+    def _resolve_execution_adapter(
+        self,
+        *,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        connection_id: str | UUID | None,
+    ) -> _ResolvedExecutionAdapter:
+        requested_connection_id = _requested_connection_id(request, connection_id)
+        if requested_connection_id is None:
+            return _ResolvedExecutionAdapter(adapter=self._execution_adapter)
+
+        try:
+            connection = self._exchange_connections.get_connection_for_user(
+                str(requested_connection_id),
+                user_id=request.user_id,
+            )
+        except PermissionError as exc:
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                reason_code=EXCHANGE_CONNECTION_FORBIDDEN_REASON_CODE,
+                reason_codes=[EXCHANGE_CONNECTION_FORBIDDEN_REASON_CODE],
+                message=str(exc) or "Exchange connection belongs to another user.",
+                validation_errors=[str(exc) or "Exchange connection belongs to another user."],
+            )
+        except LookupError as exc:
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                reason_code=EXCHANGE_CONNECTION_NOT_FOUND_REASON_CODE,
+                reason_codes=[EXCHANGE_CONNECTION_NOT_FOUND_REASON_CODE],
+                message=str(exc) or "Exchange connection is not found.",
+                validation_errors=[str(exc) or "Exchange connection is not found."],
+            )
+        except ValueError as exc:
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                reason_code=EXCHANGE_CONNECTION_NOT_FOUND_REASON_CODE,
+                reason_codes=[EXCHANGE_CONNECTION_NOT_FOUND_REASON_CODE],
+                message=str(exc) or "Exchange connection is invalid.",
+                validation_errors=[str(exc) or "Exchange connection is invalid."],
+            )
+
+        environment = connection.environment
+        order_placement_mode = connection.order_placement_mode
+        if connection.exchange_code.strip().lower() != signal.exchange.strip().lower():
+            message = "Exchange connection does not match the signal exchange."
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                connection=connection,
+                environment=environment,
+                order_placement_mode=order_placement_mode,
+                reason_code=EXCHANGE_CONNECTION_EXCHANGE_MISMATCH_REASON_CODE,
+                reason_codes=[EXCHANGE_CONNECTION_EXCHANGE_MISMATCH_REASON_CODE],
+                message=message,
+                validation_errors=[message],
+            )
+
+        blockers = _connection_response_safety_blockers(connection, settings_obj=self._settings)
+        if order_placement_mode == "disabled":
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                connection=connection,
+                environment=environment,
+                order_placement_mode=order_placement_mode,
+                reason_code=ORDER_PLACEMENT_DISABLED_REASON_CODE,
+                reason_codes=blockers or [ORDER_PLACEMENT_DISABLED_REASON_CODE],
+                message=_reason_message(ORDER_PLACEMENT_DISABLED_REASON_CODE),
+                validation_errors=[_reason_message(code) for code in blockers or [ORDER_PLACEMENT_DISABLED_REASON_CODE]],
+            )
+        if order_placement_mode == "dry_run":
+            return _ResolvedExecutionAdapter(
+                adapter=DryRunExecutionAdapter(),
+                connection=connection,
+                environment=environment,
+                order_placement_mode=order_placement_mode,
+            )
+
+        live_blockers = [code for code in blockers if code != ORDER_PLACEMENT_DRY_RUN_REASON_CODE]
+        if live_blockers:
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                connection=connection,
+                environment=environment,
+                order_placement_mode=order_placement_mode,
+                reason_code=live_blockers[0],
+                reason_codes=live_blockers,
+                message=_reason_message(live_blockers[0]),
+                validation_errors=[_reason_message(code) for code in live_blockers],
+            )
+
+        if connection.exchange_code.strip().lower() != "bybit":
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                connection=connection,
+                environment=environment,
+                order_placement_mode=order_placement_mode,
+                reason_code=EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE,
+                reason_codes=[EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE],
+                message=_reason_message(EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE),
+                validation_errors=[_reason_message(EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE)],
+            )
+
+        load_credentials = getattr(self._exchange_connections, "load_credentials", None)
+        credentials = load_credentials(connection.key_ref) if callable(load_credentials) else None
+        if credentials is None:
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                connection=connection,
+                environment=environment,
+                order_placement_mode=order_placement_mode,
+                reason_code=EXCHANGE_CREDENTIALS_UNAVAILABLE_REASON_CODE,
+                reason_codes=[EXCHANGE_CREDENTIALS_UNAVAILABLE_REASON_CODE],
+                message=_reason_message(EXCHANGE_CREDENTIALS_UNAVAILABLE_REASON_CODE),
+                validation_errors=[_reason_message(EXCHANGE_CREDENTIALS_UNAVAILABLE_REASON_CODE)],
+            )
+        api_key = credentials.get("api_key")
+        api_secret = credentials.get("api_secret")
+        if not api_key or not api_secret:
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                connection=connection,
+                environment=environment,
+                order_placement_mode=order_placement_mode,
+                reason_code=BYBIT_API_CREDENTIALS_REQUIRED_REASON_CODE,
+                reason_codes=[BYBIT_API_CREDENTIALS_REQUIRED_REASON_CODE],
+                message=_reason_message(BYBIT_API_CREDENTIALS_REQUIRED_REASON_CODE),
+                validation_errors=[_reason_message(BYBIT_API_CREDENTIALS_REQUIRED_REASON_CODE)],
+            )
+
+        base_url = BYBIT_TESTNET_API_URL if environment == "testnet" else BYBIT_API_URL
+        adapter = self._bybit_adapter_factory(
+            connection=connection,
+            connection_metadata=_adapter_connection_metadata(connection),
+            settings_override=self._settings,
+            api_key=api_key,
+            api_secret=api_secret,
+            base_url=base_url,
+        )
+        return _ResolvedExecutionAdapter(
+            adapter=adapter,
+            connection=connection,
+            environment=environment,
+            order_placement_mode=order_placement_mode,
+        )
+
+
+def _default_bybit_execution_adapter(**kwargs: Any) -> ExchangeExecutionAdapter:
+    return BybitRealExecutionAdapter(
+        connection_metadata=kwargs["connection_metadata"],
+        settings_override=kwargs["settings_override"],
+        api_key=kwargs["api_key"],
+        api_secret=kwargs["api_secret"],
+        base_url=kwargs["base_url"],
+    )
+
+
+def _blocked_real_execution_result(
+    *,
+    signal: RadarSignal,
+    status: RealExecutionStatus,
+    message: str,
+    reason_code: str,
+    reason_codes: list[str],
+    adapter: str | None,
+    connection: ExchangeConnectionResponse | None,
+    environment: str | None,
+    order_placement_mode: str | None,
+    validation_errors: list[str] | None,
+    lifecycle_trace: LifecycleTrace,
+) -> RealExecutionResult:
+    return RealExecutionResult(
+        status=status,
+        signal_valid=True,
+        execution_allowed=False,
+        exchange=signal.exchange,
+        symbol=signal.symbol,
+        message=message,
+        adapter=adapter,
+        validation_errors=validation_errors or [message],
+        reason_code=reason_code,
+        reason_codes=reason_codes,
+        connection_id=_connection_id(connection),
+        environment=environment,
+        order_placement_mode=order_placement_mode,
+        lifecycle_trace=lifecycle_trace,
+    )
+
+
+def _request_with_connection_context(
+    request: ManualConfirmRequest,
+    connection: ExchangeConnectionResponse | None,
+) -> ManualConfirmRequest:
+    if connection is None:
+        return request
+    metadata = dict(request.metadata or {})
+    metadata["connection_id"] = str(connection.id)
+    metadata["exchange_connection"] = {
+        "id": str(connection.id),
+        "exchange_code": connection.exchange_code,
+        "environment": connection.environment,
+        "order_placement_mode": connection.order_placement_mode,
+        "can_place_orders": connection.can_place_orders,
+        "mainnet_explicitly_enabled": connection.mainnet_explicitly_enabled,
+        "safety_blockers": list(connection.safety_blockers),
+    }
+    return request.model_copy(update={"connection_id": str(connection.id), "metadata": metadata})
+
+
+def _requested_connection_id(
+    request: ManualConfirmRequest,
+    connection_id: str | UUID | None,
+) -> str | UUID | None:
+    if connection_id is not None:
+        return connection_id
+    request_connection_id = getattr(request, "connection_id", None)
+    if request_connection_id:
+        return request_connection_id
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    value = metadata.get("connection_id")
+    return str(value) if value else None
+
+
+def _connection_id(connection: ExchangeConnectionResponse | None) -> str | None:
+    return str(connection.id) if connection is not None else None
+
+
+def _adapter_connection_metadata(connection: ExchangeConnectionResponse) -> dict[str, Any]:
+    metadata = dict(connection.metadata or {})
+    metadata.update(
+        {
+            "connection_id": str(connection.id),
+            "environment": connection.environment,
+            "testnet": connection.environment == "testnet",
+            "order_placement_mode": connection.order_placement_mode,
+            "mainnet_explicitly_enabled": connection.mainnet_explicitly_enabled,
+        }
+    )
+    return metadata
+
+
+def _connection_response_safety_blockers(
+    connection: ExchangeConnectionResponse,
+    *,
+    settings_obj: Any,
+) -> list[str]:
+    blockers: list[str] = []
+    if connection.status.strip().lower() != "active":
+        blockers.append(EXCHANGE_CONNECTION_INACTIVE_REASON_CODE)
+    if connection.order_placement_mode == "disabled":
+        blockers.append(ORDER_PLACEMENT_DISABLED_REASON_CODE)
+        return _dedupe(blockers)
+    if connection.order_placement_mode == "dry_run":
+        blockers.append(ORDER_PLACEMENT_DRY_RUN_REASON_CODE)
+        return _dedupe(blockers)
+    if connection.exchange_code.strip().lower() != "bybit":
+        blockers.append(EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE)
+        return _dedupe(blockers)
+    if not _truthy_setting(settings_obj, "enable_live_trading"):
+        blockers.append(ENABLE_LIVE_TRADING_FALSE_REASON_CODE)
+    if not _truthy_setting(settings_obj, "enable_bybit_live_order_placement"):
+        blockers.append(ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE)
+    if connection.environment == "mainnet":
+        if not _truthy_setting(settings_obj, "enable_bybit_mainnet_order_placement"):
+            blockers.append(ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE)
+        if not connection.mainnet_explicitly_enabled:
+            blockers.append(MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE)
+    return _dedupe(blockers)
+
+
+def _truthy_setting(settings_obj: Any, name: str) -> bool:
+    value = getattr(settings_obj, name, False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)
+
+
+def _reason_message(reason_code: str) -> str:
+    return {
+        REAL_EXECUTION_CONNECTION_REQUIRED_REASON_CODE: "Real execution requires an exchange connection.",
+        EXCHANGE_CONNECTION_FORBIDDEN_REASON_CODE: "Exchange connection belongs to another user.",
+        EXCHANGE_CONNECTION_NOT_FOUND_REASON_CODE: "Exchange connection is not found.",
+        EXCHANGE_CONNECTION_EXCHANGE_MISMATCH_REASON_CODE: "Exchange connection does not match the signal exchange.",
+        EXCHANGE_CONNECTION_INACTIVE_REASON_CODE: "Exchange connection is not active.",
+        ORDER_PLACEMENT_DISABLED_REASON_CODE: "Order placement is disabled for this exchange connection.",
+        ORDER_PLACEMENT_DRY_RUN_REASON_CODE: "Order placement mode is dry-run; no exchange order will be sent.",
+        EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE: "Live order placement is not supported for this exchange.",
+        ENABLE_LIVE_TRADING_FALSE_REASON_CODE: "ENABLE_LIVE_TRADING=false blocks live order placement.",
+        ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE: (
+            "ENABLE_BYBIT_LIVE_ORDER_PLACEMENT=false blocks Bybit live order placement."
+        ),
+        ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE: (
+            "ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT=false blocks Bybit mainnet order placement."
+        ),
+        MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE: (
+            "Mainnet live order placement requires explicit connection opt-in."
+        ),
+        EXCHANGE_CREDENTIALS_UNAVAILABLE_REASON_CODE: "Exchange credentials are unavailable.",
+        BYBIT_API_CREDENTIALS_REQUIRED_REASON_CODE: "Bybit live order placement requires api_key and api_secret.",
+        PROTECTIVE_STOP_REQUIRED_REASON_CODE: "Live entry requires a protective stop before placement.",
+    }.get(reason_code, reason_code)
+
+
+def _reason_code_for_adapter_safety_message(message: str) -> str:
+    normalized = message.lower()
+    if "mainnet" in normalized:
+        return ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE
+    if "live order placement" in normalized:
+        return ENABLE_LIVE_TRADING_FALSE_REASON_CODE
+    return "ADAPTER_SAFETY_BLOCKED"
+
+
+def _validation_reason_code(validation_errors: list[str], *, live_adapter: bool) -> str:
+    if live_adapter and any("protective stop" in error.lower() for error in validation_errors):
+        return PROTECTIVE_STOP_REQUIRED_REASON_CODE
+    return "EXECUTION_PLAN_VALIDATION_FAILED"
+
+
+def _parse_uuid(value: str | UUID | None) -> UUID | None:
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _entry_price(signal: RadarSignal) -> float:

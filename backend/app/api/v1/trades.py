@@ -113,7 +113,11 @@ async def confirm_real_trade(request: RealConfirmRequest) -> RealExecutionResult
             detail="Signal is not found",
         )
     try:
-        result = await real_execution_service.place_order(signal, request)
+        result = await real_execution_service.place_order(
+            signal,
+            request,
+            connection_id=request.connection_id,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

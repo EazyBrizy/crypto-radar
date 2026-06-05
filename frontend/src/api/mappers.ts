@@ -81,6 +81,7 @@ import type {
   VirtualSimulatedPositionPath
 } from "@/types";
 import { z } from "zod";
+import { DEV_FALLBACK_USER_ID } from "@/auth/current-user";
 import { SIGNAL_STATUSES } from "@/domain/signal-status";
 import { isActiveTradeStatus, isTerminalTradeStatus } from "@/domain/trade-status";
 import type { OhlcvCandleDto, RadarConfigDto, RadarSignalDto, TradeJournalEntryDto } from "./generated/schemas";
@@ -1062,7 +1063,7 @@ export function normalizeRiskDecision(value: unknown): RiskDecision | null {
 export function normalizeRiskState(value: unknown): RiskStateResponse | null {
   if (!isRecord(value)) return null;
   return {
-    user_id: String(value.user_id ?? "demo_user"),
+    user_id: String(value.user_id ?? DEV_FALLBACK_USER_ID),
     mode: value.mode === "real" ? "real" : value.mode === "virtual" ? "virtual" : null,
     protection_state: normalizeRiskProtectionMode(value.protection_state),
     protection_reason: value.protection_reason == null ? null : String(value.protection_reason),
@@ -1476,7 +1477,7 @@ export function normalizeVirtualAccount(account?: unknown): VirtualAccount | nul
   if (!account) return null;
   const value = account as VirtualAccountDto;
   return {
-    user_id: value.user_id ?? "demo_user",
+    user_id: value.user_id ?? DEV_FALLBACK_USER_ID,
     starting_balance: value.starting_balance ?? 100,
     balance: value.balance ?? 100,
     equity: value.equity ?? value.balance ?? 100,
@@ -1500,7 +1501,7 @@ export function normalizeTradeResponse(trades: TradeJournalEntryDto[], account?:
 export function normalizeWatchlist(config: RadarConfig): Watchlist {
   return {
     id: "config-derived",
-    user_id: "demo_user",
+    user_id: DEV_FALLBACK_USER_ID,
     name: "Default",
     is_default: true,
     pairs: config.symbols.map((symbol) => ({
@@ -1561,7 +1562,7 @@ export function normalizeWatchlistResponse(value: unknown): Watchlist {
     : [];
   return {
     id: String(watchlist.id ?? ""),
-    user_id: String(watchlist.user_id ?? "demo_user"),
+    user_id: String(watchlist.user_id ?? DEV_FALLBACK_USER_ID),
     name: String(watchlist.name ?? "Default"),
     is_default: Boolean(watchlist.is_default ?? true),
     pairs,
@@ -1585,7 +1586,7 @@ export function normalizeStrategyConfig(value: unknown): StrategyConfig {
     : [];
   return {
     id: String(config.id ?? ""),
-    user_id: String(config.user_id ?? "demo_user"),
+    user_id: String(config.user_id ?? DEV_FALLBACK_USER_ID),
     strategy_version_id: String(config.strategy_version_id ?? ""),
     strategy_code: String(config.strategy_code ?? ""),
     strategy_name: String(config.strategy_name ?? config.name ?? "Strategy"),
@@ -1606,7 +1607,7 @@ export function normalizeAlertRule(value: unknown): AlertRule {
   const alert = value as Partial<AlertRule>;
   return {
     id: String(alert.id ?? ""),
-    user_id: String(alert.user_id ?? "demo_user"),
+    user_id: String(alert.user_id ?? DEV_FALLBACK_USER_ID),
     pair: alert.pair ? normalizeMarketPair(alert.pair) : null,
     strategy_version_id: alert.strategy_version_id ?? null,
     condition_type: String(alert.condition_type ?? "price_above"),
@@ -1621,7 +1622,7 @@ export function normalizeNotification(value: unknown): PersistedNotification {
   const notification = value as Partial<PersistedNotification>;
   return {
     id: String(notification.id ?? ""),
-    user_id: String(notification.user_id ?? "demo_user"),
+    user_id: String(notification.user_id ?? DEV_FALLBACK_USER_ID),
     type: String(notification.type ?? "system"),
     title: String(notification.title ?? "Notification"),
     body: notification.body == null ? null : String(notification.body),

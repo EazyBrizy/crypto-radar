@@ -1,3 +1,4 @@
+import inspect
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -9,11 +10,17 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.api.v1 import signals as signals_api
-from app.api.v1.signals import confirm_signal, list_active_signals, list_open_signals
+from app.api.v1.signals import confirm_signal, list_active_signals, list_open_signals, preview_virtual_execution
 from app.schemas.pending_entry import PendingEntryIntentRead
 from app.api.v1.trades import confirm_real_trade
 from app.schemas.signal import RadarSignal
-from app.schemas.trade import ManualConfirmRequest, RealConfirmRequest, RealExecutionResult, VirtualTrade
+from app.schemas.trade import (
+    ManualConfirmRequest,
+    RealConfirmRequest,
+    RealExecutionResult,
+    VirtualExecutionReport,
+    VirtualTrade,
+)
 from app.schemas.user import RiskManagementSettings
 from app.services.execution_service import RealExecutionService
 from app.services.risk_market_data import RiskMarketDataSnapshot
@@ -69,6 +76,30 @@ class _FakeVirtualTradingService:
             signal.model_copy(update={"status": "confirmed", "confirmed_at": now}),
             _virtual_trade(signal, request, now=now),
         )
+
+
+class _FakePreviewActionService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def preview_virtual_execution(self, signal_id: str, *, user_id: str) -> VirtualExecutionReport:
+        self.calls.append((signal_id, user_id))
+        return _execution_report()
+
+
+class _FakePreviewVirtualTradingService:
+    def __init__(self) -> None:
+        self.requests: list[ManualConfirmRequest] = []
+        self.signal_ids: list[str] = []
+
+    def preview_virtual_execution(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+    ) -> VirtualExecutionReport:
+        self.signal_ids.append(signal.id)
+        self.requests.append(request)
+        return _execution_report()
 
 
 class _FakeMarketDataService:
@@ -364,6 +395,48 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exc.exception.status_code, 409)
         self.assertEqual(pending_service.calls, 0)
 
+    async def test_execution_preview_without_body_uses_current_user(self) -> None:
+        app = FastAPI()
+        app.include_router(signals_api.router)
+        preview_service = _FakePreviewActionService()
+
+        with patch("app.api.v1.signals._signal_action_service", return_value=preview_service):
+            response = TestClient(app).post(
+                "/signals/sig_preview/execution-preview",
+                headers={"content-type": "application/json", "x-auth-user-id": "usr_current"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(preview_service.calls, [("sig_preview", "usr_current")])
+
+    async def test_execution_preview_body_ignores_legacy_user_id_for_current_user(self) -> None:
+        signal = _real_ready_signal("sig_preview_body")
+        self.signal_service.add_signal(signal)
+        preview_service = _FakePreviewVirtualTradingService()
+        app = FastAPI()
+        app.include_router(signals_api.router)
+
+        with (
+            patch("app.api.v1.signals.signal_service", self.signal_service),
+            patch("app.api.v1.signals.virtual_trading_service", preview_service),
+        ):
+            response = TestClient(app).post(
+                f"/signals/{signal.id}/execution-preview",
+                headers={"x-auth-user-id": "usr_current"},
+                json={"mode": "virtual", "user_id": "spoofed_user", "size_usd": 321.0},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(preview_service.signal_ids, [signal.id])
+        self.assertEqual(len(preview_service.requests), 1)
+        self.assertEqual(preview_service.requests[0].user_id, "usr_current")
+        self.assertEqual(preview_service.requests[0].size_usd, 321.0)
+
+    async def test_execution_preview_endpoint_has_no_usr_demo_hardcode(self) -> None:
+        source = inspect.getsource(preview_virtual_execution)
+
+        self.assertNotIn("usr_demo", source)
+
     async def test_real_confirm_signal_returns_dry_run_structured_response(self) -> None:
         signal = _real_ready_signal("sig_real_dry_run")
         self.signal_service.add_signal(signal)
@@ -511,6 +584,15 @@ def _real_execution_result(
         exchange=signal.exchange,
         symbol=signal.symbol,
         message=message,
+    )
+
+
+def _execution_report() -> VirtualExecutionReport:
+    return VirtualExecutionReport(
+        requested_size_usd=100.0,
+        filled_size_usd=100.0,
+        reference_price=100.0,
+        average_price=100.0,
     )
 
 

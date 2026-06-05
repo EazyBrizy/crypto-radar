@@ -1,6 +1,7 @@
 import type { MarketUniversePairsQuery, RadarDisplayMode } from "@/features/server-state/types";
 import type { StrategyTestRunStatus } from "@/features/strategy-testing/types";
 import type { SignalActionMode, SignalStatus, Timeframe, TradeMode, TradeSource, TradeStatus } from "@/types";
+import { DEV_FALLBACK_USER_ID } from "@/auth/current-user";
 import { CandleFilterSchema, SignalHistoryFilterSchema, TradeJournalFilterSchema } from "@/validation/filter-schemas";
 
 export type TradeJournalFilters = {
@@ -76,7 +77,7 @@ const normalizeCandleFilters = (filters: CandleFilters) => {
 const normalizeStrategyTestRunFilters = (filters: StrategyTestRunFilters = {}) => ({
   limit: filters.limit ?? 25,
   status: filters.status ?? "all",
-  userId: filters.userId ?? "demo_user"
+  userId: filters.userId ?? DEV_FALLBACK_USER_ID
 });
 
 const normalizeStrategyTestReportFilters = (filters: StrategyTestReportFilters = {}) => ({

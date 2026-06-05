@@ -16,6 +16,7 @@ import type {
 import type { RadarConfig, RadarStatus, RiskStateResponse } from "@/types";
 import { billingApi } from "./billing.api";
 import { openApiClient, request, requestJson } from "./client";
+import { currentUserId, currentUserQuery } from "./user-identity";
 import {
   normalizeAlertRule,
   normalizeConfig,
@@ -80,23 +81,26 @@ export const settingsApi = {
     };
   },
   async strategyConfigs(): Promise<StrategyConfig[]> {
-    const response = await fetchJson<unknown[]>("/api/v1/strategies/configs?user_id=demo_user");
+    const params = new URLSearchParams(await currentUserQuery());
+    const response = await fetchJson<unknown[]>(`/api/v1/strategies/configs?${params.toString()}`);
     return response.map(normalizeStrategyConfig);
   },
   async updateStrategyConfig(configId: string, patch: StrategyConfigPatch): Promise<StrategyConfig> {
+    const userId = await currentUserId();
     return normalizeStrategyConfig(
       await fetchJson(`/api/v1/strategies/configs/${encodeURIComponent(configId)}`, {
         method: "PATCH",
-        body: JSON.stringify({ user_id: "demo_user", ...patch })
+        body: JSON.stringify({ ...patch, user_id: userId })
       })
     );
   },
   async addWatchlistPair(pairId: string): Promise<Watchlist> {
+    const userId = await currentUserId();
     return normalizeWatchlistResponse(
       await request(() =>
         openApiClient.POST("/api/v1/watchlists/default/pairs", {
           body: {
-            user_id: "demo_user",
+            user_id: userId,
             pair_id: pairId
           }
         })
@@ -104,31 +108,34 @@ export const settingsApi = {
     );
   },
   async removeWatchlistPair(pairId: string): Promise<Watchlist> {
+    const query = await currentUserQuery();
     return normalizeWatchlistResponse(
       await request(() =>
         openApiClient.DELETE("/api/v1/watchlists/default/pairs/{pair_id}", {
           params: {
             path: { pair_id: pairId },
-            query: { user_id: "demo_user" }
+            query
           }
         })
       )
     );
   },
   async alertRules(): Promise<AlertRule[]> {
+    const query = await currentUserQuery();
     const response = await request(() =>
       openApiClient.GET("/api/v1/alerts", {
-        params: { query: { user_id: "demo_user" } }
+        params: { query }
       })
     );
     return response.map(normalizeAlertRule);
   },
   async createAlertRule(draft: AlertRuleDraft): Promise<AlertRule> {
+    const userId = await currentUserId();
     return normalizeAlertRule(
       await request(() =>
         openApiClient.POST("/api/v1/alerts", {
           body: {
-            user_id: "demo_user",
+            user_id: userId,
             pair_id: draft.pair_id ?? null,
             strategy_version_id: draft.strategy_version_id ?? null,
             condition_type: draft.condition_type,
@@ -175,29 +182,32 @@ export const settingsApi = {
     return normalizeHealth(await request(() => openApiClient.POST("/api/v1/radar/scanner/stop")));
   },
   async userProfile(): Promise<UserProfile> {
+    const query = await currentUserQuery();
     return normalizeUserProfile(
       await request(() =>
         openApiClient.GET("/api/v1/users/me", {
-          params: { query: { user_id: "demo_user" } }
+          params: { query }
         })
       )
     );
   },
   async updateUserSettings(patch: UserSettingsPatch): Promise<UserProfile> {
+    const query = await currentUserQuery();
     return normalizeUserProfile(
       await request(() =>
         openApiClient.PATCH("/api/v1/users/me/settings", {
-          params: { query: { user_id: "demo_user" } },
+          params: { query },
           body: patch
         })
       )
     );
   },
   async riskState(): Promise<RiskStateResponse> {
+    const query = await currentUserQuery();
     const state = normalizeRiskState(
       await request(() =>
         openApiClient.GET("/api/v1/risk/state", {
-          params: { query: { user_id: "demo_user" } }
+          params: { query }
         })
       )
     );

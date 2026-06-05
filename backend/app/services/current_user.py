@@ -100,3 +100,7 @@ def _clean_user_id(value: object) -> str | None:
 
 
 current_user_identity_service = CurrentUserIdentityService()
+
+
+def resolve_current_user(request: Request) -> CurrentUserIdentity:
+    return current_user_identity_service.resolve_from_request(request)

@@ -1,28 +1,29 @@
 import type { NotificationDraft, PersistedNotification } from "@/features/server-state/types";
 import { openApiClient, request } from "./client";
 import { normalizeNotification } from "./mappers";
+import { currentUserId, currentUserQuery } from "./user-identity";
 
 export const notificationsApi = {
   async list(): Promise<PersistedNotification[]> {
+    const query = {
+      ...(await currentUserQuery()),
+      limit: 50
+    };
     const response = await request(() =>
       openApiClient.GET("/api/v1/notifications", {
-        params: {
-          query: {
-            user_id: "demo_user",
-            limit: 50
-          }
-        }
+        params: { query }
       })
     );
     return response.map(normalizeNotification);
   },
 
   async create(draft: NotificationDraft): Promise<PersistedNotification> {
+    const userId = await currentUserId();
     return normalizeNotification(
       await request(() =>
         openApiClient.POST("/api/v1/notifications", {
           body: {
-            user_id: "demo_user",
+            user_id: userId,
             type: draft.type,
             title: draft.title,
             body: draft.body ?? null,
@@ -35,11 +36,12 @@ export const notificationsApi = {
   },
 
   async createTest(): Promise<PersistedNotification> {
+    const userId = await currentUserId();
     return normalizeNotification(
       await request(() =>
         openApiClient.POST("/api/v1/notifications/test", {
           body: {
-            user_id: "demo_user",
+            user_id: userId,
             channels: ["websocket", "email", "telegram"]
           }
         })
@@ -61,11 +63,10 @@ export const notificationsApi = {
   },
 
   async markAllRead(): Promise<{ updated: number }> {
+    const query = await currentUserQuery();
     const response = await request(() =>
       openApiClient.POST("/api/v1/notifications/read-all", {
-        params: {
-          query: { user_id: "demo_user" }
-        }
+        params: { query }
       })
     );
     return { updated: Number(response.updated ?? 0) };

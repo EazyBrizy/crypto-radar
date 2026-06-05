@@ -15,7 +15,7 @@ from app.schemas.trade import (
 )
 from app.services.execution_service import real_execution_service
 from app.services.message_broker import realtime_event_broker
-from app.services.current_user import current_user_identity_service
+from app.services.current_user import current_user_identity_service, resolve_current_user
 from app.services.realtime_events import signal_invalidated_event
 from app.services.signal_actions import SignalActionService, SignalActionUnavailable
 from app.services.signal_service import signal_service
@@ -140,6 +140,7 @@ async def confirm_signal(
     signal_id: str,
     request: ManualConfirmRequest | None = None,
 ) -> ManualDecisionResponse:
+    # TODO: Remove this compatibility endpoint after legacy clients migrate.
     # Deprecated compatibility endpoint. Trading action logic lives in
     # SignalActionService; keep this path only while old clients migrate.
     request = request or ManualConfirmRequest()
@@ -173,25 +174,35 @@ async def confirm_signal(
 @router.post("/{signal_id}/execution-preview", response_model=VirtualExecutionReport)
 async def preview_virtual_execution(
     signal_id: str,
+    http_request: Request,
     request: ManualConfirmRequest | None = None,
 ) -> VirtualExecutionReport:
-    if request is None:
-        try:
+    try:
+        current_user = resolve_current_user(http_request)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+
+    try:
+        if request is None:
             return _signal_action_service().preview_virtual_execution(
                 signal_id,
-                user_id="usr_demo",
+                user_id=current_user.user_id,
             )
-        except LookupError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(exc),
-            ) from exc
-    request = request or ManualConfirmRequest()
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    request = request.model_copy(update={"user_id": current_user.user_id})
     signal = signal_service.get_signal(signal_id)
     if signal is None:
         raise HTTPException(

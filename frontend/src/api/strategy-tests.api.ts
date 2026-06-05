@@ -1,4 +1,5 @@
 import { requestJson } from "./client";
+import { currentUserId } from "./user-identity";
 import type {
   StrategyTestReport,
   StrategyTestRunDetailResponse,
@@ -7,8 +8,6 @@ import type {
   StrategyTestRunStatus,
   StrategyTestTrade
 } from "@/features/strategy-testing/types";
-
-const DEFAULT_USER_ID = "demo_user";
 
 export interface StrategyTestRunListParams {
   userId?: string;
@@ -23,9 +22,10 @@ export interface StrategyTestReportListParams {
 
 export const strategyTestsApi = {
   async run(request: StrategyTestRunRequest): Promise<StrategyTestRunResponse> {
+    const userId = request.user_id ?? await currentUserId();
     return rawJson<StrategyTestRunResponse>("/api/v1/strategy-tests/runs", {
       body: JSON.stringify({
-        user_id: request.user_id ?? DEFAULT_USER_ID,
+        user_id: userId,
         strategies: request.strategies,
         pairs: request.pairs,
         timeframes: request.timeframes,
@@ -45,7 +45,8 @@ export const strategyTestsApi = {
     });
   },
   async listRuns(params: StrategyTestRunListParams = {}): Promise<StrategyTestRunResponse[]> {
-    return rawJson<StrategyTestRunResponse[]>(strategyTestRunsPath(params));
+    const userId = params.userId ?? await currentUserId();
+    return rawJson<StrategyTestRunResponse[]>(strategyTestRunsPath({ ...params, userId }));
   },
   async getRun(runId: string): Promise<StrategyTestRunResponse> {
     const detail = await rawJson<StrategyTestRunDetailResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}`);
@@ -64,7 +65,7 @@ export const strategyTestsApi = {
 
 function strategyTestRunsPath(params: StrategyTestRunListParams): string {
   const query = new URLSearchParams();
-  query.set("user_id", params.userId ?? DEFAULT_USER_ID);
+  if (params.userId) query.set("user_id", params.userId);
   if (params.limit != null) query.set("limit", String(params.limit));
   if (params.status) query.set("status", params.status);
   return `/api/v1/strategy-tests/runs?${query.toString()}`;

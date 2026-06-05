@@ -166,6 +166,18 @@ Full-stack smoke:
 powershell -ExecutionPolicy Bypass -File .\scripts\smoke.ps1
 ```
 
+Virtual trading mechanics smoke:
+
+```powershell
+make smoke-virtual
+```
+
+Equivalent PowerShell command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_virtual.ps1
+```
+
 ## Live Trading Safety
 
 Live order placement is disabled by default. Keep these defaults unless you are deliberately testing live execution in a controlled environment:

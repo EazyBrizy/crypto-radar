@@ -1,8 +1,10 @@
+import { QueryClient } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
+import { createRealtimeEventRouter } from "@/realtime/event-router";
 import { useSignalStore } from "@/stores/signal-store";
 import { useUiStore } from "@/stores/ui-store";
 import {
@@ -111,6 +113,7 @@ vi.mock("./RadarPage", async () => {
     RadarPage: (props: {
       filter: "all" | "long" | "short";
       onFilterChange: (filter: "all" | "long" | "short") => void;
+      onAcceptPendingEntry: (signal: RadarSignal) => void;
       onSelectLatestSignal: () => void;
       onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
       onSelectSignal: (signal: RadarSignal) => void;
@@ -127,9 +130,13 @@ vi.mock("./RadarPage", async () => {
       React.createElement("div", { "data-testid": "selected-card" }, props.selectedSignalId ?? "none"),
       React.createElement("div", { "data-testid": "missing-signal" }, props.missingSelectedSignalId ?? "none"),
       React.createElement("div", { "data-testid": "signal-ids" }, props.signalIds.join(",")),
+      React.createElement("div", { "data-testid": "pending-statuses" }, props.pendingEntries.map((intent) => `${intent.id}:${intent.status}`).join(",")),
       React.createElement("div", { "data-testid": "active-filter" }, props.filter),
       props.missingSelectedSignalId
         ? React.createElement("button", { onClick: props.onSelectLatestSignal, type: "button" }, "choose latest")
+        : null,
+      props.signals[0]
+        ? React.createElement("button", { onClick: () => props.onAcceptPendingEntry(props.signals[0]), type: "button" }, `arm virtual pending ${props.signals[0].id}`)
         : null,
       React.createElement("button", { onClick: () => props.onFilterChange("short"), type: "button" }, "filter short"),
       React.createElement("button", { onClick: () => props.onFilterChange("all"), type: "button" }, "filter all"),
@@ -291,6 +298,71 @@ function routeSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {
 }
 
 describe("RadarRoute selection", () => {
+  it("renders realtime signal.created after an empty REST radar snapshot and shows pending after arming", async () => {
+    radarRouteMockState.radarResponse = { signals: [] };
+    const queryClient = new QueryClient();
+    const router = createRealtimeEventRouter({ queryClient, onRealtimeEvent: () => undefined });
+    const realtimeSignal = routeSignal({
+      id: "sig_realtime",
+      symbol: "BTCUSDT",
+      updated_at: "2026-06-05T10:00:05.000Z",
+      expires_at: "2099-06-05T11:00:05.000Z"
+    });
+    radarRouteMockState.mutateAsync.mockImplementation(async (payload) => {
+      expect(payload).toEqual({
+        signalId: "sig_realtime",
+        kind: "arm_pending_entry",
+        mode: "virtual"
+      });
+      radarRouteMockState.pendingEntries = [pendingIntent({
+        id: "intent_realtime",
+        signal_id: "sig_realtime",
+        symbol: realtimeSignal.symbol,
+        side: realtimeSignal.direction,
+        status: "pending"
+      })];
+      return null;
+    });
+
+    const { rerender } = render(createElement(RadarRoute));
+
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("");
+
+    await act(async () => {
+      router.route({
+        id: "evt_realtime_created",
+        type: "signal.created",
+        version: 1,
+        timestamp: "2026-06-05T10:00:05.000Z",
+        payload: {
+          signal: realtimeSignal,
+          signalId: realtimeSignal.id,
+          pair: realtimeSignal.symbol,
+          exchange: realtimeSignal.exchange,
+          side: "LONG",
+          strategy: realtimeSignal.strategy,
+          confidence: realtimeSignal.score,
+          risk: "MEDIUM",
+          entryZone: { from: realtimeSignal.entry_min, to: realtimeSignal.entry_max },
+          stopLoss: realtimeSignal.stop_loss,
+          takeProfit: [realtimeSignal.take_profit_1, realtimeSignal.take_profit_2].filter((price): price is number => typeof price === "number"),
+          timeframe: realtimeSignal.timeframe
+        }
+      });
+    });
+
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_realtime");
+
+    fireEvent.click(screen.getByRole("button", { name: "arm virtual pending sig_realtime" }));
+
+    await waitFor(() => expect(radarRouteMockState.mutateAsync).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      rerender(createElement(RadarRoute));
+    });
+
+    expect(screen.getByTestId("pending-statuses")).toHaveTextContent("intent_realtime:pending");
+  });
+
   it("does not reapply an empty REST snapshot over realtime signals on clock ticks", async () => {
     vi.useFakeTimers({ now: new Date("2026-06-05T10:00:00.000Z") });
     radarRouteMockState.radarResponse = { signals: [] };

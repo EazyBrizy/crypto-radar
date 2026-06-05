@@ -375,6 +375,7 @@ describe("createRealtimeEventRouter signal feed updates", () => {
     queryClient.setQueryData(historyKey, []);
     queryClient.setQueryData(activeQueueKey, [intent]);
     queryClient.setQueryData(historyQueueKey, []);
+    queryClient.setQueryData(queryKeys.trades, { trades: [], account: null });
     queryClient.setQueryData(queryKeys.signals, [baseSignal]);
     useSignalStore.getState().addSignal(baseSignal);
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
@@ -424,6 +425,53 @@ describe("createRealtimeEventRouter signal feed updates", () => {
     expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: serverStateKeys.signals.pendingEntry("sig_1", "demo_user")
     });
+
+    router.route({
+      id: "evt_trade_activated_from_pending",
+      type: "trade.activated",
+      version: 1,
+      timestamp: "2026-05-25T10:12:48.231Z",
+      payload: tradePayload({
+        ...baseTrade,
+        id: "trade_from_pending",
+        pending_entry_intent_id: "intent_1",
+        status: "open",
+        updated_at: "2026-05-25T10:12:48.231Z"
+      })
+    });
+
+    expect(queryClient.getQueryData<TradeJournalResponse>(queryKeys.trades)?.trades[0]).toMatchObject({
+      id: "trade_from_pending",
+      pending_entry_intent_id: "intent_1",
+      status: "open"
+    });
+
+    router.route({
+      id: "evt_trade_closed_from_pending",
+      type: "trade.closed",
+      version: 1,
+      timestamp: "2026-05-25T10:12:49.231Z",
+      payload: tradePayload({
+        ...baseTrade,
+        id: "trade_from_pending",
+        pending_entry_intent_id: "intent_1",
+        status: "closed",
+        close_reason: "take_profit",
+        exit_price: 110,
+        pnl: 10,
+        realized_pnl: 10,
+        updated_at: "2026-05-25T10:12:49.231Z",
+        closed_at: "2026-05-25T10:12:49.231Z"
+      })
+    });
+
+    expect(queryClient.getQueryData<TradeJournalResponse>(queryKeys.trades)?.trades[0]).toMatchObject({
+      id: "trade_from_pending",
+      pending_entry_intent_id: "intent_1",
+      status: "closed",
+      close_reason: "take_profit",
+      realized_pnl: 10
+    });
   });
 });
 
@@ -469,5 +517,27 @@ function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntr
     filled_trade_id: null,
     failure_reason: null,
     ...overrides
+  };
+}
+
+function tradePayload(trade: TradeJournalEntry) {
+  return {
+    trade,
+    tradeId: trade.id,
+    signalId: trade.signal_id,
+    pair: trade.symbol,
+    exchange: trade.exchange,
+    side: trade.side.toUpperCase(),
+    status: trade.status,
+    entryPrice: trade.entry_price,
+    currentPrice: trade.current_price,
+    exitPrice: trade.exit_price,
+    stopLoss: trade.stop_loss,
+    takeProfit: trade.take_profit,
+    riskAmount: trade.risk_amount,
+    riskReward: trade.risk_reward,
+    pnl: trade.pnl,
+    pnlPercent: trade.pnl_percent,
+    closeReason: trade.close_reason
   };
 }

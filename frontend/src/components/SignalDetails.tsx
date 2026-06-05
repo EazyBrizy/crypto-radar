@@ -13,7 +13,7 @@ import {
   riskGateTone
 } from "@/domain/signal-status";
 import type { AccountRiskSnapshot, ExchangeConnection } from "@/features/server-state/types";
-import type { DecisionReason, ExecutionGateStatus, ImpactRisk, PendingEntryIntent, RadarSignal, RiskStateResponse, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
+import type { DecisionReason, ExecutionGateStatus, ImpactRisk, PendingEntryIntent, RadarSignal, RiskStateResponse, SignalActionBlocker, SignalActionState, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
 import { buildSignalDetailsViewModel, type SignalDetailsViewModel, type UiBlocker } from "./signal-details-view-model";
 import {
   entryZone,
@@ -46,6 +46,9 @@ interface SignalDetailsProps {
   executionPreview: VirtualExecutionReport | null;
   executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
+  actionState?: SignalActionState | null;
+  actionStateLoading?: boolean;
+  realActionState?: SignalActionState | null;
   tradingActionsDisabled?: boolean;
   realTradeContext?: RealTradeContext;
   realTradeBusy?: boolean;
@@ -74,6 +77,9 @@ export function SignalDetails({
   executionPreview,
   executionPreviewError = null,
   executionPreviewLoading = false,
+  actionState,
+  actionStateLoading = false,
+  realActionState,
   tradingActionsDisabled = false,
   realTradeContext,
   realTradeBusy = false
@@ -106,20 +112,33 @@ export function SignalDetails({
   const terminalLegacyAutoEntry = viewModel.terminalLegacyAutoEntry;
   const activePendingStatus = activePendingEntry?.status ?? activeLegacyAutoEntry?.status ?? null;
   const hasActivePendingStatus = activePendingStatus != null;
-  const entryActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || strategyRiskBlocked || !statusAllowsTrade || riskFailed;
-  const acceptPendingDisabled = busy
-    || tradingActionsDisabled
-    || pendingEntryLoading
-    || hasActivePendingStatus
-    || !viewModel.riskSummary.isMarketOpportunity
-    || !isWaitingEntry(signal.status)
-    || (formingCandle && !openCandleAllowed)
-    || statusAllowsTrade;
-  const cancelPendingDisabled = busy || tradingActionsDisabled || !activePendingEntry;
-  const realActionDisabled = busy || tradingActionsDisabled || hasActivePendingStatus || viewModel.canEnterNow !== true || !onConfirmRealTrade;
+  const hasBackendActionState = actionState !== undefined;
+  const backendCanEnterNow = hasBackendActionState ? Boolean(actionState?.can_enter_now) : viewModel.canEnterNow;
+  const backendDisabledReason = actionStateDisabledReason(actionState);
+  const backendTopBlockers = actionState?.blockers.map(actionBlockerToUiBlocker) ?? null;
+  const entryActionDisabled = hasBackendActionState
+    ? busy || tradingActionsDisabled || actionStateLoading || !actionState?.can_enter_now
+    : busy || tradingActionsDisabled || hasActivePendingStatus || strategyRiskBlocked || !statusAllowsTrade || riskFailed;
+  const acceptPendingDisabled = hasBackendActionState
+    ? busy || tradingActionsDisabled || actionStateLoading || pendingEntryLoading || !actionState?.can_arm_pending
+    : busy
+      || tradingActionsDisabled
+      || pendingEntryLoading
+      || hasActivePendingStatus
+      || !viewModel.riskSummary.isMarketOpportunity
+      || !isWaitingEntry(signal.status)
+      || (formingCandle && !openCandleAllowed)
+      || statusAllowsTrade;
+  const cancelPendingDisabled = hasBackendActionState
+    ? busy || tradingActionsDisabled || actionStateLoading || !actionState?.can_cancel
+    : busy || tradingActionsDisabled || !activePendingEntry;
+  const realActionAvailable = realActionState === undefined
+    ? viewModel.canEnterNow === true
+    : Boolean(realActionState?.can_enter_now || realActionState?.can_arm_pending);
+  const realActionDisabled = busy || tradingActionsDisabled || !realActionAvailable || !onConfirmRealTrade;
   const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
   const tradePlan = viewModel.tradePlanSummary;
-  const topBlockers = viewModel.topBlockers.slice(0, 3);
+  const topBlockers = (backendTopBlockers ?? viewModel.topBlockers).slice(0, 3);
   const reasons = viewModel.topReasons.slice(0, 6);
 
   return (
@@ -140,12 +159,19 @@ export function SignalDetails({
         </div>
       </div>
 
-      <DecisionCard viewModel={viewModel} topBlockers={topBlockers} />
+      <DecisionCard
+        canEnterNow={backendCanEnterNow}
+        primaryActionLabel={actionState?.display_labels.primary_action ?? viewModel.primaryActionLabel}
+        recommendedActionText={backendDisabledReason ?? viewModel.recommendedActionText}
+        viewModel={viewModel}
+        topBlockers={topBlockers}
+      />
 
       <ActivePendingEntryCompact
         pendingEntry={activePendingEntry}
         onReconfirmPendingEntry={onReconfirmPendingEntry}
         busy={busy || tradingActionsDisabled}
+        canReconfirm={hasBackendActionState ? Boolean(actionState?.can_reconfirm) : undefined}
       />
 
       <TradePlanCompact signal={signal} tradePlan={tradePlan} />
@@ -176,7 +202,8 @@ export function SignalDetails({
         setRealConfirmationOpen={setRealConfirmationOpen}
         statusAllowsTrade={statusAllowsTrade}
         tradingActionsDisabled={tradingActionsDisabled}
-        viewModel={viewModel}
+        backendDisabledReason={backendDisabledReason}
+        canEnterNow={backendCanEnterNow}
       />
 
       {chartOpen ? <LazySignalDetailsChart signal={signal} /> : null}
@@ -214,9 +241,15 @@ export function SignalDetails({
 }
 
 function DecisionCard({
+  canEnterNow,
+  primaryActionLabel,
+  recommendedActionText,
   viewModel,
   topBlockers
 }: {
+  canEnterNow: boolean | null;
+  primaryActionLabel: string;
+  recommendedActionText: string;
   viewModel: SignalDetailsViewModel;
   topBlockers: UiBlocker[];
 }) {
@@ -228,10 +261,10 @@ function DecisionCard({
         <Badge tone={primaryStatusTone(viewModel.primaryStatus)}>{primaryStatusLabel(viewModel.primaryStatus)}</Badge>
       </div>
       <div className="compact-metric-grid decision-card-grid">
-        <MetricLine label="Recommended action" value={viewModel.primaryActionLabel} />
-        <MetricLine label="Can enter now" value={canEnterNowLabel(viewModel.canEnterNow)} />
+        <MetricLine label="Recommended action" value={primaryActionLabel} />
+        <MetricLine label="Can enter now" value={canEnterNowLabel(canEnterNow)} />
       </div>
-      <p>{viewModel.recommendedActionText}</p>
+      <p>{recommendedActionText}</p>
       <div className="top-blocker-list">
         <strong>Top blockers</strong>
         {topBlockers.length ? (
@@ -251,11 +284,13 @@ function DecisionCard({
 function ActivePendingEntryCompact({
   pendingEntry,
   onReconfirmPendingEntry,
-  busy
+  busy,
+  canReconfirm
 }: {
   pendingEntry: PendingEntryIntent | null;
   onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
   busy: boolean;
+  canReconfirm?: boolean;
 }) {
   if (!pendingEntry) return null;
   const status = pendingEntry.status;
@@ -278,7 +313,7 @@ function ActivePendingEntryCompact({
       ) : null}
       {status === "requires_reconfirmation" && onReconfirmPendingEntry ? (
         <div className="detail-actions compact-card-actions">
-          <button className="secondary-action" disabled={busy} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
+          <button className="secondary-action" disabled={busy || canReconfirm === false} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
             <FileCheck2 size={17} /> Reconfirm plan
           </button>
         </div>
@@ -392,7 +427,8 @@ function ActionsBlock({
   setRealConfirmationOpen,
   statusAllowsTrade,
   tradingActionsDisabled,
-  viewModel
+  backendDisabledReason,
+  canEnterNow
 }: {
   acceptPendingDisabled: boolean;
   activePendingEntry: PendingEntryIntent | null;
@@ -409,15 +445,16 @@ function ActionsBlock({
   setRealConfirmationOpen: (open: boolean) => void;
   statusAllowsTrade: boolean;
   tradingActionsDisabled: boolean;
-  viewModel: SignalDetailsViewModel;
+  backendDisabledReason: string | null;
+  canEnterNow: boolean | null;
 }) {
   return (
     <div className="actions-block">
       <div className="section-title">
         <FileCheck2 size={18} />
         <h3>Actions</h3>
-        <Badge tone={viewModel.canEnterNow === true ? "green" : viewModel.canEnterNow === false ? "red" : "yellow"}>
-          {canEnterNowLabel(viewModel.canEnterNow)}
+        <Badge tone={canEnterNow === true ? "green" : canEnterNow === false ? "red" : "yellow"}>
+          {canEnterNowLabel(canEnterNow)}
         </Badge>
       </div>
       <div className="detail-actions compact-actions">
@@ -428,7 +465,7 @@ function ActionsBlock({
           <ShieldAlert size={17} /> Real wait entry
         </button>
         <button className="primary-action" onClick={onPaperTrade} disabled={entryActionDisabled} type="button">
-          <FileCheck2 size={17} /> {statusAllowsTrade ? "Virtual entry now" : "Virtual entry locked"}
+          <FileCheck2 size={17} /> {canEnterNow === true || (canEnterNow == null && statusAllowsTrade) ? "Virtual entry now" : "Virtual entry locked"}
         </button>
         {activePendingEntry ? (
           <button className="secondary-action" onClick={onCancelPendingEntry} disabled={cancelPendingDisabled} type="button">
@@ -447,6 +484,8 @@ function ActionsBlock({
       </div>
       {tradingActionsDisabled ? (
         <p className="compact-action-note">Trading actions disabled until realtime data is current.</p>
+      ) : backendDisabledReason ? (
+        <p className="compact-action-note">{backendDisabledReason}</p>
       ) : null}
     </div>
   );
@@ -1475,6 +1514,26 @@ function RiskBlockersDetailBlock({
 
 function blockerKey(blocker: UiBlocker): string {
   return `${blocker.severity}:${blocker.category}:${blocker.code}:${blocker.userMessage}`;
+}
+
+function actionStateDisabledReason(state: SignalActionState | null | undefined): string | null {
+  if (!state) return null;
+  const blocker = state.blockers[0] ?? null;
+  return state.display_labels.disabled_reason
+    ?? blocker?.display_label
+    ?? blocker?.message
+    ?? state.disabled_reason_code
+    ?? null;
+}
+
+function actionBlockerToUiBlocker(blocker: SignalActionBlocker): UiBlocker {
+  return {
+    code: blocker.code,
+    severity: blocker.severity === "warning" || blocker.severity === "info" ? blocker.severity : "blocker",
+    category: "execution",
+    userMessage: blocker.display_label ?? blocker.message ?? blocker.code,
+    debugMessages: [blocker.code]
+  };
 }
 
 function StrategyLayersBlock({ signal, execution }: { signal: RadarSignal; execution: VirtualExecutionReport | null }) {

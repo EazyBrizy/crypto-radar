@@ -103,7 +103,11 @@ async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promi
   }
 
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    return await fetch(input, {
+      ...init,
+      credentials: init.credentials ?? "include",
+      signal: controller.signal
+    });
   } finally {
     globalThis.clearTimeout(timeout);
   }

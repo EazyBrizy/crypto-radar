@@ -14,6 +14,13 @@ export type SignalStatus =
   | "closed"
   | "entry_touched";
 export type TradeMode = "virtual" | "real";
+export type SignalActionMode = TradeMode;
+export type SignalActionKind =
+  | "enter_now"
+  | "arm_pending_entry"
+  | "cancel_pending_entry"
+  | "reconfirm_pending_entry";
+export type SignalActionSeverity = "blocker" | "warning" | "info";
 export type PendingEntryIntentStatus =
   | "pending"
   | "triggered"
@@ -314,6 +321,46 @@ export interface PendingEntryIntent {
   filled_at: string | null;
   filled_trade_id: string | null;
   failure_reason: string | null;
+}
+
+export interface SignalActionBlocker {
+  code: string;
+  severity: SignalActionSeverity;
+  message: string | null;
+  display_label: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface SignalActionRequest {
+  signalId: string;
+  kind: SignalActionKind;
+  mode: SignalActionMode;
+  connectionId?: string | null;
+}
+
+export interface SignalActionState {
+  can_enter_now: boolean;
+  can_arm_pending: boolean;
+  can_reconfirm: boolean;
+  can_cancel: boolean;
+  mode: SignalActionMode;
+  environment: string;
+  primary_action: SignalActionKind | null;
+  disabled_reason_code: string | null;
+  blockers: SignalActionBlocker[];
+  warnings: SignalActionBlocker[];
+  accepted_trade_plan_snapshot: Record<string, unknown> | null;
+  display_labels: Record<string, string>;
+}
+
+export interface SignalActionResponse {
+  state: SignalActionState;
+  signal: RadarSignal;
+  virtual_trade: unknown | null;
+  real_execution: unknown | null;
+  real_execution_result: unknown | null;
+  pending_entry_intent: PendingEntryIntent | null;
+  message: string;
 }
 
 export interface RadarSignal {

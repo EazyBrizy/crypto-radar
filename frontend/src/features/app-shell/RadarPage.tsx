@@ -5,7 +5,7 @@ import { SignalDetails, type RealTradeContext } from "@/components/SignalDetails
 import { SignalFeed } from "@/components/SignalFeed";
 import { canShowEnterButton, RADAR_STATUS_FILTERS } from "@/domain/signal-status";
 import type { RadarDisplayMode } from "@/features/server-state/types";
-import type { HealthStatus, PendingEntryIntent, RadarSignal, RadarStatus, SignalStatus, VirtualExecutionReport } from "@/types";
+import type { HealthStatus, PendingEntryIntent, RadarSignal, RadarStatus, SignalActionState, SignalStatus, VirtualExecutionReport } from "@/types";
 import { isRiskRewardBlocked } from "@/utils";
 
 interface RadarPageProps {
@@ -38,6 +38,9 @@ interface RadarPageProps {
   executionPreview?: VirtualExecutionReport | null;
   executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
+  actionState?: SignalActionState | null;
+  actionStateLoading?: boolean;
+  realActionState?: SignalActionState | null;
   pendingEntryLoading?: boolean;
   realTradeContext?: RealTradeContext;
   realTradeBusy?: boolean;
@@ -194,6 +197,9 @@ export function RadarPage(props: RadarPageProps) {
         executionPreview={props.executionPreview ?? null}
         executionPreviewError={props.executionPreviewError ?? null}
         executionPreviewLoading={props.executionPreviewLoading ?? false}
+        actionState={props.actionState}
+        actionStateLoading={props.actionStateLoading ?? false}
+        realActionState={props.realActionState}
         realTradeContext={props.realTradeContext}
         realTradeBusy={props.realTradeBusy ?? false}
         tradingActionsDisabled={props.tradingActionsDisabled}

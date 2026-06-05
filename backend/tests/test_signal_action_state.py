@@ -1,0 +1,210 @@
+import unittest
+from datetime import datetime, timezone
+from decimal import Decimal
+from types import SimpleNamespace
+from uuid import UUID
+
+from app.schemas.pending_entry import PendingEntryIntentRead
+from app.schemas.risk import ResolvedExecutionProfile
+from app.schemas.signal import RadarSignal
+from app.schemas.trade import VirtualAccount
+from app.schemas.user import RiskManagementSettings
+from app.services.signal_actions import SignalActionService
+
+USER_ID = "usr_demo"
+SIGNAL_UUID = UUID("ba520631-d035-4f95-a4c0-3b40553dd527")
+INTENT_UUID = UUID("ba520631-d035-4f95-a4c0-3b40553dd530")
+
+
+class SignalActionStateTest(unittest.TestCase):
+    def test_waiting_signal_can_arm_pending(self) -> None:
+        state = _service().state_for_signal(_signal(status="ready"), mode="virtual", user_id=USER_ID)
+
+        self.assertTrue(state.can_arm_pending)
+        self.assertFalse(state.can_enter_now)
+        self.assertEqual(state.primary_action, "arm_pending_entry")
+
+    def test_actionable_signal_can_enter_now(self) -> None:
+        state = _service().state_for_signal(_signal(status="actionable"), mode="virtual", user_id=USER_ID)
+
+        self.assertTrue(state.can_enter_now)
+        self.assertFalse(state.can_arm_pending)
+        self.assertEqual(state.primary_action, "enter_now")
+
+    def test_active_pending_can_cancel_and_blocks_enter(self) -> None:
+        state = _service(intent=_pending_intent(status="pending")).state_for_signal(
+            _signal(status="actionable"),
+            mode="virtual",
+            user_id=USER_ID,
+        )
+
+        self.assertTrue(state.can_cancel)
+        self.assertFalse(state.can_enter_now)
+        self.assertEqual(state.disabled_reason_code, "pending_entry_active")
+
+    def test_requires_reconfirmation_can_reconfirm(self) -> None:
+        state = _service(intent=_pending_intent(status="requires_reconfirmation")).state_for_signal(
+            _signal(status="ready"),
+            mode="virtual",
+            user_id=USER_ID,
+        )
+
+        self.assertTrue(state.can_reconfirm)
+        self.assertTrue(state.can_cancel)
+        self.assertFalse(state.can_enter_now)
+        self.assertEqual(state.primary_action, "reconfirm_pending_entry")
+
+    def test_terminal_signal_has_no_trade_actions(self) -> None:
+        state = _service().state_for_signal(_signal(status="expired"), mode="virtual", user_id=USER_ID)
+
+        self.assertFalse(state.can_enter_now)
+        self.assertFalse(state.can_arm_pending)
+        self.assertFalse(state.can_reconfirm)
+        self.assertFalse(state.can_cancel)
+        self.assertEqual(state.disabled_reason_code, "signal_terminal")
+
+    def test_backend_owned_context_builds_confirm_request(self) -> None:
+        request = _service().build_backend_confirm_request(
+            _signal(status="actionable"),
+            mode="virtual",
+            connection_id=None,
+            user_id=USER_ID,
+        )
+
+        self.assertEqual(request.user_id, USER_ID)
+        self.assertEqual(request.account_balance, 10_000)
+        self.assertEqual(request.leverage, 3)
+        self.assertEqual(request.fee_rate, 0.001)
+        self.assertEqual(request.slippage_bps, 0.0)
+        self.assertEqual(request.max_open_positions, 3)
+
+
+def _service(intent: PendingEntryIntentRead | None = None) -> SignalActionService:
+    return SignalActionService(
+        signals=_FakeSignalService(),
+        pending_entries=_FakePendingEntryService(intent),
+        virtual_trading=_FakeVirtualTradingService(),
+        risk_settings_provider=lambda _user_id: RiskManagementSettings(),
+        market_data_service=_FakeMarketDataService(),
+        fee_rate_service=_FakeFeeRateService(),
+        exchange_connections=_FakeExchangeConnectionService(),
+        account_snapshots=_FakeAccountSnapshotService(),
+        realtime_broker=_FakeRealtimeBroker(),
+    )
+
+
+class _FakeSignalService:
+    def get_signal(self, _signal_id: str):
+        return None
+
+
+class _FakePendingEntryService:
+    def __init__(self, intent: PendingEntryIntentRead | None) -> None:
+        self.intent = intent
+
+    def get_active_for_signal(self, **_kwargs):
+        return self.intent
+
+    def resolve_execution_profile(self, _signal, _request, *, mode):
+        return ResolvedExecutionProfile(
+            execution_mode=mode,
+            instrument_type="futures",
+            risk_mode="percent",
+            risk_percent=Decimal("1.0"),
+            leverage=Decimal("3"),
+            rr_guard_mode="soft",
+            min_rr_ratio=Decimal("2.0"),
+            rr_target="final",
+            radar_display_mode="all_market_opportunities",
+        )
+
+
+class _FakeVirtualTradingService:
+    def get_virtual_account(self, user_id: str = USER_ID):
+        now = datetime.now(timezone.utc)
+        return VirtualAccount(
+            user_id=user_id,
+            starting_balance=10_000,
+            balance=10_000,
+            equity=10_000,
+            updated_at=now,
+        )
+
+
+class _FakeMarketDataService:
+    def build_snapshot(self, **kwargs):
+        return SimpleNamespace(
+            warnings=(),
+            slippage_bps=0.0,
+            liquidation_price=None,
+            entry_price=kwargs["fallback_entry_price"],
+        )
+
+
+class _FakeFeeRateService:
+    def resolve(self, **_kwargs):
+        return SimpleNamespace(warnings=(), fee_rate=0.001)
+
+
+class _FakeExchangeConnectionService:
+    pass
+
+
+class _FakeAccountSnapshotService:
+    pass
+
+
+class _FakeRealtimeBroker:
+    async def publish(self, _event):
+        return None
+
+
+def _signal(*, status: str) -> RadarSignal:
+    now = datetime.now(timezone.utc)
+    return RadarSignal(
+        id=str(SIGNAL_UUID),
+        symbol="BTC/USDT:PERP",
+        exchange="bybit",
+        strategy="trend_pullback_continuation",
+        direction="long",
+        confidence=0.82,
+        status=status,
+        score=82,
+        entry_min=100.0,
+        entry_max=101.0,
+        stop_loss=95.0,
+        take_profit_1=110.0,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _pending_intent(*, status: str) -> PendingEntryIntentRead:
+    now = datetime.now(timezone.utc)
+    return PendingEntryIntentRead(
+        id=INTENT_UUID,
+        user_id=UUID("ba520631-d035-4f95-a4c0-3b40553dd524"),
+        signal_id=SIGNAL_UUID,
+        mode="virtual",
+        status=status,
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="long",
+        entry_min=Decimal("100"),
+        entry_max=Decimal("101"),
+        entry_price_policy="accepted_entry_zone",
+        stop_loss=Decimal("95"),
+        targets_snapshot=[{"label": "TP1", "price": "110"}],
+        accepted_trade_plan_snapshot={"entry": {"min_price": "100", "max_price": "101"}},
+        accepted_trade_plan_hash="sha256:test",
+        accepted_signal_status="ready",
+        execution_profile_snapshot={"rr_guard_mode": "soft"},
+        request_snapshot={"auto_enter_on_confirmation": True},
+        idempotency_key="pending-entry:test",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+if __name__ == "__main__":
+    unittest.main()

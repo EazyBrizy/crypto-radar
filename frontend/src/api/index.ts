@@ -32,6 +32,8 @@ export const api = {
   activeSignals: signalsApi.active,
   openSignals: signalsApi.open,
   historicalSignals: signalsApi.historical,
+  getSignalActionState: signalsApi.getSignalActionState,
+  sendSignalAction: signalsApi.sendSignalAction,
   confirmVirtual: signalsApi.confirmVirtual,
   confirmReal: signalsApi.confirmReal,
   pendingEntry: signalsApi.pendingEntry,

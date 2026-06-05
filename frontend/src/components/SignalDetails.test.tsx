@@ -342,6 +342,43 @@ describe("SignalDetails", () => {
     expect(onPaperTrade).toHaveBeenCalledTimes(1);
   });
 
+  it("displays disabled reason from backend action-state", () => {
+    render(
+      <SignalDetails
+        actionState={{
+          can_enter_now: false,
+          can_arm_pending: false,
+          can_reconfirm: false,
+          can_cancel: false,
+          mode: "virtual",
+          environment: "virtual",
+          primary_action: null,
+          disabled_reason_code: "risk_profile_unavailable",
+          blockers: [
+            {
+              code: "risk_profile_unavailable",
+              severity: "blocker",
+              message: "Risk profile is unavailable.",
+              display_label: "Risk profile unavailable",
+              metadata: {}
+            }
+          ],
+          warnings: [],
+          accepted_trade_plan_snapshot: null,
+          display_labels: { disabled_reason: "Risk profile unavailable" }
+        }}
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={{ ...signal, can_enter: true, no_trade_filter: null }}
+      />
+    );
+
+    expect(screen.getAllByText("Risk profile unavailable").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Virtual entry locked/u })).toBeDisabled();
+  });
+
   it("renders core action buttons with Russian labels in RU mode", async () => {
     const onCancelPendingEntry = vi.fn();
     window.localStorage.setItem(LOCALE_STORAGE_KEY, "ru");

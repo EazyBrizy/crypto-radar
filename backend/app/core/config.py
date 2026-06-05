@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    app_env: str = "development"
+
     binance_api_key: str = ""
     binance_secret: str = ""
 
@@ -30,6 +32,10 @@ class Settings(BaseSettings):
     enable_bybit_live_order_placement: bool = False
     enable_bybit_mainnet_order_placement: bool = False
     require_protective_stop_for_live_entry: bool = True
+    virtual_max_open_positions: int = 3
+    virtual_max_slippage_bps: float = 150.0
+    virtual_allow_partial_fill: bool = True
+    virtual_min_fill_ratio: float = 0.25
 
     exchange_instrument_sync_enabled: bool = True
     exchange_instrument_sync_interval_seconds: int = 21_600

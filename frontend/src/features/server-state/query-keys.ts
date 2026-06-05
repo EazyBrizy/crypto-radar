@@ -1,6 +1,6 @@
 import type { MarketUniversePairsQuery, RadarDisplayMode } from "@/features/server-state/types";
 import type { StrategyTestRunStatus } from "@/features/strategy-testing/types";
-import type { SignalStatus, Timeframe, TradeMode, TradeSource, TradeStatus } from "@/types";
+import type { SignalActionMode, SignalStatus, Timeframe, TradeMode, TradeSource, TradeStatus } from "@/types";
 import { CandleFilterSchema, SignalHistoryFilterSchema, TradeJournalFilterSchema } from "@/validation/filter-schemas";
 
 export type TradeJournalFilters = {
@@ -166,6 +166,8 @@ export const serverStateKeys = {
     open: () => [...serverStateKeys.signals.all(), "open"] as const,
     pendingEntry: (signalId: string, userId = "demo_user") => [...serverStateKeys.signals.all(), "pending-entry", signalId, userId] as const,
     pendingEntryHistory: (signalId: string, userId = "demo_user") => [...serverStateKeys.signals.all(), "pending-entry-history", signalId, userId] as const,
+    actionState: (signalId: string, mode: SignalActionMode, connectionId = "none") =>
+      [...serverStateKeys.signals.all(), "action-state", signalId, mode, connectionId] as const,
     executionPreview: (signalId: string) => [...serverStateKeys.signals.all(), "execution-preview", signalId] as const
   },
   journal: {

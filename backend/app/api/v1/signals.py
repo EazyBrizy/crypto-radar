@@ -1,7 +1,12 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
-from app.domain.signal_status import can_signal_enter_now, is_terminal_signal_status
 from app.schemas.signal import RadarSignal
+from app.schemas.signal_action import (
+    SignalActionMode,
+    SignalActionRequest,
+    SignalActionResponse,
+    SignalActionState,
+)
 from app.schemas.trade import (
     ManualConfirmRequest,
     ManualDecisionResponse,
@@ -10,12 +15,9 @@ from app.schemas.trade import (
 )
 from app.services.execution_service import real_execution_service
 from app.services.message_broker import realtime_event_broker
-from app.services.realtime_events import (
-    signal_invalidated_event,
-    signal_updated_event,
-    trade_activated_event,
-)
-from app.services.signal_risk_reward import StrategyRiskRewardBlocked
+from app.services.current_user import current_user_identity_service
+from app.services.realtime_events import signal_invalidated_event
+from app.services.signal_actions import SignalActionService, SignalActionUnavailable
 from app.services.signal_service import signal_service
 from app.services.virtual_trading import VirtualExecutionRejected, virtual_trading_service
 
@@ -48,83 +50,65 @@ async def get_signal(signal_id: str) -> RadarSignal:
     return signal
 
 
-@router.post("/{signal_id}/confirm", response_model=ManualDecisionResponse)
-async def confirm_signal(
+@router.get("/{signal_id}/action-state", response_model=SignalActionState)
+async def get_signal_action_state(
     signal_id: str,
-    request: ManualConfirmRequest | None = None,
-) -> ManualDecisionResponse:
-    request = request or ManualConfirmRequest()
-    signal = signal_service.get_signal(signal_id)
-    if signal is None:
+    request: Request,
+    mode: SignalActionMode = Query(default="virtual"),
+    connection_id: str | None = Query(default=None),
+) -> SignalActionState:
+    try:
+        current_user = current_user_identity_service.resolve_from_request(request)
+        return _signal_action_service().get_action_state(
+            signal_id,
+            mode=mode,
+            connection_id=connection_id,
+            user_id=current_user.user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+    except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Signal is not found",
-        )
-    if is_terminal_signal_status(signal.status):
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Signal cannot be confirmed in current status",
-        )
-    if request.auto_enter_on_confirmation and not can_signal_enter_now(
-        signal.status,
-        decision=signal.decision,
-        can_enter=signal.can_enter,
-        mode=request.mode,
-    ):
-        try:
-            arm_result = signal_service.arm_auto_entry(signal.id, request.model_dump(mode="json"))
-        except StrategyRiskRewardBlocked as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=exc.reason,
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(exc),
-            ) from exc
-        except LookupError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        if arm_result is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Signal is not found",
-            )
-        await realtime_event_broker.publish(signal_updated_event(arm_result.signal))
-        return ManualDecisionResponse(
-            signal=arm_result.signal,
-            pending_entry_intent=arm_result.pending_entry_intent,
-            message="Auto-entry armed; waiting for accepted entry zone",
-        )
-    if not can_signal_enter_now(
-        signal.status,
-        decision=signal.decision,
-        can_enter=signal.can_enter,
-        mode=request.mode,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Signal is not actionable yet. Arm auto-entry to wait for confirmation.",
-        )
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
-    if request.mode == "real":
-        real_execution = await real_execution_service.place_order(signal, request)
-        return ManualDecisionResponse(
-            signal=signal,
-            real_execution=real_execution,
-            real_execution_result=real_execution,
-            message=real_execution.message,
-        )
 
+@router.post("/{signal_id}/actions", response_model=SignalActionResponse)
+async def send_signal_action(
+    signal_id: str,
+    action: SignalActionRequest,
+    request: Request,
+) -> SignalActionResponse:
     try:
-        updated_signal, virtual_trade = virtual_trading_service.confirm_signal(signal, request)
-    except StrategyRiskRewardBlocked as exc:
+        current_user = current_user_identity_service.resolve_from_request(request)
+        return await _signal_action_service().execute_action(
+            signal_id,
+            action,
+            user_id=current_user.user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except SignalActionUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=exc.reason,
+            detail=str(exc),
         ) from exc
     except VirtualExecutionRejected as exc:
         raise HTTPException(
@@ -140,14 +124,44 @@ async def confirm_signal(
             detail=str(exc),
         ) from exc
 
-    await realtime_event_broker.publish(signal_updated_event(updated_signal))
-    await realtime_event_broker.publish(trade_activated_event(virtual_trade))
 
-    return ManualDecisionResponse(
-        signal=updated_signal,
-        virtual_trade=virtual_trade,
-        message="Virtual trade opened",
-    )
+@router.post(
+    "/{signal_id}/confirm",
+    response_model=ManualDecisionResponse,
+    deprecated=True,
+)
+async def confirm_signal(
+    signal_id: str,
+    request: ManualConfirmRequest | None = None,
+) -> ManualDecisionResponse:
+    # Deprecated compatibility endpoint. Trading action logic lives in
+    # SignalActionService; keep this path only while old clients migrate.
+    request = request or ManualConfirmRequest()
+    try:
+        return await _signal_action_service().confirm_legacy(signal_id, request)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except VirtualExecutionRejected as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": str(exc),
+                "virtual_execution": exc.report.model_dump(mode="json"),
+            },
+        ) from exc
+    except SignalActionUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/{signal_id}/execution-preview", response_model=VirtualExecutionReport)
@@ -155,6 +169,22 @@ async def preview_virtual_execution(
     signal_id: str,
     request: ManualConfirmRequest | None = None,
 ) -> VirtualExecutionReport:
+    if request is None:
+        try:
+            return _signal_action_service().preview_virtual_execution(
+                signal_id,
+                user_id="usr_demo",
+            )
+        except LookupError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
     request = request or ManualConfirmRequest()
     signal = signal_service.get_signal(signal_id)
     if signal is None:
@@ -205,4 +235,16 @@ async def reject_signal(
     return ManualDecisionResponse(
         signal=signal,
         message="Signal rejected",
+    )
+
+
+def _signal_action_service() -> SignalActionService:
+    from app.services.pending_entry import pending_entry_intent_service as current_pending_entry_service
+
+    return SignalActionService(
+        signals=signal_service,
+        pending_entries=current_pending_entry_service,
+        virtual_trading=virtual_trading_service,
+        real_execution=real_execution_service,
+        realtime_broker=realtime_event_broker,
     )

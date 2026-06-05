@@ -61,6 +61,21 @@ vi.mock("@/hooks/use-radar-queries", () => {
     useReconfirmPendingEntryMutation: mutation,
     useRejectSignalMutation: mutation,
     useRiskStateQuery: () => query(null),
+    useSendSignalActionMutation: mutation,
+    useSignalActionStateQuery: () => query({
+      can_enter_now: false,
+      can_arm_pending: true,
+      can_reconfirm: false,
+      can_cancel: false,
+      mode: "virtual",
+      environment: "virtual",
+      primary_action: "arm_pending_entry",
+      disabled_reason_code: null,
+      blockers: [],
+      warnings: [],
+      accepted_trade_plan_snapshot: null,
+      display_labels: { primary_action: "Wait for entry" }
+    }),
     useSignalExecutionPreviewQuery: () => query(null),
     useUserProfileQuery: () => query(null)
   };

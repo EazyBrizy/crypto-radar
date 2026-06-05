@@ -22,7 +22,19 @@ import type {
   SubscriptionStatus,
   UserProfile
 } from "@/features/server-state/types";
-import type { HealthStatus, PendingEntryIntent, RadarResponse, RadarSignal, RadarStatus, RiskStateResponse, TradeJournalResponse } from "@/types";
+import type {
+  HealthStatus,
+  PendingEntryIntent,
+  RadarResponse,
+  RadarSignal,
+  RadarStatus,
+  RiskStateResponse,
+  SignalActionMode,
+  SignalActionRequest,
+  SignalActionResponse,
+  SignalActionState,
+  TradeJournalResponse
+} from "@/types";
 import { isOpenFeedSignal } from "@/utils";
 import {
   queryKeys,
@@ -81,6 +93,21 @@ export function useSignalExecutionPreviewQuery(signalId: string | null, options:
     queryKey: serverStateKeys.signals.executionPreview(signalId ?? "none"),
     queryFn: () => api.executionPreview(signalId as string),
     enabled: options.enabled ?? Boolean(signalId),
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
+export function useSignalActionStateQuery(
+  signalId: string | null,
+  mode: SignalActionMode = "virtual",
+  connectionId?: string | null,
+  options: PlannedQueryOptions = {}
+) {
+  return useQuery<SignalActionState>({
+    queryKey: serverStateKeys.signals.actionState(signalId ?? "none", mode, connectionId ?? "none"),
+    queryFn: () => api.getSignalActionState(signalId as string, mode, connectionId),
+    enabled: options.enabled ?? Boolean(signalId),
+    refetchInterval: options.refetchInterval,
     staleTime: serverStatePolicy.realtimeStaleTimeMs
   });
 }
@@ -635,6 +662,42 @@ export function useConfirmVirtualMutation() {
   });
 }
 
+export function useSendSignalActionMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<SignalActionResponse, Error, SignalActionRequest>({
+    mutationFn: ({ signalId, kind, mode, connectionId }) =>
+      api.sendSignalAction(signalId, { kind, mode, connectionId }),
+    onSuccess: async (response, variables) => {
+      queryClient.setQueryData(
+        serverStateKeys.signals.actionState(
+          variables.signalId,
+          variables.mode,
+          variables.connectionId ?? "none"
+        ),
+        response.state
+      );
+      if (response.pending_entry_intent) {
+        queryClient.setQueryData(
+          serverStateKeys.signals.pendingEntry(
+            response.pending_entry_intent.signal_id,
+            response.pending_entry_intent.user_id
+          ),
+          response.pending_entry_intent
+        );
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.signals.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.journal.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.risk.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.exchangeConnections.all() })
+      ]);
+    }
+  });
+}
+
 export function useConfirmRealMutation() {
   const queryClient = useQueryClient();
 
@@ -658,13 +721,9 @@ export function useArmPendingEntryMutation() {
 
   return useMutation({
     mutationFn: api.armPendingEntry,
-    onSuccess: async (intent, variables) => {
+    onSuccess: async (intent) => {
       queryClient.setQueryData(
         serverStateKeys.signals.pendingEntry(intent.signal_id, intent.user_id),
-        intent
-      );
-      queryClient.setQueryData(
-        serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
         intent
       );
       await Promise.all([
@@ -680,21 +739,13 @@ export function useCancelPendingEntryMutation() {
 
   return useMutation({
     mutationFn: api.cancelPendingEntry,
-    onSuccess: async (intent, variables) => {
+    onSuccess: async (intent) => {
       queryClient.setQueryData<PendingEntryIntent | null>(
         serverStateKeys.signals.pendingEntry(intent.signal_id, intent.user_id),
         (current) => pendingEntryAfterCancel(current, intent)
       );
-      queryClient.setQueryData<PendingEntryIntent | null>(
-        serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
-        (current) => pendingEntryAfterCancel(current, intent)
-      );
       queryClient.setQueryData<PendingEntryIntent[]>(
         serverStateKeys.signals.pendingEntryHistory(intent.signal_id, intent.user_id),
-        (current) => upsertPendingEntryHistory(current, intent)
-      );
-      queryClient.setQueryData<PendingEntryIntent[]>(
-        serverStateKeys.signals.pendingEntryHistory(intent.signal_id, variables.userId ?? "demo_user"),
         (current) => upsertPendingEntryHistory(current, intent)
       );
       await Promise.all([
@@ -710,13 +761,9 @@ export function useReconfirmPendingEntryMutation() {
 
   return useMutation({
     mutationFn: api.reconfirmPendingEntry,
-    onSuccess: async (intent, variables) => {
+    onSuccess: async (intent) => {
       queryClient.setQueryData(
         serverStateKeys.signals.pendingEntry(intent.signal_id, intent.user_id),
-        intent
-      );
-      queryClient.setQueryData(
-        serverStateKeys.signals.pendingEntry(intent.signal_id, variables.userId ?? "demo_user"),
         intent
       );
       await Promise.all([

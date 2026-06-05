@@ -6,21 +6,18 @@ import { useRouter } from "next/navigation";
 import { RadarPage } from "@/features/app-shell/RadarPage";
 import { useAuthSessionQuery } from "@/auth/use-auth";
 import {
-  useConfirmRealMutation,
-  useConfirmVirtualMutation,
-  useArmPendingEntryMutation,
   useExchangeConnectionAccountSnapshotsQuery,
   useExchangeConnectionsQuery,
   useHealthQuery,
   useHistoricalSignalsQuery,
-  useCancelPendingEntryMutation,
   usePendingEntryHistoryQuery,
   usePendingEntryQuery,
   useRadarQuery,
   useRadarStatusQuery,
-  useReconfirmPendingEntryMutation,
   useRejectSignalMutation,
   useRiskStateQuery,
+  useSendSignalActionMutation,
+  useSignalActionStateQuery,
   useSignalExecutionPreviewQuery,
   useUserProfileQuery
 } from "@/hooks/use-radar-queries";
@@ -35,7 +32,7 @@ import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/doma
 import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
-import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
+import type { PendingEntryIntent, RadarSignal, SignalActionState, SignalStatus } from "@/types";
 import type { ExchangeConnection, RadarDisplayMode } from "@/features/server-state/types";
 import { isOpenFeedSignal } from "@/utils";
 
@@ -65,11 +62,7 @@ export function RadarRoute() {
   const exchangeConnectionsQuery = useExchangeConnectionsQuery();
   const userProfileQuery = useUserProfileQuery({ enabled: true });
   const riskStateQuery = useRiskStateQuery();
-  const confirmVirtualMutation = useConfirmVirtualMutation();
-  const confirmRealMutation = useConfirmRealMutation();
-  const armPendingEntryMutation = useArmPendingEntryMutation();
-  const cancelPendingEntryMutation = useCancelPendingEntryMutation();
-  const reconfirmPendingEntryMutation = useReconfirmPendingEntryMutation();
+  const signalActionMutation = useSendSignalActionMutation();
   const rejectSignalMutation = useRejectSignalMutation();
 
   useEffect(() => {
@@ -117,6 +110,12 @@ export function RadarRoute() {
     [selectedRealConnection]
   );
   const accountSnapshotsQuery = useExchangeConnectionAccountSnapshotsQuery(realConnectionIds, userId);
+  const virtualActionStateQuery = useSignalActionStateQuery(selectedSignal?.id ?? null, "virtual", null, {
+    enabled: selectedSignal != null && signalView === "open"
+  });
+  const realActionStateQuery = useSignalActionStateQuery(selectedSignal?.id ?? null, "real", selectedRealConnection?.id ?? null, {
+    enabled: selectedSignal != null && signalView === "open"
+  });
   const executionPreviewQuery = useSignalExecutionPreviewQuery(selectedSignal?.id ?? null, {
     enabled: shouldRequestExecutionPreview(selectedSignal, signalView, tradingActionsDisabled)
   });
@@ -158,11 +157,7 @@ export function RadarRoute() {
   ]);
   const loading = [healthQuery, radarStatusQuery, radarQuery].some((query) => query.isLoading)
     || (signalView === "history" && historicalSignalsQuery.isLoading);
-  const busy = confirmVirtualMutation.isPending
-    || confirmRealMutation.isPending
-    || armPendingEntryMutation.isPending
-    || cancelPendingEntryMutation.isPending
-    || reconfirmPendingEntryMutation.isPending
+  const busy = signalActionMutation.isPending
     || rejectSignalMutation.isPending
     || tradingActionsDisabled;
 
@@ -173,9 +168,11 @@ export function RadarRoute() {
       radarQuery.refetch(),
       historicalSignalsQuery.refetch(),
       riskStateQuery.refetch(),
-      userProfileQuery.refetch()
+      userProfileQuery.refetch(),
+      virtualActionStateQuery.refetch(),
+      realActionStateQuery.refetch()
     ]);
-  }, [healthQuery, historicalSignalsQuery, radarQuery, radarStatusQuery, riskStateQuery, userProfileQuery]);
+  }, [healthQuery, historicalSignalsQuery, radarQuery, radarStatusQuery, realActionStateQuery, riskStateQuery, userProfileQuery, virtualActionStateQuery]);
 
   const handleSelectSignal = useCallback((signal: RadarSignal) => {
     setActionError(null);
@@ -185,17 +182,24 @@ export function RadarRoute() {
   async function handlePaperTrade(signal: RadarSignal) {
     try {
       if (tradingActionsDisabled) return;
-      if (!canSendPaperTrade(signal)) {
-        setActionError("Only open strategy ideas can be armed or sent to virtual trading.");
+      const state = virtualActionStateQuery.data ?? null;
+      const kind = state?.can_enter_now
+        ? "enter_now"
+        : state?.can_arm_pending
+          ? "arm_pending_entry"
+          : null;
+      if (!kind) {
+        setActionError(actionStateErrorMessage(state, "Only open strategy ideas can be armed or sent to virtual trading."));
         return;
       }
       setActionError(null);
-      await confirmVirtualMutation.mutateAsync({
+      await signalActionMutation.mutateAsync({
         signalId: signal.id,
-        waitForConfirmation: !isActionableSignal(signal)
+        kind,
+        mode: "virtual"
       });
       await refreshData();
-      if (isActionableSignal(signal)) {
+      if (kind === "enter_now") {
         router.push("/dashboard/trades/active");
       }
     } catch (exc) {
@@ -208,14 +212,24 @@ export function RadarRoute() {
       if (tradingActionsDisabled) return;
       setActionError(null);
       const connection = selectRealTradeConnection(exchangeConnectionsQuery.data ?? [], signal);
-      await confirmRealMutation.mutateAsync({
+      const state = realActionStateQuery.data ?? null;
+      const kind = state?.can_enter_now
+        ? "enter_now"
+        : state?.can_arm_pending
+          ? "arm_pending_entry"
+          : null;
+      if (!kind) {
+        setActionError(actionStateErrorMessage(state, "Real trade was rejected by execution safeguards."));
+        return;
+      }
+      await signalActionMutation.mutateAsync({
         signalId: signal.id,
-        userId,
+        kind,
+        mode: "real",
         connectionId: connection?.id ?? null,
-        waitForConfirmation: !isActionableSignal(signal)
       });
       await refreshData();
-      if (isActionableSignal(signal)) {
+      if (kind === "enter_now") {
         router.push("/dashboard/trades/active");
       }
     } catch (exc) {
@@ -227,13 +241,18 @@ export function RadarRoute() {
     if (pendingArmInFlightRef.current) return;
     try {
       if (tradingActionsDisabled) return;
-      if (!canArmAutoEntry(signal)) {
-        setActionError("This signal is not available for pending entry.");
+      const state = virtualActionStateQuery.data ?? null;
+      if (!state?.can_arm_pending) {
+        setActionError(actionStateErrorMessage(state, "This signal is not available for pending entry."));
         return;
       }
       pendingArmInFlightRef.current = true;
       setActionError(null);
-      await armPendingEntryMutation.mutateAsync({ signalId: signal.id, userId });
+      await signalActionMutation.mutateAsync({
+        signalId: signal.id,
+        kind: "arm_pending_entry",
+        mode: "virtual"
+      });
       await refreshData();
     } catch (exc) {
       setActionError(errorMessage(exc, "Pending entry was rejected."));
@@ -245,8 +264,17 @@ export function RadarRoute() {
   async function handleCancelPendingEntry(intent: PendingEntryIntent) {
     try {
       if (tradingActionsDisabled) return;
+      const state = virtualActionStateQuery.data ?? null;
+      if (!state?.can_cancel) {
+        setActionError(actionStateErrorMessage(state, "Pending entry cancel failed."));
+        return;
+      }
       setActionError(null);
-      await cancelPendingEntryMutation.mutateAsync({ intentId: intent.id, userId });
+      await signalActionMutation.mutateAsync({
+        signalId: intent.signal_id,
+        kind: "cancel_pending_entry",
+        mode: intent.mode
+      });
       await refreshData();
     } catch (exc) {
       setActionError(errorMessage(exc, "Pending entry cancel failed."));
@@ -256,8 +284,17 @@ export function RadarRoute() {
   async function handleReconfirmPendingEntry(intent: PendingEntryIntent) {
     try {
       if (tradingActionsDisabled) return;
+      const state = virtualActionStateQuery.data ?? null;
+      if (!state?.can_reconfirm) {
+        setActionError(actionStateErrorMessage(state, "Pending entry reconfirmation failed."));
+        return;
+      }
       setActionError(null);
-      await reconfirmPendingEntryMutation.mutateAsync({ intentId: intent.id, userId });
+      await signalActionMutation.mutateAsync({
+        signalId: intent.signal_id,
+        kind: "reconfirm_pending_entry",
+        mode: intent.mode
+      });
       await refreshData();
     } catch (exc) {
       setActionError(errorMessage(exc, "Pending entry reconfirmation failed."));
@@ -288,8 +325,11 @@ export function RadarRoute() {
       executionPreview={executionPreviewQuery.data ?? null}
       executionPreviewError={executionPreviewQuery.error instanceof Error ? executionPreviewQuery.error.message : null}
       executionPreviewLoading={executionPreviewQuery.isFetching}
+      actionState={virtualActionStateQuery.data ?? null}
+      actionStateLoading={virtualActionStateQuery.isFetching}
+      realActionState={realActionStateQuery.data ?? null}
       selectedPendingEntry={selectedPendingEntry}
-      pendingEntryLoading={pendingEntryQuery.isFetching || pendingEntryHistoryQuery.isFetching}
+      pendingEntryLoading={pendingEntryQuery.isFetching || pendingEntryHistoryQuery.isFetching || virtualActionStateQuery.isFetching}
       tradingActionsDisabled={tradingActionsDisabled}
       filter={filter}
       radarDisplayMode={radarDisplayMode}
@@ -307,7 +347,7 @@ export function RadarRoute() {
       onReconfirmPendingEntry={handleReconfirmPendingEntry}
       onReject={handleReject}
       realTradeContext={realTradeContext}
-      realTradeBusy={confirmRealMutation.isPending}
+      realTradeBusy={signalActionMutation.isPending}
       selectedSignalId={selectedSignal?.id ?? null}
       signalIds={visibleSignalIds}
     />
@@ -366,6 +406,16 @@ export function selectPendingEntryForDetails(
 
 function errorMessage(exc: unknown, fallback: string): string {
   return exc instanceof Error && exc.message ? exc.message : fallback;
+}
+
+function actionStateErrorMessage(state: SignalActionState | null, fallback: string): string {
+  if (!state) return fallback;
+  const blocker = state.blockers[0] ?? null;
+  return state.display_labels.disabled_reason
+    ?? blocker?.display_label
+    ?? blocker?.message
+    ?? state.disabled_reason_code
+    ?? fallback;
 }
 
 function isActivePendingEntryIntent(intent: PendingEntryIntent): boolean {

@@ -165,6 +165,13 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
             current.request_snapshot["pending_entry_lifecycle_events"][-1]["event"] if current else None,
             "pending_entry.requires_reconfirmation",
         )
+        change = current.request_snapshot["pending_entry_lifecycle_events"][-1]["change_summary"]["changes"][0]
+        self.assertIn("field", change)
+        self.assertIn("previous", change)
+        self.assertIn("current", change)
+        self.assertIn("tolerance", change)
+        self.assertIn("severity", change)
+        self.assertIn("reason_code", change)
         self.assertEqual(self.signals.auto_entry_updates[-1]["status"], "requires_reconfirmation")
         self.assertEqual(self.signals.auto_entry_updates[-1]["message"], TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON)
         self.assertEqual(self.virtual.calls, [])
@@ -268,6 +275,32 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(results[0].status, "pending")
         self.assertEqual(current.status if current else None, "pending")
         self.assertEqual(self.virtual.calls, [])
+
+    def test_entry_touch_after_non_material_drift_uses_accepted_snapshot(self) -> None:
+        created = self.repository.create_intent(_intent_create(side="long"))
+        self.signals.signal = _signal(
+            entry_min=100.05,
+            entry_max=101.05,
+            stop_loss=95.05,
+            take_profit_1=110.05,
+            score=95,
+        )
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results[0].status, "filled")
+        self.assertEqual(current.status if current else None, "filled")
+        self.assertEqual(len(self.virtual.calls), 1)
+        execution_signal = self.virtual.calls[0][0]
+        self.assertEqual(execution_signal.entry_min, 100.0)
+        self.assertEqual(execution_signal.entry_max, 101.0)
+        self.assertEqual(execution_signal.stop_loss, 95.0)
+        self.assertEqual(execution_signal.take_profit_1, 110.0)
+        self.assertEqual(execution_signal.score, 82)
+        self.assertIsNotNone(execution_signal.trade_plan)
+        self.assertEqual(execution_signal.trade_plan.stop_loss if execution_signal.trade_plan else None, 95.0)
+        self.assertEqual(execution_signal.trade_plan.targets[0].price if execution_signal.trade_plan else None, 110.0)
 
     def test_requires_reconfirmation_intent_cannot_fill(self) -> None:
         created = self.repository.create_intent(_intent_create(side="long", status="requires_reconfirmation"))
@@ -420,6 +453,9 @@ def _signal(
 
 def _intent_create(**overrides: Any) -> PendingEntryIntentCreate:
     signal = _signal(direction=overrides.get("side", "long"))
+    targets_snapshot = [{"label": "TP1", "price": str(signal.take_profit_1)}]
+    if signal.take_profit_2 is not None:
+        targets_snapshot.append({"label": "TP2", "price": str(signal.take_profit_2)})
     values: dict[str, Any] = {
         "user_id": USER_ID,
         "signal_id": SIGNAL_ID,
@@ -431,8 +467,20 @@ def _intent_create(**overrides: Any) -> PendingEntryIntentCreate:
         "entry_max": Decimal("101"),
         "entry_price_policy": "accepted_entry_zone",
         "stop_loss": Decimal("95") if signal.direction == "long" else Decimal("105"),
-        "targets_snapshot": [{"label": "TP1", "price": "110"}],
-        "accepted_trade_plan_snapshot": {"entry": {"min_price": "100", "max_price": "101"}},
+        "targets_snapshot": targets_snapshot,
+        "accepted_trade_plan_snapshot": {
+            "entry": {"min_price": "100", "max_price": "101"},
+            "accepted_signal": {
+                "score": signal.score,
+                "confidence": signal.confidence,
+                "risk_reward": signal.risk_reward,
+                "first_target_rr": signal.first_target_rr,
+                "final_target_rr": signal.final_target_rr,
+                "selected_rr": signal.selected_rr,
+                "selected_rr_target": signal.selected_rr_target,
+                "min_rr_ratio": signal.min_rr_ratio,
+            },
+        },
         "accepted_trade_plan_hash": accepted_trade_plan_hash(signal),
         "accepted_signal_status": "active",
         "accepted_signal_version": "v1",

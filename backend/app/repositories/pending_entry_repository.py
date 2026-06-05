@@ -265,6 +265,25 @@ class PendingEntryIntentRepository:
             session.commit()
             return _to_read(record)
 
+    def update_market_review_snapshot(
+        self,
+        intent_id: str | UUID,
+        *,
+        request_snapshot: dict[str, Any],
+        now: datetime | None = None,
+    ) -> PendingEntryIntentRead | None:
+        parsed_id = _parse_uuid(intent_id)
+        if parsed_id is None:
+            return None
+        with self._session_factory() as session:
+            record = session.get(PendingEntryIntent, parsed_id)
+            if record is None:
+                return None
+            record.request_snapshot = request_snapshot
+            record.updated_at = now or datetime.now(timezone.utc)
+            session.commit()
+            return _to_read(record)
+
     def lock_for_trigger(
         self,
         intent_id: str | UUID,

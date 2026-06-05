@@ -26,7 +26,13 @@ from app.schemas.risk import ResolvedExecutionProfile
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest
 from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
-from app.services.trade_plan_fingerprint import fingerprint_signal_trade_plan
+from app.services.trade_plan_fingerprint import (
+    default_material_change_policy,
+    evaluate_pending_entry_material_change,
+    material_change_policy_from_snapshot,
+    normalized_pending_entry_payload,
+    fingerprint_signal_trade_plan,
+)
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_management import (
     execution_profile_resolver,
@@ -246,6 +252,13 @@ class PendingEntryService:
         )
         accepted_plan = _accepted_trade_plan(signal)
         trade_plan_hash = accepted_trade_plan_hash(signal)
+        accepted_snapshot = _accepted_execution_envelope(
+            accepted_plan.snapshot,
+            signal=signal,
+            trade_plan_hash=trade_plan_hash,
+            execution_profile_snapshot=execution_profile.model_dump(mode="json"),
+            accepted_at=datetime.now(timezone.utc),
+        )
         request_snapshot = _request_snapshot(next_request, mode=intent.mode)
         request_snapshot = _with_reconfirmation_lifecycle_event(
             request_snapshot=request_snapshot,
@@ -264,7 +277,7 @@ class PendingEntryService:
             entry_price_policy=accepted_plan.entry_price_policy,
             stop_loss=accepted_plan.stop_loss,
             targets_snapshot=accepted_plan.targets_snapshot,
-            accepted_trade_plan_snapshot=accepted_plan.snapshot,
+            accepted_trade_plan_snapshot=accepted_snapshot,
             accepted_trade_plan_hash=trade_plan_hash,
             accepted_signal_status=signal.status,
             accepted_signal_version=accepted_plan.signal_version,
@@ -293,20 +306,49 @@ class PendingEntryService:
         list_active = getattr(self._repository, "list_active_for_signal", None)
         if list_active is None:
             return []
-        try:
-            current_hash = accepted_trade_plan_hash(signal)
-            hash_error: str | None = None
-        except ValueError as exc:
-            current_hash = None
-            hash_error = str(exc)
 
         changed: list[PendingEntryIntentRead] = []
         for intent in list_active(signal.id):
             if intent.status == "requires_reconfirmation":
                 continue
-            if current_hash is not None and intent.accepted_trade_plan_hash == current_hash:
+            if is_terminal_signal_status(signal.status):
+                status: PendingEntryIntentStatus = "expired" if signal.status == "expired" else "cancelled"
+                reason = f"Signal is terminal during pending entry reconciliation: {signal.status}."
+                self._update_current_market_review(
+                    intent,
+                    signal=signal,
+                    material_summary=_terminal_signal_change_summary(signal),
+                    material_change_pending_review=True,
+                )
+                updated = self.transition_status(
+                    intent.id,
+                    status=status,
+                    failure_reason=reason,
+                )
+                if updated is not None:
+                    changed.append(updated)
                 continue
-            reason = _reconfirmation_reason(hash_error)
+
+            material = _material_change_evaluation(intent, signal)
+            if not material.material:
+                if (
+                    material.current_hash is not None
+                    and intent.accepted_trade_plan_hash != material.current_hash
+                ):
+                    self._update_current_market_review(
+                        intent,
+                        signal=signal,
+                        material_summary=material.summary,
+                        material_change_pending_review=False,
+                    )
+                continue
+            reason = _reconfirmation_reason(material.error)
+            self._update_current_market_review(
+                intent,
+                signal=signal,
+                material_summary=material.summary,
+                material_change_pending_review=True,
+            )
             updated = self.transition_status(
                 intent.id,
                 status="requires_reconfirmation",
@@ -318,7 +360,7 @@ class PendingEntryService:
         if changed and auto_entry_updater is not None:
             auto_entry_updater(
                 str(signal.id),
-                status="requires_reconfirmation",
+                status=changed[0].status,
                 message=changed[0].failure_reason,
             )
         return changed
@@ -363,6 +405,13 @@ class PendingEntryService:
         request_snapshot = _request_snapshot(request, mode=mode)
         accepted_plan = _accepted_trade_plan(signal)
         trade_plan_hash = accepted_trade_plan_hash(signal)
+        accepted_snapshot = _accepted_execution_envelope(
+            accepted_plan.snapshot,
+            signal=signal,
+            trade_plan_hash=trade_plan_hash,
+            execution_profile_snapshot=execution_profile.model_dump(mode="json"),
+            accepted_at=datetime.now(timezone.utc),
+        )
         existing = self._get_active_intent(
             user_id=user_uuid,
             signal_id=signal_uuid,
@@ -397,7 +446,7 @@ class PendingEntryService:
             entry_price_policy=accepted_plan.entry_price_policy,
             stop_loss=accepted_plan.stop_loss,
             targets_snapshot=accepted_plan.targets_snapshot,
-            accepted_trade_plan_snapshot=accepted_plan.snapshot,
+            accepted_trade_plan_snapshot=accepted_snapshot,
             accepted_trade_plan_hash=trade_plan_hash,
             accepted_signal_status=signal.status,
             accepted_signal_version=accepted_plan.signal_version,
@@ -473,6 +522,29 @@ class PendingEntryService:
             self._event_publisher.publish_update(intent, message=message)
         except Exception as exc:
             logger.warning("Pending entry realtime event publish failed: %s", exc)
+
+    def _update_current_market_review(
+        self,
+        intent: PendingEntryIntentRead,
+        *,
+        signal: RadarSignal,
+        material_summary: dict[str, Any],
+        material_change_pending_review: bool,
+    ) -> PendingEntryIntentRead | None:
+        updater = getattr(self._repository, "update_market_review_snapshot", None)
+        if updater is None:
+            return None
+        request_snapshot = _request_snapshot_with_market_review(
+            intent.request_snapshot,
+            signal=signal,
+            material_summary=material_summary,
+            material_change_pending_review=material_change_pending_review,
+        )
+        try:
+            return updater(intent.id, request_snapshot=request_snapshot)
+        except Exception as exc:
+            logger.warning("Pending entry market review snapshot update failed: %s", exc)
+            return None
 
 
 PendingEntryIntentService = PendingEntryService
@@ -560,6 +632,123 @@ def _accepted_trade_plan(signal: RadarSignal) -> _AcceptedTradePlan:
         targets_snapshot=targets_snapshot,
         signal_version=_signal_version(trade_plan),
     )
+
+
+def _accepted_execution_envelope(
+    snapshot: dict[str, Any],
+    *,
+    signal: RadarSignal,
+    trade_plan_hash: str,
+    execution_profile_snapshot: dict[str, Any],
+    accepted_at: datetime,
+) -> dict[str, Any]:
+    envelope = dict(snapshot)
+    material_policy = material_change_policy_from_snapshot(envelope)
+    signal_snapshot = {
+        "id": str(signal.id),
+        "status": signal.status,
+        "version": _signal_version(_trade_plan_from_signal(signal)),
+        "fingerprint": _signal_fingerprint(signal, trade_plan_hash),
+        "created_at": signal.created_at.isoformat(),
+        "updated_at": signal.updated_at.isoformat(),
+        "expires_at": signal.expires_at.isoformat() if signal.expires_at is not None else None,
+        "score": signal.score,
+        "confidence": signal.confidence,
+        "risk_reward": signal.risk_reward,
+        "first_target_rr": signal.first_target_rr,
+        "final_target_rr": signal.final_target_rr,
+        "selected_rr": signal.selected_rr,
+        "selected_rr_target": signal.selected_rr_target,
+        "min_rr_ratio": signal.min_rr_ratio,
+    }
+    envelope.update(
+        {
+            "exchange": signal.exchange.strip().lower(),
+            "symbol": signal.symbol.replace("/", "").replace(":PERP", "").upper(),
+            "side": signal.direction,
+            "accepted_at": accepted_at.isoformat(),
+            "accepted_created_at": accepted_at.isoformat(),
+            "accepted_expires_at": signal.expires_at.isoformat() if signal.expires_at is not None else None,
+            "accepted_trade_plan_hash": trade_plan_hash,
+            "accepted_signal": signal_snapshot,
+            "execution_profile_snapshot": execution_profile_snapshot,
+            "material_change_policy": material_policy,
+        }
+    )
+    return envelope
+
+
+def _material_change_evaluation(intent: PendingEntryIntentRead, signal: RadarSignal):
+    accepted_payload = normalized_pending_entry_payload(
+        exchange=intent.exchange,
+        symbol=intent.symbol,
+        side=intent.side,
+        entry_min=intent.entry_min,
+        entry_max=intent.entry_max,
+        stop_loss=intent.stop_loss,
+        targets_snapshot=intent.targets_snapshot,
+    )
+    return evaluate_pending_entry_material_change(
+        accepted_payload=accepted_payload,
+        current_signal=signal,
+        policy=material_change_policy_from_snapshot(intent.accepted_trade_plan_snapshot),
+        execution_profile_snapshot=intent.execution_profile_snapshot,
+        mode=intent.mode,
+    )
+
+
+def _terminal_signal_change_summary(signal: RadarSignal) -> dict[str, Any]:
+    return {
+        "material": True,
+        "changed_fields": ["signal.status"],
+        "changes": [
+            {
+                "field": "signal.status",
+                "previous": None,
+                "accepted": None,
+                "current": signal.status,
+                "tolerance": {"type": "non_terminal_signal"},
+                "severity": "blocking",
+                "reason_code": "signal_terminal",
+            }
+        ],
+        "policy": default_material_change_policy(),
+    }
+
+
+def _request_snapshot_with_market_review(
+    request_snapshot: dict[str, Any],
+    *,
+    signal: RadarSignal,
+    material_summary: dict[str, Any],
+    material_change_pending_review: bool,
+) -> dict[str, Any]:
+    snapshot = dict(request_snapshot or {})
+    now = datetime.now(timezone.utc)
+    current_market_snapshot = {
+        "observed_at": now.isoformat(),
+        "signal_id": str(signal.id),
+        "status": signal.status,
+        "exchange": signal.exchange,
+        "symbol": signal.symbol,
+        "side": signal.direction,
+        "updated_at": signal.updated_at.isoformat(),
+        "expires_at": signal.expires_at.isoformat() if signal.expires_at is not None else None,
+        "material_change_pending_review": material_change_pending_review,
+        "material_change_summary": material_summary,
+    }
+    if isinstance(material_summary.get("current_trade_plan_hash"), str):
+        current_market_snapshot["trade_plan_hash"] = material_summary["current_trade_plan_hash"]
+    snapshot["current_market_snapshot"] = current_market_snapshot
+    snapshot["material_change_pending_review"] = material_change_pending_review
+    raw_warnings = snapshot.get("pending_entry_warnings")
+    warnings = list(raw_warnings) if isinstance(raw_warnings, list) else []
+    if material_change_pending_review:
+        warnings.append("Pending entry material change requires user review.")
+    elif material_summary.get("current_trade_plan_hash") is not None:
+        warnings.append("Pending entry live signal changed without material execution-plan impact.")
+    snapshot["pending_entry_warnings"] = _dedupe_strings(warnings)[-20:]
+    return snapshot
 
 
 def _trade_plan_from_signal(signal: RadarSignal) -> TradePlan:
@@ -761,6 +950,18 @@ def _decimal_string_or_none(value: Any) -> str | None:
     if value is None:
         return None
     return _decimal_string(_positive_decimal(value, "price"))
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def _parse_uuid_or_raise(value: Any, field_name: str) -> UUID:

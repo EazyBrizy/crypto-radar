@@ -41,6 +41,28 @@ class TradePlanFingerprintTest(unittest.TestCase):
         self.assertNotEqual(base_hash, fingerprint_signal_trade_plan(_signal(stop_loss=94.0)).hash)
         self.assertNotEqual(base_hash, fingerprint_signal_trade_plan(_signal(take_profit_1=111.0)).hash)
 
+    def test_target_label_action_and_close_percent_do_not_change_hash(self) -> None:
+        first = _signal(
+            trade_plan=_trade_plan(
+                metadata={"label": "original"},
+                selected_rr=2.0,
+                target_label="TP1",
+                target_action="partial_close",
+                close_percent="50.0",
+            )
+        )
+        second = _signal(
+            trade_plan=_trade_plan(
+                metadata={"label": "renamed"},
+                selected_rr=2.0,
+                target_label="Final target",
+                target_action="full_close",
+                close_percent="100.0",
+            )
+        )
+
+        self.assertEqual(fingerprint_signal_trade_plan(first).hash, fingerprint_signal_trade_plan(second).hash)
+
 
 def _signal(
     *,
@@ -76,11 +98,18 @@ def _signal(
     )
 
 
-def _trade_plan(*, metadata: dict[str, object], selected_rr: float) -> TradePlan:
+def _trade_plan(
+    *,
+    metadata: dict[str, object],
+    selected_rr: float,
+    target_label: str = "TP1",
+    target_action: str = "partial_close",
+    close_percent: str = "50.0",
+) -> TradePlan:
     return TradePlan(
         entry=TradePlanEntry(price=100.5, min_price=100.0, max_price=101.0),
         stop_loss=95.0,
-        targets=[TradePlanTarget(label="TP1", price=110.0, action="partial_close", close_percent="50.0")],
+        targets=[TradePlanTarget(label=target_label, price=110.0, action=target_action, close_percent=close_percent)],
         risk_rules=TradePlanRiskRules(selected_rr=selected_rr, metadata=metadata),
         metadata=metadata,
     )

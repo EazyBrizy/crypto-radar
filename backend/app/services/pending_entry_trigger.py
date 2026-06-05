@@ -17,6 +17,7 @@ from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.risk import RiskOverride, StrategyExecutionSettings
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, RecentTradePrint, VirtualMarketSnapshot, VirtualTrade
+from app.schemas.trade_plan import TradePlan
 from app.services.pending_entry import (
     TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
     pending_entry_service,
@@ -24,7 +25,11 @@ from app.services.pending_entry import (
 from app.services.pending_entry_events import PendingEntryUpdatePublisher, pending_entry_update_publisher
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.signal_service import signal_service
-from app.services.trade_plan_fingerprint import fingerprint_signal_trade_plan
+from app.services.trade_plan_fingerprint import (
+    evaluate_pending_entry_material_change,
+    material_change_policy_from_snapshot,
+    normalized_pending_entry_payload,
+)
 from app.services.virtual_trading import VirtualExecutionRejected, virtual_trading_service
 
 logger = logging.getLogger(__name__)
@@ -174,24 +179,14 @@ class PendingEntryTriggerService:
                 session.commit()
                 self._publish_locked_update(record)
                 return _result(record, touched=False, reason=record.failure_reason)
-            try:
-                current_fingerprint = fingerprint_signal_trade_plan(signal)
-                current_hash = current_fingerprint.hash
-            except ValueError as exc:
-                _transition_locked(
-                    record,
-                    status="failed",
-                    failure_reason=f"Current trade plan is invalid: {exc}",
-                    now=now,
-                )
-                session.commit()
-                self._publish_locked_update(record)
-                return _result(record, touched=False, reason=record.failure_reason)
-            if current_hash != record.accepted_trade_plan_hash:
+            material = _material_change_evaluation(record, signal)
+            if material.material:
                 _mark_requires_reconfirmation_locked(
                     record,
-                    current_trade_plan_hash=current_hash,
-                    current_trade_plan_snapshot=current_fingerprint.normalized,
+                    current_signal=signal,
+                    current_trade_plan_hash=material.current_hash,
+                    current_trade_plan_snapshot=material.current_normalized,
+                    change_summary=material.summary,
                     now=now,
                 )
                 session.commit()
@@ -202,6 +197,17 @@ class PendingEntryTriggerService:
                     message=TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
                 )
                 return _result(record, touched=False, reason=record.failure_reason)
+            if (
+                material.current_hash is not None
+                and material.current_hash != record.accepted_trade_plan_hash
+            ):
+                _record_market_review_locked(
+                    record,
+                    signal=signal,
+                    material_summary=material.summary,
+                    material_change_pending_review=False,
+                    now=now,
+                )
 
             touch = entry_zone_touch(
                 side=record.side,
@@ -274,7 +280,10 @@ class PendingEntryTriggerService:
         except ValueError as exc:
             return self._finish_structural_failure(intent, str(exc), touch)
 
-        execution_signal = signal.model_copy(update={"status": "entry_touched"})
+        try:
+            execution_signal = _execution_signal_from_accepted_snapshot(signal, intent)
+        except ValueError as exc:
+            return self._finish_structural_failure(intent, str(exc), touch)
         try:
             _, trade = self._virtual_trading.confirm_signal(execution_signal, request)
         except StrategyRiskRewardBlocked as exc:
@@ -373,6 +382,8 @@ class PendingEntryTriggerService:
         if update is None:
             return
         try:
+            # TODO(frontend-migration): remove this legacy auto_entry mirror after
+            # frontend reads canonical pending_entry_intents status directly.
             update(str(signal_id), status=status, message=message, trade_id=trade_id)
         except Exception as exc:
             logger.warning("Pending entry legacy auto-entry mirror update failed: %s", exc)
@@ -472,6 +483,114 @@ def _trigger_confirm_request(
         if risk_override is not None:
             updates["risk_override"] = risk_override
     return request.model_copy(update=updates)
+
+
+def _execution_signal_from_accepted_snapshot(
+    signal: RadarSignal,
+    intent: PendingEntryIntentRead,
+) -> RadarSignal:
+    trade_plan = _accepted_trade_plan_for_execution(intent)
+    target_prices = _target_prices_for_signal(intent.targets_snapshot)
+    accepted_signal = (
+        intent.accepted_trade_plan_snapshot.get("accepted_signal")
+        if isinstance(intent.accepted_trade_plan_snapshot, dict)
+        else None
+    )
+    accepted_signal = accepted_signal if isinstance(accepted_signal, dict) else {}
+    updates: dict[str, Any] = {
+        "status": "entry_touched",
+        "exchange": intent.exchange,
+        "symbol": intent.symbol,
+        "direction": intent.side,
+        "entry_min": float(intent.entry_min),
+        "entry_max": float(intent.entry_max),
+        "stop_loss": float(intent.stop_loss),
+        "take_profit_1": target_prices[0] if target_prices else None,
+        "take_profit_2": target_prices[1] if len(target_prices) > 1 else None,
+        "trade_plan": trade_plan,
+    }
+    for field_name in (
+        "score",
+        "confidence",
+        "risk_reward",
+        "first_target_rr",
+        "final_target_rr",
+        "selected_rr",
+        "selected_rr_target",
+        "min_rr_ratio",
+    ):
+        if accepted_signal.get(field_name) is not None:
+            updates[field_name] = accepted_signal[field_name]
+    return signal.model_copy(update=updates)
+
+
+def _accepted_trade_plan_for_execution(intent: PendingEntryIntentRead) -> TradePlan:
+    snapshot = dict(intent.accepted_trade_plan_snapshot or {})
+    entry_min = _decimal(intent.entry_min, "entry_min")
+    entry_max = _decimal(intent.entry_max, "entry_max")
+    stop_loss = _decimal(intent.stop_loss, "stop_loss")
+    entry = dict(snapshot.get("entry") if isinstance(snapshot.get("entry"), dict) else {})
+    entry.update(
+        {
+            "min_price": float(entry_min),
+            "max_price": float(entry_max),
+            "price": float((entry_min + entry_max) / Decimal("2")),
+        }
+    )
+    payload = {
+        **snapshot,
+        "entry": entry,
+        "stop_loss": float(stop_loss),
+        "targets": _targets_for_execution(intent.targets_snapshot),
+        "invalidation": _invalidation_for_execution(snapshot, stop_loss),
+    }
+    metadata = dict(payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {})
+    metadata.update(
+        {
+            "source": "accepted_pending_entry_snapshot",
+            "pending_entry_intent_id": str(intent.id),
+            "accepted_trade_plan_hash": intent.accepted_trade_plan_hash,
+        }
+    )
+    payload["metadata"] = metadata
+    try:
+        return TradePlan.model_validate(payload)
+    except ValueError as exc:
+        raise ValueError(f"Accepted pending-entry trade plan snapshot is invalid: {exc}") from exc
+
+
+def _targets_for_execution(value: Any) -> list[dict[str, Any]]:
+    raw_targets = value.get("targets") if isinstance(value, dict) else value
+    if not isinstance(raw_targets, list):
+        raw_targets = []
+    targets: list[dict[str, Any]] = []
+    for index, target in enumerate(raw_targets):
+        target_payload = dict(target) if isinstance(target, dict) else {"price": target}
+        price = _decimal(target_payload.get("price"), "target.price")
+        target_payload["price"] = float(price)
+        target_payload["label"] = str(target_payload.get("label") or f"TP{index + 1}")
+        targets.append(target_payload)
+    if not targets:
+        raise ValueError("Accepted pending-entry snapshot requires at least one take-profit target.")
+    return targets
+
+
+def _target_prices_for_signal(value: Any) -> list[float]:
+    return [float(_decimal(target["price"], "target.price")) for target in _targets_for_execution(value)]
+
+
+def _invalidation_for_execution(snapshot: dict[str, Any], stop_loss: Decimal) -> dict[str, Any]:
+    invalidation = snapshot.get("invalidation")
+    if isinstance(invalidation, dict):
+        payload = dict(invalidation)
+    else:
+        payload = {}
+    payload["price"] = float(stop_loss)
+    payload["hard_stop"] = float(stop_loss)
+    metadata = dict(payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {})
+    metadata.setdefault("source", "accepted_pending_entry_snapshot")
+    payload["metadata"] = metadata
+    return payload
 
 
 def _trigger_request_metadata(
@@ -583,11 +702,32 @@ def _transition_locked(
         record.filled_at = now
 
 
+def _material_change_evaluation(record: PendingEntryIntent, signal: RadarSignal):
+    accepted_payload = normalized_pending_entry_payload(
+        exchange=record.exchange,
+        symbol=record.symbol,
+        side=record.side,
+        entry_min=record.entry_min,
+        entry_max=record.entry_max,
+        stop_loss=record.stop_loss,
+        targets_snapshot=record.targets_snapshot,
+    )
+    return evaluate_pending_entry_material_change(
+        accepted_payload=accepted_payload,
+        current_signal=signal,
+        policy=material_change_policy_from_snapshot(record.accepted_trade_plan_snapshot),
+        execution_profile_snapshot=record.execution_profile_snapshot,
+        mode=record.mode,
+    )
+
+
 def _mark_requires_reconfirmation_locked(
     record: PendingEntryIntent,
     *,
-    current_trade_plan_hash: str,
-    current_trade_plan_snapshot: dict[str, Any],
+    current_signal: RadarSignal,
+    current_trade_plan_hash: str | None,
+    current_trade_plan_snapshot: dict[str, Any] | None,
+    change_summary: dict[str, Any],
     now: datetime,
 ) -> None:
     _transition_locked(
@@ -610,89 +750,106 @@ def _mark_requires_reconfirmation_locked(
             "current_trade_plan_hash": current_trade_plan_hash,
             "accepted_trade_plan_snapshot": record.accepted_trade_plan_snapshot,
             "current_trade_plan_snapshot": current_trade_plan_snapshot,
-            "change_summary": _trade_plan_change_summary(
-                record.accepted_trade_plan_snapshot,
-                current_trade_plan_snapshot,
-            ),
+            "change_summary": change_summary,
         }
     )
     snapshot["pending_entry_lifecycle_events"] = lifecycle_events[-20:]
+    snapshot = _request_snapshot_with_market_review(
+        snapshot,
+        signal_id=str(current_signal.id),
+        signal_status=current_signal.status,
+        signal_exchange=current_signal.exchange,
+        signal_symbol=current_signal.symbol,
+        signal_side=current_signal.direction,
+        signal_updated_at=current_signal.updated_at,
+        signal_expires_at=current_signal.expires_at,
+        material_summary=change_summary,
+        material_change_pending_review=True,
+        now=now,
+    )
     record.request_snapshot = snapshot
 
 
-def _trade_plan_change_summary(
-    accepted_snapshot: dict[str, Any] | None,
-    current_snapshot: dict[str, Any] | None,
+def _record_market_review_locked(
+    record: PendingEntryIntent,
+    *,
+    signal: RadarSignal,
+    material_summary: dict[str, Any],
+    material_change_pending_review: bool,
+    now: datetime,
+) -> None:
+    record.request_snapshot = _request_snapshot_with_market_review(
+        dict(record.request_snapshot or {}),
+        signal_id=str(signal.id),
+        signal_status=signal.status,
+        signal_exchange=signal.exchange,
+        signal_symbol=signal.symbol,
+        signal_side=signal.direction,
+        signal_updated_at=signal.updated_at,
+        signal_expires_at=signal.expires_at,
+        material_summary=material_summary,
+        material_change_pending_review=material_change_pending_review,
+        now=now,
+    )
+    record.updated_at = now
+
+
+def _request_snapshot_with_market_review(
+    request_snapshot: dict[str, Any],
+    *,
+    signal_id: str,
+    signal_status: str,
+    material_summary: dict[str, Any],
+    material_change_pending_review: bool,
+    now: datetime,
+    signal_exchange: str | None = None,
+    signal_symbol: str | None = None,
+    signal_side: str | None = None,
+    signal_updated_at: datetime | None = None,
+    signal_expires_at: datetime | None = None,
 ) -> dict[str, Any]:
-    accepted = accepted_snapshot if isinstance(accepted_snapshot, dict) else {}
-    current = current_snapshot if isinstance(current_snapshot, dict) else {}
-    changes: list[dict[str, Any]] = []
-
-    accepted_entry = accepted.get("entry") if isinstance(accepted.get("entry"), dict) else {}
-    current_entry = current.get("entry") if isinstance(current.get("entry"), dict) else {}
-    for key in ("min_price", "max_price", "price"):
-        accepted_value = _summary_string(accepted_entry.get(key))
-        current_value = _summary_string(current_entry.get(key))
-        if accepted_value != current_value:
-            changes.append(
-                {
-                    "field": f"entry.{key}",
-                    "accepted": accepted_value,
-                    "current": current_value,
-                }
-            )
-
-    accepted_stop = _summary_string(accepted.get("stop_loss"))
-    current_stop = _summary_string(current.get("stop_loss"))
-    if accepted_stop != current_stop:
-        changes.append(
-            {
-                "field": "stop_loss",
-                "accepted": accepted_stop,
-                "current": current_stop,
-            }
-        )
-
-    accepted_targets = _targets_summary(accepted.get("targets"))
-    current_targets = _targets_summary(current.get("targets"))
-    if accepted_targets != current_targets:
-        changes.append(
-            {
-                "field": "targets",
-                "accepted": accepted_targets,
-                "current": current_targets,
-            }
-        )
-
-    return {
-        "changed_fields": [change["field"] for change in changes],
-        "changes": changes,
+    snapshot = dict(request_snapshot or {})
+    current_market_snapshot: dict[str, Any] = {
+        "observed_at": now.isoformat(),
+        "signal_id": signal_id,
+        "status": signal_status,
+        "material_change_pending_review": material_change_pending_review,
+        "material_change_summary": material_summary,
     }
+    if signal_exchange is not None:
+        current_market_snapshot["exchange"] = signal_exchange
+    if signal_symbol is not None:
+        current_market_snapshot["symbol"] = signal_symbol
+    if signal_side is not None:
+        current_market_snapshot["side"] = signal_side
+    if signal_updated_at is not None:
+        current_market_snapshot["updated_at"] = signal_updated_at.isoformat()
+    if signal_expires_at is not None:
+        current_market_snapshot["expires_at"] = signal_expires_at.isoformat()
+    if isinstance(material_summary.get("current_trade_plan_hash"), str):
+        current_market_snapshot["trade_plan_hash"] = material_summary["current_trade_plan_hash"]
+    snapshot["current_market_snapshot"] = current_market_snapshot
+    snapshot["material_change_pending_review"] = material_change_pending_review
+    raw_warnings = snapshot.get("pending_entry_warnings")
+    warnings = list(raw_warnings) if isinstance(raw_warnings, list) else []
+    if material_change_pending_review:
+        warnings.append("Pending entry material change requires user review.")
+    elif material_summary.get("current_trade_plan_hash") is not None:
+        warnings.append("Pending entry live signal changed without material execution-plan impact.")
+    snapshot["pending_entry_warnings"] = _dedupe_strings(warnings)[-20:]
+    return snapshot
 
 
-def _targets_summary(value: Any) -> list[dict[str, str | None]]:
-    if not isinstance(value, list):
-        return []
-    targets: list[dict[str, str | None]] = []
-    for index, target in enumerate(value):
-        if not isinstance(target, dict):
+def _dedupe_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
             continue
-        targets.append(
-            {
-                "label": _summary_string(target.get("label")) or f"target_{index + 1}",
-                "price": _summary_string(target.get("price")),
-                "action": _summary_string(target.get("action")),
-                "close_percent": _summary_string(target.get("close_percent")),
-            }
-        )
-    return targets
-
-
-def _summary_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def _result(

@@ -62,6 +62,12 @@ class PendingEntryServiceTest(unittest.TestCase):
         self.assertEqual(intent.execution_profile_snapshot["risk_mode"], "percent")
         self.assertTrue(intent.accepted_trade_plan_hash.startswith("sha256:"))
         self.assertEqual(intent.accepted_trade_plan_snapshot["entry"]["min_price"], "100")
+        self.assertEqual(intent.accepted_trade_plan_snapshot["exchange"], "bybit")
+        self.assertEqual(intent.accepted_trade_plan_snapshot["symbol"], "BTCUSDT")
+        self.assertEqual(intent.accepted_trade_plan_snapshot["side"], "long")
+        self.assertEqual(intent.accepted_trade_plan_snapshot["accepted_signal"]["score"], 82)
+        self.assertEqual(intent.accepted_trade_plan_snapshot["execution_profile_snapshot"]["risk_mode"], "percent")
+        self.assertIn("material_change_policy", intent.accepted_trade_plan_snapshot)
         self.assertEqual(intent.request_snapshot["auto_enter_on_confirmation"], True)
         self.assertEqual(repository.create_calls, 1)
 
@@ -484,6 +490,25 @@ class _FakePendingEntryRepository:
                 "failure_reason": failure_reason,
                 "filled_trade_id": filled_trade_id,
                 "updated_at": now or datetime.now(timezone.utc),
+            }
+        )
+        self.records = [updated if intent.id == intent_id else intent for intent in self.records]
+        self.active = updated if updated.status in {"pending", "triggered", "filling", "requires_reconfirmation"} else None
+        return updated
+
+    def update_market_review_snapshot(
+        self,
+        intent_id: UUID,
+        *,
+        request_snapshot: dict[str, Any],
+    ) -> PendingEntryIntentRead | None:
+        existing = self.get_by_id(intent_id)
+        if existing is None:
+            return None
+        updated = existing.model_copy(
+            update={
+                "request_snapshot": request_snapshot,
+                "updated_at": datetime.now(timezone.utc),
             }
         )
         self.records = [updated if intent.id == intent_id else intent for intent in self.records]

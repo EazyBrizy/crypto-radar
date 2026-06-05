@@ -17,6 +17,8 @@ from app.services.signal_service import SignalService, signal_service
 logger = logging.getLogger(__name__)
 STOP_TIMEOUT_SEC = 3.0
 SIGNAL_UPDATE_EVENT_MIN_INTERVAL_SEC = 3.0
+SIGNAL_EXPIRY_MAINTENANCE_INTERVAL_SEC = 30
+SIGNAL_EXPIRY_MAINTENANCE_LIMIT = 500
 
 
 class ScannerRunner:
@@ -201,3 +203,79 @@ class ScannerRunner:
         except ScannerUniverseLimitError as exc:
             digest = hashlib.sha256(str(exc).encode("utf-8")).hexdigest()[:16]
             return f"blocked:{digest}"
+
+
+class SignalExpiryWorker:
+    """Expires stale open signals outside request/read paths."""
+
+    def __init__(
+        self,
+        *,
+        store: SignalService = signal_service,
+        interval_seconds: int = SIGNAL_EXPIRY_MAINTENANCE_INTERVAL_SEC,
+        limit: int = SIGNAL_EXPIRY_MAINTENANCE_LIMIT,
+    ) -> None:
+        self._store = store
+        self._interval_seconds = max(1, int(interval_seconds))
+        self._limit = max(1, int(limit))
+        self._task: Optional[asyncio.Task[None]] = None
+        self._stopping = False
+        self._last_result: dict[str, object] = {}
+
+    @property
+    def is_running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    @property
+    def last_result(self) -> dict[str, object]:
+        return dict(self._last_result)
+
+    def start(self) -> None:
+        if self.is_running:
+            return
+        self._stopping = False
+        self._task = asyncio.create_task(self._run())
+        logger.info("Signal expiry worker started")
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        if self._task.done():
+            self._task = None
+            self._stopping = False
+            return
+        self._stopping = True
+        self._task.cancel()
+        try:
+            done, pending = await asyncio.wait({self._task}, timeout=STOP_TIMEOUT_SEC)
+        except asyncio.CancelledError:
+            self._task.cancel()
+            raise
+        if pending:
+            logger.warning("Signal expiry worker stop timed out after %.1f seconds", STOP_TIMEOUT_SEC)
+            return
+        task = done.pop()
+        with contextlib.suppress(asyncio.CancelledError):
+            task.result()
+        logger.info("Signal expiry worker stopped")
+        if self._task is task:
+            self._task = None
+            self._stopping = False
+
+    async def expire_once(self) -> dict[str, object]:
+        expired = await asyncio.to_thread(
+            self._store.expire_open_signals,
+            limit=self._limit,
+        )
+        self._last_result = {"expired": expired, "limit": self._limit}
+        return self.last_result
+
+    async def _run(self) -> None:
+        while True:
+            try:
+                result = await self.expire_once()
+                if result["expired"]:
+                    logger.info("Expired stale open signals: %s", result["expired"])
+            except Exception as exc:
+                logger.warning("Signal expiry maintenance failed: %s", exc)
+            await asyncio.sleep(self._interval_seconds)

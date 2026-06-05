@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import logging
 from typing import Any, Protocol
@@ -173,6 +174,12 @@ class SignalService:
 
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         return self._repository.get_signal(signal_id)
+
+    def expire_open_signals(self, now: datetime | None = None, limit: int = 500) -> int:
+        expire = getattr(self._repository, "expire_open_signals", None)
+        if expire is None:
+            return 0
+        return expire(now=now, limit=limit)
 
     def add_signal(self, signal: RadarSignal) -> RadarSignal:
         result = self._repository.add_signal(signal)

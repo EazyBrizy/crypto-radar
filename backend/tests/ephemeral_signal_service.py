@@ -25,7 +25,6 @@ class EphemeralSignalRepository:
         self._signals: dict[str, RadarSignal] = {}
 
     def list_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
-        self._expire_open_signals()
         return sorted(self._signals.values(), key=lambda signal: signal.created_at, reverse=True)[:limit]
 
     def list_active_signals(self, limit: int = MAX_STORED_SIGNALS) -> list[RadarSignal]:
@@ -45,7 +44,15 @@ class EphemeralSignalRepository:
         ]
 
     def get_signal(self, signal_id: str) -> RadarSignal | None:
-        return self._signals.get(signal_id)
+        signal = self._signals.get(signal_id)
+        if signal is None:
+            return None
+        if signal.status in OPEN_SIGNAL_STATUSES and not _is_signal_actionable(signal):
+            return None
+        return signal
+
+    def expire_open_signals(self, now: datetime | None = None, limit: int = MAX_STORED_SIGNALS) -> int:
+        return self._expire_open_signals(now=now, limit=limit)
 
     def add_signal(self, signal: RadarSignal) -> SignalWriteResult:
         created = signal.id not in self._signals
@@ -162,25 +169,35 @@ class EphemeralSignalRepository:
         self._signals[signal_id] = updated
         return _write_result(updated, False, SIGNAL_AUTO_ENTRY_ARMED_EVENT)
 
-    def _expire_open_signals(self) -> None:
-        now = datetime.now(timezone.utc)
+    def _expire_open_signals(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = MAX_STORED_SIGNALS,
+    ) -> int:
+        resolved_now = now or datetime.now(timezone.utc)
+        expired = 0
         for signal_id, signal in list(self._signals.items()):
+            if expired >= limit:
+                break
             if signal.status not in OPEN_SIGNAL_STATUSES:
                 continue
             expires_at = signal.expires_at or _signal_expires_at(signal.created_at)
             if expires_at is None:
                 continue
-            if expires_at > now:
+            if expires_at > resolved_now:
                 if signal.expires_at is None:
                     self._signals[signal_id] = signal.model_copy(update={"expires_at": expires_at})
                 continue
             self._signals[signal_id] = signal.model_copy(
                 update={
                     "status": "expired",
-                    "updated_at": now,
+                    "updated_at": resolved_now,
                     "expires_at": expires_at,
                 }
             )
+            expired += 1
+        return expired
 
 
 def ephemeral_signal_service() -> SignalService:

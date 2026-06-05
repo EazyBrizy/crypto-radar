@@ -148,7 +148,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([signal.id for signal in signals], ["sig_actionable"])
 
-    async def test_active_signals_endpoint_expires_stale_signals(self) -> None:
+    async def test_active_signals_endpoint_filters_stale_signals_without_expiring_on_read(self) -> None:
         now = datetime.now(timezone.utc)
         self.signal_service.add_signal(
             RadarSignal(
@@ -186,7 +186,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([signal.id for signal in signals], ["sig_fresh"])
         stale_signal = self.signal_service.get_signal("sig_stale")
-        self.assertEqual(stale_signal.status if stale_signal else None, "expired")
+        self.assertIsNone(stale_signal)
 
     async def test_open_signals_endpoint_keeps_watchlist_candidates(self) -> None:
         now = datetime.now(timezone.utc)

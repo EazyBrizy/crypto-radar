@@ -21,7 +21,7 @@ from app.workers.derivative_snapshot_worker import DerivativeSnapshotSyncRunner
 from app.workers.exchange_instrument_worker import ExchangeInstrumentRuleSyncRunner
 from app.workers.orderbook_snapshot_worker import OrderbookSnapshotWorker
 from app.workers.real_position_sync_worker import BybitRealPositionSyncClient, RealPositionSyncWorker
-from app.workers.signal_worker import ScannerRunner
+from app.workers.signal_worker import ScannerRunner, SignalExpiryWorker
 
 load_dotenv()
 
@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     instrument_rule_runner = ExchangeInstrumentRuleSyncRunner()
     derivative_snapshot_runner = DerivativeSnapshotSyncRunner()
     orderbook_snapshot_worker = OrderbookSnapshotWorker()
+    signal_expiry_worker = SignalExpiryWorker()
     real_position_sync_worker = RealPositionSyncWorker(
         client=BybitRealPositionSyncClient(),
         interval_seconds=settings.real_position_sync_interval_seconds,
@@ -70,6 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.exchange_instrument_rule_sync_runner = instrument_rule_runner
     app.state.derivative_snapshot_sync_runner = derivative_snapshot_runner
     app.state.orderbook_snapshot_worker = orderbook_snapshot_worker
+    app.state.signal_expiry_worker = signal_expiry_worker
     app.state.real_position_sync_worker = real_position_sync_worker
     app.state.scanner_autostart_enabled = scanner_autostart_enabled
     app.state.exchange_instrument_rule_sync_enabled = instrument_rule_sync_enabled
@@ -94,6 +96,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         logging.info("Orderbook snapshot sync disabled by settings")
 
+    signal_expiry_worker.start()
+
     if real_position_sync_enabled:
         real_position_sync_worker.start()
     else:
@@ -107,6 +111,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await signal_expiry_worker.stop()
         await orderbook_snapshot_worker.stop()
         await real_position_sync_worker.stop()
         await derivative_snapshot_runner.stop()

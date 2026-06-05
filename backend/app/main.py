@@ -12,6 +12,7 @@ from app.api.v1.router import api_router
 from app.core.clickhouse_client import close_clickhouse_client
 from app.core.database import dispose_database_engine
 from app.core.health import get_storage_health
+from app.core.migrations import warn_if_migrations_outdated
 from app.core.redis_client import close_redis_client
 from app.core.config import settings
 from app.core.request_timing import add_request_timing_middleware
@@ -31,7 +32,9 @@ TICK_LIMIT = 5000
 
 
 def _scanner_enabled() -> bool:
-    raw_value = os.getenv("CRYPTO_RADAR_SCANNER_ENABLED", "true")
+    raw_value = os.getenv("CRYPTO_RADAR_SCANNER_ENABLED")
+    if raw_value is None:
+        return settings.crypto_radar_scanner_enabled
     return raw_value.strip().lower() not in {"0", "false", "no", "off"}
 
 
@@ -78,6 +81,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.derivative_snapshot_sync_enabled = derivative_snapshot_sync_enabled
     app.state.orderbook_snapshot_sync_enabled = orderbook_snapshot_sync_enabled
     app.state.real_position_sync_enabled = real_position_sync_enabled
+
+    await asyncio.to_thread(warn_if_migrations_outdated)
 
     realtime_gateway.start_broker_bridge()
 

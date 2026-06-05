@@ -23,106 +23,143 @@ Crypto Radar is a realtime crypto market radar and trading control plane. The ba
 - pnpm 10.x through Corepack
 - Docker Desktop for local infra
 
-## Local Infra
+## Local MVP Virtual Trading Runbook
 
-Start only storage and messaging dependencies:
+Use this order for a clean local check of scanner plus virtual trading. Keep the backend and frontend commands in separate PowerShell terminals once they start long-running servers.
 
-```powershell
-docker compose -f infra\docker-compose.yml --profile infra up -d postgres redis nats clickhouse
-```
-
-Optional observability:
-
-```powershell
-docker compose -f infra\docker-compose.yml --profile observability up -d
-```
-
-Full app containers are also available:
-
-```powershell
-docker compose -f infra\docker-compose.yml --profile app up --build
-```
-
-## Backend
-
-Install dependencies:
+1. Install dependencies:
 
 ```powershell
 cd backend
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+cd ..\frontend
+corepack enable
+corepack pnpm install
+
+cd ..
 ```
 
-Apply migrations:
+2. Start DB/Redis and local supporting stores:
+
+```powershell
+docker compose -f infra\docker-compose.yml --profile infra up -d postgres redis nats clickhouse
+```
+
+3. Apply migrations:
 
 ```powershell
 cd backend
 .\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic current
+.\.venv\Scripts\python.exe -m alembic heads
+cd ..
 ```
 
-Run the API:
+`alembic current` must match `alembic heads`. The current head includes the fix 3.0 migrations `add_soft_delete_to_exchange_connections` and `add_exchange_connection_execution_safety`. Backend startup also logs a warning when it can verify that the database is not at Alembic head.
+
+4. Start backend with the local MVP scanner profile:
 
 ```powershell
 cd backend
 $env:CRYPTO_RADAR_SCANNER_ENABLED="false"
+$env:MAX_SCANNER_PAIRS="20"
+$env:TRUNCATE_SCANNER_PAIRS_OVER_LIMIT="false"
+$env:SCANNER_WARMUP_CONCURRENCY="2"
+$env:SCANNER_WARMUP_TIMEOUT_SECONDS="8"
+$env:EXCHANGE_INSTRUMENT_SYNC_ENABLED="false"
+$env:DERIVATIVE_SNAPSHOT_SYNC_ENABLED="false"
+$env:ORDERBOOK_SNAPSHOT_SYNC_ENABLED="false"
+$env:REAL_POSITION_SYNC_ENABLED="false"
+$env:ENABLE_LIVE_TRADING="false"
+$env:ENABLE_BYBIT_LIVE_ORDER_PLACEMENT="false"
+$env:ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT="false"
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Useful URLs:
-
-- API: `http://127.0.0.1:8000`
-- FastAPI docs: `http://127.0.0.1:8000/docs`
-- Health: `http://127.0.0.1:8000/health`
-
-## Frontend
-
-Install dependencies:
-
-```powershell
-cd frontend
-corepack enable
-corepack pnpm install
-```
-
-Run Next.js:
+5. Start frontend:
 
 ```powershell
 cd frontend
 $env:NEXT_PUBLIC_FASTAPI_HTTP_URL="http://127.0.0.1:8000"
 $env:NEXT_PUBLIC_FASTAPI_WS_URL="ws://127.0.0.1:8000/api/v1/realtime/ws"
 $env:NEXT_PUBLIC_FASTAPI_SSE_URL="http://127.0.0.1:8000/api/v1/realtime/events"
+$env:NEXT_PUBLIC_FASTAPI_TIMEOUT_MS="8000"
 corepack pnpm dev
 ```
 
 Frontend URL: `http://127.0.0.1:3000`
 
+6. Verify `/health`:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+Expected for the local MVP profile: storage is `ok`, `scanner_running` is `false`, optional sync workers are disabled, and `real_position_sync_enabled` is `false`.
+
+7. Verify `/api/v1/radar/status`:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/radar/status
+```
+
+Expected before scanner start: `scanner_running=false`, `scanner_pairs_count` is small, and `max_scanner_pairs=20`.
+
+8. Start scanner explicitly:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/radar/scanner/start
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/radar/status
+```
+
+Expected after start: `scanner_running=true`; `stage` moves through `warming_up`, `listening`, or `degraded` if optional external market data is unavailable.
+
+9. Run virtual trading smoke:
+
+```powershell
+make smoke-virtual
+```
+
+Equivalent PowerShell command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_virtual.ps1
+```
+
 ## One-Command Dev
 
-After backend and frontend dependencies are installed:
+After backend and frontend dependencies are installed, this command starts infra, applies Alembic migrations, starts backend with scanner disabled, and starts frontend:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1 -WithInfra -NoScanner
 ```
 
-Remove `-NoScanner` when you want the market scanner to start with the API.
+Remove `-NoScanner` when you want the scanner to autostart with the bounded local profile.
 
-## Environment
+## Environment Defaults
 
-Use `.env.example` as the safe template. Do not commit real exchange credentials.
+Use `.env.example` as the safe local template: copy it to `.env` in the repository root. Do not commit real exchange credentials.
 
-Important backend variables:
+Important backend defaults for the local MVP:
 
 ```env
-DATABASE_URL=postgresql://crypto_radar:crypto_radar@localhost:5432/crypto_radar
-REDIS_URL=redis://localhost:6379/0
-NATS_URL=nats://localhost:4222
-CLICKHOUSE_HOST=localhost
-CLICKHOUSE_PORT=8123
-CLICKHOUSE_DATABASE=crypto_radar
-CRYPTO_RADAR_SCANNER_ENABLED=true
+CRYPTO_RADAR_SCANNER_ENABLED=false
+MAX_SCANNER_PAIRS=20
+TRUNCATE_SCANNER_PAIRS_OVER_LIMIT=false
+SCANNER_WARMUP_CONCURRENCY=2
+SCANNER_WARMUP_TIMEOUT_SECONDS=8
+EXCHANGE_INSTRUMENT_SYNC_ENABLED=false
+DERIVATIVE_SNAPSHOT_SYNC_ENABLED=false
+ORDERBOOK_SNAPSHOT_SYNC_ENABLED=false
+REAL_POSITION_SYNC_ENABLED=false
+ENABLE_LIVE_TRADING=false
+ENABLE_BYBIT_LIVE_ORDER_PLACEMENT=false
+ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT=false
 ```
 
-Important frontend variables:
+Important frontend defaults:
 
 ```env
 NEXT_PUBLIC_FASTAPI_HTTP_URL=http://127.0.0.1:8000
@@ -130,6 +167,8 @@ NEXT_PUBLIC_FASTAPI_WS_URL=ws://127.0.0.1:8000/api/v1/realtime/ws
 NEXT_PUBLIC_FASTAPI_SSE_URL=http://127.0.0.1:8000/api/v1/realtime/events
 NEXT_PUBLIC_FASTAPI_TIMEOUT_MS=8000
 ```
+
+Optional workers are external-data helpers. Keep them disabled for the fast local virtual flow. Enable exchange instrument sync, derivative snapshot sync, or orderbook snapshot sync only when validating exchange-rule, derivative-context, orderbook, or real-execution readiness behavior.
 
 ## Migrations
 
@@ -139,6 +178,22 @@ PostgreSQL schema changes must go through Alembic:
 cd backend
 .\.venv\Scripts\python.exe -m alembic revision -m "describe_change"
 .\.venv\Scripts\python.exe -m alembic upgrade head
+```
+
+Check local migration state:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m alembic current
+.\.venv\Scripts\python.exe -m alembic heads
+```
+
+Make targets are available for the same checks:
+
+```powershell
+make migrate
+make migrations-current
+make migrations-heads
 ```
 
 Update SQLAlchemy models in `backend/app/models/` and keep migrations in `backend/alembic/versions/`.
@@ -172,31 +227,17 @@ Virtual trading mechanics smoke:
 make smoke-virtual
 ```
 
-Equivalent PowerShell command:
+## Virtual, Testnet, Mainnet
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\smoke_virtual.ps1
-```
-
-## Live Trading Safety
-
-Live order placement is disabled by default. Keep these defaults unless you are deliberately testing live execution in a controlled environment:
-
-```env
-ENABLE_LIVE_TRADING=false
-ENABLE_BYBIT_LIVE_ORDER_PLACEMENT=false
-ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT=false
-REQUIRE_PROTECTIVE_STOP_FOR_LIVE_ENTRY=true
-EXCHANGE_ACCOUNT_SNAPSHOT_TTL_SECONDS=15
-MAX_SCANNER_PAIRS=200
-TRUNCATE_SCANNER_PAIRS_OVER_LIMIT=false
-```
-
-Real execution must pass backend risk checks, exchange connection checks, account snapshot freshness, instrument rules, idempotency, and protective-order requirements before an adapter can place orders.
+- Virtual pending execution is implemented. The local MVP flow should use virtual mode and the scanner tick path to validate pending-entry behavior.
+- Real pending execution from scanner tick triggers is not implemented. Do not treat real pending entries as live trigger automation.
+- Real order placement is disabled unless `ENABLE_LIVE_TRADING=true`, `ENABLE_BYBIT_LIVE_ORDER_PLACEMENT=true`, the exchange connection allows live placement, and all backend risk/safety checks pass.
+- Mainnet order placement additionally requires `ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT=true` and explicit mainnet opt-in on the exchange connection.
+- Testnet and mainnet are separate exchange connection environments. Local virtual smoke checks do not require exchange credentials and do not place orders.
+- Notifications are not proof that the Radar signal feed works. Use `/health`, `/api/v1/radar/status`, scanner status, and `make smoke-virtual` as the local proof points.
 
 ## Current Limitations
 
-- Real pending-entry execution from tick triggers is not implemented; pending entry is currently virtual-only.
 - Email and Telegram notification providers are stubbed; WebSocket/SSE delivery is active.
 - NATS is provisioned in local and deploy infra, while current realtime fanout uses Redis Pub/Sub plus WebSocket/SSE.
 - Mainnet order placement requires explicit backend flags and an exchange connection configured for live placement.

@@ -314,6 +314,18 @@ if ($WithInfra) {
 
 $backendEnv = @{
     PYTHONUNBUFFERED = "1"
+    MAX_SCANNER_PAIRS = "20"
+    TRUNCATE_SCANNER_PAIRS_OVER_LIMIT = "false"
+    SCANNER_WARMUP_CONCURRENCY = "2"
+    SCANNER_WARMUP_TIMEOUT_SECONDS = "8"
+    EXCHANGE_INSTRUMENT_SYNC_ENABLED = "false"
+    DERIVATIVE_SNAPSHOT_SYNC_ENABLED = "false"
+    ORDERBOOK_SNAPSHOT_SYNC_ENABLED = "false"
+    REAL_POSITION_SYNC_ENABLED = "false"
+    ENABLE_LIVE_TRADING = "false"
+    ENABLE_BYBIT_LIVE_ORDER_PLACEMENT = "false"
+    ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT = "false"
+    REQUIRE_PROTECTIVE_STOP_FOR_LIVE_ENTRY = "true"
 }
 
 if ($BackendPythonPath) {
@@ -322,6 +334,9 @@ if ($BackendPythonPath) {
 
 if ($NoScanner) {
     $backendEnv["CRYPTO_RADAR_SCANNER_ENABLED"] = "false"
+}
+else {
+    $backendEnv["CRYPTO_RADAR_SCANNER_ENABLED"] = "true"
 }
 
 Invoke-BackendCommand `
@@ -334,6 +349,7 @@ $frontendEnv = @{
     PORT = [string]$FrontendPort
     NEXT_PUBLIC_FASTAPI_HTTP_URL = "http://$BackendHost`:$BackendPort"
     NEXT_PUBLIC_FASTAPI_WS_URL = "ws://$BackendHost`:$BackendPort/api/v1/realtime/ws"
+    NEXT_PUBLIC_FASTAPI_TIMEOUT_MS = "8000"
 }
 
 $managed = @()

@@ -117,4 +117,8 @@ Do not use ClickHouse as the source of truth for user actions, positions, orders
 ```powershell
 cd backend
 .\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic current
+.\.venv\Scripts\python.exe -m alembic heads
 ```
+
+`alembic current` must match `alembic heads`. Backend startup warns when it can verify that PostgreSQL is not at Alembic head, but the warning is diagnostic only; run `alembic upgrade head` before local scanner or virtual-trading checks.

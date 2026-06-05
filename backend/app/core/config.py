@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
 
     app_env: str = "development"
 
@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     prometheus_metrics_enabled: bool = True
     fastapi_slow_request_ms: int = 1000
 
+    crypto_radar_scanner_enabled: bool = False
     enable_live_trading: bool = False
     enable_bybit_live_order_placement: bool = False
     enable_bybit_mainnet_order_placement: bool = False
@@ -39,17 +40,17 @@ class Settings(BaseSettings):
     virtual_min_fill_ratio: float = 0.25
     virtual_execution_profile: str = "realistic"
 
-    exchange_instrument_sync_enabled: bool = True
+    exchange_instrument_sync_enabled: bool = False
     exchange_instrument_sync_interval_seconds: int = 21_600
     exchange_instrument_rules_ttl_seconds: int = 86_400
     bybit_instrument_rule_categories: str = "linear"
-    derivative_snapshot_sync_enabled: bool = True
+    derivative_snapshot_sync_enabled: bool = False
     derivative_snapshot_sync_interval_seconds: int = 60
     derivative_snapshot_ttl_seconds: int = 120
     bybit_derivative_snapshot_categories: str = "linear"
     market_universe_high_turnover_24h: Decimal = Decimal("100000000")
     market_universe_medium_turnover_24h: Decimal = Decimal("10000000")
-    orderbook_snapshot_sync_enabled: bool = True
+    orderbook_snapshot_sync_enabled: bool = False
     orderbook_snapshot_sync_interval_seconds: int = 10
     orderbook_snapshot_ttl_seconds: int = 15
     bybit_orderbook_snapshot_categories: str = "linear"
@@ -62,10 +63,10 @@ class Settings(BaseSettings):
     signal_outcome_tracking_min_score: int = 70
     signal_outcome_same_candle_resolution: str = "conservative_stop_first"
     strategy_performance_min_sample_size: int = 30
-    max_scanner_pairs: int = 200
+    max_scanner_pairs: int = 20
     truncate_scanner_pairs_over_limit: bool = False
-    scanner_warmup_concurrency: int = 5
-    scanner_warmup_timeout_seconds: float = 10.0
+    scanner_warmup_concurrency: int = 2
+    scanner_warmup_timeout_seconds: float = 8.0
     scanner_market_data_stale_seconds: float = 30.0
 
 

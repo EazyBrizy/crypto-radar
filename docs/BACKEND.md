@@ -57,6 +57,7 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
   - Builds execution plans only after backend risk checks and exchange readiness checks.
   - Default adapter is dry-run.
   - Live Bybit placement is guarded by backend flags, connection environment, account snapshots, instrument rules, idempotency, and protective-order validation.
+  - Real pending execution from scanner tick triggers is not implemented; pending-entry trigger automation is virtual-only.
 
 - Risk: `backend/app/services/risk_gate.py`, `backend/app/services/risk_management.py`, `backend/app/services/risk_state.py`, `backend/app/services/risk_preview.py`
   - Owns position sizing, stop/take-profit plans, R:R gates, leverage/margin checks, market data quality checks, daily/open/correlated risk, protection state, and audit records.
@@ -77,7 +78,17 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - Strategy performance: `backend/app/workers/strategy_performance_worker.py`
 - Signal outcomes: `backend/app/workers/signal_outcome_worker.py`
 
-Workers are started from `backend/app/main.py` lifespan according to settings.
+Workers are started from `backend/app/main.py` lifespan according to settings. Local MVP defaults keep scanner autostart and optional external sync workers disabled:
+
+- `CRYPTO_RADAR_SCANNER_ENABLED=false`
+- `EXCHANGE_INSTRUMENT_SYNC_ENABLED=false`
+- `DERIVATIVE_SNAPSHOT_SYNC_ENABLED=false`
+- `ORDERBOOK_SNAPSHOT_SYNC_ENABLED=false`
+- `REAL_POSITION_SYNC_ENABLED=false`
+- `MAX_SCANNER_PAIRS=20`
+- `SCANNER_WARMUP_CONCURRENCY=2`
+
+Start the scanner explicitly with `POST /api/v1/radar/scanner/start` after `/health` and `/api/v1/radar/status` are healthy.
 
 ## Data Ownership Rules
 

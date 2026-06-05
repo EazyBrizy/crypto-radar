@@ -62,9 +62,9 @@ export function useHealthQuery() {
   });
 }
 
-export function useRadarQuery(radarDisplayMode?: RadarDisplayMode | null, userId = "demo_user") {
+export function useRadarQuery(radarDisplayMode?: RadarDisplayMode | null, userId?: string | null) {
   return useQuery({
-    queryKey: serverStateKeys.radar.dashboard(radarDisplayMode ?? undefined, userId),
+    queryKey: serverStateKeys.radar.dashboard(radarDisplayMode ?? undefined, userId ?? "me"),
     queryFn: () => api.radar({ radarDisplayMode, userId }),
     refetchInterval: serverStatePolicy.reconciliationIntervalMs,
     staleTime: serverStatePolicy.realtimeStaleTimeMs
@@ -113,9 +113,9 @@ export function useSignalActionStateQuery(
   });
 }
 
-export function usePendingEntryQuery(signalId: string | null, userId = "demo_user", options: PlannedQueryOptions = {}) {
+export function usePendingEntryQuery(signalId: string | null, userId?: string | null, options: PlannedQueryOptions = {}) {
   return useQuery({
-    queryKey: serverStateKeys.signals.pendingEntry(signalId ?? "none", userId),
+    queryKey: serverStateKeys.signals.pendingEntry(signalId ?? "none", userId ?? "me"),
     queryFn: () => api.pendingEntry(signalId as string, userId),
     enabled: options.enabled ?? Boolean(signalId),
     refetchInterval: options.refetchInterval,
@@ -123,9 +123,9 @@ export function usePendingEntryQuery(signalId: string | null, userId = "demo_use
   });
 }
 
-export function usePendingEntryHistoryQuery(signalId: string | null, userId = "demo_user", options: PlannedQueryOptions = {}) {
+export function usePendingEntryHistoryQuery(signalId: string | null, userId?: string | null, options: PlannedQueryOptions = {}) {
   return useQuery({
-    queryKey: serverStateKeys.signals.pendingEntryHistory(signalId ?? "none", userId),
+    queryKey: serverStateKeys.signals.pendingEntryHistory(signalId ?? "none", userId ?? "me"),
     queryFn: () => api.pendingEntryHistory(signalId as string, userId),
     enabled: options.enabled ?? Boolean(signalId),
     refetchInterval: options.refetchInterval,
@@ -134,12 +134,12 @@ export function usePendingEntryHistoryQuery(signalId: string | null, userId = "d
 }
 
 export function usePendingEntriesQuery(
-  userId = "demo_user",
+  userId?: string | null,
   scope: PendingEntryQueueScope = "active",
   options: PlannedQueryOptions & { limit?: number } = {}
 ) {
   return useQuery({
-    queryKey: serverStateKeys.signals.pendingEntries(scope, userId),
+    queryKey: serverStateKeys.signals.pendingEntries(scope, userId ?? "me"),
     queryFn: () => api.pendingEntries({ userId, scope, limit: options.limit }),
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval,
@@ -556,12 +556,12 @@ export function useExchangeConnectionsQuery() {
   });
 }
 
-export function useExchangeConnectionWalletBalancesQuery(connectionIds: string[], userId = "demo_user") {
+export function useExchangeConnectionWalletBalancesQuery(connectionIds: string[], userId?: string | null) {
   const uniqueConnectionIds = uniqueIds(connectionIds);
   const queries = useQueries({
     queries: uniqueConnectionIds.map((connectionId) => ({
-      queryKey: serverStateKeys.exchangeConnections.walletBalance(connectionId, userId),
-      queryFn: () => api.getConnectionWalletBalance(connectionId, userId),
+      queryKey: serverStateKeys.exchangeConnections.walletBalance(connectionId, userId ?? "me"),
+      queryFn: () => api.getConnectionWalletBalance(connectionId, userId ?? undefined),
       enabled: Boolean(connectionId),
       refetchInterval: serverStatePolicy.slowBackgroundRefreshMs,
       staleTime: serverStatePolicy.realtimeStaleTimeMs
@@ -571,12 +571,12 @@ export function useExchangeConnectionWalletBalancesQuery(connectionIds: string[]
   return mapConnectionQueryResults<ExchangeWalletBalance>(uniqueConnectionIds, queries);
 }
 
-export function useExchangeConnectionAccountSnapshotsQuery(connectionIds: string[], userId = "demo_user") {
+export function useExchangeConnectionAccountSnapshotsQuery(connectionIds: string[], userId?: string | null) {
   const uniqueConnectionIds = uniqueIds(connectionIds);
   const queries = useQueries({
     queries: uniqueConnectionIds.map((connectionId) => ({
-      queryKey: serverStateKeys.exchangeConnections.accountSnapshot(connectionId, userId),
-      queryFn: () => api.getConnectionAccountSnapshot(connectionId, userId),
+      queryKey: serverStateKeys.exchangeConnections.accountSnapshot(connectionId, userId ?? "me"),
+      queryFn: () => api.getConnectionAccountSnapshot(connectionId, userId ?? undefined),
       enabled: Boolean(connectionId),
       refetchInterval: serverStatePolicy.slowBackgroundRefreshMs,
       staleTime: serverStatePolicy.realtimeStaleTimeMs
@@ -586,22 +586,22 @@ export function useExchangeConnectionAccountSnapshotsQuery(connectionIds: string
   return mapConnectionQueryResults<AccountRiskSnapshot>(uniqueConnectionIds, queries);
 }
 
-export function useRefreshExchangeConnectionBalanceMutation(userId = "demo_user") {
+export function useRefreshExchangeConnectionBalanceMutation(userId?: string | null) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (connectionId: string) => {
-      const snapshot = await api.getConnectionAccountSnapshot(connectionId, userId, true);
-      const wallet = await api.getConnectionWalletBalance(connectionId, userId, false);
+      const snapshot = await api.getConnectionAccountSnapshot(connectionId, userId ?? undefined, true);
+      const wallet = await api.getConnectionWalletBalance(connectionId, userId ?? undefined, false);
       return { connectionId, snapshot, wallet };
     },
     onSuccess: async ({ connectionId, snapshot, wallet }) => {
       queryClient.setQueryData(
-        serverStateKeys.exchangeConnections.accountSnapshot(connectionId, userId),
+        serverStateKeys.exchangeConnections.accountSnapshot(connectionId, userId ?? "me"),
         snapshot
       );
       queryClient.setQueryData(
-        serverStateKeys.exchangeConnections.walletBalance(connectionId, userId),
+        serverStateKeys.exchangeConnections.walletBalance(connectionId, userId ?? "me"),
         wallet
       );
       await queryClient.invalidateQueries({ queryKey: serverStateKeys.exchangeConnections.all() });

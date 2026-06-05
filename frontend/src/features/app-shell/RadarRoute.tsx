@@ -23,13 +23,6 @@ import {
   useSignalExecutionPreviewQuery,
   useUserProfileQuery
 } from "@/hooks/use-radar-queries";
-import {
-  canShowEnterButton,
-  canShowSignalEntryAction,
-  isMarketOpportunity,
-  isOpenCandleActionableAllowed,
-  isWaitingEntry
-} from "@/domain/signal-status";
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
 import { useSignalStore } from "@/stores/signal-store";
 import { useTradingActionsDisabled } from "@/stores/ui-selectors";
@@ -58,7 +51,7 @@ export function RadarRoute() {
   const replaceSignals = useSignalStore((state) => state.replaceSignals);
 
   const sessionQuery = useAuthSessionQuery();
-  const userId = sessionQuery.data?.user.id ?? "demo_user";
+  const userId = sessionQuery.data?.user.id ?? null;
   const healthQuery = useHealthQuery();
   const radarStatusQuery = useRadarStatusQuery();
   const radarQuery = useRadarQuery(radarDisplayMode, userId);
@@ -364,6 +357,7 @@ export function RadarRoute() {
       selectedSignal={selectedSignal}
       health={healthQuery.data ?? radarStatusQuery.data ?? null}
       radarStatus={radarStatusQuery.data ?? null}
+      radarSummary={radarQuery.data?.summary ?? null}
       loading={loading}
       busy={busy}
       actionError={actionError}
@@ -408,7 +402,7 @@ export function RadarRoute() {
 }
 
 function isActionableSignal(signal: RadarSignal): boolean {
-  return canShowSignalEntryAction(signal);
+  return signal.details_view?.can_enter_now === true;
 }
 
 export function shouldRequestExecutionPreview(
@@ -416,11 +410,9 @@ export function shouldRequestExecutionPreview(
   signalView: "open" | "history",
   tradingActionsDisabled: boolean
 ): boolean {
-  return signal != null && signalView === "open" && !tradingActionsDisabled && isPreviewableSignal(signal);
-}
-
-function isPreviewableSignal(signal: RadarSignal): boolean {
-  return isMarketOpportunity(signal.status);
+  return signal?.details_view?.execution_summary.preview_available === true
+    && signalView === "open"
+    && !tradingActionsDisabled;
 }
 
 export function canSendPaperTrade(signal: RadarSignal | null): boolean {
@@ -428,11 +420,8 @@ export function canSendPaperTrade(signal: RadarSignal | null): boolean {
 }
 
 export function canArmAutoEntry(signal: RadarSignal | null): boolean {
-  if (!signal) return false;
-  if (canShowEnterButton(signal)) return false;
-  if (signal.auto_entry && isActivePendingEntryStatus(signal.auto_entry.status)) return false;
-  if (signal.candle_state === "open" && !isOpenCandleActionableAllowed(signal)) return false;
-  return isWaitingEntry(signal.status);
+  return signal?.details_view?.primary_action_label === "Wait for entry"
+    || signal?.details_view?.primary_status === "waiting_entry";
 }
 
 export function selectRealTradeConnection(

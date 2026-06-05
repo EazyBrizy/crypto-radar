@@ -85,8 +85,8 @@ describe("signal status domain helper", () => {
   it("marks entry-touched/actionable consistently as execution candidates and invalidated/expired as terminal", () => {
     for (const status of ["entry_touched", "actionable"] as const) {
       expect(isExecutionCandidateStatus(status)).toBe(true);
-      expect(canShowEnterButton({ ...baseSignal, status, can_enter: true })).toBe(true);
-      expect(canShowEnterButton({ ...baseSignal, status, can_enter: false })).toBe(false);
+      expect(canShowEnterButton(withBackendEnter({ ...baseSignal, status }, true))).toBe(true);
+      expect(canShowEnterButton(withBackendEnter({ ...baseSignal, status }, false))).toBe(false);
     }
     expect(isExecutionCandidateStatus("confirmed")).toBe(true);
     expect(isTerminalSignalStatus("invalidated")).toBe(true);
@@ -96,12 +96,13 @@ describe("signal status domain helper", () => {
   it("requires backend permission for actionable and entry-touched signals", () => {
     expect(canShowEnterButton({ ...baseSignal, status: "actionable" })).toBe(false);
     expect(canShowEnterButton({ ...baseSignal, status: "entry_touched" })).toBe(false);
-    expect(canShowEnterButton({ ...baseSignal, status: "actionable", can_enter: true })).toBe(true);
-    expect(canShowEnterButton({ ...baseSignal, status: "entry_touched", can_enter: true })).toBe(true);
-    expect(canShowEnterButton({ ...baseSignal, status: "entry_touched", can_enter: false })).toBe(false);
+    expect(canShowEnterButton({ ...baseSignal, status: "actionable", can_enter: true })).toBe(false);
+    expect(canShowEnterButton(withBackendEnter({ ...baseSignal, status: "actionable" }, true))).toBe(true);
+    expect(canShowEnterButton(withBackendEnter({ ...baseSignal, status: "entry_touched" }, true))).toBe(true);
+    expect(canShowEnterButton(withBackendEnter({ ...baseSignal, status: "entry_touched" }, false))).toBe(false);
   });
 
-  it("accepts decision snapshots only when execution is allowed and unblocked", () => {
+  it("ignores legacy decision snapshots for enter permission", () => {
     const signal: RadarSignal = {
       ...baseSignal,
       status: "actionable",
@@ -117,20 +118,63 @@ describe("signal status domain helper", () => {
       }
     };
 
-    expect(canShowEnterButton(signal)).toBe(true);
-    expect(canShowEnterButton({
-      ...signal,
-      decision: {
-        ...signal.decision!,
-        blockers: [{
-          code: "risk_gate",
-          message: "Blocked by risk profile",
-          source: "risk",
-          severity: "blocker",
-          scope: "virtual",
-          metadata: {}
-        }]
-      }
-    })).toBe(false);
+    expect(canShowEnterButton(signal)).toBe(false);
+    expect(canShowEnterButton(withBackendEnter(signal, true))).toBe(true);
   });
 });
+
+function withBackendEnter(signal: RadarSignal, canEnterNow: boolean): RadarSignal {
+  return {
+    ...signal,
+    details_view: {
+      title: signal.symbol,
+      side: signal.direction,
+      primary_status: canEnterNow ? "execution_ready" : "blocked",
+      primary_status_label: canEnterNow ? "Execution ready" : "Blocked",
+      primary_status_tone: canEnterNow ? "green" : "red",
+      primary_action_label: canEnterNow ? "Enter now" : "Locked",
+      recommended_action_text: "Backend action-state owns this decision.",
+      can_enter_now: canEnterNow,
+      trade_plan: {
+        has_trade_plan: true,
+        entry_type: "Backend entry",
+        entry_zone: "100 - 101",
+        entry_price: 100,
+        stop_loss: 98,
+        targets: [],
+        selected_rr: 2,
+        selected_rr_target: "final",
+        min_rr: 1.5,
+        trade_plan_complete: true,
+        fallback_used: false,
+        missing: [],
+        invalidation: "-"
+      },
+      risk_summary: {
+        label: "Risk ok",
+        risk_failed: false,
+        risk_reward_blocked: false,
+        risk_reward_warning: null,
+        forming_candle: false,
+        open_candle_allowed: false,
+        forming_reason: null,
+        status_allows_trade: true,
+        trade_plan_complete: true,
+        risk_reward_ok: true,
+        is_market_opportunity: true
+      },
+      execution_summary: {
+        preview_available: canEnterNow,
+        risk_check_status: null,
+        risk_decision_status: null,
+        can_enter: canEnterNow,
+        quality_gate_status: null,
+        impact_risk: null,
+        status_allows_trade: true
+      },
+      top_reasons: [],
+      top_blockers: [],
+      warnings: []
+    }
+  };
+}

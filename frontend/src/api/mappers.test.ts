@@ -7,12 +7,14 @@ import type {
   PendingEntryIntentReadDto
 } from "./generated/schemas";
 import {
+  ApiContractError,
   normalizeAccountRiskSnapshot,
   normalizeExchangeWalletBalance,
   normalizeExecutionReport,
   normalizeMarketUniversePair,
   normalizePendingEntryIntent,
-  normalizeRadarStatus
+  normalizeRadarStatus,
+  normalizeSignalActionState
 } from "./mappers";
 
 describe("normalizeExecutionReport", () => {
@@ -88,6 +90,24 @@ describe("normalizeRadarStatus", () => {
 });
 
 describe("market/risk/trading OpenAPI DTO mappers", () => {
+  it("throws API contract error when critical action-state fields are missing", () => {
+    expect(() =>
+      normalizeSignalActionState({
+        can_arm_pending: true,
+        can_reconfirm: false,
+        can_cancel: false,
+        mode: "virtual",
+        environment: "virtual",
+        primary_action: "arm_pending_entry",
+        disabled_reason_code: null,
+        blockers: [],
+        warnings: [],
+        accepted_trade_plan_snapshot: null,
+        display_labels: {}
+      })
+    ).toThrow(ApiContractError);
+  });
+
   it("accepts generated pending-entry history DTOs with Decimal strings", () => {
     const intent = {
       id: "intent_1",

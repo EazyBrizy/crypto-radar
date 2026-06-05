@@ -3,11 +3,11 @@ import { FileCheck2, Filter, RadioTower, RefreshCw, XCircle } from "lucide-react
 import { Metric } from "@/components/Metric";
 import { SignalDetails, type RealTradeContext } from "@/components/SignalDetails";
 import { SignalFeed } from "@/components/SignalFeed";
-import { canShowEnterButton, RADAR_STATUS_FILTERS } from "@/domain/signal-status";
+import { RADAR_STATUS_FILTERS } from "@/domain/signal-status";
 import type { RadarDisplayMode } from "@/features/server-state/types";
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
-import type { HealthStatus, PendingEntryIntent, RadarSignal, RadarStatus, SignalActionState, SignalStatus, VirtualExecutionReport } from "@/types";
-import { formatPrice, isRiskRewardBlocked } from "@/utils";
+import type { HealthStatus, PendingEntryIntent, RadarSignal, RadarStatus, RadarSummary, SignalActionState, SignalStatus, VirtualExecutionReport } from "@/types";
+import { formatPrice } from "@/utils";
 
 interface RadarPageProps {
   busy: boolean;
@@ -32,6 +32,7 @@ interface RadarPageProps {
   onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
   onSelectLatestSignal: () => void;
   radarStatus: RadarStatus | null;
+  radarSummary?: RadarSummary | null;
   selectedSignal: RadarSignal | null;
   selectedSignalId: string | null;
   missingSelectedSignalId?: string | null;
@@ -57,10 +58,7 @@ interface RadarPageProps {
 }
 
 export function RadarPage(props: RadarPageProps) {
-  const executionReadySignals = props.signals.filter(canShowEnterButton).length;
-  const highConfidence = props.signals.filter((signal) => signal.score >= 80).length;
-  const positiveEdge = props.signals.filter((signal) => signal.edge?.status === "positive").length;
-  const blockedIdeas = props.signals.filter((signal) => isRiskRewardBlocked(signal) || signal.no_trade_filter?.blocked || signal.risk_gate_status === "failed" || signal.can_enter === false).length;
+  const summary = props.radarSummary;
   const scannerPairCount = props.radarStatus?.scanner_pairs_count ?? props.health?.scanner_pairs_count ?? props.radarStatus?.symbols.length ?? 0;
   const scannerUniverse = props.radarStatus?.scanner_universe_source ?? props.health?.scanner_universe_source ?? "default";
   const estimatedEvaluations = props.radarStatus?.estimated_strategy_checks ?? props.health?.estimated_strategy_checks ?? 0;
@@ -85,10 +83,10 @@ export function RadarPage(props: RadarPageProps) {
 
         <div className="metrics-grid">
           <Metric label="Market Status" value={props.health?.scanner_running ? "Online" : "Offline"} hint="scanner" />
-          <Metric label="Execution Ready" value={String(executionReadySignals)} hint="RiskGate" />
-          <Metric label="High Confidence" value={String(highConfidence)} hint="score 80+" />
-          <Metric label="Positive Edge" value={String(positiveEdge)} hint="EV gate" />
-          <Metric label="Blocked Ideas" value={String(blockedIdeas)} hint="RR/no-trade" />
+          <Metric label="Execution Ready" value={String(summary?.execution_ready_signals ?? 0)} hint="RiskGate" />
+          <Metric label="High Confidence" value={String(summary?.high_confidence_signals ?? 0)} hint="score 80+" />
+          <Metric label="Positive Edge" value={String(summary?.positive_edge_signals ?? 0)} hint="EV gate" />
+          <Metric label="Blocked Ideas" value={String(summary?.blocked_ideas ?? 0)} hint="backend" />
           <Metric label="Ticks" value={String(props.radarStatus?.ticks_processed ?? props.health?.ticks_processed ?? 0)} hint="market data" />
           <Metric label="Strategy Checks" value={String(props.radarStatus?.strategy_evaluations ?? props.health?.strategy_evaluations ?? 0)} hint="evaluated" />
           <Metric label="Features" value={String(props.radarStatus?.features_built ?? props.health?.features_built ?? 0)} hint="candles analyzed" />
@@ -336,9 +334,9 @@ function PendingEntryQueueItem({
   onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
   selected: boolean;
 }) {
-  const reasonCode = pendingEntryReasonCode(intent);
-  const reason = pendingEntryReason(intent, reasonCode);
-  const currentPrice = intent.current_price == null ? "-" : formatPrice(intent.current_price);
+  const reasonCode = intent.view?.reason_code ?? intent.reason_code ?? null;
+  const reason = intent.view?.reason ?? intent.failure_reason ?? reasonCode?.replaceAll("_", " ") ?? "No reason from backend";
+  const currentPrice = intent.view?.current_price == null ? formatPrice(intent.current_price) : formatPrice(intent.view.current_price);
 
   return (
     <article className={selected ? "pending-entry-item selected" : "pending-entry-item"}>
@@ -353,7 +351,7 @@ function PendingEntryQueueItem({
         </div>
       </div>
       <div className="pending-entry-metrics">
-        <MetricLine label="Entry zone" value={`${formatPrice(intent.entry_min)} - ${formatPrice(intent.entry_max)}`} />
+        <MetricLine label="Entry zone" value={intent.view?.entry_zone ?? `${formatPrice(intent.entry_min)} - ${formatPrice(intent.entry_max)}`} />
         <MetricLine label="Current price" value={currentPrice} />
         <MetricLine label="Expires" value={formatPendingEntryTtl(intent.expires_at)} />
         <MetricLine label="Reason code" value={reasonCode ?? "-"} />
@@ -410,38 +408,4 @@ function formatPendingEntryTtl(value: string | null): string {
   const diffMinutes = Math.ceil(diffMs / 60_000);
   if (diffMinutes < 60) return `${diffMinutes}m left`;
   return `${Math.ceil(diffMinutes / 60)}h left`;
-}
-
-function pendingEntryReason(intent: PendingEntryIntent, reasonCode: string | null): string {
-  return intent.localized_reason
-    ?? intent.failure_reason
-    ?? pendingEntrySnapshotString(intent, "localized_reason")
-    ?? pendingEntrySnapshotString(intent, "reason")
-    ?? reasonCode?.replaceAll("_", " ")
-    ?? "No reason from backend";
-}
-
-function pendingEntryReasonCode(intent: PendingEntryIntent): string | null {
-  return intent.reason_code
-    ?? pendingEntrySnapshotString(intent, "reason_code")
-    ?? pendingEntryMaterialReasonCode(intent);
-}
-
-function pendingEntrySnapshotString(intent: PendingEntryIntent, key: string): string | null {
-  const value = intent.request_snapshot[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function pendingEntryMaterialReasonCode(intent: PendingEntryIntent): string | null {
-  const review = intent.request_snapshot.current_market_snapshot;
-  if (!isRecord(review)) return null;
-  const summary = review.material_change_summary;
-  if (!isRecord(summary) || !Array.isArray(summary.changes)) return null;
-  const firstChange = summary.changes.find(isRecord);
-  const reasonCode = firstChange?.reason_code;
-  return typeof reasonCode === "string" && reasonCode.trim() ? reasonCode.trim() : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

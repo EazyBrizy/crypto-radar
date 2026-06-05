@@ -88,23 +88,15 @@ export function isEntryTouched(status: SignalStatus): boolean {
 
 export function isExecutionReady(
   status: SignalStatus,
-  decision?: RadarSignal["decision"] | null,
+  _decision?: RadarSignal["decision"] | null,
   canEnter?: boolean | null
 ): boolean {
-  if (!isExecutionCandidateStatus(status)) return false;
-  if (canEnter === false) return false;
-  if (canEnter === true) return true;
-  if (decision) {
-    return decision.signal_actionable === true
-      && decision.execution_allowed_virtual !== false
-      && !decision.blockers.length;
-  }
-  return false;
+  return isExecutionCandidateStatus(status) && canEnter === true;
 }
 
 export function canShowEnterButton(signal: RadarSignal | null): boolean {
   if (!signal) return false;
-  return isExecutionReady(signal.status, signal.decision, signal.can_enter);
+  return signal.details_view?.can_enter_now === true;
 }
 
 export function isFormingCandleSignal(signal: RadarSignal): boolean {
@@ -113,17 +105,7 @@ export function isFormingCandleSignal(signal: RadarSignal): boolean {
 
 export function isOpenCandleActionableAllowed(signal: RadarSignal): boolean {
   if (!isFormingCandleSignal(signal)) return true;
-  const candleStateCheck = signal.confirmation?.checks.find((item) => item.name === "candle_state_gate");
-  const metadataSources = [
-    signal.trade_plan?.metadata,
-    signal.trade_plan?.risk_rules.metadata,
-    candleStateCheck?.metadata
-  ].filter((source): source is Record<string, unknown> => Boolean(source));
-  return metadataSources.some((metadata) => {
-    if (booleanMetadata(metadata, "actionable_from_open_candle") === true) return true;
-    return booleanMetadata(metadata, "allow_open_candle_actionable") === true
-      && booleanMetadata(metadata, "signal_actionable") === true;
-  });
+  return signal.details_view?.risk_summary.open_candle_allowed === true;
 }
 
 export function canShowSignalEntryAction(signal: RadarSignal): boolean {
@@ -136,7 +118,7 @@ export function statusBadgeTone(
   previewOnly = false
 ): SignalUiBadgeTone {
   if (previewOnly) return "yellow";
-  if (isExecutionReady(signal.status, signal.decision, signal.can_enter)) return "green";
+  if (signal.card_view?.status_tone) return signal.card_view.status_tone;
   if (isEntryTouched(signal.status)) return "purple";
   if (isWaitingEntry(signal.status)) return signal.status === "watchlist" ? "yellow" : "blue";
   if (isTerminalSignalStatus(signal.status)) return "red";
@@ -145,7 +127,7 @@ export function statusBadgeTone(
 
 export function statusBadgeLabel(signal: RadarSignal, previewOnly = false): string {
   if (previewOnly) return "preview";
-  if (isExecutionReady(signal.status, signal.decision, signal.can_enter)) return "Execution-ready";
+  if (signal.card_view?.status_label) return signal.card_view.status_label;
   if (isEntryTouched(signal.status)) return "Entry touched";
   if (isWaitingEntry(signal.status)) return "Waiting entry";
   if (isMarketOpportunity(signal.status)) return "Market opportunity";
@@ -153,8 +135,7 @@ export function statusBadgeLabel(signal: RadarSignal, previewOnly = false): stri
 }
 
 export function marketOpportunityLabel(signal: RadarSignal): string {
-  if (isExecutionReady(signal.status, signal.decision, signal.can_enter)) return "Execution-ready";
-  if (signal.risk_gate_status === "failed" || signal.can_enter === false) return "Risk blocked";
+  if (signal.card_view?.opportunity_label) return signal.card_view.opportunity_label;
   if (isEntryTouched(signal.status)) return "Entry touched";
   if (isWaitingEntry(signal.status)) return "Waiting entry";
   if (isMarketOpportunity(signal.status)) return "Market opportunity";
@@ -162,8 +143,7 @@ export function marketOpportunityLabel(signal: RadarSignal): string {
 }
 
 export function marketOpportunityTone(signal: RadarSignal): SignalUiBadgeTone {
-  if (isExecutionReady(signal.status, signal.decision, signal.can_enter)) return "green";
-  if (signal.risk_gate_status === "failed" || signal.can_enter === false) return "red";
+  if (signal.card_view?.opportunity_tone) return signal.card_view.opportunity_tone;
   if (isEntryTouched(signal.status)) return "purple";
   if (isWaitingEntry(signal.status)) return "blue";
   if (isMarketOpportunity(signal.status)) return "yellow";
@@ -175,15 +155,4 @@ export function riskGateTone(status: RiskCheckStatus | null | undefined): Signal
   if (status === "failed") return "red";
   if (status === "warning") return "yellow";
   return "neutral";
-}
-
-function booleanMetadata(metadata: Record<string, unknown>, key: string): boolean | null {
-  const value = metadata[key];
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (["1", "true", "yes", "on"].includes(normalized)) return true;
-    if (["0", "false", "no", "off"].includes(normalized)) return false;
-  }
-  return null;
 }

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from app.services.radar_config_service import SUPPORTED_EXCHANGES
@@ -20,6 +20,7 @@ from app.schemas.external_exchange import (
     RealTradeImportResult,
 )
 from app.services.exchange_account_snapshot import exchange_account_snapshot_service
+from app.services.current_user import current_user_identity_service
 from app.services.exchange_connection_service import (
     ExchangeConnectionHardDeleteConflict,
     ExchangeConnectionServiceError,
@@ -77,15 +78,35 @@ async def list_exchanges() -> dict[str, list[str]]:
 
 
 @router.get("/connections", response_model=list[ExchangeConnectionResponse])
-async def list_exchange_connections(user_id: str = "demo_user") -> list[ExchangeConnectionResponse]:
+async def list_exchange_connections(
+    request: Request,
+    user_id: str | None = None,
+) -> list[ExchangeConnectionResponse]:
     try:
-        return exchange_connection_service.list_connections(user_id)
+        resolved_user_id = user_id or _current_user_id(request)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+    try:
+        return exchange_connection_service.list_connections(resolved_user_id)
     except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
 @router.post("/connections", response_model=ExchangeConnectionResponse, status_code=status.HTTP_201_CREATED)
-async def create_exchange_connection(request: ExchangeConnectionCreateRequest) -> ExchangeConnectionResponse:
+async def create_exchange_connection(
+    request: ExchangeConnectionCreateRequest,
+    fastapi_request: Request,
+) -> ExchangeConnectionResponse:
+    try:
+        request = request.model_copy(update={"user_id": _current_user_id(fastapi_request)})
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
     try:
         return exchange_connection_service.create_connection(request)
     except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
@@ -96,7 +117,7 @@ async def create_exchange_connection(request: ExchangeConnectionCreateRequest) -
 async def get_exchange_connection(connection_id: str) -> ExchangeConnectionResponse:
     try:
         return exchange_connection_service.get_connection(connection_id)
-    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
+    except (LookupError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -107,7 +128,7 @@ async def update_exchange_connection(
 ) -> ExchangeConnectionResponse:
     try:
         return exchange_connection_service.update_connection(connection_id, request)
-    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
+    except (LookupError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -147,13 +168,21 @@ async def get_exchange_connection_fee_rates(
 @router.get("/connections/{connection_id}/wallet-balance", response_model=ExchangeWalletBalanceResponse)
 async def get_exchange_connection_wallet_balance(
     connection_id: str,
-    user_id: str = "demo_user",
+    request: Request,
+    user_id: str | None = None,
     force_refresh: bool = False,
 ) -> ExchangeWalletBalanceResponse:
     try:
-        connection = exchange_connection_service.get_connection_for_user(connection_id, user_id)
+        resolved_user_id = user_id or _current_user_id(request)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+    try:
+        connection = exchange_connection_service.get_connection_for_user(connection_id, resolved_user_id)
         return exchange_account_snapshot_service.get_wallet_balance(
-            user_id=user_id,
+            user_id=resolved_user_id,
             exchange=connection.exchange_code,
             connection_id=connection.id,
             force_refresh=force_refresh,
@@ -165,13 +194,21 @@ async def get_exchange_connection_wallet_balance(
 @router.get("/connections/{connection_id}/account-snapshot", response_model=AccountRiskSnapshot)
 async def get_exchange_connection_account_snapshot(
     connection_id: str,
-    user_id: str = "demo_user",
+    request: Request,
+    user_id: str | None = None,
     force_refresh: bool = False,
 ) -> AccountRiskSnapshot:
     try:
-        connection = exchange_connection_service.get_connection_for_user(connection_id, user_id)
+        resolved_user_id = user_id or _current_user_id(request)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+    try:
+        connection = exchange_connection_service.get_connection_for_user(connection_id, resolved_user_id)
         return exchange_account_snapshot_service.get_snapshot(
-            user_id=user_id,
+            user_id=resolved_user_id,
             exchange=connection.exchange_code,
             connection_id=connection.id,
             mode="real",
@@ -184,10 +221,12 @@ async def get_exchange_connection_account_snapshot(
 @router.post("/connections/{connection_id}/account-snapshot/refresh", response_model=AccountRiskSnapshot)
 async def refresh_exchange_connection_account_snapshot(
     connection_id: str,
-    user_id: str = "demo_user",
+    request: Request,
+    user_id: str | None = None,
 ) -> AccountRiskSnapshot:
     return await get_exchange_connection_account_snapshot(
         connection_id=connection_id,
+        request=request,
         user_id=user_id,
         force_refresh=True,
     )
@@ -240,3 +279,7 @@ async def sync_exchange_connection_trades(connection_id: str) -> RealTradeImport
         )
     except (LookupError, ValueError) as exc:
         raise _http_error(exc) from exc
+
+
+def _current_user_id(request: Request) -> str:
+    return current_user_identity_service.resolve_from_request(request).user_id

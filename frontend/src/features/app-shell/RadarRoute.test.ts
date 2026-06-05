@@ -28,7 +28,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/auth/use-auth", () => ({
-  useAuthSessionQuery: () => ({ data: { user: { id: "demo_user" } } })
+  useAuthSessionQuery: () => ({ data: { user: { id: "user_1" } } })
 }));
 
 vi.mock("@/hooks/use-radar-queries", () => {
@@ -203,8 +203,74 @@ beforeEach(() => {
   useUiStore.setState({ selectedSignalId: null, signalFilter: "all" });
 });
 
-function signalWithStatus(status: SignalStatus): RadarSignal {
-  return { ...baseSignal, status };
+function signalWithStatus(
+  status: SignalStatus,
+  detailsOverrides: Partial<NonNullable<RadarSignal["details_view"]>> = {}
+): RadarSignal {
+  return { ...baseSignal, status, details_view: detailsView(detailsOverrides) };
+}
+
+function detailsView(
+  overrides: Partial<NonNullable<RadarSignal["details_view"]>> = {}
+): NonNullable<RadarSignal["details_view"]> {
+  return {
+    title: "BTCUSDT backend detail",
+    side: "long",
+    primary_status: "blocked",
+    primary_status_label: "Blocked",
+    primary_status_tone: "red",
+    primary_action_label: "Locked",
+    recommended_action_text: "Backend owns action availability.",
+    can_enter_now: false,
+    trade_plan: {
+      has_trade_plan: true,
+      entry_type: "Backend entry",
+      entry_zone: "100 - 101",
+      entry_price: 100,
+      stop_loss: 98,
+      targets: [],
+      selected_rr: 2,
+      selected_rr_target: "final",
+      min_rr: 1.5,
+      trade_plan_complete: true,
+      fallback_used: false,
+      missing: [],
+      invalidation: "-"
+    },
+    risk_summary: {
+      label: "Risk ok",
+      risk_failed: false,
+      risk_reward_blocked: false,
+      risk_reward_warning: null,
+      forming_candle: false,
+      open_candle_allowed: false,
+      forming_reason: null,
+      status_allows_trade: true,
+      trade_plan_complete: true,
+      risk_reward_ok: true,
+      is_market_opportunity: true
+    },
+    execution_summary: executionSummary(),
+    top_reasons: [],
+    top_blockers: [],
+    warnings: [],
+    ...overrides
+  };
+}
+
+function executionSummary(
+  overrides: Partial<NonNullable<RadarSignal["details_view"]>["execution_summary"]> = {}
+): NonNullable<RadarSignal["details_view"]>["execution_summary"] {
+  return {
+    preview_available: true,
+    risk_check_status: null,
+    risk_decision_status: null,
+    can_enter: null,
+    quality_gate_status: null,
+    impact_risk: null,
+    status_allows_trade: true,
+    ...overrides
+  };
 }
 
 function routeSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {
@@ -287,17 +353,19 @@ describe("RadarRoute selection", () => {
 });
 
 describe("shouldRequestExecutionPreview", () => {
-  it("keeps Reality Check populated for armed and pending Trend Pullback statuses", () => {
+  it("requests preview only when backend details view marks it available", () => {
     expect(shouldRequestExecutionPreview(signalWithStatus("new"), "open", false)).toBe(true);
     expect(shouldRequestExecutionPreview(signalWithStatus("watchlist"), "open", false)).toBe(true);
     expect(shouldRequestExecutionPreview(signalWithStatus("ready"), "open", false)).toBe(true);
     expect(shouldRequestExecutionPreview(signalWithStatus("wait_for_pullback"), "open", false)).toBe(true);
   });
 
-  it("does not preview history, blocked UI state, or terminal signals", () => {
+  it("does not preview history, blocked UI state, unavailable backend preview, or missing signal", () => {
     expect(shouldRequestExecutionPreview(signalWithStatus("ready"), "history", false)).toBe(false);
     expect(shouldRequestExecutionPreview(signalWithStatus("ready"), "open", true)).toBe(false);
-    expect(shouldRequestExecutionPreview(signalWithStatus("expired"), "open", false)).toBe(false);
+    expect(shouldRequestExecutionPreview(signalWithStatus("expired", {
+      execution_summary: executionSummary({ preview_available: false })
+    }), "open", false)).toBe(false);
     expect(shouldRequestExecutionPreview(null, "open", false)).toBe(false);
   });
 });
@@ -310,14 +378,19 @@ describe("paper trade eligibility", () => {
   it("allows paper trade only after backend execution permission", () => {
     expect(canSendPaperTrade(signalWithStatus("actionable"))).toBe(false);
     expect(canSendPaperTrade(signalWithStatus("entry_touched"))).toBe(false);
-    expect(canSendPaperTrade({ ...signalWithStatus("actionable"), can_enter: true })).toBe(true);
-    expect(canSendPaperTrade({ ...signalWithStatus("entry_touched"), can_enter: true })).toBe(true);
-    expect(canSendPaperTrade({ ...signalWithStatus("entry_touched"), can_enter: false })).toBe(false);
+    expect(canSendPaperTrade(signalWithStatus("actionable", { can_enter_now: true }))).toBe(true);
+    expect(canSendPaperTrade(signalWithStatus("entry_touched", { can_enter_now: true }))).toBe(true);
+    expect(canSendPaperTrade(signalWithStatus("entry_touched", { can_enter_now: false }))).toBe(false);
   });
 
   it("does not turn soft or legacy RR warnings into enter permission", () => {
     const lowRrSignal: RadarSignal = {
       ...baseSignal,
+      details_view: detailsView({
+        can_enter_now: false,
+        primary_status: "waiting_entry",
+        primary_action_label: "Wait for entry"
+      }),
       selected_rr: 0.8,
       confirmation: {
         passed: false,
@@ -337,10 +410,16 @@ describe("paper trade eligibility", () => {
     expect(canSendPaperTrade(lowRrSignal)).toBe(false);
   });
 
-  it("allows market opportunities to arm pending entry and blocks duplicate pending arms", () => {
-    expect(canArmAutoEntry(signalWithStatus("active"))).toBe(true);
+  it("uses backend details view to expose the pending-entry affordance", () => {
+    expect(canArmAutoEntry(signalWithStatus("active", {
+      primary_status: "waiting_entry",
+      primary_action_label: "Wait for entry"
+    }))).toBe(true);
     expect(canArmAutoEntry({
-      ...signalWithStatus("ready"),
+      ...signalWithStatus("ready", {
+        primary_status: "execution_ready",
+        primary_action_label: "Enter now"
+      }),
       auto_entry: {
         enabled: true,
         status: "pending",

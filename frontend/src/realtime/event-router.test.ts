@@ -57,7 +57,7 @@ const baseSignal: RadarSignal = {
 
 const baseTrade: TradeJournalEntry = {
   id: "trade_1",
-  user_id: "demo_user",
+  user_id: "user_1",
   signal_id: "sig_1",
   mode: "virtual",
   source: "virtual",
@@ -394,7 +394,7 @@ describe("createRealtimeEventRouter signal feed updates", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: historyKey });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: activeQueueKey });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: historyQueueKey });
-    expect(invalidateSpy).toHaveBeenCalledWith({
+    expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: serverStateKeys.signals.pendingEntry("sig_1", "demo_user")
     });
   });

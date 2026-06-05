@@ -21,11 +21,7 @@ export const exchangesApi = {
     return normalizeExchangeCatalog(catalog);
   },
   async connections(): Promise<ExchangeConnection[]> {
-    const response = await request(() =>
-      openApiClient.GET("/api/v1/exchanges/connections", {
-        params: { query: { user_id: "demo_user" } }
-      })
-    );
+    const response = await request(() => openApiClient.GET("/api/v1/exchanges/connections"));
     return response.map(normalizeExchangeConnection);
   },
   async createConnection(draft: ExchangeConnectionDraft): Promise<ExchangeConnection> {
@@ -33,7 +29,6 @@ export const exchangesApi = {
       await request(() =>
         openApiClient.POST("/api/v1/exchanges/connections", {
           body: {
-            user_id: "demo_user",
             exchange_code: draft.exchange_code,
             label: draft.label,
             account_type: draft.account_type ?? "spot",
@@ -45,7 +40,7 @@ export const exchangesApi = {
             order_placement_mode: draft.order_placement_mode ?? "dry_run",
             mainnet_explicitly_enabled: Boolean(draft.mainnet_explicitly_enabled),
             metadata: draft.metadata ?? {}
-          }
+          } as never
         })
       )
     );
@@ -55,7 +50,7 @@ export const exchangesApi = {
       await request(() =>
         openApiClient.PATCH("/api/v1/exchanges/connections/{connection_id}", {
           params: { path: { connection_id: connectionId } },
-          body: patch
+          body: patch as never
         })
       )
     );
@@ -88,15 +83,17 @@ export const exchangesApi = {
   },
   async getConnectionWalletBalance(
     connectionId: string,
-    userId = "demo_user",
+    userId?: string | null,
     forceRefresh = false
   ): Promise<ExchangeWalletBalance> {
+    const query: { user_id?: string; force_refresh: boolean } = { force_refresh: forceRefresh };
+    if (userId) query.user_id = userId;
     return normalizeExchangeWalletBalance(
       await request(() =>
         openApiClient.GET("/api/v1/exchanges/connections/{connection_id}/wallet-balance", {
           params: {
             path: { connection_id: connectionId },
-            query: { user_id: userId, force_refresh: forceRefresh }
+            query
           }
         })
       )
@@ -104,15 +101,17 @@ export const exchangesApi = {
   },
   async getConnectionAccountSnapshot(
     connectionId: string,
-    userId = "demo_user",
+    userId?: string | null,
     forceRefresh = false
   ): Promise<AccountRiskSnapshot> {
+    const query: { user_id?: string; force_refresh: boolean } = { force_refresh: forceRefresh };
+    if (userId) query.user_id = userId;
     return normalizeAccountRiskSnapshot(
       await request(() =>
         openApiClient.GET("/api/v1/exchanges/connections/{connection_id}/account-snapshot", {
           params: {
             path: { connection_id: connectionId },
-            query: { user_id: userId, force_refresh: forceRefresh }
+            query
           }
         })
       )

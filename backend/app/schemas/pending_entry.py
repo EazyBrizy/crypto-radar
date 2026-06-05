@@ -21,6 +21,16 @@ PendingEntryIntentStatus = Literal[
 ]
 PendingEntryIntentMode = Literal["virtual", "real"]
 PendingEntryIntentSide = Literal["long", "short"]
+PendingEntryViewTone = Literal["green", "red", "yellow", "blue", "purple", "neutral"]
+
+
+class PendingEntryView(BaseModel):
+    status_label: str
+    status_tone: PendingEntryViewTone = "neutral"
+    reason_code: str | None = None
+    reason: str
+    entry_zone: str
+    current_price: Decimal | None = None
 
 
 class PendingEntryIntentCreate(BaseModel):
@@ -69,3 +79,4 @@ class PendingEntryIntentRead(PendingEntryIntentCreate):
     filled_at: datetime | None = None
     filled_trade_id: UUID | None = None
     failure_reason: str | None = None
+    view: PendingEntryView | None = None

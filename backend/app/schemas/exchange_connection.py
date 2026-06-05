@@ -38,7 +38,7 @@ class ExchangeConnectionResponse(BaseModel):
 
 
 class ExchangeConnectionCreateRequest(BaseModel):
-    user_id: str = "demo_user"
+    user_id: str | None = None
     exchange_code: str = Field(..., min_length=1)
     label: str = Field(..., min_length=1)
     account_type: str = "spot"

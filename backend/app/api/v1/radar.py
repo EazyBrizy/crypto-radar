@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from app.schemas.candle import RadarConfig, RadarConfigUpdate
 from app.schemas.risk import RadarDisplayMode
 from app.schemas.signal import RadarResponse
 from app.services.candle_service import candle_service
 from app.services.message_broker import realtime_event_broker
+from app.services.current_user import current_user_identity_service
 from app.services.radar_config_service import radar_config_service
 from app.services.radar_service import RadarFilters, radar_service
 from app.services.realtime_events import radar_status_event
@@ -14,14 +15,22 @@ router = APIRouter(prefix="/radar", tags=["radar"])
 
 @router.get("", response_model=RadarResponse)
 async def get_radar(
-    user_id: str = Query(default="demo_user"),
+    request: Request,
+    user_id: str | None = Query(default=None),
     radar_display_mode: RadarDisplayMode | None = Query(default=None),
     exchange: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
     timeframe: str | None = Query(default=None),
 ) -> RadarResponse:
+    try:
+        current_user = current_user_identity_service.resolve_from_request(request)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
     return radar_service.list_signals(
-        user_id=user_id,
+        user_id=user_id or current_user.user_id,
         mode=radar_display_mode,
         filters=RadarFilters(exchange=exchange, symbol=symbol, timeframe=timeframe),
     )

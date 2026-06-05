@@ -51,6 +51,7 @@ CloseMarketTradeStatus = Literal["closed", "not_implemented"]
 TradeInvalidationStatus = Literal["valid", "invalidated", "unavailable"]
 TradeInvalidationAction = Literal["none", "close_market_or_wait_stop"]
 TradeInvalidationUserAction = Literal["close_market", "keep_stop_loss", "dismissed"]
+TradeViewTone = Literal["green", "red", "yellow", "blue", "purple", "neutral"]
 SimulationMode = Literal["auto", "passive", "impact_aware"]
 VirtualSimulationMode = Literal["passive", "impact_aware"]
 VirtualSimulationTier = Literal["mvp", "advanced", "pro"]
@@ -383,6 +384,21 @@ class VirtualTradeTargetState(BaseModel):
     exit_fee: float = Field(default=0.0, ge=0)
 
 
+class PnLView(BaseModel):
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    total_pnl: Optional[float] = None
+    pnl_percent: Optional[float] = None
+    tone: TradeViewTone = "neutral"
+
+
+class TradeView(BaseModel):
+    status_label: str
+    status_tone: TradeViewTone = "neutral"
+    source_label: str
+    pnl: PnLView
+
+
 class VirtualTradeLifecycleEvent(BaseModel):
     signal_id: Optional[str] = None
     pending_entry_intent_id: Optional[str] = None
@@ -483,6 +499,7 @@ class VirtualTrade(BaseModel):
     target_states: list[VirtualTradeTargetState] = Field(default_factory=list)
     lifecycle_events: list[VirtualTradeLifecycleEvent] = Field(default_factory=list)
     lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
+    view: Optional[TradeView] = None
 
 
 class RealExecutionResult(BaseModel):
@@ -601,6 +618,7 @@ class TradeJournalEntry(BaseModel):
     target_states: list[VirtualTradeTargetState] = Field(default_factory=list)
     lifecycle_events: list[VirtualTradeLifecycleEvent] = Field(default_factory=list)
     lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
+    view: Optional[TradeView] = None
 
 
 class RealTrade(TradeJournalEntry):

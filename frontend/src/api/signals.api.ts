@@ -3,7 +3,6 @@ import type {
   PendingEntryIntent,
   RadarResponse,
   RadarSignal,
-  SignalActionBlocker,
   SignalActionKind,
   SignalActionMode,
   SignalActionResponse,
@@ -12,7 +11,14 @@ import type {
 } from "@/types";
 import { openApiClient, request, requestJson } from "./client";
 import type { PendingEntryIntentReadDto } from "./generated/schemas";
-import { normalizePendingEntryIntent, normalizeRiskPreviewResponse, normalizeSignal, riskPreviewToExecutionReport } from "./mappers";
+import {
+  normalizePendingEntryIntent,
+  normalizeRadarSummary,
+  normalizeRiskPreviewResponse,
+  normalizeSignal,
+  normalizeSignalActionState,
+  riskPreviewToExecutionReport
+} from "./mappers";
 
 type RadarRequestOptions = {
   radarDisplayMode?: RadarDisplayMode | null;
@@ -93,7 +99,11 @@ export const signalsApi = {
         params: { query }
       })
     );
-    return { signals: response.signals.map(normalizeSignal) };
+    const payload = response as { signals: unknown[]; summary: unknown };
+    return {
+      signals: payload.signals.map((signal) => normalizeSignal(signal as never)),
+      summary: normalizeRadarSummary(payload.summary)
+    };
   },
   async confirmVirtual(input: string | { signalId: string; waitForConfirmation?: boolean }) {
     const signalId = typeof input === "string" ? input : input.signalId;
@@ -204,49 +214,6 @@ function normalizeSignalActionResponse(value: unknown): SignalActionResponse {
     pending_entry_intent: payload.pending_entry_intent ? normalizePendingEntryIntent(payload.pending_entry_intent) : null,
     message: String(payload.message ?? "")
   };
-}
-
-function normalizeSignalActionState(value: unknown): SignalActionState {
-  const state = isRecord(value) ? value : {};
-  return {
-    can_enter_now: Boolean(state.can_enter_now),
-    can_arm_pending: Boolean(state.can_arm_pending),
-    can_reconfirm: Boolean(state.can_reconfirm),
-    can_cancel: Boolean(state.can_cancel),
-    mode: state.mode === "real" ? "real" : "virtual",
-    environment: String(state.environment ?? (state.mode === "real" ? "real_unresolved" : "virtual")),
-    primary_action: normalizeSignalActionKind(state.primary_action),
-    disabled_reason_code: optionalString(state.disabled_reason_code),
-    blockers: normalizeSignalActionBlockers(state.blockers),
-    warnings: normalizeSignalActionBlockers(state.warnings),
-    accepted_trade_plan_snapshot: isRecord(state.accepted_trade_plan_snapshot) ? { ...state.accepted_trade_plan_snapshot } : null,
-    display_labels: isRecord(state.display_labels)
-      ? Object.fromEntries(Object.entries(state.display_labels).map(([key, label]) => [key, String(label)]))
-      : {}
-  };
-}
-
-function normalizeSignalActionBlockers(value: unknown): SignalActionBlocker[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isRecord).map((item) => ({
-    code: String(item.code ?? "action_unavailable"),
-    severity: item.severity === "warning" || item.severity === "info" ? item.severity : "blocker",
-    message: optionalString(item.message),
-    display_label: optionalString(item.display_label),
-    metadata: isRecord(item.metadata) ? { ...item.metadata } : {}
-  }));
-}
-
-function normalizeSignalActionKind(value: unknown): SignalActionKind | null {
-  if (
-    value === "enter_now" ||
-    value === "arm_pending_entry" ||
-    value === "cancel_pending_entry" ||
-    value === "reconfirm_pending_entry"
-  ) {
-    return value;
-  }
-  return null;
 }
 
 function isVirtualExecutionReport(value: unknown): value is VirtualExecutionReport {

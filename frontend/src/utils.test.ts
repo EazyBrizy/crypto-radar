@@ -3,11 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RadarSignal } from "./types";
 import {
   isOpenFeedSignal,
-  isRiskRewardBlocked,
   isSignalExpired,
-  riskRewardWarningReason,
   signalAge,
-  signalTradePlanSummary,
   signalTtlLabel,
   signalUpdatedAge
 } from "./utils";
@@ -92,134 +89,5 @@ describe("signal expiry utilities", () => {
 
     expect(signalAge(refreshedSignal)).toBe("58m ago");
     expect(signalUpdatedAge(refreshedSignal)).toBe("just now");
-  });
-});
-
-describe("risk/reward display utilities", () => {
-  it("summarizes trade-plan fallback metadata", () => {
-    const signal: RadarSignal = {
-      ...baseSignal,
-      trade_plan: {
-        version: "v1",
-        entry: {
-          price: 100,
-          min_price: 100,
-          max_price: 100,
-          source: "legacy_fields",
-          metadata: {}
-        },
-        stop_loss: 98,
-        targets: [
-          {
-            label: "TP1",
-            price: 102,
-            r_multiple: 1,
-            action: "partial_close",
-            close_percent: 40,
-            source: "r_multiple_fallback",
-            metadata: { fallback_target_used: true }
-          }
-        ],
-        invalidation: null,
-        risk_rules: {
-          risk_reward: 1,
-          first_target_rr: 1,
-          final_target_rr: 1,
-          selected_rr: 1,
-          selected_rr_target: "nearest",
-          min_rr_ratio: 2,
-          metadata: {}
-        },
-        metadata: {
-          trade_plan_complete: false,
-          fallback_used: true,
-          fallback_stop_used: true,
-          fallback_targets_used: true,
-          missing: ["structural_stop", "structural_target"]
-        }
-      }
-    };
-
-    const summary = signalTradePlanSummary(signal);
-
-    expect(summary.tradePlanComplete).toBe(false);
-    expect(summary.fallbackUsed).toBe(true);
-    expect(summary.fallbackStopUsed).toBe(true);
-    expect(summary.fallbackTargetsUsed).toBe(true);
-    expect(summary.missing).toEqual(["structural_stop", "structural_target"]);
-  });
-
-  it("treats failed legacy RR metadata as a virtual warning instead of a hard block", () => {
-    const signal: RadarSignal = {
-      ...baseSignal,
-      selected_rr: 0.8,
-      min_rr_ratio: 1.5,
-      confirmation: {
-        passed: false,
-        checks: [
-          {
-            name: "risk_reward_guard",
-            status: "failed",
-            score: 0.8,
-            reason: "Risk/reward blocked: nearest target is below minimum",
-            metadata: { risk_reward_blocked: true }
-          }
-        ]
-      }
-    };
-
-    expect(isRiskRewardBlocked(signal)).toBe(false);
-    expect(riskRewardWarningReason(signal)).toContain("Risk/reward warning");
-    expect(riskRewardWarningReason(signal)?.toLowerCase()).not.toContain("blocked");
-  });
-
-  it("keeps explicitly hard RR failures as blockers", () => {
-    const signal: RadarSignal = {
-      ...baseSignal,
-      confirmation: {
-        passed: false,
-        checks: [
-          {
-            name: "risk_reward_guard",
-            status: "failed",
-            score: 0.8,
-            reason: "Risk/reward blocked: nearest target is below minimum",
-            metadata: { risk_reward_blocked: true, risk_reward_guard_mode: "hard" }
-          }
-        ]
-      }
-    };
-
-    expect(isRiskRewardBlocked(signal)).toBe(true);
-    expect(riskRewardWarningReason(signal)).toBeNull();
-  });
-
-  it("treats explicit off RR guard as metadata-only", () => {
-    const signal: RadarSignal = {
-      ...baseSignal,
-      selected_rr: 0.8,
-      min_rr_ratio: 1.5,
-      confirmation: {
-        passed: true,
-        checks: [
-          {
-            name: "risk_reward_guard",
-            status: "skipped",
-            score: 0.8,
-            reason: "Risk/reward guard is off: nearest target is 0.80R",
-            metadata: {
-              risk_reward_guard_mode: "off",
-              risk_reward_warning: false,
-              risk_reward_blocked: false,
-              selected_rr: 0.8,
-              min_rr_ratio: 1.5
-            }
-          }
-        ]
-      }
-    };
-
-    expect(isRiskRewardBlocked(signal)).toBe(false);
-    expect(riskRewardWarningReason(signal)).toBeNull();
   });
 });

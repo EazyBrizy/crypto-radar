@@ -40,6 +40,7 @@ from app.services.realtime_events import (
 )
 from app.services.real_trade_import_service import RealTradeImportNotReadyError, real_trade_import_service
 from app.services.signal_service import signal_service
+from app.services.signal_views import annotate_trade_view, annotate_virtual_trade_view
 from app.services.trade_journal_service import trade_journal_service
 from app.services.trade_invalidation import trade_invalidation_service
 from app.services.virtual_trading import (
@@ -65,14 +66,17 @@ async def list_trade_journal(
         else None
     )
     return TradeJournalResponse(
-        trades=trade_journal_service.list_journal(
-            mode=mode,
-            status=status_filter,
-            signal_id=signal_id,
-            source=source,
-            tag=tag,
-            run_id=run_id,
-        ),
+        trades=[
+            annotate_trade_view(trade)
+            for trade in trade_journal_service.list_journal(
+                mode=mode,
+                status=status_filter,
+                signal_id=signal_id,
+                source=source,
+                tag=tag,
+                run_id=run_id,
+            )
+        ],
         account=account,
     )
 
@@ -83,10 +87,13 @@ async def list_virtual_trades(
     signal_id: Optional[str] = None,
 ) -> VirtualTradeResponse:
     return VirtualTradeResponse(
-        trades=virtual_trading_service.list_virtual_trades(
-            status=status_filter,
-            signal_id=signal_id,
-        )
+        trades=[
+            annotate_virtual_trade_view(trade)
+            for trade in virtual_trading_service.list_virtual_trades(
+                status=status_filter,
+                signal_id=signal_id,
+            )
+        ]
     )
 
 
@@ -96,10 +103,13 @@ async def list_real_trades(
     signal_id: Optional[str] = None,
 ) -> TradeJournalResponse:
     return TradeJournalResponse(
-        trades=virtual_trading_service.list_real_trades(
-            status=status_filter,
-            signal_id=signal_id,
-        ),
+        trades=[
+            annotate_trade_view(trade)
+            for trade in virtual_trading_service.list_real_trades(
+                status=status_filter,
+                signal_id=signal_id,
+            )
+        ],
         account=None,
     )
 
@@ -241,14 +251,14 @@ async def get_virtual_trade(trade_id: str) -> VirtualTrade:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Виртуальная сделка не найдена",
         )
-    return trade
+    return annotate_virtual_trade_view(trade)
 
 
 @router.get("/{trade_id}", response_model=TradeJournalEntry)
 async def get_trade_journal_entry(trade_id: str) -> TradeJournalEntry:
     trade = trade_journal_service.get_entry(trade_id)
     if trade is not None:
-        return trade
+        return annotate_trade_view(trade)
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -293,7 +303,7 @@ async def close_market_trade(
             mode="virtual",
             status="closed",
             message=_close_market_message(request.reason),
-            trade=TradeJournalEntry.model_validate(closed_trade.model_dump()),
+            trade=annotate_trade_view(TradeJournalEntry.model_validate(closed_trade.model_dump())),
         )
 
     real_trade = virtual_trading_service.get_real_trade(trade_id)
@@ -305,7 +315,7 @@ async def close_market_trade(
                 "Real market close is not connected yet. "
                 "No exchange order was sent and no real trade was changed."
             ),
-            trade=real_trade,
+            trade=annotate_trade_view(real_trade),
         )
 
     raise HTTPException(
@@ -341,7 +351,7 @@ async def close_virtual_trade(
         except LookupError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     await _publish_virtual_close_events(trade)
-    return trade
+    return annotate_virtual_trade_view(trade)
 
 
 async def _publish_virtual_close_events(trade: VirtualTrade) -> None:

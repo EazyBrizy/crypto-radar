@@ -100,7 +100,7 @@ export const serverStateKeys = {
   health: () => [...serverStateKeys.all, "health"] as const,
   radar: {
     all: () => [...serverStateKeys.all, "radar"] as const,
-    dashboard: (radarDisplayMode?: RadarDisplayMode, userId = "demo_user") =>
+    dashboard: (radarDisplayMode?: RadarDisplayMode, userId = "me") =>
       radarDisplayMode
         ? [...serverStateKeys.radar.all(), "dashboard", userId, radarDisplayMode] as const
         : [...serverStateKeys.radar.all(), "dashboard", userId] as const,
@@ -156,9 +156,9 @@ export const serverStateKeys = {
   exchangeConnections: {
     all: () => [...serverStateKeys.all, "exchange-connections"] as const,
     list: () => [...serverStateKeys.exchangeConnections.all(), "list"] as const,
-    walletBalance: (connectionId: string, userId = "demo_user") =>
+    walletBalance: (connectionId: string, userId = "me") =>
       [...serverStateKeys.exchangeConnections.all(), "wallet-balance", connectionId, userId] as const,
-    accountSnapshot: (connectionId: string, userId = "demo_user") =>
+    accountSnapshot: (connectionId: string, userId = "me") =>
       [...serverStateKeys.exchangeConnections.all(), "account-snapshot", connectionId, userId] as const
   },
   signals: {
@@ -166,10 +166,10 @@ export const serverStateKeys = {
     history: (filters?: SignalHistoryFilters) => [...serverStateKeys.signals.all(), "history", normalizeSignalFilters(filters)] as const,
     active: () => [...serverStateKeys.signals.all(), "active"] as const,
     open: () => [...serverStateKeys.signals.all(), "open"] as const,
-    pendingEntries: (scope: PendingEntryQueueScope = "active", userId = "demo_user") =>
+    pendingEntries: (scope: PendingEntryQueueScope = "active", userId = "me") =>
       [...serverStateKeys.signals.all(), "pending-entries", scope, userId] as const,
-    pendingEntry: (signalId: string, userId = "demo_user") => [...serverStateKeys.signals.all(), "pending-entry", signalId, userId] as const,
-    pendingEntryHistory: (signalId: string, userId = "demo_user") => [...serverStateKeys.signals.all(), "pending-entry-history", signalId, userId] as const,
+    pendingEntry: (signalId: string, userId = "me") => [...serverStateKeys.signals.all(), "pending-entry", signalId, userId] as const,
+    pendingEntryHistory: (signalId: string, userId = "me") => [...serverStateKeys.signals.all(), "pending-entry-history", signalId, userId] as const,
     actionState: (signalId: string, mode: SignalActionMode, connectionId = "none") =>
       [...serverStateKeys.signals.all(), "action-state", signalId, mode, connectionId] as const,
     executionPreview: (signalId: string) => [...serverStateKeys.signals.all(), "execution-preview", signalId] as const

@@ -1,107 +1,60 @@
 import { describe, expect, it } from "vitest";
 
-import type { PendingEntryIntent, RadarSignal } from "@/types";
+import type { PendingEntryIntent, RadarSignal, SignalActionState, SignalDetailsView } from "@/types";
 import { buildSignalDetailsViewModel } from "./signal-details-view-model";
 
-const formingCandleRawReason = "forming_candle: forming candle preview is not actionable until the candle closes";
-
 describe("buildSignalDetailsViewModel", () => {
-  it("collapses duplicate forming_candle messages into one entry blocker", () => {
-    const signal = baseSignal({
-      candle_state: "open",
-      can_enter: false,
-      confirmation: {
-        passed: false,
-        checks: [
-          {
-            name: "candle_state_gate",
-            status: "failed",
-            score: null,
-            reason: formingCandleRawReason,
-            metadata: { reason_code: "forming_candle" }
-          }
-        ]
-      },
-      decision: {
-        setup_valid: true,
-        trade_plan_valid: true,
-        market_context_score: 72,
-        signal_actionable: false,
-        execution_allowed_virtual: false,
-        execution_allowed_real: null,
+  it("uses backend details view and backend action-state for actions/blockers", () => {
+    const viewModel = buildSignalDetailsViewModel(baseSignal(), null, {
+      actionState: actionState({
+        can_enter_now: false,
+        can_arm_pending: true,
+        primary_action: "arm_pending_entry",
         blockers: [
           {
-            code: "forming_candle",
-            message: formingCandleRawReason,
-            source: "data",
+            code: "risk_profile_unavailable",
             severity: "blocker",
-            scope: "virtual",
+            message: "Risk profile is unavailable.",
+            display_label: "Risk profile unavailable",
             metadata: {}
           }
         ],
-        warnings: []
-      },
-      risks: [formingCandleRawReason]
+        display_labels: {
+          primary_action: "Wait for backend trigger",
+          disabled_reason: "Risk profile unavailable"
+        }
+      })
     });
 
-    const viewModel = buildSignalDetailsViewModel(signal, null);
-    const formingBlockers = viewModel.topBlockers.filter((blocker) => blocker.code === "forming_candle");
-
-    expect(formingBlockers).toHaveLength(1);
-    expect(formingBlockers[0].category).toBe("entry");
-    expect(formingBlockers[0].userMessage).toBe("Свеча ещё формируется. Вход будет доступен после закрытия свечи.");
-    expect(formingBlockers[0].debugMessages.length).toBeGreaterThan(1);
+    expect(viewModel.canEnterNow).toBe(false);
+    expect(viewModel.primaryActionLabel).toBe("Wait for backend trigger");
+    expect(viewModel.recommendedActionText).toBe("Risk profile unavailable");
+    expect(viewModel.topBlockers.map((blocker) => blocker.userMessage)).toEqual([
+      "Risk profile unavailable",
+      "Backend liquidity blocker"
+    ]);
   });
 
-  it("collapses multiple liquidation missing-field messages into one technical blocker", () => {
-    const signal = baseSignal({
-      no_trade_filter: {
-        enabled: true,
-        blocked: true,
-        hard_block: true,
-        blockers: [
-          "liquidation_price is missing",
-          "liquidation_buffer_percent is missing for liquidation guard"
-        ],
-        warnings: [],
-        checks: [],
-        metadata: {}
-      }
-    });
+  it("surfaces a contract error when SignalDetailsView is missing", () => {
+    const viewModel = buildSignalDetailsViewModel({ ...baseSignal(), details_view: null }, null);
 
-    const viewModel = buildSignalDetailsViewModel(signal, null);
-    const liquidationBlockers = viewModel.topBlockers.filter((blocker) => blocker.code === "liquidation_missing_fields");
-
-    expect(liquidationBlockers).toHaveLength(1);
-    expect(liquidationBlockers[0].category).toBe("technical");
-    expect(liquidationBlockers[0].severity).toBe("blocker");
-    expect(liquidationBlockers[0].debugMessages).toEqual(expect.arrayContaining([
-      "liquidation_price is missing",
-      "liquidation_buffer_percent is missing for liquidation guard"
-    ]));
+    expect(viewModel.contractError).toBe("API contract error: SignalDetailsView is missing");
+    expect(viewModel.primaryActionLabel).toBe("Action state unavailable");
+    expect(viewModel.tradePlanSummary.entry_type).toBe("API contract error");
   });
 
-  it("treats cancelled pendingEntry as terminal instead of active", () => {
-    const viewModel = buildSignalDetailsViewModel(baseSignal(), pendingIntent({ status: "cancelled" }));
+  it("classifies active and terminal pending entries without changing backend primary status", () => {
+    const active = buildSignalDetailsViewModel(baseSignal({ details_view: detailsView({ primary_status: "waiting_entry" }) }), pendingIntent({ status: "pending" }));
+    const terminal = buildSignalDetailsViewModel(baseSignal(), pendingIntent({ status: "cancelled" }));
+    const reconfirm = buildSignalDetailsViewModel(baseSignal({ details_view: detailsView({ primary_status: "requires_reconfirmation" }) }), pendingIntent({ status: "requires_reconfirmation" }));
 
-    expect(viewModel.activePendingEntry).toBeNull();
-    expect(viewModel.terminalPendingEntry?.status).toBe("cancelled");
-    expect(viewModel.primaryStatus).toBe("execution_ready");
-  });
-
-  it("uses waiting_entry primary status for active pending entry", () => {
-    const viewModel = buildSignalDetailsViewModel(baseSignal(), pendingIntent({ status: "pending" }));
-
-    expect(viewModel.activePendingEntry?.status).toBe("pending");
-    expect(viewModel.terminalPendingEntry).toBeNull();
-    expect(viewModel.primaryStatus).toBe("waiting_entry");
-  });
-
-  it("uses requires_reconfirmation primary status for reconfirmation pending entry", () => {
-    const viewModel = buildSignalDetailsViewModel(baseSignal(), pendingIntent({ status: "requires_reconfirmation" }));
-
-    expect(viewModel.activePendingEntry?.status).toBe("requires_reconfirmation");
-    expect(viewModel.primaryStatus).toBe("requires_reconfirmation");
+    expect(active.activePendingEntry?.status).toBe("pending");
+    expect(active.terminalPendingEntry).toBeNull();
+    expect(active.primaryStatus).toBe("waiting_entry");
+    expect(terminal.activePendingEntry).toBeNull();
+    expect(terminal.terminalPendingEntry?.status).toBe("cancelled");
+    expect(reconfirm.activePendingEntry?.status).toBe("requires_reconfirmation");
+    expect(reconfirm.primaryStatus).toBe("requires_reconfirmation");
   });
 });
 
@@ -145,63 +98,98 @@ function baseSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {
     quality: null,
     regime: null,
     setup: null,
-    confirmation: {
-      passed: true,
-      checks: []
-    },
+    confirmation: null,
     invalidation: null,
     exit_plan: null,
     auto_entry: null,
-    trade_plan: {
-      version: "v1",
-      entry: {
-        price: 2_102,
-        min_price: 2_100,
-        max_price: 2_105,
-        source: "aggressive_breakout",
-        metadata: { entry_type: "aggressive_breakout" }
-      },
-      stop_loss: 2_060,
-      targets: [
-        { label: "TP1", price: 2_150, r_multiple: 1, action: "partial_close", close_percent: 40, source: "rr", metadata: {} },
-        { label: "TP2", price: 2_200, r_multiple: 2.5, action: "full_close", close_percent: 60, source: "rr", metadata: {} }
-      ],
-      invalidation: {
-        price: 2_060,
-        hard_stop: 2_060,
-        conditions: ["Breakout fails"],
-        metadata: {}
-      },
-      risk_rules: {
-        risk_reward: 2.5,
-        first_target_rr: 1,
-        final_target_rr: 2.5,
-        selected_rr: 2.5,
-        selected_rr_target: "final",
-        min_rr_ratio: 1.5,
-        metadata: {}
-      },
-      metadata: {}
-    },
-    no_trade_filter: null,
-    edge: null,
-    decision: {
-      setup_valid: true,
-      trade_plan_valid: true,
-      market_context_score: 84,
-      signal_actionable: true,
-      execution_allowed_virtual: true,
-      execution_allowed_real: null,
-      blockers: [],
-      warnings: []
-    },
-    rr_status: "passed",
-    risk_gate_status: "passed",
-    can_enter: true,
-    display_reason: null,
+    card_view: null,
+    details_view: detailsView(),
     created_at: "2026-05-31T07:00:00.000Z",
     updated_at: "2026-05-31T07:00:00.000Z",
     expires_at: "2026-05-31T08:00:00.000Z",
+    ...overrides
+  };
+}
+
+function detailsView(overrides: Partial<SignalDetailsView> = {}): SignalDetailsView {
+  return {
+    title: "ETHUSDT backend detail",
+    side: "long",
+    primary_status: "execution_ready",
+    primary_status_label: "Execution ready",
+    primary_status_tone: "green",
+    primary_action_label: "Enter now",
+    recommended_action_text: "Backend says this signal is ready.",
+    can_enter_now: true,
+    trade_plan: {
+      has_trade_plan: true,
+      entry_type: "Backend entry",
+      entry_zone: "2100 - 2105",
+      entry_price: 2_102,
+      stop_loss: 2_060,
+      targets: [
+        { label: "TP1", price: 2_150, r_multiple: 1, action: "partial_close" },
+        { label: "TP2", price: 2_200, r_multiple: 2.5, action: "full_close" }
+      ],
+      selected_rr: 2.5,
+      selected_rr_target: "final",
+      min_rr: 1.5,
+      trade_plan_complete: true,
+      fallback_used: false,
+      missing: [],
+      invalidation: "Below 2060"
+    },
+    risk_summary: {
+      label: "Risk ok",
+      risk_failed: false,
+      risk_reward_blocked: false,
+      risk_reward_warning: null,
+      forming_candle: false,
+      open_candle_allowed: false,
+      forming_reason: null,
+      status_allows_trade: true,
+      trade_plan_complete: true,
+      risk_reward_ok: true,
+      is_market_opportunity: true
+    },
+    execution_summary: {
+      preview_available: false,
+      risk_check_status: null,
+      risk_decision_status: null,
+      can_enter: true,
+      quality_gate_status: null,
+      impact_risk: null,
+      status_allows_trade: true
+    },
+    top_reasons: ["Backend reason"],
+    top_blockers: [
+      {
+        code: "backend_liquidity",
+        severity: "blocker",
+        category: "liquidity",
+        user_message: "Backend liquidity blocker",
+        debug_messages: ["liquidity"]
+      }
+    ],
+    warnings: [],
+    ...overrides
+  };
+}
+
+function actionState(overrides: Partial<SignalActionState> = {}): SignalActionState {
+  return {
+    can_enter_now: true,
+    can_arm_pending: false,
+    can_reconfirm: false,
+    can_cancel: false,
+    mode: "virtual",
+    environment: "virtual",
+    primary_action: "enter_now",
+    disabled_reason_code: null,
+    blockers: [],
+    warnings: [],
+    accepted_trade_plan_snapshot: null,
+    display_labels: {},
     ...overrides
   };
 }
@@ -222,7 +210,7 @@ function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntr
     entry_price_policy: "accepted_entry_zone",
     stop_loss: 2_060,
     targets_snapshot: [{ label: "TP1", price: "2150" }],
-    accepted_trade_plan_snapshot: { entry: { min_price: "2100", max_price: "2105" } },
+    accepted_trade_plan_snapshot: {},
     accepted_trade_plan_hash: "sha256:test",
     accepted_signal_status: "ready",
     accepted_signal_version: null,
@@ -237,6 +225,10 @@ function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntr
     filled_at: null,
     filled_trade_id: null,
     failure_reason: null,
+    current_price: null,
+    reason_code: null,
+    localized_reason: null,
+    view: null,
     ...overrides
   };
 }

@@ -11,7 +11,7 @@ describe("signalsApi.radar", () => {
 
   it("passes user_id and radar_display_mode to the Radar endpoint", async () => {
     const getSpy = vi.spyOn(openApiClient, "GET").mockResolvedValue({
-      data: { signals: [] },
+      data: { signals: [], summary: radarSummary() },
       error: undefined,
       response: new Response("{}", { status: 200 })
     } as never);
@@ -44,12 +44,7 @@ describe("signalsApi.armPendingEntry", () => {
       return new Response(JSON.stringify({
         state: actionState({ primary_action: "arm_pending_entry" }),
         signal: signalDto(),
-        pending_entry_intent: {
-          id: "intent_1",
-          user_id: "usr_demo",
-          signal_id: "sig_1",
-          status: "pending"
-        },
+        pending_entry_intent: pendingEntryIntentDto(),
         message: "Auto-entry armed"
       }), {
         headers: { "Content-Type": "application/json" },
@@ -120,10 +115,10 @@ describe("signalsApi.pendingEntry", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
 
-    const result = await signalsApi.pendingEntry("sig_1", "usr_demo");
+    const result = await signalsApi.pendingEntry("sig_1", "user_1");
 
     expect(result).toBeNull();
-    expect(String(fetchSpy.mock.calls[0][0])).toContain("/api/v1/signals/sig_1/pending-entry?user_id=usr_demo");
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/api/v1/signals/sig_1/pending-entry?user_id=user_1");
   });
 });
 
@@ -138,9 +133,8 @@ describe("signalsApi.pendingEntryHistory", () => {
       void args;
       return new Response(JSON.stringify([
         {
+          ...pendingEntryIntentDto(),
           id: "intent_cancelled",
-          user_id: "demo_user",
-          signal_id: "sig_1",
           status: "cancelled",
           updated_at: "2026-06-04T12:00:00.000Z"
         }
@@ -171,9 +165,8 @@ describe("signalsApi.pendingEntries", () => {
       void args;
       return new Response(JSON.stringify([
         {
+          ...pendingEntryIntentDto(),
           id: "intent_1",
-          user_id: "demo_user",
-          signal_id: "sig_1",
           status: "pending",
           updated_at: "2026-06-04T12:00:00.000Z"
         }
@@ -184,11 +177,11 @@ describe("signalsApi.pendingEntries", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
 
-    const result = await signalsApi.pendingEntries({ userId: "usr_demo", scope: "active", limit: 100 });
+    const result = await signalsApi.pendingEntries({ userId: "user_1", scope: "active", limit: 100 });
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ id: "intent_1", status: "pending" });
-    expect(String(fetchSpy.mock.calls[0][0])).toContain("/api/v1/pending-entry?user_id=usr_demo&scope=active&limit=100");
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/api/v1/pending-entry?user_id=user_1&scope=active&limit=100");
   });
 });
 
@@ -225,6 +218,62 @@ function signalDto() {
   };
 }
 
+function pendingEntryIntentDto(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "intent_1",
+    user_id: "user_1",
+    signal_id: "sig_1",
+    strategy_id: null,
+    mode: "virtual",
+    status: "pending",
+    exchange: "bybit",
+    symbol: "BTCUSDT",
+    side: "long",
+    entry_min: "67100",
+    entry_max: "67200",
+    entry_price_policy: "accepted_entry_zone",
+    stop_loss: "66500",
+    targets_snapshot: [{ label: "TP1", price: "68100" }],
+    accepted_trade_plan_snapshot: {},
+    accepted_trade_plan_hash: "plan_hash",
+    accepted_signal_status: "ready",
+    accepted_signal_version: null,
+    accepted_signal_fingerprint: null,
+    execution_profile_snapshot: {},
+    request_snapshot: {},
+    idempotency_key: "idem_1",
+    expires_at: null,
+    created_at: "2026-06-04T12:00:00.000Z",
+    updated_at: "2026-06-04T12:00:00.000Z",
+    triggered_at: null,
+    filled_at: null,
+    filled_trade_id: null,
+    failure_reason: null,
+    current_price: null,
+    reason_code: null,
+    localized_reason: null,
+    view: {
+      status_label: "Waiting entry",
+      status_tone: "yellow",
+      reason_code: null,
+      reason: "Backend is waiting for entry.",
+      entry_zone: "67100 - 67200",
+      current_price: null
+    },
+    ...overrides
+  };
+}
+
+function radarSummary() {
+  return {
+    total_signals: 0,
+    execution_ready_signals: 0,
+    high_confidence_signals: 0,
+    positive_edge_signals: 0,
+    blocked_ideas: 0
+  };
+}
+
 function expectActionBodyOnlyIntent(body: Record<string, unknown>) {
   for (const field of [
     "user_id",
@@ -238,4 +287,7 @@ function expectActionBodyOnlyIntent(body: Record<string, unknown>) {
   ]) {
     expect(body).not.toHaveProperty(field);
   }
+  const serialized = JSON.stringify(body);
+  expect(serialized).not.toContain("demo_user");
+  expect(serialized).not.toContain("usr_demo");
 }

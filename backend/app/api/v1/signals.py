@@ -19,6 +19,7 @@ from app.services.current_user import current_user_identity_service
 from app.services.realtime_events import signal_invalidated_event
 from app.services.signal_actions import SignalActionService, SignalActionUnavailable
 from app.services.signal_service import signal_service
+from app.services.signal_views import annotate_pending_entry_view, annotate_signal_views
 from app.services.virtual_trading import VirtualExecutionRejected, virtual_trading_service
 
 router = APIRouter(prefix="/signals", tags=["signals"])
@@ -26,17 +27,17 @@ router = APIRouter(prefix="/signals", tags=["signals"])
 
 @router.get("", response_model=list[RadarSignal])
 async def list_signals() -> list[RadarSignal]:
-    return signal_service.list_signals()
+    return [_with_views(signal) for signal in signal_service.list_signals()]
 
 
 @router.get("/active", response_model=list[RadarSignal])
 async def list_active_signals() -> list[RadarSignal]:
-    return signal_service.list_active_signals()
+    return [_with_views(signal) for signal in signal_service.list_active_signals()]
 
 
 @router.get("/open", response_model=list[RadarSignal])
 async def list_open_signals() -> list[RadarSignal]:
-    return signal_service.list_open_signals()
+    return [_with_views(signal) for signal in signal_service.list_open_signals()]
 
 
 @router.get("/{signal_id}", response_model=RadarSignal)
@@ -47,7 +48,7 @@ async def get_signal(signal_id: str) -> RadarSignal:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Signal is not found",
         )
-    return signal
+    return _with_views(signal)
 
 
 @router.get("/{signal_id}/action-state", response_model=SignalActionState)
@@ -90,11 +91,16 @@ async def send_signal_action(
 ) -> SignalActionResponse:
     try:
         current_user = current_user_identity_service.resolve_from_request(request)
-        return await _signal_action_service().execute_action(
+        response = await _signal_action_service().execute_action(
             signal_id,
             action,
             user_id=current_user.user_id,
         )
+        if response.pending_entry_intent is not None:
+            response = response.model_copy(
+                update={"pending_entry_intent": annotate_pending_entry_view(response.pending_entry_intent)}
+            )
+        return response
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -248,3 +254,7 @@ def _signal_action_service() -> SignalActionService:
         real_execution=real_execution_service,
         realtime_broker=realtime_event_broker,
     )
+
+
+def _with_views(signal: RadarSignal) -> RadarSignal:
+    return annotate_signal_views(signal)

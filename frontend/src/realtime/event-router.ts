@@ -548,7 +548,7 @@ function pendingEntryMessage(payload: PendingEntryUpdatedPayload): string | null
 }
 
 function pendingEntryUserIds(userId: string): string[] {
-  return Array.from(new Set([userId, "demo_user", "usr_demo"].filter(Boolean)));
+  return userId ? [userId] : [];
 }
 
 function isSignalEvent(message: RealtimeMessage): message is Extract<RealtimeMessage, { signal: RadarSignal }> {

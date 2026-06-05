@@ -40,6 +40,7 @@ class SignalEdgeSnapshot(BaseModel):
 LayerCheckStatus = Literal["passed", "warning", "failed", "skipped"]
 RadarRRStatus = Literal["passed", "warning", "failed", "skipped", "unknown"]
 RadarRiskGateStatus = Literal["passed", "warning", "failed"]
+ViewTone = Literal["green", "red", "yellow", "blue", "purple", "neutral"]
 
 
 class SignalLayerCheck(BaseModel):
@@ -126,6 +127,117 @@ class SignalAutoEntrySnapshot(BaseModel):
     request: dict[str, Any] = Field(default_factory=dict)
     trade_id: Optional[str] = None
     real_execution: Optional[dict[str, Any]] = None
+
+
+class SignalBadgeView(BaseModel):
+    code: str
+    label: str
+    tone: ViewTone = "neutral"
+
+
+class SignalTargetView(BaseModel):
+    label: str
+    price: Optional[float] = None
+    r_multiple: Optional[float] = None
+    action: Optional[str] = None
+
+
+class SignalTradePlanView(BaseModel):
+    has_trade_plan: bool = False
+    entry_type: str
+    entry_zone: str
+    entry_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    targets: list[SignalTargetView] = Field(default_factory=list)
+    selected_rr: Optional[float] = None
+    selected_rr_target: Optional[str] = None
+    min_rr: Optional[float] = None
+    trade_plan_complete: Optional[bool] = None
+    fallback_used: bool = False
+    missing: list[str] = Field(default_factory=list)
+    invalidation: str = "-"
+
+
+class SignalCardView(BaseModel):
+    status_label: str
+    status_tone: ViewTone
+    opportunity_label: str
+    opportunity_tone: ViewTone
+    risk_label: str
+    risk_meta: str
+    badges: list[SignalBadgeView] = Field(default_factory=list)
+    entry_label: str
+    entry_value: str
+    stop_loss: Optional[float] = None
+    targets: list[SignalTargetView] = Field(default_factory=list)
+    selected_rr: Optional[float] = None
+    reason: str
+
+
+class SignalDetailsRiskSummaryView(BaseModel):
+    label: str
+    risk_failed: bool = False
+    risk_reward_blocked: bool = False
+    risk_reward_warning: Optional[str] = None
+    forming_candle: bool = False
+    open_candle_allowed: bool = False
+    forming_reason: Optional[str] = None
+    status_allows_trade: bool = False
+    trade_plan_complete: bool = False
+    risk_reward_ok: bool = False
+    is_market_opportunity: bool = False
+
+
+class SignalDetailsExecutionSummaryView(BaseModel):
+    preview_available: bool = False
+    risk_check_status: Optional[str] = None
+    risk_decision_status: Optional[str] = None
+    can_enter: Optional[bool] = None
+    quality_gate_status: Optional[str] = None
+    impact_risk: Optional[str] = None
+    status_allows_trade: bool = False
+
+
+class SignalDetailsBlockerView(BaseModel):
+    code: str
+    severity: Literal["blocker", "warning", "info"] = "blocker"
+    category: Literal["entry", "risk", "market_data", "liquidity", "execution", "technical"] = "technical"
+    user_message: str
+    debug_messages: list[str] = Field(default_factory=list)
+
+
+class SignalDetailsView(BaseModel):
+    title: str
+    side: Literal["long", "short"]
+    primary_status: Literal[
+        "execution_ready",
+        "waiting_entry",
+        "requires_reconfirmation",
+        "blocked",
+        "watchlist",
+        "cancelled",
+        "expired",
+        "unknown",
+    ]
+    primary_status_label: str
+    primary_status_tone: ViewTone
+    primary_action_label: str
+    recommended_action_text: str
+    can_enter_now: Optional[bool] = None
+    trade_plan: SignalTradePlanView
+    risk_summary: SignalDetailsRiskSummaryView
+    execution_summary: SignalDetailsExecutionSummaryView = Field(default_factory=SignalDetailsExecutionSummaryView)
+    top_reasons: list[str] = Field(default_factory=list)
+    top_blockers: list[SignalDetailsBlockerView] = Field(default_factory=list)
+    warnings: list[SignalDetailsBlockerView] = Field(default_factory=list)
+
+
+class RadarSummary(BaseModel):
+    total_signals: int = 0
+    execution_ready_signals: int = 0
+    high_confidence_signals: int = 0
+    positive_edge_signals: int = 0
+    blocked_ideas: int = 0
 
 
 SignalDirection = Literal["long", "short"]
@@ -241,11 +353,14 @@ class RadarSignal(BaseModel):
     risk_gate_status: Optional[RadarRiskGateStatus] = None
     can_enter: Optional[bool] = None
     display_reason: Optional[str] = None
+    card_view: Optional[SignalCardView] = None
+    details_view: Optional[SignalDetailsView] = None
     lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
 
 
 class RadarResponse(BaseModel):
     signals: List[RadarSignal]
+    summary: RadarSummary = Field(default_factory=RadarSummary)
 
 
 class ScoredSignal(BaseModel):

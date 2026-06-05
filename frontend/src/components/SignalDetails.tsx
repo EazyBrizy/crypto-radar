@@ -2,27 +2,21 @@
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
-import { BarChart3, CheckCircle2, Circle, ExternalLink, FileCheck2, ShieldAlert, XCircle } from "lucide-react";
+import { BarChart3, FileCheck2, ShieldAlert, XCircle } from "lucide-react";
 
 import { Badge } from "./Badge";
-import {
-  canShowSignalEntryAction,
-  isWaitingEntry,
-  marketOpportunityLabel,
-  marketOpportunityTone,
-  riskGateTone
-} from "@/domain/signal-status";
 import type { AccountRiskSnapshot, ExchangeConnection } from "@/features/server-state/types";
-import type { DecisionReason, ExecutionGateStatus, ImpactRisk, PendingEntryIntent, RadarSignal, RiskStateResponse, SignalActionBlocker, SignalActionState, SignalEdgeStatus, SignalLayerCheck, VirtualExecutionReport } from "../types";
+import type {
+  PendingEntryIntent,
+  RadarSignal,
+  RiskStateResponse,
+  SignalActionState,
+  SignalTradePlanView,
+  ViewTone,
+  VirtualExecutionReport
+} from "../types";
 import { buildSignalDetailsViewModel, type SignalDetailsViewModel, type UiBlocker } from "./signal-details-view-model";
-import {
-  entryZone,
-  formatPrice,
-  isRiskRewardBlocked,
-  riskRewardBlockReason,
-  riskRewardWarningReason,
-  signalTradePlanSummary
-} from "../utils";
+import { formatPrice } from "../utils";
 
 const LazySignalDetailsChart = dynamic(
   () => import("@/components/charts/SignalDetailsChart").then((module) => module.SignalDetailsChart),
@@ -57,7 +51,7 @@ interface SignalDetailsProps {
 }
 
 export interface RealTradeContext {
-  userId: string;
+  userId: string | null;
   connection: ExchangeConnection | null;
   accountSnapshot: AccountRiskSnapshot | null;
   riskState: RiskStateResponse | null;
@@ -93,70 +87,30 @@ export function SignalDetails({
   const [realConfirmationOpen, setRealConfirmationOpen] = useState(false);
 
   if (!signal) {
-    if (missingSignalId) {
-      return (
-        <section className="details-empty">
-          <FileCheck2 size={32} />
-          <h2>Signal is no longer visible</h2>
-          <p>selected signal is no longer visible / сигнал больше не отображается.</p>
-          <button className="secondary-action" disabled={!onSelectLatestSignal} onClick={onSelectLatestSignal} type="button">
-            <FileCheck2 size={17} /> выбрать последний сигнал
-          </button>
-        </section>
-      );
-    }
     return (
       <section className="details-empty">
         <FileCheck2 size={32} />
-        <h2>Выбери сигнал</h2>
-        <p>Здесь появится торговый план, причины, риск и действия для Manual Confirm.</p>
+        <h2>{missingSignalId ? "Signal is no longer visible" : "Р’С‹Р±РµСЂРё СЃРёРіРЅР°Р»"}</h2>
+        <p>{missingSignalId ? "selected signal is no longer visible." : "Backend signal details will appear here."}</p>
+        {missingSignalId ? (
+          <button className="secondary-action" disabled={!onSelectLatestSignal} onClick={onSelectLatestSignal} type="button">
+            <FileCheck2 size={17} /> РІС‹Р±СЂР°С‚СЊ РїРѕСЃР»РµРґРЅРёР№ СЃРёРіРЅР°Р»
+          </button>
+        ) : null}
       </section>
     );
   }
 
-  const viewModel = buildSignalDetailsViewModel(signal, pendingEntry, { executionPreview });
-  const isLong = viewModel.side === "long";
-  const riskFailed = viewModel.riskSummary.riskFailed;
-  const strategyRiskBlocked = viewModel.riskSummary.riskRewardBlocked;
-  const formingCandle = viewModel.riskSummary.formingCandle;
-  const openCandleAllowed = viewModel.riskSummary.openCandleAllowed;
-  const formingReason = viewModel.riskSummary.formingReason;
-  const statusAllowsTrade = viewModel.riskSummary.statusAllowsTrade;
+  const viewModel = buildSignalDetailsViewModel(signal, pendingEntry, { actionState: actionState ?? null });
   const activePendingEntry = viewModel.activePendingEntry;
   const terminalPendingEntry = viewModel.terminalPendingEntry;
-  const activeLegacyAutoEntry = viewModel.activeLegacyAutoEntry;
-  const terminalLegacyAutoEntry = viewModel.terminalLegacyAutoEntry;
-  const activePendingStatus = activePendingEntry?.status ?? activeLegacyAutoEntry?.status ?? null;
-  const hasActivePendingStatus = activePendingStatus != null;
-  const hasBackendActionState = actionState !== undefined;
-  const backendCanEnterNow = hasBackendActionState ? Boolean(actionState?.can_enter_now) : viewModel.canEnterNow;
-  const backendDisabledReason = actionStateDisabledReason(actionState);
-  const backendTopBlockers = actionState?.blockers.map(actionBlockerToUiBlocker) ?? null;
-  const entryActionDisabled = hasBackendActionState
-    ? busy || tradingActionsDisabled || actionStateLoading || !actionState?.can_enter_now
-    : busy || tradingActionsDisabled || hasActivePendingStatus || strategyRiskBlocked || !statusAllowsTrade || riskFailed;
-  const acceptPendingDisabled = hasBackendActionState
-    ? busy || tradingActionsDisabled || actionStateLoading || pendingEntryLoading || !actionState?.can_arm_pending
-    : busy
-      || tradingActionsDisabled
-      || pendingEntryLoading
-      || hasActivePendingStatus
-      || !viewModel.riskSummary.isMarketOpportunity
-      || !isWaitingEntry(signal.status)
-      || (formingCandle && !openCandleAllowed)
-      || statusAllowsTrade;
-  const cancelPendingDisabled = hasBackendActionState
-    ? busy || tradingActionsDisabled || actionStateLoading || !actionState?.can_cancel
-    : busy || tradingActionsDisabled || !activePendingEntry;
-  const realActionAvailable = realActionState === undefined
-    ? viewModel.canEnterNow === true
-    : Boolean(realActionState?.can_enter_now || realActionState?.can_arm_pending);
+  const backendDisabledReason = actionStateDisabledReason(actionState ?? null);
+  const entryActionDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_enter_now !== true;
+  const acceptPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || pendingEntryLoading || actionState?.can_arm_pending !== true;
+  const cancelPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_cancel !== true;
+  const realActionAvailable = Boolean(realActionState?.can_enter_now || realActionState?.can_arm_pending);
   const realActionDisabled = busy || tradingActionsDisabled || !realActionAvailable || !onConfirmRealTrade;
-  const realExecutionEnvironment = realExecutionEnvironmentLabel(realTradeContext?.connection ?? null, realActionState);
-  const rejectDisabled = busy || tradingActionsDisabled || signal.status === "confirmed" || signal.status === "invalidated" || signal.status === "expired";
-  const tradePlan = viewModel.tradePlanSummary;
-  const topBlockers = (backendTopBlockers ?? viewModel.topBlockers).slice(0, 3);
-  const reasons = viewModel.topReasons.slice(0, 6);
+  const rejectDisabled = busy || tradingActionsDisabled || signal.details_view?.primary_status === "cancelled" || signal.details_view?.primary_status === "expired";
 
   return (
     <section className="details-panel">
@@ -166,42 +120,35 @@ export function SignalDetails({
           <h2>{signal.symbol}</h2>
         </div>
         <div className="details-badges">
-          <Badge tone={isLong ? "green" : "red"}>{signal.direction.toUpperCase()}</Badge>
+          <Badge tone={viewModel.side === "long" ? "green" : "red"}>{viewModel.side.toUpperCase()}</Badge>
           <Badge tone="yellow">Risk {viewModel.riskSummary.label}</Badge>
-          <Badge tone={primaryStatusTone(viewModel.primaryStatus)}>{primaryStatusLabel(viewModel.primaryStatus)}</Badge>
-          {formingCandle ? <Badge tone={openCandleAllowed ? "blue" : "yellow"}>{openCandleAllowed ? "forming allowed" : "forming candle"}</Badge> : null}
-          <Badge tone={marketOpportunityTone(signal)}>{formingReason ? "preview" : marketOpportunityLabel(signal)}</Badge>
-          {activePendingStatus ? <Badge tone={pendingEntryTone(activePendingStatus)}>{pendingEntryLabel(activePendingStatus)}</Badge> : null}
-          {signal.risk_gate_status ? <Badge tone={riskGateTone(signal.risk_gate_status)}>RiskGate {signal.risk_gate_status}</Badge> : null}
+          <Badge tone={viewModel.primaryStatusTone}>{viewModel.primaryStatusLabel}</Badge>
+          {signal.card_view?.badges.map((badge) => (
+            <Badge key={`${badge.code}:${badge.label}`} tone={badge.tone}>{badge.label}</Badge>
+          ))}
         </div>
       </div>
 
+      {viewModel.contractError ? <div className="error-banner">{viewModel.contractError}</div> : null}
+
       <DecisionCard
-        canEnterNow={backendCanEnterNow}
-        primaryActionLabel={actionState?.display_labels.primary_action ?? viewModel.primaryActionLabel}
+        canEnterNow={viewModel.canEnterNow}
+        primaryActionLabel={viewModel.primaryActionLabel}
         recommendedActionText={backendDisabledReason ?? viewModel.recommendedActionText}
         viewModel={viewModel}
-        topBlockers={topBlockers}
+        topBlockers={viewModel.topBlockers.slice(0, 3)}
       />
 
       <ActivePendingEntryCompact
         pendingEntry={activePendingEntry}
         onReconfirmPendingEntry={onReconfirmPendingEntry}
         busy={busy || tradingActionsDisabled}
-        canReconfirm={hasBackendActionState ? Boolean(actionState?.can_reconfirm) : undefined}
+        canReconfirm={actionState?.can_reconfirm}
       />
 
-      <TradePlanCompact signal={signal} tradePlan={tradePlan} />
-
-      <RiskCompact
-        signal={signal}
-        execution={executionPreview}
-        error={executionPreviewError}
-        loading={executionPreviewLoading}
-        realTradeContext={realTradeContext}
-      />
-
-      <WhyThisSignal reasons={reasons} />
+      <TradePlanCompact tradePlan={viewModel.tradePlanSummary} />
+      <RiskCompact execution={executionPreview} error={executionPreviewError} loading={executionPreviewLoading} />
+      <WhyThisSignal reasons={viewModel.topReasons.slice(0, 6)} />
 
       <ActionsBlock
         acceptPendingDisabled={acceptPendingDisabled}
@@ -215,20 +162,18 @@ export function SignalDetails({
         onReject={() => onReject(signal)}
         onToggleChart={() => setChartOpen((open) => !open)}
         realActionDisabled={realActionDisabled}
-        realExecutionEnvironment={realExecutionEnvironment}
+        realExecutionEnvironment={realActionState?.environment ?? realTradeContext?.connection?.environment ?? "No exchange connection"}
         rejectDisabled={rejectDisabled}
         setRealConfirmationOpen={setRealConfirmationOpen}
-        statusAllowsTrade={statusAllowsTrade}
         tradingActionsDisabled={tradingActionsDisabled}
         backendDisabledReason={backendDisabledReason}
-        canEnterNow={backendCanEnterNow}
+        canEnterNow={viewModel.canEnterNow}
       />
 
       {chartOpen ? <LazySignalDetailsChart signal={signal} /> : null}
 
       <DiagnosticsPanel
-        activeLegacyAutoEntry={activeLegacyAutoEntry}
-        activePendingEntry={activePendingEntry}
+        actionState={actionState ?? null}
         busy={busy || tradingActionsDisabled}
         execution={executionPreview}
         executionError={executionPreviewError}
@@ -236,13 +181,15 @@ export function SignalDetails({
         open={diagnosticsOpen}
         onReconfirmPendingEntry={onReconfirmPendingEntry}
         onToggle={() => setDiagnosticsOpen((open) => !open)}
+        pendingEntry={activePendingEntry}
         signal={signal}
-        terminalLegacyAutoEntry={terminalLegacyAutoEntry}
         terminalPendingEntry={terminalPendingEntry}
         viewModel={viewModel}
       />
+
       {realConfirmationOpen ? (
         <RealTradeConfirmationModal
+          actionState={realActionState ?? null}
           busy={realTradeBusy}
           context={realTradeContext}
           execution={executionPreview}
@@ -276,7 +223,7 @@ function DecisionCard({
       <div className="section-title compact-section-title">
         <FileCheck2 size={18} />
         <h3>Decision</h3>
-        <Badge tone={primaryStatusTone(viewModel.primaryStatus)}>{primaryStatusLabel(viewModel.primaryStatus)}</Badge>
+        <Badge tone={viewModel.primaryStatusTone}>{viewModel.primaryStatusLabel}</Badge>
       </div>
       <div className="compact-metric-grid decision-card-grid">
         <MetricLine label="Recommended action" value={primaryActionLabel} />
@@ -292,7 +239,7 @@ function DecisionCard({
             ))}
           </ul>
         ) : (
-          <p className="compact-empty">No active blockers from current checks.</p>
+          <p className="compact-empty">No active blockers from backend action-state.</p>
         )}
       </div>
     </div>
@@ -311,25 +258,23 @@ function ActivePendingEntryCompact({
   canReconfirm?: boolean;
 }) {
   if (!pendingEntry) return null;
-  const status = pendingEntry.status;
+  const view = pendingEntry.view;
   return (
     <div className="auto-entry-block active-pending-compact">
       <div className="section-title">
         <FileCheck2 size={18} />
         <h3>Active Pending Entry</h3>
-        <Badge tone={pendingEntryTone(status)}>{pendingEntryLabel(status)}</Badge>
+        <Badge tone={view?.status_tone ?? pendingEntryTone(pendingEntry.status)}>{view?.status_label ?? pendingEntry.status.replaceAll("_", " ")}</Badge>
       </div>
       <div className="compact-metric-grid">
-        <MetricLine label="State" value={pendingEntryLabel(status)} />
-        <MetricLine label="Entry zone" value={`${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
+        <MetricLine label="State" value={view?.status_label ?? pendingEntry.status.replaceAll("_", " ")} />
+        <MetricLine label="Entry zone" value={view?.entry_zone ?? `${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
         <MetricLine label="Stop" value={formatPrice(pendingEntry.stop_loss)} />
-        <MetricLine label="Accepted status" value={pendingEntry.accepted_signal_status.replaceAll("_", " ")} />
+        <MetricLine label="Reason code" value={view?.reason_code ?? pendingEntry.reason_code ?? "-"} />
         <MetricLine label="Expiry / TTL" value={formatPendingEntryExpiry(pendingEntry)} />
       </div>
-      {pendingEntry.failure_reason ? (
-        <p>{pendingEntry.failure_reason}</p>
-      ) : null}
-      {status === "requires_reconfirmation" && onReconfirmPendingEntry ? (
+      <p>{view?.reason ?? pendingEntry.failure_reason ?? "No backend reason."}</p>
+      {pendingEntry.status === "requires_reconfirmation" && onReconfirmPendingEntry ? (
         <div className="detail-actions compact-card-actions">
           <button className="secondary-action" disabled={busy || canReconfirm === false} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
             <FileCheck2 size={17} /> Reconfirm plan
@@ -340,77 +285,52 @@ function ActivePendingEntryCompact({
   );
 }
 
-function TradePlanCompact({
-  signal,
-  tradePlan
-}: {
-  signal: RadarSignal;
-  tradePlan: SignalDetailsViewModel["tradePlanSummary"];
-}) {
+function TradePlanCompact({ tradePlan }: { tradePlan: SignalTradePlanView }) {
   return (
     <div className="risk-reward-detail-block trade-plan-compact">
       <div className="section-title">
         <ShieldAlert size={18} />
         <h3>Trade Plan</h3>
-        <Badge tone={tradePlan.hasTradePlan ? "blue" : "neutral"}>{tradePlan.entryType}</Badge>
+        <Badge tone={tradePlan.has_trade_plan ? "blue" : "neutral"}>{tradePlan.entry_type}</Badge>
       </div>
       <div className="compact-metric-grid trade-plan-compact-grid">
-        <MetricLine label="Entry type" value={tradePlan.entryType} />
-        <MetricLine label="Entry zone / price" value={`${tradePlan.entryZone} / ${formatPrice(tradePlan.entryPrice)}`} />
-        <MetricLine label="Stop-loss" value={formatPrice(tradePlan.stopLoss)} />
+        <MetricLine label="Entry type" value={tradePlan.entry_type} />
+        <MetricLine label="Entry zone / price" value={`${tradePlan.entry_zone} / ${formatPrice(tradePlan.entry_price)}`} />
+        <MetricLine label="Stop-loss" value={formatPrice(tradePlan.stop_loss)} />
         <MetricLine label="TP1" value={formatCompactTarget(tradePlan, 0)} />
         <MetricLine label="TP2" value={formatCompactTarget(tradePlan, 1)} />
         <MetricLine label="Runner" value={formatCompactRunnerTarget(tradePlan)} />
-        <MetricLine label="Selected RR" value={formatRMultiple(tradePlan.selectedRr)} />
-        <MetricLine label="Invalidation" value={formatCompactInvalidation(signal)} />
+        <MetricLine label="Selected RR" value={formatRMultiple(tradePlan.selected_rr)} />
+        <MetricLine label="Invalidation" value={tradePlan.invalidation} />
       </div>
     </div>
   );
 }
 
 function RiskCompact({
-  signal,
   execution,
   error,
-  loading,
-  realTradeContext
+  loading
 }: {
-  signal: RadarSignal;
   execution: VirtualExecutionReport | null;
   error: string | null;
   loading: boolean;
-  realTradeContext?: RealTradeContext;
 }) {
-  const riskDecision = execution?.risk_decision ?? null;
-  const riskCheck = execution?.risk_check ?? riskDecision?.risk_check ?? null;
-  const sizing = execution?.position_sizing ?? riskDecision?.checked_position_sizing ?? riskDecision?.position_sizing ?? null;
-  const riskGateStatus = signal.risk_gate_status ?? riskDecision?.status ?? riskCheck?.status ?? null;
-  const riskAmount = riskCheck?.effective_risk_amount
-    ?? riskCheck?.adjusted_risk_amount
-    ?? sizing?.risk_amount
-    ?? riskDecision?.risk_adjustment_plan.adjusted_risk_amount
-    ?? null;
-  const riskPercent = riskCheck?.adjusted_risk_percent
-    ?? sizing?.risk_per_trade_percent
-    ?? riskDecision?.risk_adjustment_plan.adjusted_risk_percent
-    ?? null;
-  const requiredMargin = riskCheck?.required_margin ?? sizing?.required_margin ?? null;
-  const leverage = sizing?.leverage ?? null;
-  const availableBalance = riskCheck?.available_balance ?? realTradeContext?.accountSnapshot?.available_balance ?? null;
-
+  const riskCheck = execution?.risk_check ?? execution?.risk_decision?.risk_check ?? null;
+  const sizing = execution?.position_sizing ?? execution?.risk_decision?.checked_position_sizing ?? null;
   return (
     <div className="risk-reward-detail-block risk-compact">
       <div className="section-title">
         <ShieldAlert size={18} />
         <h3>Risk</h3>
-        <Badge tone={riskGateTone(riskGateStatus)}>{riskGateStatus ?? "not previewed"}</Badge>
+        <Badge tone={riskGateTone(riskCheck?.status ?? execution?.risk_decision?.status ?? null)}>
+          {riskCheck?.status ?? execution?.risk_decision?.status ?? (loading ? "checking" : "not previewed")}
+        </Badge>
       </div>
       <div className="compact-metric-grid risk-compact-grid">
-        <MetricLine label="RiskGate" value={riskGateStatus ?? "not previewed"} />
-        <MetricLine label="Risk amount / %" value={`${formatCurrencyAmount(riskAmount)} / ${formatPercentValue(riskPercent)}`} />
-        <MetricLine label="Margin / leverage" value={`${formatCurrencyAmount(requiredMargin)} / ${leverage == null ? "-" : `${leverage}x`}`} />
-        {availableBalance != null ? <MetricLine label="Available balance" value={formatCurrencyAmount(availableBalance)} /> : null}
-        <MetricLine label="Execution quality" value={executionQualitySummary(signal, execution, error, loading)} />
+        <MetricLine label="Risk amount / %" value={`${formatCurrencyAmount(riskCheck?.effective_risk_amount ?? sizing?.risk_amount)} / ${formatPercentValue(riskCheck?.adjusted_risk_percent ?? sizing?.risk_per_trade_percent)}`} />
+        <MetricLine label="Margin / leverage" value={`${formatCurrencyAmount(riskCheck?.required_margin ?? sizing?.required_margin)} / ${sizing?.leverage == null ? "-" : `${sizing.leverage}x`}`} />
+        <MetricLine label="Execution quality" value={execution ? `${execution.quality_gate.status} / ${execution.liquidity.impact_risk} impact` : error ? "Preview error" : loading ? "Checking" : "not previewed"} />
       </div>
     </div>
   );
@@ -420,11 +340,7 @@ function WhyThisSignal({ reasons }: { reasons: string[] }) {
   return (
     <div className="explanation-block why-signal-block">
       <h3>Why this signal?</h3>
-      <ul>
-        {reasons.map((reason) => (
-          <li key={reason}><CheckCircle2 size={16} /><span>{reason}</span></li>
-        ))}
-      </ul>
+      <ul>{reasons.map((reason) => <li key={reason}><span>{reason}</span></li>)}</ul>
     </div>
   );
 }
@@ -444,7 +360,6 @@ function ActionsBlock({
   realExecutionEnvironment,
   rejectDisabled,
   setRealConfirmationOpen,
-  statusAllowsTrade,
   tradingActionsDisabled,
   backendDisabledReason,
   canEnterNow
@@ -463,7 +378,6 @@ function ActionsBlock({
   realExecutionEnvironment: string;
   rejectDisabled: boolean;
   setRealConfirmationOpen: (open: boolean) => void;
-  statusAllowsTrade: boolean;
   tradingActionsDisabled: boolean;
   backendDisabledReason: string | null;
   canEnterNow: boolean | null;
@@ -486,7 +400,7 @@ function ActionsBlock({
           <ShieldAlert size={17} /> Real wait entry
         </button>
         <button className="primary-action" onClick={onPaperTrade} disabled={entryActionDisabled} type="button">
-          <FileCheck2 size={17} /> {canEnterNow === true || (canEnterNow == null && statusAllowsTrade) ? "Virtual entry now" : "Virtual entry locked"}
+          <FileCheck2 size={17} /> {canEnterNow === true ? "Virtual entry now" : "Virtual entry locked"}
         </button>
         {activePendingEntry ? (
           <button className="secondary-action" onClick={onCancelPendingEntry} disabled={cancelPendingDisabled} type="button">
@@ -495,9 +409,6 @@ function ActionsBlock({
         ) : null}
         <button className="secondary-action" onClick={onToggleChart} type="button">
           <BarChart3 size={17} /> {chartOpen ? "Hide chart" : "Open chart"}
-        </button>
-        <button className="secondary-action" type="button" disabled>
-          <ExternalLink size={17} /> Open exchange
         </button>
         <button className="danger-action" onClick={onReject} disabled={rejectDisabled} type="button">
           <XCircle size={17} /> Reject / ignore
@@ -513,8 +424,7 @@ function ActionsBlock({
 }
 
 function DiagnosticsPanel({
-  activeLegacyAutoEntry,
-  activePendingEntry,
+  actionState,
   busy,
   execution,
   executionError,
@@ -522,13 +432,12 @@ function DiagnosticsPanel({
   open,
   onReconfirmPendingEntry,
   onToggle,
+  pendingEntry,
   signal,
-  terminalLegacyAutoEntry,
   terminalPendingEntry,
   viewModel
 }: {
-  activeLegacyAutoEntry: RadarSignal["auto_entry"];
-  activePendingEntry: PendingEntryIntent | null;
+  actionState: SignalActionState | null;
   busy: boolean;
   execution: VirtualExecutionReport | null;
   executionError: string | null;
@@ -536,8 +445,8 @@ function DiagnosticsPanel({
   open: boolean;
   onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
   onToggle: () => void;
+  pendingEntry: PendingEntryIntent | null;
   signal: RadarSignal;
-  terminalLegacyAutoEntry: RadarSignal["auto_entry"];
   terminalPendingEntry: PendingEntryIntent | null;
   viewModel: SignalDetailsViewModel;
 }) {
@@ -552,109 +461,279 @@ function DiagnosticsPanel({
       >
         <span className="section-title">
           <ShieldAlert size={18} />
-          <span>Диагностика</span>
+          <span>Р”РёР°РіРЅРѕСЃС‚РёРєР°</span>
         </span>
         <Badge tone={open ? "blue" : "neutral"}>{open ? "open" : "collapsed"}</Badge>
       </button>
       {open ? (
         <div className="diagnostics-content" id="signal-diagnostics-content">
-          <RadarAnnotationBlock signal={signal} />
-          <PullbackGuidanceBlock signal={signal} />
-          <BreakoutEntryPlanBlock signal={signal} />
-          <LiquiditySweepPlanBlock signal={signal} />
-          <PendingEntryBlock
-            pendingEntry={activePendingEntry}
-            onReconfirmPendingEntry={onReconfirmPendingEntry}
-            busy={busy}
-          />
+          <BackendViewBlock signal={signal} actionState={actionState} viewModel={viewModel} />
+          <PendingEntryBlock pendingEntry={pendingEntry} onReconfirmPendingEntry={onReconfirmPendingEntry} busy={busy} />
           <PendingEntryHistoryCollapsed pendingEntry={terminalPendingEntry} />
-          <AutoEntryBlock autoEntry={activeLegacyAutoEntry} />
-          <AutoEntryDiagnosticsCollapsed autoEntry={terminalLegacyAutoEntry} />
-          <TradePlanDetailBlock signal={signal} />
-          <RiskRewardDetailBlock signal={signal} />
-          <EdgeSnapshotBlock signal={signal} />
-          <DecisionSnapshotBlock signal={signal} />
-          <RiskBlockersDetailBlock viewModel={viewModel} />
-          <ExecutionQualityBlock
-            signal={signal}
-            execution={execution}
-            error={executionError}
-            loading={executionLoading}
-          />
-          <StrategyLayersBlock signal={signal} execution={execution} />
-          <ConfidenceBreakdownBlock signal={signal} />
-          <ChecklistBlock signal={signal} viewModel={viewModel} />
-          <RiskListBlock signal={signal} />
+          <ExecutionPreviewBlock execution={execution} error={executionError} loading={executionLoading} />
         </div>
       ) : null}
     </div>
   );
 }
 
-function ConfidenceBreakdownBlock({ signal }: { signal: RadarSignal }) {
-  const breakdown = signal.score_breakdown;
-  return (
-    <div className="confidence-breakdown">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Confidence Score</h3>
-      </div>
-      <ScoreLine label="Trend" value={breakdown.trend_score} max={100} />
-      <ScoreLine label="Volume" value={breakdown.volume_score} max={100} />
-      <ScoreLine label="Liquidity" value={breakdown.liquidity_score} max={100} />
-      <ScoreLine label="Orderbook" value={breakdown.orderbook_score} max={100} />
-      <ScoreLine label="Risk/Reward" value={breakdown.risk_reward_score} max={100} />
-      <ScoreLine label="Volatility" value={breakdown.volatility_score} max={100} />
-      <ScoreLine label="Overheat Penalty" value={breakdown.overheat_penalty} max={100} />
-      <ScoreLine label="News/Event Risk" value={breakdown.news_event_risk_penalty} max={100} />
-    </div>
-  );
-}
-
-function ChecklistBlock({
+function BackendViewBlock({
   signal,
+  actionState,
   viewModel
 }: {
   signal: RadarSignal;
+  actionState: SignalActionState | null;
   viewModel: SignalDetailsViewModel;
 }) {
   return (
-    <div className="checklist-block">
-      <h3>Confirmation Checklist</h3>
-      <CheckRow done text="Сетап соответствует стратегии" />
-      <CheckRow done={viewModel.riskSummary.tradePlanComplete} text="Entry, SL and TP are calculated" />
-      <CheckRow done={viewModel.riskSummary.riskRewardOk} text="Risk/Reward is set" />
-      <CheckRow done={viewModel.riskSummary.statusAllowsTrade} text={`Strategy status: ${signal.status.replaceAll("_", " ")}`} />
+    <div className="risk-reward-detail-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Backend Action State</h3>
+        <Badge tone={viewModel.primaryStatusTone}>{viewModel.primaryStatusLabel}</Badge>
+      </div>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Signal status" value={signal.status.replaceAll("_", " ")} />
+        <MetricLine label="Primary action" value={actionState?.primary_action ?? "-"} />
+        <MetricLine label="Can enter" value={canEnterNowLabel(actionState?.can_enter_now ?? null)} />
+        <MetricLine label="Can arm pending" value={formatBool(actionState?.can_arm_pending)} />
+        <MetricLine label="Can cancel" value={formatBool(actionState?.can_cancel)} />
+        <MetricLine label="Environment" value={actionState?.environment ?? "-"} />
+      </div>
+      {[...viewModel.topBlockers, ...viewModel.warnings].length ? (
+        <ul className="risk-blocker-list">
+          {[...viewModel.topBlockers, ...viewModel.warnings].map((blocker) => (
+            <li key={blockerKey(blocker)}>{blocker.userMessage}</li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
 
-function RiskListBlock({ signal }: { signal: RadarSignal }) {
-  if (!signal.risks.length) return null;
+function PendingEntryBlock({
+  pendingEntry,
+  onReconfirmPendingEntry,
+  busy
+}: {
+  pendingEntry: PendingEntryIntent | null;
+  onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
+  busy: boolean;
+}) {
+  if (!pendingEntry) return null;
   return (
-    <div className="risk-block">
-      <h3>Risks</h3>
-      {signal.risks.map((risk) => <p key={risk}>{risk}</p>)}
+    <div className="auto-entry-block">
+      <div className="section-title">
+        <FileCheck2 size={18} />
+        <h3>Pending Entry</h3>
+        <Badge tone={pendingEntry.view?.status_tone ?? pendingEntryTone(pendingEntry.status)}>
+          {pendingEntry.view?.status_label ?? pendingEntry.status.replaceAll("_", " ")}
+        </Badge>
+      </div>
+      <p>{pendingEntry.view?.reason ?? pendingEntry.failure_reason ?? "No backend reason."}</p>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Entry zone" value={pendingEntry.view?.entry_zone ?? `${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
+        <MetricLine label="Stop" value={formatPrice(pendingEntry.stop_loss)} />
+        <MetricLine label="Mode" value={pendingEntry.mode} />
+        <MetricLine label="Accepted status" value={pendingEntry.accepted_signal_status.replaceAll("_", " ")} />
+      </div>
+      {pendingEntry.status === "requires_reconfirmation" && onReconfirmPendingEntry ? (
+        <div className="detail-actions">
+          <button className="secondary-action" disabled={busy} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
+            <FileCheck2 size={17} /> Reconfirm plan
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function primaryStatusTone(
-  status: SignalDetailsViewModel["primaryStatus"]
-): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
-  if (status === "execution_ready") return "green";
-  if (status === "blocked" || status === "cancelled" || status === "expired") return "red";
-  if (status === "requires_reconfirmation") return "yellow";
-  if (status === "waiting_entry") return "blue";
-  if (status === "watchlist") return "purple";
-  return "neutral";
+function PendingEntryHistoryCollapsed({ pendingEntry }: { pendingEntry: PendingEntryIntent | null }) {
+  if (!pendingEntry) return null;
+  return (
+    <details className="risk-reward-detail-block pending-entry-history-block">
+      <summary className="pending-entry-history-summary">
+        <span className="section-title">
+          <FileCheck2 size={18} />
+          <h3>РСЃС‚РѕСЂРёСЏ РѕР¶РёРґР°РЅРёСЏ РІС…РѕРґР°</h3>
+        </span>
+        <Badge tone={pendingEntry.view?.status_tone ?? pendingEntryTone(pendingEntry.status)}>
+          {pendingEntry.view?.status_label ?? pendingEntry.status.replaceAll("_", " ")}
+        </Badge>
+      </summary>
+      <div className="risk-reward-detail-grid">
+        <MetricLine label="Status" value={pendingEntry.status.replaceAll("_", " ")} />
+        <MetricLine label="Reason" value={pendingEntry.view?.reason ?? pendingEntry.failure_reason ?? "-"} />
+        <MetricLine label="Updated" value={formatPendingEntryTimestamp(pendingEntry.updated_at)} />
+      </div>
+    </details>
+  );
 }
 
-function primaryStatusLabel(status: SignalDetailsViewModel["primaryStatus"]): string {
-  return status.replaceAll("_", " ");
+function ExecutionPreviewBlock({
+  execution,
+  error,
+  loading
+}: {
+  execution: VirtualExecutionReport | null;
+  error: string | null;
+  loading: boolean;
+}) {
+  return (
+    <div className="execution-quality-block">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <h3>Backend Execution Preview</h3>
+        <Badge tone={execution ? riskGateTone(execution.risk_check?.status ?? execution.risk_decision?.status ?? null) : loading ? "yellow" : "neutral"}>
+          {execution?.risk_check?.status ?? execution?.risk_decision?.status ?? (loading ? "checking" : "not previewed")}
+        </Badge>
+      </div>
+      {execution ? (
+        <div className="execution-quality-grid">
+          <MetricLine label="Quality gate" value={execution.quality_gate.status} />
+          <MetricLine label="Impact risk" value={execution.liquidity.impact_risk} />
+          <MetricLine label="Requested size" value={formatCurrencyAmount(execution.requested_size_usd)} />
+          <MetricLine label="Filled size" value={formatCurrencyAmount(execution.filled_size_usd)} />
+          <MetricLine label="Entry slippage" value={formatBps(execution.entry_slippage_bps)} />
+          <MetricLine label="Reason" value={execution.reason_code ?? "-"} />
+        </div>
+      ) : (
+        <p>{error ?? (loading ? "Backend execution preview is loading." : "No execution preview requested.")}</p>
+      )}
+    </div>
+  );
+}
+
+function RealTradeConfirmationModal({
+  signal,
+  context,
+  execution,
+  actionState,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  signal: RadarSignal;
+  context?: RealTradeContext;
+  execution: VirtualExecutionReport | null;
+  actionState: SignalActionState | null;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const confirmDisabled = busy || !(actionState?.can_enter_now || actionState?.can_arm_pending);
+  const blockers = actionState?.blockers ?? [];
+  const warnings = actionState?.warnings ?? [];
+  const riskCheck = execution?.risk_check ?? execution?.risk_decision?.risk_check ?? null;
+  const tradePlan = signal.details_view?.trade_plan;
+  return (
+    <div className="real-trade-modal-backdrop">
+      <div aria-labelledby="real-trade-confirm-title" aria-modal="true" className="real-trade-modal" role="dialog">
+        <div className="real-trade-modal-header">
+          <div>
+            <span className="muted">Real execution</span>
+            <h3 id="real-trade-confirm-title">РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ СЂРµР°Р»СЊРЅРѕРіРѕ РІС…РѕРґР°</h3>
+          </div>
+          <div className="details-badges">
+            <Badge tone={actionState?.environment === "mainnet" ? "red" : actionState?.environment === "testnet" ? "blue" : "yellow"}>
+              {actionState?.environment ?? "real_unresolved"}
+            </Badge>
+            <Badge tone={context?.accountSnapshot?.status === "fresh" ? "green" : context?.accountSnapshot?.status === "stale" ? "yellow" : "red"}>
+              {context?.accountSnapshot?.status ?? "missing"}
+            </Badge>
+          </div>
+        </div>
+
+        <div className="real-trade-warning">
+          <ShieldAlert size={18} />
+          <span>Real execution availability is backend-owned. Confirm only sends the selected intent.</span>
+        </div>
+
+        <div className="real-trade-metric-grid">
+          <RealTradeMetric label="Exchange" value={context?.connection ? `${context.connection.exchange_name || context.connection.exchange_code} В· ${context.connection.label}` : signal.exchange} />
+          <RealTradeMetric label="Account equity" value={formatCurrencyAmount(context?.accountSnapshot?.account_equity)} />
+          <RealTradeMetric label="Available balance" value={formatCurrencyAmount(riskCheck?.available_balance)} />
+          <RealTradeMetric label="Symbol / side" value={`${signal.symbol} / ${signal.direction.toUpperCase()}`} />
+          <RealTradeMetric label="Entry zone" value={tradePlan?.entry_zone ?? "-"} />
+          <RealTradeMetric label="Stop-loss" value={formatPrice(tradePlan?.stop_loss)} />
+          <RealTradeMetric label="Selected RR" value={formatRMultiple(tradePlan?.selected_rr ?? null)} />
+          <RealTradeMetric label="RiskGate" value={riskCheck?.status ?? execution?.risk_decision?.status ?? "-"} />
+        </div>
+
+        <div className="real-trade-blockers">
+          <strong>Backend blockers / warnings</strong>
+          {blockers.length ? (
+            <ul className="risk-blocker-list">
+              {blockers.map((blocker) => (
+                <li key={blocker.code}>{blocker.display_label ?? blocker.message ?? blocker.code}</li>
+              ))}
+            </ul>
+          ) : (
+            <p>Р‘Р»РѕРєРµСЂРѕРІ РЅРµС‚.</p>
+          )}
+          {warnings.length ? (
+            <div className="real-trade-warning-list">
+              {warnings.map((warning) => (
+                <span key={warning.code}>{warning.display_label ?? warning.message ?? warning.code}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="real-trade-modal-actions">
+          <button className="secondary-action" onClick={onCancel} type="button">РћС‚РјРµРЅР°</button>
+          <button className="real-action" disabled={confirmDisabled} onClick={onConfirm} type="button">
+            <ShieldAlert size={17} /> РџРѕРґС‚РІРµСЂРґРёС‚СЊ СЂРµР°Р»СЊРЅС‹Р№ РІС…РѕРґ
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MetricLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="execution-quality-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function RealTradeMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="real-trade-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function formatCompactTarget(tradePlan: SignalTradePlanView, index: number): string {
+  const target = tradePlan.targets[index];
+  if (!target) return "-";
+  const rr = target.r_multiple == null ? "" : ` / ${formatRMultiple(target.r_multiple)}`;
+  return `${target.label} ${formatPrice(target.price)}${rr}`;
+}
+
+function formatCompactRunnerTarget(tradePlan: SignalTradePlanView): string {
+  const runner = tradePlan.targets[2] ?? tradePlan.targets.find((target) => target.action?.includes("runner")) ?? null;
+  if (!runner) return "-";
+  const rr = runner.r_multiple == null ? "" : ` / ${formatRMultiple(runner.r_multiple)}`;
+  return `${runner.label} ${formatPrice(runner.price)}${rr}`;
+}
+
+function formatRMultiple(value: number | null): string {
+  return value == null ? "-" : `${value.toFixed(2)}R`;
 }
 
 function canEnterNowLabel(value: boolean | null): string {
+  if (value == null) return "not evaluated";
+  return value ? "yes" : "no";
+}
+
+function formatBool(value: boolean | undefined): string {
   if (value == null) return "not evaluated";
   return value ? "yes" : "no";
 }
@@ -674,295 +753,34 @@ function formatPendingEntryTtl(value: string): string {
   return `${Math.ceil(diffMinutes / 60)}h left`;
 }
 
-function formatCompactTarget(
-  tradePlan: SignalDetailsViewModel["tradePlanSummary"],
-  index: number
-): string {
-  const target = tradePlan.targets[index];
-  if (!target) return "-";
-  const rr = target.rMultiple == null ? "" : ` / ${formatRMultiple(target.rMultiple)}`;
-  return `${target.label} ${formatPrice(target.price)}${rr}`;
+function formatPendingEntryTimestamp(value: string | null | undefined): string {
+  if (!value) return "-";
+  return value.replace("T", " ").replace(".000Z", "Z");
 }
 
-function formatCompactRunnerTarget(tradePlan: SignalDetailsViewModel["tradePlanSummary"]): string {
-  const runner = tradePlan.targets[2] ?? tradePlan.targets.find((target) => target.action?.includes("runner")) ?? null;
-  if (!runner) return "-";
-  const rr = runner.rMultiple == null ? "" : ` / ${formatRMultiple(runner.rMultiple)}`;
-  return `${runner.label} ${formatPrice(runner.price)}${rr}`;
+function pendingEntryTone(status: PendingEntryIntent["status"]): ViewTone {
+  if (status === "pending") return "blue";
+  if (status === "requires_reconfirmation") return "yellow";
+  if (status === "triggered" || status === "filling" || status === "filled") return "green";
+  if (status === "failed" || status === "cancelled" || status === "expired") return "red";
+  return "neutral";
 }
 
-function formatCompactInvalidation(signal: RadarSignal): string {
-  const tradePlanInvalidation = signal.trade_plan?.invalidation ?? null;
-  return formatPrice(
-    tradePlanInvalidation?.hard_stop
-    ?? tradePlanInvalidation?.price
-    ?? signal.invalidation?.hard_stop
-    ?? signal.invalidation?.price
-  );
+function riskGateTone(status: string | null | undefined): ViewTone {
+  if (status === "passed") return "green";
+  if (status === "failed") return "red";
+  if (status === "warning") return "yellow";
+  return "neutral";
 }
 
-function executionQualitySummary(
-  signal: RadarSignal,
-  execution: VirtualExecutionReport | null,
-  error: string | null,
-  loading: boolean
-): string {
-  if (loading && !execution) return "Checking";
-  if (error && !execution) return "Preview error";
-  const gateStatus = execution?.quality_gate.status ?? scoreGateStatus(signal);
-  const impactRisk = execution?.liquidity.impact_risk ?? scoreImpactRisk(signal);
-  return `${executionQualityLabel(gateStatus, impactRisk)} / ${impactRiskLabel(impactRisk)} impact`;
-}
-
-function RealTradeConfirmationModal({
-  signal,
-  context,
-  execution,
-  busy,
-  onCancel,
-  onConfirm
-}: {
-  signal: RadarSignal;
-  context?: RealTradeContext;
-  execution: VirtualExecutionReport | null;
-  busy: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const snapshot = context?.accountSnapshot ?? null;
-  const connection = context?.connection ?? null;
-  const tradePlan = signalTradePlanSummary(signal);
-  const riskDecision = execution?.risk_decision ?? null;
-  const riskCheck = execution?.risk_check ?? null;
-  const sizing = execution?.position_sizing ?? riskDecision?.checked_position_sizing ?? null;
-  const environment = connectionEnvironment(connection);
-  const environmentLabel = realExecutionEnvironmentLabel(connection, undefined);
-  const blockers = realTradeBlockers(signal, context, execution);
-  const warnings = realTradeWarnings(signal, context, execution);
-  const confirmDisabled = busy || blockers.length > 0;
-  const accountEquity = snapshot?.account_equity ?? riskCheck?.account_equity ?? null;
-  const availableBalance = snapshot?.available_balance ?? riskCheck?.available_balance ?? null;
-  const positionNotional = sizing?.notional ?? riskCheck?.position_notional ?? null;
-  const requiredMargin = sizing?.required_margin ?? riskCheck?.required_margin ?? null;
-  const riskAmount = riskCheck?.effective_risk_amount ?? sizing?.risk_amount ?? null;
-  const riskPercent = riskCheck?.adjusted_risk_percent ?? sizing?.risk_per_trade_percent ?? riskDecision?.risk_adjustment_plan.adjusted_risk_percent ?? null;
-  const feeRate = riskCheck?.taker_fee_rate ?? sizing?.fee_rate ?? null;
-  const slippageBps = riskCheck?.slippage_bps ?? sizing?.slippage_bps ?? execution?.entry_slippage_bps ?? null;
-  const exchangeLabel = connection
-    ? `${connection.exchange_name || connection.exchange_code} · ${connection.label}`
-    : signal.exchange;
-
-  return (
-    <div className="real-trade-modal-backdrop">
-      <div aria-labelledby="real-trade-confirm-title" aria-modal="true" className="real-trade-modal" role="dialog">
-        <div className="real-trade-modal-header">
-          <div>
-            <span className="muted">Real execution</span>
-            <h3 id="real-trade-confirm-title">Подтверждение реального входа</h3>
-          </div>
-          <div className="details-badges">
-            <Badge tone={environment === "testnet" ? "blue" : environment === "mainnet" ? "red" : "yellow"}>
-              {environmentLabel}
-            </Badge>
-            <Badge tone={snapshotStatusTone(snapshot?.status ?? "missing")}>{snapshot?.status ?? "missing"}</Badge>
-          </div>
-        </div>
-
-        <div className="real-trade-warning">
-          <ShieldAlert size={18} />
-          <span>Реальный вход отделён от виртуального: подтверждение доступно только при свежем snapshot и без блокеров.</span>
-        </div>
-
-        <div className="real-trade-metric-grid">
-          <RealTradeMetric label="Exchange" value={exchangeLabel} />
-          <RealTradeMetric label="Account equity" value={formatCurrencyAmount(accountEquity)} />
-          <RealTradeMetric label="Available balance" value={formatCurrencyAmount(availableBalance)} />
-          <RealTradeMetric label="Snapshot age" value={formatSnapshotFreshness(snapshot)} />
-          <RealTradeMetric label="Symbol / side" value={`${signal.symbol} / ${signal.direction.toUpperCase()}`} />
-          <RealTradeMetric label="Entry zone" value={tradePlan.entryZone} />
-          <RealTradeMetric label="Stop-loss" value={formatPrice(tradePlan.stopLoss)} />
-          <RealTradeMetric label="TP targets" value={formatTargetsInline(tradePlan.targets)} />
-          <RealTradeMetric label="Selected RR" value={formatRMultiple(tradePlan.selectedRr)} />
-          <RealTradeMetric label="Position notional" value={formatCurrencyAmount(positionNotional)} />
-          <RealTradeMetric label="Required margin" value={formatCurrencyAmount(requiredMargin)} />
-          <RealTradeMetric label="Risk amount / %" value={`${formatCurrencyAmount(riskAmount)} / ${formatPercentValue(riskPercent)}`} />
-          <RealTradeMetric label="Fees / slippage" value={`${formatFeeRate(feeRate)} / ${formatBps(slippageBps)}`} />
-          <RealTradeMetric label="Protective stop" value={protectiveStopStatus(signal, execution)} />
-          <RealTradeMetric label="RiskGate" value={riskGateStatusLabel(signal, execution)} />
-        </div>
-
-        <div className="real-trade-blockers">
-          <strong>Key blockers / warnings</strong>
-          {blockers.length ? (
-            <ul className="risk-blocker-list">
-              {blockers.map((blocker) => (
-                <li key={blocker}>{blocker}</li>
-              ))}
-            </ul>
-          ) : (
-            <p>Блокеров нет.</p>
-          )}
-          {warnings.length ? (
-            <div className="real-trade-warning-list">
-              {warnings.map((warning) => (
-                <span key={warning}>{warning}</span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="real-trade-modal-actions">
-          <button className="secondary-action" onClick={onCancel} type="button">
-            Отмена
-          </button>
-          <button className="real-action" disabled={confirmDisabled} onClick={onConfirm} type="button">
-            <ShieldAlert size={17} /> Подтвердить реальный вход
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RealTradeMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="real-trade-metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function realTradeBlockers(
-  signal: RadarSignal,
-  context: RealTradeContext | undefined,
-  execution: VirtualExecutionReport | null
-): string[] {
-  const snapshot = context?.accountSnapshot ?? null;
-  const riskCheck = execution?.risk_check ?? null;
-  const riskDecision = execution?.risk_decision ?? null;
-  const riskState = context?.riskState ?? null;
-  const blockers = [
-    ...(!context?.realExecutionEnabled ? ["Live trading выключен в настройках пользователя."] : []),
-    ...(!snapshot ? ["Account snapshot отсутствует."] : []),
-    ...(snapshot?.status === "missing" ? ["Account snapshot отсутствует."] : []),
-    ...(snapshot?.status === "stale" ? ["Account snapshot устарел."] : []),
-    ...(riskGateBlocked(signal, execution) ? ["RiskGate блокирует реальный вход."] : []),
-    ...(protectiveStopMissing(signal, execution) ? ["Protective stop отсутствует."] : []),
-    ...(riskCheck?.protective_orders_allowed === false || riskState?.protective_orders_allowed === false
-      ? ["Protective orders недоступны в текущем risk state."]
-      : []),
-    ...(riskCheck?.real_entries_allowed === false || riskState?.real_entries_allowed === false
-      ? ["Risk state запрещает real entries."]
-      : []),
-    ...(riskCheck?.close_only || riskState?.close_only ? ["Risk state находится в close-only режиме."] : []),
-    ...(connectionEnvironment(context?.connection ?? null) === "mainnet" && !mainnetExplicitlyEnabled(context?.connection ?? null)
-      ? ["Mainnet требует отдельного явного включения."]
-      : []),
-    ...((context?.connection?.safety_blockers ?? []).filter((code) => code !== "ORDER_PLACEMENT_DRY_RUN"))
-  ];
-  return dedupe([
-    ...blockers,
-    ...(riskCheck?.status === "failed" ? riskCheck.blockers : []),
-    ...(riskDecision?.status === "failed" ? riskDecision.blockers : []),
-    ...(signal.decision?.execution_allowed_real === false
-      ? signal.decision.blockers.filter((reason) => reason.scope === "real").map((reason) => reason.message)
-      : [])
-  ]);
-}
-
-function realTradeWarnings(
-  signal: RadarSignal,
-  context: RealTradeContext | undefined,
-  execution: VirtualExecutionReport | null
-): string[] {
-  const riskCheck = execution?.risk_check ?? null;
-  const riskDecision = execution?.risk_decision ?? null;
-  return dedupe([
-    ...(context?.loading ? ["Данные аккаунта обновляются."] : []),
-    ...(context?.accountSnapshot?.warnings ?? []),
-    ...(riskCheck?.warnings ?? []),
-    ...(riskDecision?.warnings ?? []),
-    ...(signal.no_trade_filter?.warnings ?? []),
-    ...(context?.riskState?.protection_reason ? [context.riskState.protection_reason] : [])
-  ]);
-}
-
-function riskGateBlocked(signal: RadarSignal, execution: VirtualExecutionReport | null): boolean {
-  const riskCheck = execution?.risk_check ?? null;
-  const riskDecision = execution?.risk_decision ?? null;
-  return signal.risk_gate_status === "failed"
-    || signal.can_enter === false
-    || signal.decision?.execution_allowed_real === false
-    || riskCheck?.status === "failed"
-    || riskDecision?.status === "failed"
-    || riskDecision?.can_enter === false;
-}
-
-function protectiveStopMissing(signal: RadarSignal, execution: VirtualExecutionReport | null): boolean {
-  const plan = signalTradePlanSummary(signal);
-  return plan.stopLoss == null && execution?.stop_loss_plan?.stop_loss_price == null;
-}
-
-function protectiveStopStatus(signal: RadarSignal, execution: VirtualExecutionReport | null): string {
-  if (protectiveStopMissing(signal, execution)) return "missing";
-  if (execution?.risk_check?.protective_orders_allowed === false) return "blocked";
-  const stop = execution?.stop_loss_plan?.stop_loss_price ?? signalTradePlanSummary(signal).stopLoss;
-  return `ready @ ${formatPrice(stop)}`;
-}
-
-function riskGateStatusLabel(signal: RadarSignal, execution: VirtualExecutionReport | null): string {
-  const status = execution?.risk_decision?.status ?? execution?.risk_check?.status ?? signal.risk_gate_status ?? "not previewed";
-  if (execution?.risk_decision?.can_enter === false || signal.can_enter === false) return `${status} / blocked`;
-  return status;
-}
-
-function connectionEnvironment(connection: ExchangeConnection | null): "testnet" | "mainnet" | "unknown" {
-  if (!connection) return "unknown";
-  return connection.environment;
-}
-
-function mainnetExplicitlyEnabled(connection: ExchangeConnection | null): boolean {
-  if (!connection) return false;
-  return connection.mainnet_explicitly_enabled;
-}
-
-function realExecutionEnvironmentLabel(
-  connection: ExchangeConnection | null,
-  state: SignalActionState | null | undefined
-): string {
-  if (connection) {
-    if (connection.environment === "testnet") {
-      return connection.order_placement_mode === "live" && connection.can_place_orders
-        ? "Testnet live"
-        : "Testnet dry-run";
-    }
-    return connection.can_place_orders ? "Mainnet live enabled" : "Mainnet blocked";
-  }
-  const environment = state?.environment;
-  return environment && environment !== "real_unresolved" ? environment : "No exchange connection";
-}
-
-function snapshotStatusTone(status: AccountRiskSnapshot["status"]): "green" | "red" | "yellow" | "blue" {
-  if (status === "fresh") return "green";
-  if (status === "stale") return "yellow";
-  return "red";
-}
-
-function formatSnapshotFreshness(snapshot: AccountRiskSnapshot | null): string {
-  if (!snapshot) return "missing";
-  return `${snapshot.status} / ${formatSnapshotAge(snapshot.fetched_at)}`;
-}
-
-function formatSnapshotAge(value: string | null | undefined): string {
-  if (!value) return "missing";
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "unknown";
-  const diffSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
-  if (diffSeconds < 60) return "just now";
-  const diffMinutes = Math.floor(diffSeconds / 60);
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  return `${Math.floor(diffMinutes / 60)}h ago`;
+function actionStateDisabledReason(state: SignalActionState | null): string | null {
+  if (!state) return null;
+  const blocker = state.blockers[0] ?? null;
+  return state.display_labels.disabled_reason
+    ?? blocker?.display_label
+    ?? blocker?.message
+    ?? state.disabled_reason_code
+    ?? null;
 }
 
 function formatCurrencyAmount(value: number | null | undefined): string {
@@ -981,988 +799,11 @@ function formatPercentValue(value: number | null | undefined): string {
   return `${value.toFixed(value >= 10 ? 1 : 2)}%`;
 }
 
-function formatFeeRate(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "fee -";
-  return `fee ${(value * 100).toFixed(3)}%`;
-}
-
 function formatBps(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "slippage -";
   return `slippage ${value.toFixed(1)} bps`;
 }
 
-function RadarAnnotationBlock({ signal }: { signal: RadarSignal }) {
-  const rrReason = riskRewardBlockReason(signal) ?? riskRewardWarningReason(signal);
-  if (!signal.rr_status && !signal.risk_gate_status && signal.can_enter == null && !signal.display_reason && !rrReason) return null;
-  return (
-    <div className="risk-reward-detail-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Radar Display</h3>
-        <Badge tone={marketOpportunityTone(signal)}>{marketOpportunityLabel(signal)}</Badge>
-      </div>
-      {signal.display_reason ? <p>{signal.display_reason}</p> : null}
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="RR status" value={signal.rr_status ? signal.rr_status.replaceAll("_", " ") : "-"} />
-        <MetricLine label="RiskGate" value={signal.risk_gate_status ? signal.risk_gate_status.replaceAll("_", " ") : "not previewed"} />
-        <MetricLine label="Can enter" value={signal.can_enter == null ? "not evaluated" : signal.can_enter ? "yes" : "no"} />
-        <MetricLine label="Entry state" value={marketOpportunityLabel(signal)} />
-      </div>
-      {rrReason ? <p>{rrReason}</p> : null}
-    </div>
-  );
-}
-
-function AutoEntryBlock({ autoEntry }: { autoEntry: RadarSignal["auto_entry"] }) {
-  if (!autoEntry) return null;
-  return (
-    <div className="auto-entry-block">
-      <div className="section-title">
-        <FileCheck2 size={18} />
-        <h3>Legacy auto-entry state</h3>
-        <Badge tone={autoEntryTone(autoEntry.status)}>
-          {autoEntry.status.replaceAll("_", " ")}
-        </Badge>
-      </div>
-      <p>{autoEntry.message ?? `Auto ${autoEntry.mode} entry is ${autoEntry.status}.`}</p>
-    </div>
-  );
-}
-
-function PendingEntryBlock({
-  pendingEntry,
-  onReconfirmPendingEntry,
-  busy
-}: {
-  pendingEntry: PendingEntryIntent | null;
-  onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
-  busy: boolean;
-}) {
-  if (!pendingEntry) return null;
-  const status = pendingEntry.status;
-  return (
-    <div className="auto-entry-block">
-      <div className="section-title">
-        <FileCheck2 size={18} />
-        <h3>Pending Entry</h3>
-        <Badge tone={pendingEntryTone(status)}>{pendingEntryLabel(status)}</Badge>
-      </div>
-      {status === "requires_reconfirmation" ? (
-        <>
-          <p>План изменился. Нужно подтвердить ожидание входа заново.</p>
-          {pendingEntry.failure_reason ? (
-            <div className="risk-blocker-list">
-              <span>{pendingEntry.failure_reason}</span>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <p>{pendingEntryActiveDescription(status)}</p>
-      )}
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="Entry zone" value={`${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
-        <MetricLine label="Stop" value={formatPrice(pendingEntry.stop_loss)} />
-        <MetricLine label="Mode" value={pendingEntry.mode} />
-        <MetricLine label="Accepted status" value={pendingEntry.accepted_signal_status.replaceAll("_", " ")} />
-      </div>
-      {status === "requires_reconfirmation" && pendingEntry && onReconfirmPendingEntry ? (
-        <div className="detail-actions">
-          <button className="secondary-action" disabled={busy} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
-            <FileCheck2 size={17} /> Reconfirm plan
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function PendingEntryHistoryCollapsed({ pendingEntry }: { pendingEntry: PendingEntryIntent | null }) {
-  if (!pendingEntry) return null;
-  return (
-    <details className="risk-reward-detail-block pending-entry-history-block">
-      <summary className="pending-entry-history-summary">
-        <span className="section-title">
-          <FileCheck2 size={18} />
-          <h3>История ожидания входа</h3>
-        </span>
-        <Badge tone={pendingEntryTone(pendingEntry.status)}>{pendingEntryLabel(pendingEntry.status)}</Badge>
-      </summary>
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="Status" value={pendingEntry.status.replaceAll("_", " ")} />
-        <MetricLine label="Reason" value={pendingEntry.failure_reason ?? "-"} />
-        <MetricLine label="Updated" value={formatPendingEntryTimestamp(pendingEntry.updated_at)} />
-      </div>
-    </details>
-  );
-}
-
-function AutoEntryDiagnosticsCollapsed({ autoEntry }: { autoEntry: RadarSignal["auto_entry"] }) {
-  if (!autoEntry) return null;
-  return (
-    <details className="risk-reward-detail-block pending-entry-history-block">
-      <summary className="pending-entry-history-summary">
-        <span className="section-title">
-          <FileCheck2 size={18} />
-          <h3>Auto-entry diagnostics</h3>
-        </span>
-        <Badge tone={autoEntryTone(autoEntry.status)}>{autoEntry.status.replaceAll("_", " ")}</Badge>
-      </summary>
-      <p>{autoEntry.message ?? `Legacy auto-entry mirror is ${autoEntry.status}.`}</p>
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="Status" value={autoEntry.status.replaceAll("_", " ")} />
-        <MetricLine label="Mode" value={autoEntry.mode} />
-        <MetricLine label="Armed" value={formatPendingEntryTimestamp(autoEntry.armed_at)} />
-        <MetricLine label="Triggered" value={formatPendingEntryTimestamp(autoEntry.triggered_at)} />
-        <MetricLine label="Trade" value={autoEntry.trade_id ?? "-"} />
-      </div>
-    </details>
-  );
-}
-
-function pendingEntryActiveDescription(status: PendingEntryIntent["status"]): string {
-  if (status === "triggered") return "Зона входа сработала, backend готовит исполнение.";
-  if (status === "filling") return "Исполнение начато, ожидаем заполнение заявки.";
-  return "Ожидание входа активно: backend trigger service ждёт касание зоны входа.";
-}
-
-function formatPendingEntryTimestamp(value: string | null | undefined): string {
-  if (!value) return "-";
-  return value.replace("T", " ").replace(".000Z", "Z");
-}
-
-function autoEntryTone(
-  status: PendingEntryIntent["status"]
-): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
-  if (status === "pending") return "blue";
-  if (status === "failed" || status === "cancelled" || status === "expired") return "red";
-  if (status === "requires_reconfirmation") return "yellow";
-  return "green";
-}
-
-function pendingEntryTone(
-  status: PendingEntryIntent["status"]
-): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
-  if (status === "pending") return "blue";
-  if (status === "requires_reconfirmation") return "yellow";
-  if (status === "triggered" || status === "filling" || status === "filled") return "green";
-  if (status === "failed" || status === "cancelled" || status === "expired") return "red";
-  return "neutral";
-}
-
-function pendingEntryLabel(status: PendingEntryIntent["status"]): string {
-  if (status === "pending") return "Waiting entry";
-  if (status === "requires_reconfirmation") return "Requires reconfirmation";
-  return status.replaceAll("_", " ");
-}
-
-function PullbackGuidanceBlock({ signal }: { signal: RadarSignal }) {
-  const guidance = pullbackGuidance(signal);
-  if (!guidance) return null;
-  return (
-    <div className="pullback-guidance-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Pullback Wait</h3>
-      </div>
-      <p>{guidance.reason}</p>
-      <div className="pullback-guidance-grid">
-        <MetricLine label="Do not chase" value={`${guidance.bodyAtr} body / ${guidance.rangeAtr} range`} />
-        <MetricLine label="Wait near" value={guidance.targetLabel} />
-        <MetricLine label="Pullback zone" value={guidance.entryZone} />
-      </div>
-    </div>
-  );
-}
-
-function BreakoutEntryPlanBlock({ signal }: { signal: RadarSignal }) {
-  const plan = breakoutEntryPlan(signal);
-  if (!plan) return null;
-  return (
-    <div className="risk-reward-detail-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Breakout Entries</h3>
-      </div>
-      <p>{plan.actionableMode}</p>
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="Aggressive" value={formatPrice(plan.aggressiveEntry)} />
-        <MetricLine label="Retest zone" value={plan.conservativeZone} />
-        <MetricLine label="Measured move" value={formatPrice(plan.measuredMoveTarget)} />
-      </div>
-    </div>
-  );
-}
-
-function breakoutEntryPlan(signal: RadarSignal): {
-  aggressiveEntry: number | null;
-  conservativeZone: string;
-  measuredMoveTarget: number | null;
-  actionableMode: string;
-} | null {
-  if (signal.strategy !== "volatility_squeeze_breakout") return null;
-  const metadata = signal.invalidation?.metadata ?? {};
-  const aggressiveEntry = numberMetadata(metadata, "aggressive_entry") ?? signal.entry_min ?? signal.entry_max;
-  const conservativeMin = numberMetadata(metadata, "conservative_entry_min");
-  const conservativeMax = numberMetadata(metadata, "conservative_entry_max");
-  const conservativeEntry = numberMetadata(metadata, "conservative_entry");
-  const measuredMoveTarget = numberMetadata(metadata, "measured_move_target");
-  if (aggressiveEntry == null && conservativeEntry == null && measuredMoveTarget == null) return null;
-  const conservativeZone = conservativeMin == null && conservativeMax == null
-    ? formatPrice(conservativeEntry)
-    : `${formatPrice(conservativeMin)} - ${formatPrice(conservativeMax)}`;
-  return {
-    aggressiveEntry,
-    conservativeZone,
-    measuredMoveTarget,
-    actionableMode: !canShowSignalEntryAction(signal)
-      ? "Entry is preview-only until the signal is fully actionable."
-      : signal.status === "wait_for_pullback"
-      ? "Actionable entry is the retest zone while the breakout candle cools off."
-      : "Actionable entry follows the current strategy status; retest is the conservative alternative."
-  };
-}
-
-function LiquiditySweepPlanBlock({ signal }: { signal: RadarSignal }) {
-  const plan = liquiditySweepPlan(signal);
-  if (!plan) return null;
-  return (
-    <div className="risk-reward-detail-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Liquidity Sweep</h3>
-      </div>
-      <p>{plan.mode}</p>
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="Swept level" value={formatPrice(plan.sweptLevel)} />
-        <MetricLine label="Wick" value={formatRatio(plan.wickRatio)} />
-        <MetricLine label="Level touches" value={plan.levelTouches == null ? "-" : String(plan.levelTouches)} />
-        <MetricLine label="Aggressive" value={formatPrice(plan.aggressiveEntry)} />
-        <MetricLine label="Confirm zone" value={plan.confirmationZone} />
-      </div>
-    </div>
-  );
-}
-
-function liquiditySweepPlan(signal: RadarSignal): {
-  sweptLevel: number | null;
-  wickRatio: number | null;
-  levelTouches: number | null;
-  aggressiveEntry: number | null;
-  confirmationZone: string;
-  mode: string;
-} | null {
-  if (signal.strategy !== "liquidity_sweep_reversal") return null;
-  const metadata = signal.invalidation?.metadata ?? {};
-  const sweptLevel = numberMetadata(metadata, "swept_level");
-  const wickRatio = numberMetadata(metadata, "wick_ratio");
-  const levelTouches = numberMetadata(metadata, "level_touch_count");
-  const aggressiveEntry = numberMetadata(metadata, "aggressive_entry") ?? signal.entry_min ?? signal.entry_max;
-  const conservativeMin = numberMetadata(metadata, "conservative_entry_min");
-  const conservativeMax = numberMetadata(metadata, "conservative_entry_max");
-  const conservativeTrigger = numberMetadata(metadata, "conservative_trigger");
-  if (sweptLevel == null && aggressiveEntry == null && conservativeTrigger == null) return null;
-  return {
-    sweptLevel,
-    wickRatio,
-    levelTouches,
-    aggressiveEntry,
-    confirmationZone: conservativeMin == null && conservativeMax == null
-      ? formatPrice(conservativeTrigger)
-      : `${formatPrice(conservativeMin)} - ${formatPrice(conservativeMax)}`,
-    mode: canShowSignalEntryAction(signal)
-      ? "Sweep is actionable only after reclaim, wick, volume and RR checks stay valid."
-      : "Sweep is staged; wait for reclaim or a confirmation candle through micro structure."
-  };
-}
-
-function pullbackGuidance(signal: RadarSignal): {
-  reason: string;
-  bodyAtr: string;
-  rangeAtr: string;
-  targetLabel: string;
-  entryZone: string;
-} | null {
-  if (signal.status !== "wait_for_pullback") return null;
-  const check = signal.confirmation?.checks.find((item) => item.name === "overextension_guard");
-  const metadata = check?.metadata ?? {};
-  const targetLabel = stringMetadata(metadata, "pullback_target_label") ?? "planned retest";
-  const entryMin = numberMetadata(metadata, "pullback_entry_min") ?? signal.entry_min;
-  const entryMax = numberMetadata(metadata, "pullback_entry_max") ?? signal.entry_max;
-  return {
-    reason: check?.reason ?? signal.status_reason ?? "Signal candle is extended; wait for a retest instead of market entry.",
-    bodyAtr: atrMetric(metadata, "body_atr", "body_threshold"),
-    rangeAtr: atrMetric(metadata, "range_atr", "range_threshold"),
-    targetLabel,
-    entryZone: entryMin == null && entryMax == null ? entryZone(signal) : `${formatPrice(entryMin)} - ${formatPrice(entryMax)}`
-  };
-}
-
-function atrMetric(metadata: Record<string, unknown>, valueKey: string, thresholdKey: string): string {
-  const value = numberMetadata(metadata, valueKey);
-  const threshold = numberMetadata(metadata, thresholdKey);
-  if (value == null) return "-";
-  return threshold == null ? `${value.toFixed(2)} ATR` : `${value.toFixed(2)} / ${threshold.toFixed(2)} ATR`;
-}
-
-function numberMetadata(metadata: Record<string, unknown>, key: string): number | null {
-  const value = metadata[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function stringMetadata(metadata: Record<string, unknown>, key: string): string | null {
-  const value = metadata[key];
-  return typeof value === "string" && value ? value : null;
-}
-
-function RiskRewardDetailBlock({ signal }: { signal: RadarSignal }) {
-  const details = riskRewardDetails(signal);
-  if (!details) return null;
-  return (
-    <div className="risk-reward-detail-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Risk / Reward Guard</h3>
-      </div>
-      <p>{details.reason}</p>
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="Nearest RR" value={formatRMultiple(details.firstTargetRr)} />
-        <MetricLine label="Final RR" value={formatRMultiple(details.finalTargetRr)} />
-        <MetricLine label="Selected RR" value={formatRMultiple(details.selectedRr)} />
-        <MetricLine label="Guard target" value={details.selectedTarget} />
-        <MetricLine label="Min execution/reporting RR" value={formatRMultiple(details.minRr)} />
-      </div>
-    </div>
-  );
-}
-
-function riskRewardDetails(signal: RadarSignal): {
-  firstTargetRr: number | null;
-  finalTargetRr: number | null;
-  selectedRr: number | null;
-  selectedTarget: string;
-  minRr: number | null;
-  reason: string;
-} | null {
-  const check = signal.confirmation?.checks.find((item) => item.name === "risk_reward_guard");
-  const metadata = check?.metadata ?? {};
-  const firstTargetRr = signal.first_target_rr ?? numberMetadata(metadata, "first_target_rr");
-  const finalTargetRr = signal.final_target_rr ?? numberMetadata(metadata, "final_target_rr");
-  const selectedRr = signal.selected_rr ?? numberMetadata(metadata, "selected_rr") ?? signal.risk_reward;
-  const minRr = signal.min_rr_ratio ?? numberMetadata(metadata, "min_rr_ratio");
-  const selectedTarget = formatRrTarget(
-    signal.selected_rr_target
-      ?? stringMetadata(metadata, "selected_rr_target")
-      ?? stringMetadata(metadata, "selected_rr_label")
-  );
-  if (firstTargetRr == null && finalTargetRr == null && selectedRr == null && !check) return null;
-  return {
-    firstTargetRr,
-    finalTargetRr,
-    selectedRr,
-    selectedTarget,
-    minRr,
-    reason: check?.reason ?? "Strategy RR classification is shown here; final entry permission still comes from the risk gate."
-  };
-}
-
-function formatRMultiple(value: number | null): string {
-  return value == null ? "-" : `${value.toFixed(2)}R`;
-}
-
-function formatRatio(value: number | null): string {
-  return value == null ? "-" : `${Math.round(value * 100)}%`;
-}
-
-function formatRrTarget(value: string | null): string {
-  if (!value) return "-";
-  return value.replaceAll("_", " ");
-}
-
-function formatTradePlanCompleteness(plan: ReturnType<typeof signalTradePlanSummary>): string {
-  if (plan.tradePlanComplete === true) return "complete";
-  if (plan.tradePlanComplete === false && plan.missing.length) return `missing ${plan.missing.join(", ").replaceAll("_", " ")}`;
-  if (plan.tradePlanComplete === false) return "incomplete";
-  return "-";
-}
-
-function formatTradePlanFallback(plan: ReturnType<typeof signalTradePlanSummary>): string {
-  if (!plan.fallbackUsed) return "none";
-  const parts = [];
-  if (plan.fallbackStopUsed) parts.push("stop");
-  if (plan.fallbackTargetsUsed) parts.push("targets");
-  return parts.length ? parts.join(", ") : "used";
-}
-
-function TradePlanDetailBlock({ signal }: { signal: RadarSignal }) {
-  const plan = signalTradePlanSummary(signal);
-  const invalidation = signal.trade_plan?.invalidation ?? null;
-  const planBadgeTone = plan.fallbackUsed || plan.tradePlanComplete === false ? "yellow" : plan.hasTradePlan ? "blue" : "neutral";
-  return (
-    <div className="risk-reward-detail-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Trade Plan</h3>
-        <Badge tone={planBadgeTone}>{plan.hasTradePlan ? "trade_plan" : "legacy fallback"}</Badge>
-      </div>
-      <p>{plan.hasTradePlan ? "Backend trade_plan is active for entry, stop, targets and selected RR." : "Old signal contract is displayed through legacy entry, SL and TP fields."}</p>
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="Entry type" value={plan.entryType} />
-        <MetricLine label="Entry zone" value={plan.entryZone} />
-        <MetricLine label="Entry price" value={formatPrice(plan.entryPrice)} />
-        <MetricLine label="Stop loss" value={formatPrice(plan.stopLoss)} />
-        <MetricLine label="Completeness" value={formatTradePlanCompleteness(plan)} />
-        <MetricLine label="Fallback" value={formatTradePlanFallback(plan)} />
-        <MetricLine label="Selected RR" value={formatRMultiple(plan.selectedRr)} />
-        <MetricLine label="RR target" value={formatRrTarget(plan.selectedRrTarget)} />
-        <MetricLine label="Min execution/reporting RR" value={formatRMultiple(plan.minRr)} />
-        <MetricLine label="Invalidation" value={formatPrice(invalidation?.hard_stop ?? invalidation?.price ?? signal.invalidation?.hard_stop ?? signal.invalidation?.price)} />
-      </div>
-      {plan.targets.length ? (
-        <div className="target-state-list">
-          {plan.targets.map((target, index) => (
-            <span key={`${target.label}:${target.price ?? index}`}>
-              <strong>{target.label}</strong> {formatPrice(target.price)}
-              {target.rMultiple == null ? "" : ` | ${formatRMultiple(target.rMultiple)}`}
-              {target.closePercent == null ? "" : ` | ${target.closePercent}%`}
-              {target.action ? ` | ${formatLayerCheckName(target.action)}` : ""}
-              {target.source ? ` | ${formatLayerCheckName(target.source)}` : ""}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {invalidation?.conditions.length ? (
-        <div className="invalidation-list">
-          {invalidation.conditions.slice(0, 4).map((condition) => (
-            <span key={condition}>{condition}</span>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function EdgeSnapshotBlock({ signal }: { signal: RadarSignal }) {
-  const edge = signal.edge ?? null;
-  const badge = edgeStatusBadge(edge?.status ?? "unknown");
-  return (
-    <div className="risk-reward-detail-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Edge Snapshot</h3>
-        <Badge tone={badge.tone}>{badge.label}</Badge>
-      </div>
-      <p>{edge ? "Historical/forward outcome calibration used by real-entry risk gating." : "Edge was not evaluated for this signal yet."}</p>
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="Sample" value={edge ? `${edge.sample_size}/${edge.min_sample_size}` : "unknown"} />
-        <MetricLine label="Winrate" value={formatRatioPercent(edge?.winrate ?? null)} />
-        <MetricLine label="Avg win" value={formatRMultiple(edge?.avg_win_r ?? null)} />
-        <MetricLine label="Avg loss" value={formatRMultiple(edge?.avg_loss_r ?? null)} />
-        <MetricLine label="Expectancy" value={formatRMultiple(edge?.expectancy_r ?? null)} />
-        <MetricLine label="After costs" value={formatRMultiple(edge?.expectancy_after_costs_r ?? null)} />
-        <MetricLine label="Profit factor" value={edge?.profit_factor == null ? "-" : edge.profit_factor.toFixed(2)} />
-        <MetricLine label="Confidence" value={edge ? `${Math.round(edge.confidence_score * 100)}%` : "-"} />
-        <MetricLine label="Source" value={edge?.source ?? "none"} />
-        <MetricLine label="Score bucket" value={edge?.score_bucket ?? "-"} />
-      </div>
-    </div>
-  );
-}
-
-function DecisionSnapshotBlock({ signal }: { signal: RadarSignal }) {
-  const decision = signal.decision ?? null;
-  if (!decision) return null;
-  const topReason = decision.blockers[0] ?? decision.warnings[0] ?? null;
-  return (
-    <div className="risk-reward-detail-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Decision Snapshot</h3>
-        {topReason ? <Badge tone={topReason.severity === "blocker" ? "red" : "yellow"}>{formatDecisionSource(topReason.source)}</Badge> : null}
-      </div>
-      <div className="risk-reward-detail-grid">
-        <MetricLine label="Setup valid" value={formatDecisionBool(decision.setup_valid)} />
-        <MetricLine label="Trade plan valid" value={formatDecisionBool(decision.trade_plan_valid)} />
-        <MetricLine label="Signal actionable" value={formatDecisionBool(decision.signal_actionable)} />
-        <MetricLine label="Virtual execution" value={formatDecisionOptionalBool(decision.execution_allowed_virtual)} />
-        <MetricLine label="Real execution" value={formatDecisionOptionalBool(decision.execution_allowed_real)} />
-        <MetricLine label="Market context" value={decision.market_context_score.toFixed(0)} />
-      </div>
-      <DecisionReasonList title="Blockers" reasons={decision.blockers} />
-      <DecisionReasonList title="Warnings" reasons={decision.warnings} />
-    </div>
-  );
-}
-
-function DecisionReasonList({ title, reasons }: { title: string; reasons: DecisionReason[] }) {
-  if (!reasons.length) return null;
-  return (
-    <div className="layer-check-group">
-      <strong>{title}</strong>
-      {reasons.map((reason) => (
-        <span className={`layer-check-${reason.severity === "blocker" ? "failed" : reason.severity}`} key={`${reason.source}:${reason.scope}:${reason.code}:${reason.message}`}>
-          {formatDecisionSource(reason.source)} / {reason.scope}: {reason.message}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function RiskBlockersDetailBlock({
-  viewModel
-}: {
-  viewModel: SignalDetailsViewModel;
-}) {
-  const blockers = viewModel.topBlockers;
-  const warnings = viewModel.warnings;
-  if (!blockers.length && !warnings.length) return null;
-  return (
-    <div className="risk-block">
-      <h3>Risk blockers / warnings</h3>
-      {blockers.length ? (
-        <ul className="risk-blocker-list">
-          {blockers.map((blocker) => (
-            <li key={blockerKey(blocker)}>{blocker.userMessage}</li>
-          ))}
-        </ul>
-      ) : null}
-      {warnings.map((warning) => (
-        <p key={blockerKey(warning)}>{warning.userMessage}</p>
-      ))}
-    </div>
-  );
-}
-
 function blockerKey(blocker: UiBlocker): string {
-  return `${blocker.severity}:${blocker.category}:${blocker.code}:${blocker.userMessage}`;
-}
-
-function actionStateDisabledReason(state: SignalActionState | null | undefined): string | null {
-  if (!state) return null;
-  const blocker = state.blockers[0] ?? null;
-  return state.display_labels.disabled_reason
-    ?? blocker?.display_label
-    ?? blocker?.message
-    ?? state.disabled_reason_code
-    ?? null;
-}
-
-function actionBlockerToUiBlocker(blocker: SignalActionBlocker): UiBlocker {
-  return {
-    code: blocker.code,
-    severity: blocker.severity === "warning" || blocker.severity === "info" ? blocker.severity : "blocker",
-    category: "execution",
-    userMessage: blocker.display_label ?? blocker.message ?? blocker.code,
-    debugMessages: [blocker.code]
-  };
-}
-
-function StrategyLayersBlock({ signal, execution }: { signal: RadarSignal; execution: VirtualExecutionReport | null }) {
-  const plan = signalTradePlanSummary(signal);
-  const riskGate = signal.risk_gate_status ?? execution?.risk_decision?.status ?? execution?.risk_check?.status ?? "-";
-  const regimeChecks = signal.regime?.checks.filter((check) => check.status !== "passed").slice(0, 4) ?? [];
-  const layers = [
-    {
-      label: "quality",
-      value: signal.quality ? `${signal.quality.tier.replace("_", " ")} / ${signal.quality.score}` : "-"
-    },
-    {
-      label: "regime",
-      value: signal.regime ? `${signal.regime.direction} / ${signal.regime.alignment}` : "-"
-    },
-    {
-      label: "setup",
-      value: signal.setup ? signal.setup.stage : "-"
-    },
-    {
-      label: "risk_reward",
-      value: `${isRiskRewardBlocked(signal) ? "blocked" : riskRewardWarningReason(signal) ? "warning" : "selected"} ${formatRMultiple(plan.selectedRr)}`
-    },
-    {
-      label: "confirmation",
-      value: signal.confirmation ? (signal.confirmation.passed ? "passed" : "pending") : "-"
-    },
-    {
-      label: "invalidation",
-      value: signal.invalidation?.price == null ? "-" : formatPrice(signal.invalidation.price)
-    },
-    {
-      label: "exit_plan",
-      value: signal.exit_plan?.targets.length ? `${signal.exit_plan.targets.length} targets` : "-"
-    },
-    {
-      label: "trade_plan",
-      value: plan.hasTradePlan ? `${plan.targets.length} targets` : "legacy fallback"
-    },
-    {
-      label: "edge",
-      value: signal.edge ? `${signal.edge.status} / ${signal.edge.sample_size}` : "unknown"
-    },
-    {
-      label: "risk_gate",
-      value: riskGate
-    }
-  ];
-  const checkGroups = [
-    { label: "quality", checks: signal.quality?.checks ?? [] },
-    { label: "regime", checks: signal.regime?.checks ?? [] },
-    { label: "setup", checks: signal.setup?.checks ?? [] },
-    { label: "confirmation", checks: signal.confirmation?.checks ?? [] },
-    { label: "no_trade", checks: signal.no_trade_filter?.checks ?? [] }
-  ];
-
-  return (
-    <div className="strategy-layers-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Strategy Layers</h3>
-      </div>
-      <div className="strategy-layer-grid">
-        {layers.map((layer) => (
-          <div className="strategy-layer-metric" key={layer.label}>
-            <span>{layer.label}</span>
-            <strong>{layer.value}</strong>
-          </div>
-        ))}
-      </div>
-      {signal.invalidation?.conditions.length ? (
-        <div className="invalidation-list">
-          {signal.invalidation.conditions.slice(0, 3).map((condition) => (
-            <span key={condition}>{condition}</span>
-          ))}
-        </div>
-      ) : null}
-      {regimeChecks.length ? (
-        <div className="layer-check-list">
-          {regimeChecks.map((check) => (
-            <span className={`layer-check-${check.status}`} key={`${check.name}:${check.reason ?? ""}`}>
-              {formatLayerCheckName(check.name)}: {check.reason ?? check.status}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <div className="layer-check-groups">
-        {checkGroups.filter((group) => group.checks.length).map((group) => (
-          <div className="layer-check-group" key={group.label}>
-            <strong>{group.label}</strong>
-            {group.checks.slice(0, 5).map((check) => (
-              <span className={`layer-check-${check.status}`} key={`${group.label}:${check.name}:${check.reason ?? ""}`}>
-                {formatLayerCheckName(check.name)}: {formatLayerCheckReason(check)}
-              </span>
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function formatLayerCheckName(value: string): string {
-  return value.replaceAll("_", " ");
-}
-
-function formatLayerCheckReason(check: SignalLayerCheck): string {
-  if (check.reason) return check.reason;
-  if (check.score != null) return `${check.status} (${check.score})`;
-  return check.status;
-}
-
-function formatTargetsInline(targets: ReturnType<typeof signalTradePlanSummary>["targets"]): string {
-  if (!targets.length) return "-";
-  return targets.slice(0, 3).map((target) => `${target.label} ${formatPrice(target.price)}`).join(" / ");
-}
-
-function formatRatioPercent(value: number | null): string {
-  if (value == null) return "-";
-  return `${Math.round(value * 100)}%`;
-}
-
-function edgeStatusBadge(status: SignalEdgeStatus): { label: string; tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral" } {
-  if (status === "positive") return { label: "positive edge", tone: "green" };
-  if (status === "negative") return { label: "negative edge", tone: "red" };
-  if (status === "insufficient_sample") return { label: "insufficient sample", tone: "yellow" };
-  return { label: "unknown edge", tone: "neutral" };
-}
-
-function formatDecisionBool(value: boolean): string {
-  return value ? "yes" : "no";
-}
-
-function formatDecisionOptionalBool(value: boolean | null): string {
-  if (value == null) return "not evaluated";
-  return formatDecisionBool(value);
-}
-
-function formatDecisionSource(value: DecisionReason["source"]): string {
-  return value.replaceAll("_", " ");
-}
-
-function dedupe(values: string[]): string[] {
-  return Array.from(new Set(values.filter(Boolean)));
-}
-
-function ExecutionQualityBlock({
-  signal,
-  execution,
-  error,
-  loading
-}: {
-  signal: RadarSignal;
-  execution: VirtualExecutionReport | null;
-  error: string | null;
-  loading: boolean;
-}) {
-  const gateStatus = execution?.quality_gate.status ?? scoreGateStatus(signal);
-  const impactRisk = execution?.liquidity.impact_risk ?? scoreImpactRisk(signal);
-  const tone = gateTone(gateStatus, impactRisk);
-  const executionLabel = loading && !execution ? "Checking" : executionQualityLabel(gateStatus, impactRisk);
-  const marketOrder = gateStatus === "blocked" || impactRisk === "high"
-    ? "Not realistic"
-    : gateStatus === "warning"
-      ? "Use smaller size"
-      : "Allowed";
-  const orderType = gateStatus === "blocked" || impactRisk === "high" ? "Limit" : "Market / Limit";
-  const safeSize = execution?.quality_gate.suggested_max_size_usd
-    ?? (execution && execution.quality_gate.status !== "blocked" ? execution.filled_size_usd : null);
-  const simulatedPath = execution?.simulated_path ?? null;
-  const positionSizing = execution?.position_sizing ?? null;
-  const stopLossPlan = execution?.stop_loss_plan ?? null;
-  const takeProfitPlan = execution?.take_profit_plan ?? null;
-  const breakevenPlan = execution?.breakeven_plan ?? null;
-  const trailingStopPlan = execution?.trailing_stop_plan ?? null;
-  const futuresRiskPlan = execution?.futures_risk_plan ?? null;
-  const riskAdjustmentPlan = execution?.risk_adjustment_plan ?? null;
-  const riskCheck = execution?.risk_check ?? null;
-  const riskDecision = execution?.risk_decision ?? null;
-  const executionWarnings = execution
-    ? dedupe([
-      ...execution.warnings,
-      ...execution.quality_gate.warnings,
-      ...execution.quality_gate.high_impact_reasons,
-      ...(execution.fill_result?.warnings ?? [])
-    ])
-    : [];
-  const executionBlockers = execution
-    ? dedupe([
-      ...execution.blockers,
-      ...execution.quality_gate.blockers
-    ])
-    : [];
-  const estimatedFillPrice = execution?.estimated_fill_price ?? execution?.average_price ?? null;
-
-  return (
-    <div className="execution-quality-block">
-      <div className="section-title">
-        <ShieldAlert size={18} />
-        <h3>Reality Check</h3>
-        <Badge tone={tone}>{executionLabel}</Badge>
-      </div>
-      <div className="reality-check-summary">
-        <span>Signal: {signal.score >= 70 ? "good" : "watchlist"}</span>
-        <span>Chart: {signal.score >= 80 ? "strong" : "mixed"}</span>
-        <span>Execution: {executionQualityText(gateStatus, impactRisk).toLowerCase()}</span>
-      </div>
-      <div className="execution-quality-grid">
-        <MetricLine label="Profile" value={execution ? formatExecutionProfile(execution.execution_profile) : "-"} />
-        <MetricLine label="Fill policy" value={execution ? formatFillPolicy(execution.fill_policy) : "-"} />
-        <MetricLine label="Estimated fill" value={estimatedFillPrice == null ? "-" : formatExecutionPrice(estimatedFillPrice)} />
-        <MetricLine label="Reason" value={execution?.reason_code ? execution.reason_code.replaceAll("_", " ") : "-"} />
-        <MetricLine label="Expected slippage" value={execution ? formatCompactPercent(execution.entry_slippage_bps / 100) : error ? "Preview error" : "Preview pending"} />
-        <MetricLine label="Market impact" value={impactRiskLabel(impactRisk)} />
-        <MetricLine label="Safe size" value={safeSize == null ? "-" : `$${safeSize.toFixed(0)}`} />
-        <MetricLine label="Risk budget" value={positionSizing ? `$${positionSizing.risk_amount.toFixed(2)}` : "-"} />
-        <MetricLine label="Adjusted risk" value={riskAdjustmentPlan ? `${riskAdjustmentPlan.adjusted_risk_percent.toFixed(3)}%` : "-"} />
-        <MetricLine label="Risk gate" value={riskDecision ? riskDecision.status : riskCheck ? riskCheck.status : "-"} />
-        <MetricLine label="Risk size" value={positionSizing ? `$${positionSizing.notional.toFixed(0)}` : "-"} />
-        <MetricLine label="Margin" value={positionSizing ? `$${positionSizing.required_margin.toFixed(0)} @ ${positionSizing.leverage}x` : "-"} />
-        <MetricLine label="Effective risk" value={riskCheck ? `$${riskCheck.effective_risk_amount.toFixed(2)}` : "-"} />
-        <MetricLine label="Daily risk" value={formatRiskUsage(riskCheck?.daily_risk_used_percent, riskCheck?.max_daily_loss_percent)} />
-        <MetricLine label="Account drawdown" value={formatRiskUsage(riskCheck?.account_drawdown_percent, riskCheck?.max_account_drawdown_percent)} />
-        <MetricLine label="Open risk" value={formatRiskUsage(riskCheck?.open_risk_used_percent, riskCheck?.max_open_risk_percent)} />
-        <MetricLine label="Correlated risk" value={formatRiskUsage(riskCheck?.correlated_risk_used_percent, riskCheck?.max_correlated_risk_percent)} />
-        <MetricLine label="Exchange rules" value={riskCheck ? riskCheck.exchange_rule_status : "-"} />
-        <MetricLine label="Market data" value={riskCheck ? riskCheck.market_data_status : "-"} />
-        <MetricLine label="Bid / Ask" value={riskCheck?.best_bid && riskCheck?.best_ask ? `${formatExecutionPrice(riskCheck.best_bid)} / ${formatExecutionPrice(riskCheck.best_ask)}` : "-"} />
-        <MetricLine label="Mark price" value={riskCheck?.mark_price ? formatExecutionPrice(riskCheck.mark_price) : "-"} />
-        <MetricLine label="Spread" value={riskCheck?.spread_bps == null ? "-" : `${riskCheck.spread_bps.toFixed(1)} bps`} />
-        <MetricLine label="Price drift" value={riskCheck?.price_deviation_bps == null ? "-" : `${riskCheck.price_deviation_bps.toFixed(1)} bps`} />
-        <MetricLine label="Book depth" value={riskCheck?.orderbook_depth_usd == null ? "-" : `$${riskCheck.orderbook_depth_usd.toFixed(0)}`} />
-        <MetricLine label="Fee source" value={riskCheck?.fee_rate_source ?? "-"} />
-        <MetricLine label="Taker fee" value={riskCheck?.taker_fee_rate == null ? "-" : `${(riskCheck.taker_fee_rate * 100).toFixed(3)}%`} />
-        <MetricLine label="Funding buffer" value={riskCheck ? `$${riskCheck.funding_buffer_amount.toFixed(2)}` : "-"} />
-        <MetricLine label="Close-only" value={riskCheck?.close_only ? "yes" : "no"} />
-        <MetricLine label="Protection" value={riskCheck ? riskCheck.protection_state.replace("_", " ") : "-"} />
-        <MetricLine label="Planned stop" value={stopLossPlan ? formatExecutionPrice(stopLossPlan.stop_loss_price) : formatPrice(signal.stop_loss)} />
-        <MetricLine label="Exit plan" value={takeProfitPlan ? takeProfitPlan.targets.map((target) => `${target.label} ${target.r_multiple}R`).join(" / ") : "-"} />
-        <MetricLine label="Breakeven" value={breakevenPlan ? `${formatExecutionPrice(breakevenPlan.trigger_price)} -> ${formatExecutionPrice(breakevenPlan.breakeven_stop_price)}` : "-"} />
-        <MetricLine label="Trailing" value={trailingStopPlan?.enabled ? trailingStopPlan.mode.toUpperCase() : "Off"} />
-        <MetricLine label="Futures guard" value={futuresRiskPlan ? futuresRiskPlan.status : "-"} />
-        <MetricLine label="Order type" value={orderType} />
-        <MetricLine label="Market order" value={marketOrder} />
-        <MetricLine label="Fill" value={execution ? `${Math.round(execution.fill_ratio * 100)}%` : "-"} />
-        <MetricLine label="Post-impact" value={simulatedPath ? formatExecutionPrice(simulatedPath.post_trade_price) : "-"} />
-        <MetricLine label="Decay 60s" value={simulatedPath ? formatExecutionPrice(simulatedPath.simulated_candle.close) : "-"} />
-        <MetricLine label="Model" value={execution ? execution.simulation_tier.toUpperCase() : "MVP"} />
-      </div>
-      {execution?.quality_gate.message ? (
-        <p className="execution-quality-message">{execution.quality_gate.message}</p>
-      ) : null}
-      {riskCheck?.blockers.length ? (
-        <ul className="risk-blocker-list">
-          {riskCheck.blockers.map((blocker) => (
-            <li key={blocker}>{blocker}</li>
-          ))}
-        </ul>
-      ) : null}
-      {executionBlockers.length ? (
-        <ul className="risk-blocker-list">
-          {executionBlockers.map((blocker) => (
-            <li key={blocker}>{blocker}</li>
-          ))}
-        </ul>
-      ) : null}
-      {executionWarnings.length ? (
-        <ul className="risk-blocker-list">
-          {executionWarnings.slice(0, 6).map((warning) => (
-            <li key={warning}>{warning.replaceAll("_", " ")}</li>
-          ))}
-        </ul>
-      ) : null}
-      {error && !execution ? (
-        <p className="execution-quality-message">Risk preview unavailable: {error}</p>
-      ) : null}
-      {execution ? (
-        <div className="reality-check-copy">
-          <p>{realityCheckReason(execution)}</p>
-          <p>{realityCheckRecommendation(execution, orderType)}</p>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function MetricLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="execution-quality-metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function formatExecutionPrice(price: number): string {
-  if (Math.abs(price) >= 1000) return price.toFixed(0);
-  if (Math.abs(price) >= 1) return price.toFixed(2);
-  return price.toPrecision(4);
-}
-
-function formatExecutionProfile(profile: VirtualExecutionReport["execution_profile"]): string {
-  if (profile === "relaxed_paper") return "Relaxed paper";
-  if (profile === "deterministic_test") return "Deterministic test";
-  return "Realistic";
-}
-
-function formatFillPolicy(policy: VirtualExecutionReport["fill_policy"]): string {
-  if (policy === "relaxed_market_fallback") return "Relaxed fallback";
-  if (policy === "deterministic_market_fill") return "Deterministic fill";
-  return "Strict orderbook";
-}
-
-function formatRiskUsage(used?: number | null, limit?: number | null): string {
-  if (used == null || limit == null) return "-";
-  return `${formatCompactPercent(used)} / ${limit <= 0 ? "Off" : formatCompactPercent(limit)}`;
-}
-
-function executionQualityText(status: ExecutionGateStatus, impactRisk: ImpactRisk): string {
-  if (status === "blocked") return "Poor";
-  if (status === "warning" || impactRisk !== "low") return "Risky";
-  return "Good";
-}
-
-function realityCheckReason(execution: VirtualExecutionReport): string {
-  const depthOne = execution.liquidity.orderbook_depth_1_percent_usd;
-  const depthRatio = depthOne > 0 ? execution.requested_size_usd / depthOne * 100 : null;
-  const slippagePercent = execution.entry_slippage_bps / 100;
-  const exitSlippagePercent = execution.exit_slippage_bps / 100;
-
-  if (execution.quality_gate.status === "blocked") {
-    const depthText = depthRatio == null ? "current depth" : `${formatCompactPercent(depthRatio)} of liquidity inside 1%`;
-    return `Your virtual size would consume ${depthText}. The simulated entry could be worse by about ${formatCompactPercent(slippagePercent)}, and simulated stop execution could add about ${formatCompactPercent(exitSlippagePercent)} friction.`;
-  }
-  if (execution.quality_gate.status === "warning" || execution.liquidity.impact_risk !== "low") {
-    return `The virtual fill is usable, but execution is sensitive: expected entry slippage is ${formatCompactPercent(slippagePercent)} and impact risk is ${impactRiskLabel(execution.liquidity.impact_risk)}.`;
-  }
-  return `The requested size fits current liquidity with expected entry slippage around ${formatCompactPercent(slippagePercent)}.`;
-}
-
-function realityCheckRecommendation(execution: VirtualExecutionReport, orderType: string): string {
-  const suggestedMax = execution.quality_gate.suggested_max_size_usd;
-  if (execution.quality_gate.status === "blocked") {
-    return suggestedMax == null
-      ? `Recommendation: use a much smaller virtual ${orderType.toLowerCase()} setup or treat this simulation as unrealistic.`
-      : `Recommendation: reduce virtual size to about $${suggestedMax.toFixed(0)}, use a limit order, or treat this simulation as unrealistic.`;
-  }
-  if (execution.quality_gate.status === "warning" || execution.liquidity.impact_risk !== "low") {
-    return `Recommendation: prefer ${orderType.toLowerCase()}, reduce size if the book thins out, and avoid chasing a market order.`;
-  }
-  return "Recommendation: execution looks realistic for this virtual size.";
-}
-
-function formatCompactPercent(value: number): string {
-  if (!Number.isFinite(value)) return "0%";
-  if (value > 0 && value < 0.01) return "<0.01%";
-  if (value < 10) return `${value.toFixed(2)}%`;
-  return `${value.toFixed(1)}%`;
-}
-
-function ScoreLine({ label, value, max }: { label: string; value: number; max: number }) {
-  return (
-    <div className="score-line">
-      <span>{label}</span>
-      <progress value={value} max={max} />
-      <strong>{Math.round(value)}/{max}</strong>
-    </div>
-  );
-}
-
-function scoreGateStatus(signal: RadarSignal): ExecutionGateStatus {
-  const liquidity = signal.score_breakdown.liquidity_score;
-  const orderbook = signal.score_breakdown.orderbook_score;
-  if (liquidity < 25 || orderbook < 20) return "blocked";
-  if (liquidity < 45 || orderbook < 40) return "warning";
-  return "passed";
-}
-
-function scoreImpactRisk(signal: RadarSignal): ImpactRisk {
-  const liquidity = signal.score_breakdown.liquidity_score;
-  const orderbook = signal.score_breakdown.orderbook_score;
-  if (liquidity < 35 || orderbook < 30) return "high";
-  if (liquidity < 60 || orderbook < 50) return "medium";
-  return "low";
-}
-
-function executionQualityLabel(status: ExecutionGateStatus, impactRisk: ImpactRisk): string {
-  if (status === "blocked") return "Low";
-  if (status === "warning" || impactRisk !== "low") return "Medium";
-  return "High";
-}
-
-function impactRiskLabel(risk: ImpactRisk): string {
-  if (risk === "high") return "High";
-  if (risk === "medium") return "Medium";
-  return "Low";
-}
-
-function gateTone(status: ExecutionGateStatus, risk: ImpactRisk): "green" | "red" | "yellow" {
-  if (status === "blocked" || risk === "high") return "red";
-  if (status === "warning" || risk === "medium") return "yellow";
-  return "green";
-}
-
-function CheckRow({ done = false, text }: { done?: boolean; text: string }) {
-  return (
-    <div className="check-row">
-      {done ? <CheckCircle2 size={16} /> : <Circle size={16} />}
-      <span>{text}</span>
-    </div>
-  );
+  return `${blocker.code}:${blocker.userMessage}`;
 }

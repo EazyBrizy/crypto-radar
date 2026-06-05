@@ -75,6 +75,7 @@ export type RRGuardMode = "off" | "soft" | "hard";
 export type RiskProtectionMode = "normal" | "reduced" | "virtual_only" | "blocked";
 export type ExchangeRuleStatus = "fresh" | "missing" | "stale" | "unknown";
 export type MarketDataStatus = "fresh" | "partial" | "missing" | "stale" | "unknown";
+export type ViewTone = "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
 
 export interface OhlcvCandle {
   exchange: string;
@@ -326,6 +327,16 @@ export interface PendingEntryIntent {
   current_price?: number | null;
   reason_code?: string | null;
   localized_reason?: string | null;
+  view?: PendingEntryView | null;
+}
+
+export interface PendingEntryView {
+  status_label: string;
+  status_tone: ViewTone;
+  reason_code: string | null;
+  reason: string;
+  entry_zone: string;
+  current_price: number | null;
 }
 
 export interface SignalActionBlocker {
@@ -366,6 +377,118 @@ export interface SignalActionResponse {
   real_execution_result: unknown | null;
   pending_entry_intent: PendingEntryIntent | null;
   message: string;
+}
+
+export interface SignalBadgeView {
+  code: string;
+  label: string;
+  tone: ViewTone;
+}
+
+export interface SignalTargetView {
+  label: string;
+  price: number | null;
+  r_multiple: number | null;
+  action: string | null;
+}
+
+export interface SignalTradePlanView {
+  has_trade_plan: boolean;
+  entry_type: string;
+  entry_zone: string;
+  entry_price: number | null;
+  stop_loss: number | null;
+  targets: SignalTargetView[];
+  selected_rr: number | null;
+  selected_rr_target: string | null;
+  min_rr: number | null;
+  trade_plan_complete: boolean | null;
+  fallback_used: boolean;
+  missing: string[];
+  invalidation: string;
+}
+
+export interface SignalCardView {
+  status_label: string;
+  status_tone: ViewTone;
+  opportunity_label: string;
+  opportunity_tone: ViewTone;
+  risk_label: string;
+  risk_meta: string;
+  badges: SignalBadgeView[];
+  entry_label: string;
+  entry_value: string;
+  stop_loss: number | null;
+  targets: SignalTargetView[];
+  selected_rr: number | null;
+  reason: string;
+}
+
+export type SignalDetailsPrimaryStatus =
+  | "execution_ready"
+  | "waiting_entry"
+  | "requires_reconfirmation"
+  | "blocked"
+  | "watchlist"
+  | "cancelled"
+  | "expired"
+  | "unknown";
+
+export interface SignalDetailsBlockerView {
+  code: string;
+  severity: SignalActionSeverity;
+  category: "entry" | "risk" | "market_data" | "liquidity" | "execution" | "technical";
+  user_message: string;
+  debug_messages: string[];
+}
+
+export interface SignalDetailsRiskSummaryView {
+  label: string;
+  risk_failed: boolean;
+  risk_reward_blocked: boolean;
+  risk_reward_warning: string | null;
+  forming_candle: boolean;
+  open_candle_allowed: boolean;
+  forming_reason: string | null;
+  status_allows_trade: boolean;
+  trade_plan_complete: boolean;
+  risk_reward_ok: boolean;
+  is_market_opportunity: boolean;
+}
+
+export interface SignalDetailsExecutionSummaryView {
+  preview_available: boolean;
+  risk_check_status: string | null;
+  risk_decision_status: string | null;
+  can_enter: boolean | null;
+  quality_gate_status: string | null;
+  impact_risk: string | null;
+  status_allows_trade: boolean;
+}
+
+export interface SignalDetailsView {
+  title: string;
+  side: SignalDirection;
+  primary_status: SignalDetailsPrimaryStatus;
+  primary_status_label: string;
+  primary_status_tone: ViewTone;
+  primary_action_label: string;
+  recommended_action_text: string;
+  can_enter_now: boolean | null;
+  trade_plan: SignalTradePlanView;
+  risk_summary: SignalDetailsRiskSummaryView;
+  execution_summary: SignalDetailsExecutionSummaryView;
+  top_reasons: string[];
+  top_blockers: SignalDetailsBlockerView[];
+  warnings: SignalDetailsBlockerView[];
+}
+
+export interface RadarSummary {
+  total_signals: number;
+  execution_ready_signals: number;
+  high_confidence_signals: number;
+  positive_edge_signals: number;
+  blocked_ideas: number;
 }
 
 export interface RadarSignal {
@@ -410,6 +533,8 @@ export interface RadarSignal {
   risk_gate_status?: RiskCheckStatus | null;
   can_enter?: boolean | null;
   display_reason?: string | null;
+  card_view?: SignalCardView | null;
+  details_view?: SignalDetailsView | null;
   created_at: string;
   updated_at: string;
   expires_at: string | null;
@@ -418,6 +543,7 @@ export interface RadarSignal {
 
 export interface RadarResponse {
   signals: RadarSignal[];
+  summary?: RadarSummary;
 }
 
 export interface LiquidityMetrics {
@@ -916,6 +1042,22 @@ export interface TradeJournalEntry {
   target_states?: VirtualTradeTargetState[];
   lifecycle_events?: VirtualTradeLifecycleEvent[];
   lifecycle_trace?: LifecycleTrace;
+  view?: TradeView | null;
+}
+
+export interface PnLView {
+  realized_pnl: number;
+  unrealized_pnl: number;
+  total_pnl: number | null;
+  pnl_percent: number | null;
+  tone: ViewTone;
+}
+
+export interface TradeView {
+  status_label: string;
+  status_tone: ViewTone;
+  source_label: string;
+  pnl: PnLView;
 }
 
 export interface TradeInvalidationAlert {

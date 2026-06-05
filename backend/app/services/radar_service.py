@@ -7,6 +7,7 @@ from typing import Any, Protocol, cast
 
 from app.domain.signal_status import is_execution_candidate_status
 from app.schemas.risk import RadarDisplayMode, RiskDecision, RiskPreviewRequest
+from app.schemas.signal_action import SignalActionBlocker, SignalActionMode, SignalActionState
 from app.schemas.signal import RadarResponse, RadarRRStatus, RadarSignal
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_management import (
@@ -15,6 +16,7 @@ from app.services.risk_management import (
     get_user_risk_management_settings,
 )
 from app.services.signal_service import signal_service
+from app.services.signal_views import annotate_signal_views, build_radar_summary
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +60,14 @@ class RadarService:
         risk_preview_evaluator: RiskPreviewEvaluator | None = None,
         user_risk_settings_provider: Callable[[str], RiskManagementSettings] = get_user_risk_management_settings,
         strategy_risk_settings_provider: Callable[..., tuple[dict[str, Any], str]] | None = None,
+        action_state_provider: Callable[[RadarSignal, str, SignalActionMode], SignalActionState] | None = None,
         profile_resolver: ExecutionProfileResolver = execution_profile_resolver,
     ) -> None:
         self._signal_provider = signal_provider
         self._risk_preview_evaluator = risk_preview_evaluator
         self._user_risk_settings_provider = user_risk_settings_provider
         self._strategy_risk_settings_provider = strategy_risk_settings_provider
+        self._action_state_provider = action_state_provider
         self._profile_resolver = profile_resolver
 
     def list_signals(
@@ -90,13 +94,12 @@ class RadarService:
                 risk_settings_warning=risk_settings_warning,
             )
             if resolution.mode == "all_market_opportunities":
-                visible_signals.append(
-                    _annotated_signal(
-                        signal,
-                        rr_status=_rr_status(signal),
-                        display_reason=_all_market_display_reason(signal, resolution),
-                    )
+                annotated = _annotated_signal(
+                    signal,
+                    rr_status=_rr_status(signal),
+                    display_reason=_all_market_display_reason(signal, resolution),
                 )
+                visible_signals.append(self._with_views(annotated, user_id=user_id, mode="virtual"))
                 continue
 
             if not is_execution_candidate_status(signal.status):
@@ -105,16 +108,56 @@ class RadarService:
             decision = self._evaluate_risk_gate(signal, user_id=user_id)
             if decision is None or not decision.can_enter:
                 continue
-            visible_signals.append(
-                _annotated_signal(
-                    signal,
-                    rr_status=_rr_status(signal),
-                    risk_gate_status=decision.status,
-                    can_enter=decision.can_enter,
-                    display_reason=_execution_ready_display_reason(resolution),
-                )
+            annotated = _annotated_signal(
+                signal,
+                rr_status=_rr_status(signal),
+                risk_gate_status=decision.status,
+                can_enter=decision.can_enter,
+                display_reason=_execution_ready_display_reason(resolution),
             )
-        return RadarResponse(signals=visible_signals)
+            visible_signals.append(self._with_views(annotated, user_id=user_id, mode="virtual"))
+        return RadarResponse(signals=visible_signals, summary=build_radar_summary(visible_signals))
+
+    def _with_views(
+        self,
+        signal: RadarSignal,
+        *,
+        user_id: str,
+        mode: SignalActionMode,
+    ) -> RadarSignal:
+        action_state = self._action_state(signal, user_id=user_id, mode=mode)
+        return annotate_signal_views(signal, action_state=action_state)
+
+    def _action_state(
+        self,
+        signal: RadarSignal,
+        *,
+        user_id: str,
+        mode: SignalActionMode,
+    ) -> SignalActionState:
+        provider = self._action_state_provider or _default_action_state_provider
+        try:
+            return provider(signal, user_id, mode)
+        except Exception as exc:
+            logger.warning(
+                "Radar action state failed for signal %s: %s",
+                signal.id,
+                exc,
+            )
+            return SignalActionState(
+                mode=mode,
+                environment="virtual" if mode == "virtual" else "real_unresolved",
+                disabled_reason_code="action_state_unavailable",
+                blockers=[
+                    SignalActionBlocker(
+                        code="action_state_unavailable",
+                        severity="blocker",
+                        message=f"Signal action state is unavailable: {exc.__class__.__name__}",
+                        display_label="Action state unavailable",
+                    )
+                ],
+                display_labels={"disabled_reason": "Action state unavailable"},
+            )
 
     def _load_risk_settings(self, user_id: str) -> tuple[RiskManagementSettings, str | None]:
         try:
@@ -285,6 +328,21 @@ def _profile_instrument_type(strategy_settings: Mapping[str, Any]) -> str:
 
 def _normalize_symbol(symbol: str) -> str:
     return symbol.replace("/", "").replace(":PERP", "").strip().upper()
+
+
+def _default_action_state_provider(
+    signal: RadarSignal,
+    user_id: str,
+    mode: SignalActionMode,
+) -> SignalActionState:
+    from app.services.signal_actions import signal_action_service
+
+    return signal_action_service.state_for_signal(
+        signal,
+        mode=mode,
+        connection_id=None,
+        user_id=user_id,
+    )
 
 
 radar_service = RadarService()

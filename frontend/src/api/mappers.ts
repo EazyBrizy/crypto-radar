@@ -41,6 +41,7 @@ import type {
   PendingEntryIntent,
   RadarConfig,
   RadarSignal,
+  RadarSummary,
   RadarStatus,
   SignalEdgeSnapshot,
   SignalDecisionSnapshot,
@@ -61,6 +62,7 @@ import type {
   RiskCheckStatus,
   RiskDecision,
   RadarRiskRewardStatus,
+  SignalActionState,
   RiskPreviewResponse,
   RiskStateResponse,
   SignalStatus,
@@ -78,6 +80,7 @@ import type {
   VirtualSimulationTier,
   VirtualSimulatedPositionPath
 } from "@/types";
+import { z } from "zod";
 import { SIGNAL_STATUSES } from "@/domain/signal-status";
 import { isActiveTradeStatus, isTerminalTradeStatus } from "@/domain/trade-status";
 import type { OhlcvCandleDto, RadarConfigDto, RadarSignalDto, TradeJournalEntryDto } from "./generated/schemas";
@@ -100,6 +103,7 @@ type TradeJournalEntryExtra = TradeJournalEntryDto & Partial<Pick<
   | "origin"
   | "lifecycle_trace"
   | "source"
+  | "view"
   | "tags"
   | "run_id"
   | "initial_quantity"
@@ -121,6 +125,212 @@ type TradeJournalEntryExtra = TradeJournalEntryDto & Partial<Pick<
 >>;
 
 type VirtualAccountDto = Partial<VirtualAccount>;
+
+export class ApiContractError extends Error {
+  constructor(contractName: string, details: string) {
+    super(`API contract error: ${contractName} ${details}`);
+    this.name = "ApiContractError";
+  }
+}
+
+const metadataSchema = z.record(z.string(), z.unknown());
+const viewToneSchema = z.enum(["green", "red", "yellow", "blue", "purple", "neutral"]);
+const signalActionKindSchema = z.enum([
+  "enter_now",
+  "arm_pending_entry",
+  "cancel_pending_entry",
+  "reconfirm_pending_entry"
+]);
+const signalActionBlockerSchema = z.object({
+  code: z.string().min(1),
+  severity: z.enum(["blocker", "warning", "info"]),
+  message: z.string().nullable(),
+  display_label: z.string().nullable(),
+  metadata: metadataSchema
+}).passthrough();
+const signalActionStateSchema = z.object({
+  can_enter_now: z.boolean(),
+  can_arm_pending: z.boolean(),
+  can_reconfirm: z.boolean(),
+  can_cancel: z.boolean(),
+  mode: z.enum(["virtual", "real"]),
+  environment: z.string().min(1),
+  primary_action: signalActionKindSchema.nullable(),
+  disabled_reason_code: z.string().nullable(),
+  blockers: z.array(signalActionBlockerSchema),
+  warnings: z.array(signalActionBlockerSchema),
+  accepted_trade_plan_snapshot: metadataSchema.nullable(),
+  display_labels: z.record(z.string(), z.string())
+}).passthrough();
+
+const pendingEntryIntentSchema = z.object({
+  id: z.string().min(1),
+  user_id: z.string().min(1),
+  signal_id: z.string().min(1),
+  strategy_id: z.string().nullable().optional(),
+  mode: z.enum(["virtual", "real"]),
+  status: z.enum(["pending", "triggered", "filling", "filled", "failed", "cancelled", "expired", "requires_reconfirmation"]),
+  exchange: z.string().min(1),
+  symbol: z.string().min(1),
+  side: z.enum(["long", "short"]),
+  entry_min: z.coerce.number(),
+  entry_max: z.coerce.number(),
+  entry_price_policy: z.string().min(1),
+  stop_loss: z.coerce.number(),
+  targets_snapshot: z.union([metadataSchema, z.array(z.unknown())]),
+  accepted_trade_plan_snapshot: metadataSchema,
+  accepted_trade_plan_hash: z.string().min(1),
+  accepted_signal_status: z.string().min(1),
+  accepted_signal_version: z.string().nullable().optional(),
+  accepted_signal_fingerprint: z.string().nullable().optional(),
+  execution_profile_snapshot: metadataSchema,
+  request_snapshot: metadataSchema,
+  idempotency_key: z.string().min(1),
+  expires_at: z.string().nullable().optional(),
+  created_at: z.string().min(1),
+  updated_at: z.string().min(1),
+  triggered_at: z.string().nullable().optional(),
+  filled_at: z.string().nullable().optional(),
+  filled_trade_id: z.string().nullable().optional(),
+  failure_reason: z.string().nullable().optional(),
+  current_price: z.coerce.number().nullable().optional(),
+  reason_code: z.string().nullable().optional(),
+  localized_reason: z.string().nullable().optional(),
+  view: z.object({
+    status_label: z.string(),
+    status_tone: z.enum(["green", "red", "yellow", "blue", "purple", "neutral"]),
+    reason_code: z.string().nullable(),
+    reason: z.string(),
+    entry_zone: z.string(),
+    current_price: z.coerce.number().nullable()
+  }).nullable().optional()
+}).passthrough();
+
+const radarSummarySchema = z.object({
+  total_signals: z.number(),
+  execution_ready_signals: z.number(),
+  high_confidence_signals: z.number(),
+  positive_edge_signals: z.number(),
+  blocked_ideas: z.number()
+}).passthrough();
+
+const signalBadgeViewSchema = z.object({
+  code: z.string().min(1),
+  label: z.string(),
+  tone: viewToneSchema
+}).passthrough();
+
+const signalTargetViewSchema = z.object({
+  label: z.string().min(1),
+  price: z.number().nullable(),
+  r_multiple: z.number().nullable(),
+  action: z.string().nullable()
+}).passthrough();
+
+const signalTradePlanViewSchema = z.object({
+  has_trade_plan: z.boolean(),
+  entry_type: z.string(),
+  entry_zone: z.string(),
+  entry_price: z.number().nullable(),
+  stop_loss: z.number().nullable(),
+  targets: z.array(signalTargetViewSchema),
+  selected_rr: z.number().nullable(),
+  selected_rr_target: z.string().nullable(),
+  min_rr: z.number().nullable(),
+  trade_plan_complete: z.boolean().nullable(),
+  fallback_used: z.boolean(),
+  missing: z.array(z.string()),
+  invalidation: z.string()
+}).passthrough();
+
+const signalCardViewSchema = z.object({
+  status_label: z.string(),
+  status_tone: viewToneSchema,
+  opportunity_label: z.string(),
+  opportunity_tone: viewToneSchema,
+  risk_label: z.string(),
+  risk_meta: z.string(),
+  badges: z.array(signalBadgeViewSchema),
+  entry_label: z.string(),
+  entry_value: z.string(),
+  stop_loss: z.number().nullable(),
+  targets: z.array(signalTargetViewSchema),
+  selected_rr: z.number().nullable(),
+  reason: z.string()
+}).passthrough();
+
+const signalDetailsPrimaryStatusSchema = z.enum([
+  "execution_ready",
+  "waiting_entry",
+  "requires_reconfirmation",
+  "blocked",
+  "watchlist",
+  "cancelled",
+  "expired",
+  "unknown"
+]);
+
+const signalDetailsBlockerSchema = z.object({
+  code: z.string().min(1),
+  severity: z.enum(["blocker", "warning", "info"]),
+  category: z.enum(["entry", "risk", "market_data", "liquidity", "execution", "technical"]),
+  user_message: z.string(),
+  debug_messages: z.array(z.string())
+}).passthrough();
+
+const signalDetailsRiskSummarySchema = z.object({
+  label: z.string(),
+  risk_failed: z.boolean(),
+  risk_reward_blocked: z.boolean(),
+  risk_reward_warning: z.string().nullable(),
+  forming_candle: z.boolean(),
+  open_candle_allowed: z.boolean(),
+  forming_reason: z.string().nullable(),
+  status_allows_trade: z.boolean(),
+  trade_plan_complete: z.boolean(),
+  risk_reward_ok: z.boolean(),
+  is_market_opportunity: z.boolean()
+}).passthrough();
+
+const signalDetailsExecutionSummarySchema = z.object({
+  preview_available: z.boolean(),
+  risk_check_status: z.string().nullable(),
+  risk_decision_status: z.string().nullable(),
+  can_enter: z.boolean().nullable(),
+  quality_gate_status: z.string().nullable(),
+  impact_risk: z.string().nullable(),
+  status_allows_trade: z.boolean()
+}).passthrough();
+
+const signalDetailsViewSchema = z.object({
+  title: z.string(),
+  side: z.enum(["long", "short"]),
+  primary_status: signalDetailsPrimaryStatusSchema,
+  primary_status_label: z.string(),
+  primary_status_tone: viewToneSchema,
+  primary_action_label: z.string(),
+  recommended_action_text: z.string(),
+  can_enter_now: z.boolean().nullable(),
+  trade_plan: signalTradePlanViewSchema,
+  risk_summary: signalDetailsRiskSummarySchema,
+  execution_summary: signalDetailsExecutionSummarySchema,
+  top_reasons: z.array(z.string()),
+  top_blockers: z.array(signalDetailsBlockerSchema),
+  warnings: z.array(signalDetailsBlockerSchema)
+}).passthrough();
+
+const tradeViewSchema = z.object({
+  status_label: z.string(),
+  status_tone: viewToneSchema,
+  source_label: z.string(),
+  pnl: z.object({
+    realized_pnl: z.number(),
+    unrealized_pnl: z.number(),
+    total_pnl: z.number().nullable(),
+    pnl_percent: z.number().nullable(),
+    tone: viewToneSchema
+  }).passthrough()
+}).passthrough();
 
 export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
   const enriched = signal as RadarSignalDto & Partial<RadarSignal>;
@@ -178,45 +388,57 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     risk_gate_status: normalizeOptionalRiskCheckStatus(enriched.risk_gate_status),
     can_enter: optionalBoolean(enriched.can_enter),
     display_reason: optionalString(enriched.display_reason),
+    card_view: normalizeSignalCardView(enriched.card_view),
+    details_view: normalizeSignalDetailsView(enriched.details_view),
     confirmed_trade_id: signal.confirmed_trade_id ?? null
   };
 }
 
 export function normalizePendingEntryIntent(value: unknown): PendingEntryIntent {
-  const intent = isRecord(value) ? value : {};
+  const intent = parseContract(pendingEntryIntentSchema, value, "PendingEntryIntent");
   return {
-    id: String(intent.id ?? ""),
-    user_id: String(intent.user_id ?? ""),
-    signal_id: String(intent.signal_id ?? ""),
+    id: intent.id,
+    user_id: intent.user_id,
+    signal_id: intent.signal_id,
     strategy_id: optionalString(intent.strategy_id),
-    mode: intent.mode === "real" ? "real" : "virtual",
-    status: normalizePendingEntryStatus(intent.status),
-    exchange: String(intent.exchange ?? ""),
-    symbol: String(intent.symbol ?? ""),
-    side: intent.side === "short" ? "short" : "long",
-    entry_min: Number(intent.entry_min ?? 0),
-    entry_max: Number(intent.entry_max ?? 0),
-    entry_price_policy: String(intent.entry_price_policy ?? "accepted_entry_zone"),
-    stop_loss: Number(intent.stop_loss ?? 0),
+    mode: intent.mode,
+    status: intent.status,
+    exchange: intent.exchange,
+    symbol: intent.symbol,
+    side: intent.side,
+    entry_min: intent.entry_min,
+    entry_max: intent.entry_max,
+    entry_price_policy: intent.entry_price_policy,
+    stop_loss: intent.stop_loss,
     targets_snapshot: normalizeTargetsSnapshot(intent.targets_snapshot),
     accepted_trade_plan_snapshot: normalizeMetadata(intent.accepted_trade_plan_snapshot),
-    accepted_trade_plan_hash: String(intent.accepted_trade_plan_hash ?? ""),
+    accepted_trade_plan_hash: intent.accepted_trade_plan_hash,
     accepted_signal_status: normalizeSignalStatus(intent.accepted_signal_status),
     accepted_signal_version: optionalString(intent.accepted_signal_version),
     accepted_signal_fingerprint: optionalString(intent.accepted_signal_fingerprint),
     execution_profile_snapshot: normalizeMetadata(intent.execution_profile_snapshot),
     request_snapshot: normalizeMetadata(intent.request_snapshot),
-    idempotency_key: String(intent.idempotency_key ?? ""),
+    idempotency_key: intent.idempotency_key,
     expires_at: optionalString(intent.expires_at),
-    created_at: String(intent.created_at ?? new Date().toISOString()),
-    updated_at: String(intent.updated_at ?? new Date().toISOString()),
+    created_at: intent.created_at,
+    updated_at: intent.updated_at,
     triggered_at: optionalString(intent.triggered_at),
     filled_at: optionalString(intent.filled_at),
     filled_trade_id: optionalString(intent.filled_trade_id),
     failure_reason: optionalString(intent.failure_reason),
     current_price: optionalNumber(intent.current_price),
     reason_code: optionalString(intent.reason_code),
-    localized_reason: optionalString(intent.localized_reason)
+    localized_reason: optionalString(intent.localized_reason),
+    view: intent.view
+      ? {
+          status_label: intent.view.status_label,
+          status_tone: intent.view.status_tone,
+          reason_code: intent.view.reason_code,
+          reason: intent.view.reason,
+          entry_zone: intent.view.entry_zone,
+          current_price: optionalNumber(intent.view.current_price)
+        }
+      : null
   };
 }
 
@@ -297,8 +519,78 @@ export function normalizeTrade(trade: TradeJournalEntryDto): TradeJournalEntry {
     closed_at: trade.closed_at ?? null,
     target_states: normalizeTargetStates(enriched.target_states, takeProfit, trade),
     lifecycle_events: normalizeLifecycleEvents(enriched.lifecycle_events),
-    lifecycle_trace: normalizeLifecycleTrace(enriched.lifecycle_trace)
+    lifecycle_trace: normalizeLifecycleTrace(enriched.lifecycle_trace),
+    view: normalizeTradeView(enriched.view)
   };
+}
+
+export function normalizeSignalActionState(value: unknown): SignalActionState {
+  const state = parseContract(signalActionStateSchema, value, "SignalActionState");
+  return {
+    can_enter_now: state.can_enter_now,
+    can_arm_pending: state.can_arm_pending,
+    can_reconfirm: state.can_reconfirm,
+    can_cancel: state.can_cancel,
+    mode: state.mode,
+    environment: state.environment,
+    primary_action: state.primary_action,
+    disabled_reason_code: state.disabled_reason_code,
+    blockers: state.blockers.map((item) => ({
+      code: item.code,
+      severity: item.severity,
+      message: item.message,
+      display_label: item.display_label,
+      metadata: { ...item.metadata }
+    })),
+    warnings: state.warnings.map((item) => ({
+      code: item.code,
+      severity: item.severity,
+      message: item.message,
+      display_label: item.display_label,
+      metadata: { ...item.metadata }
+    })),
+    accepted_trade_plan_snapshot: state.accepted_trade_plan_snapshot ? { ...state.accepted_trade_plan_snapshot } : null,
+    display_labels: { ...state.display_labels }
+  };
+}
+
+export function normalizeRadarSummary(value: unknown): RadarSummary {
+  return parseContract(radarSummarySchema, value, "RadarSummary");
+}
+
+function normalizeSignalCardView(value: unknown): RadarSignal["card_view"] {
+  if (!isRecord(value)) return null;
+  return parseContract(signalCardViewSchema, value, "SignalCardView");
+}
+
+function normalizeSignalDetailsView(value: unknown): RadarSignal["details_view"] {
+  if (!isRecord(value)) return null;
+  return parseContract(signalDetailsViewSchema, value, "SignalDetailsView");
+}
+
+function normalizeSignalTradePlanView(value: unknown): NonNullable<RadarSignal["details_view"]>["trade_plan"] {
+  return parseContract(signalTradePlanViewSchema, value, "SignalTradePlanView");
+}
+
+function normalizeSignalTargetViews(value: unknown): NonNullable<RadarSignal["card_view"]>["targets"] {
+  return parseContract(z.array(signalTargetViewSchema), value, "SignalTargetView[]");
+}
+
+function normalizeDetailsRiskSummary(value: unknown): NonNullable<RadarSignal["details_view"]>["risk_summary"] {
+  return parseContract(signalDetailsRiskSummarySchema, value, "SignalDetailsRiskSummary");
+}
+
+function normalizeDetailsExecutionSummary(value: unknown): NonNullable<RadarSignal["details_view"]>["execution_summary"] {
+  return parseContract(signalDetailsExecutionSummarySchema, value, "SignalDetailsExecutionSummary");
+}
+
+function normalizeDetailsBlockers(value: unknown): NonNullable<RadarSignal["details_view"]>["top_blockers"] {
+  return parseContract(z.array(signalDetailsBlockerSchema), value, "SignalDetailsBlocker[]");
+}
+
+function normalizeTradeView(value: unknown): TradeJournalEntry["view"] {
+  if (!isRecord(value)) return null;
+  return parseContract(tradeViewSchema, value, "TradeView");
 }
 
 function normalizeTradePlan(value: unknown): TradePlan | null {
@@ -1629,7 +1921,7 @@ export function normalizeExchangeConnection(value: unknown): ExchangeConnection 
   const metadata = isRecord(connection.metadata) ? connection.metadata : {};
   return {
     id: String(connection.id ?? ""),
-    user_id: String(connection.user_id ?? "demo_user"),
+    user_id: requiredString(connection.user_id, "ExchangeConnection", "user_id"),
     exchange_id: String(connection.exchange_id ?? ""),
     exchange_code: String(connection.exchange_code ?? ""),
     exchange_name: String(connection.exchange_name ?? connection.exchange_code ?? ""),
@@ -1934,4 +2226,60 @@ function normalizeSubscriptionTier(value: unknown): SubscriptionTier {
 function normalizeSubscriptionState(value: unknown): SubscriptionState {
   if (value === "active" || value === "trialing" || value === "past_due" || value === "canceled") return value;
   return "none";
+}
+
+function normalizeViewTone(value: unknown): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (value === "green" || value === "red" || value === "yellow" || value === "blue" || value === "purple") return value;
+  return "neutral";
+}
+
+function normalizeSignalDetailsPrimaryStatus(value: unknown): NonNullable<RadarSignal["details_view"]>["primary_status"] {
+  if (
+    value === "execution_ready" ||
+    value === "waiting_entry" ||
+    value === "requires_reconfirmation" ||
+    value === "blocked" ||
+    value === "watchlist" ||
+    value === "cancelled" ||
+    value === "expired"
+  ) {
+    return value;
+  }
+  return "unknown";
+}
+
+function normalizeDetailsBlockerCategory(value: unknown): NonNullable<RadarSignal["details_view"]>["top_blockers"][number]["category"] {
+  if (
+    value === "entry" ||
+    value === "risk" ||
+    value === "market_data" ||
+    value === "liquidity" ||
+    value === "execution" ||
+    value === "technical"
+  ) {
+    return value;
+  }
+  return "technical";
+}
+
+function requiredString(value: unknown, contractName: string, fieldName: string): string {
+  if (typeof value === "string" && value.trim()) return value;
+  throw new ApiContractError(contractName, `${fieldName}: Required`);
+}
+
+function parseContract<T extends z.ZodType>(
+  schema: T,
+  value: unknown,
+  contractName: string
+): z.infer<T> {
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  throw new ApiContractError(contractName, formatZodIssues(parsed.error));
+}
+
+function formatZodIssues(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "is invalid";
+  const path = issue.path.length ? issue.path.join(".") : "payload";
+  return `${path}: ${issue.message}`;
 }

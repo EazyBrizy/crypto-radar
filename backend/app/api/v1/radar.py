@@ -4,7 +4,7 @@ from app.schemas.candle import RadarConfig, RadarConfigUpdate
 from app.schemas.risk import RadarDisplayMode
 from app.schemas.signal import RadarResponse
 from app.services.candle_service import candle_service
-from app.services.message_broker import realtime_event_broker
+from app.services.message_broker import publish_realtime_event_background, realtime_event_broker
 from app.services.current_user import current_user_identity_service
 from app.services.radar_config_service import radar_config_service
 from app.services.radar_service import RadarFilters, radar_service
@@ -68,7 +68,10 @@ async def start_scanner(request: Request) -> dict[str, object]:
     if runner is not None:
         runner.start()
     status = _scanner_status(runner)
-    await realtime_event_broker.publish(radar_status_event(status))
+    publish_realtime_event_background(
+        radar_status_event(status),
+        broker=realtime_event_broker,
+    )
     return status
 
 
@@ -78,7 +81,10 @@ async def stop_scanner(request: Request) -> dict[str, object]:
     if runner is not None:
         await runner.stop()
     status = _scanner_status(runner)
-    await realtime_event_broker.publish(radar_status_event(status))
+    publish_realtime_event_background(
+        radar_status_event(status),
+        broker=realtime_event_broker,
+    )
     return status
 
 

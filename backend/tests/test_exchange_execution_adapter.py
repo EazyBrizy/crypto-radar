@@ -28,6 +28,7 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(fields["enable_live_trading"].default)
         self.assertFalse(fields["enable_bybit_live_order_placement"].default)
         self.assertFalse(fields["enable_bybit_mainnet_order_placement"].default)
+        self.assertEqual(fields["bybit_http_timeout_seconds"].default, 4.0)
         self.assertTrue(fields["require_protective_stop_for_live_entry"].default)
 
     async def test_dry_run_adapter_returns_planned_order_without_submission(self) -> None:
@@ -257,7 +258,7 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.get_header("X-bapi-api-key"), "api_key")
         self.assertEqual(request.get_header("X-bapi-timestamp"), "1676360412362")
         self.assertEqual(request.get_header("X-bapi-sign"), expected_signature)
-        self.assertEqual(captured["timeout"], 10)
+        self.assertEqual(captured["timeout"], 4.0)
         self.assertEqual(
             payload,
             {
@@ -406,7 +407,7 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
         request = captured["request"]
         self.assertIn(BYBIT_ORDER_REALTIME_PATH, request.full_url)
         self.assertIn("orderLinkId=entry-3", request.full_url)
-        self.assertEqual(captured["timeout"], 10)
+        self.assertEqual(captured["timeout"], 4.0)
         self.assertEqual(orders[0].cum_exec_qty, Decimal("0.4"))
         self.assertEqual(orders[0].avg_price, Decimal("101"))
 

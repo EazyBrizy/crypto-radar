@@ -223,6 +223,7 @@ def _signal_event(event_type: Literal["signal.created", "signal.updated"], signa
 
 
 def _signal_payload(signal: RadarSignal) -> dict[str, Any]:
+    signal = _signal_with_views(signal)
     signal_payload = _model_payload(signal)
     return {
         "signal": signal_payload,
@@ -245,6 +246,14 @@ def _signal_payload(signal: RadarSignal) -> dict[str, Any]:
         ],
         "timeframe": signal.timeframe,
     }
+
+
+def _signal_with_views(signal: RadarSignal) -> RadarSignal:
+    if signal.card_view is not None and signal.details_view is not None:
+        return signal
+    from app.services.signal_views import annotate_signal_views
+
+    return annotate_signal_views(signal)
 
 
 def _trade_payload(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any]:

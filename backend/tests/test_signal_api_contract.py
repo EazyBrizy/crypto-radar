@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -297,12 +298,18 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
                 ManualConfirmRequest(mode="virtual", user_id="demo_user", auto_enter_on_confirmation=True),
         )
 
+        await asyncio.sleep(0)
+
         self.assertEqual(response.signal.status, "ready")
+        self.assertIsNotNone(response.signal.card_view)
+        self.assertIsNotNone(response.signal.details_view)
         self.assertIsNone(response.signal.model_dump(mode="json").get("auto_entry"))
         self.assertEqual(response.pending_entry_intent.id, pending_service.intent.id)
         self.assertIn("Pending entry armed", response.message)
         self.assertEqual(pending_service.calls, 1)
         self.assertEqual(broker.events[0]["type"], "signal.updated")
+        self.assertIsNotNone(broker.events[0]["payload"]["signal"]["card_view"])
+        self.assertIsNotNone(broker.events[0]["payload"]["signal"]["details_view"])
 
     async def test_confirm_endpoint_allows_pending_entry_when_virtual_rr_guard_is_soft(self) -> None:
         now = datetime.now(timezone.utc)

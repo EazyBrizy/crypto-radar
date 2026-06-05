@@ -1,8 +1,9 @@
 import asyncio
 import inspect
+import time
 import unittest
 
-from app.services.message_broker import RedisMessageBroker
+from app.services.message_broker import RedisMessageBroker, publish_realtime_event
 from app.services.realtime_gateway import RealtimeGateway
 from app.services.realtime_events import create_realtime_event
 
@@ -84,10 +85,26 @@ class RealtimeBrokerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(websocket.sent[0]["type"], "pending_entry.updated")
         self.assertEqual(websocket.sent[0]["payload"]["pending_entry_id"], "intent_test")
 
+    async def test_safe_publish_times_out_slow_publishers(self) -> None:
+        started_at = time.monotonic()
+
+        await publish_realtime_event(
+            create_realtime_event("connection.heartbeat", {"status": "ok"}),
+            broker=SlowRealtimeBroker(),
+            timeout_seconds=0.01,
+        )
+
+        self.assertLess(time.monotonic() - started_at, 0.5)
+
 
 async def _wait_for_message(websocket: JsonCollectingWebSocket) -> None:
     while not websocket.sent:
         await asyncio.sleep(0)
+
+
+class SlowRealtimeBroker:
+    async def publish(self, _event: dict) -> None:
+        await asyncio.sleep(1)
 
 
 if __name__ == "__main__":

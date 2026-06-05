@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from app.schemas.strategy import StrategyConfigResponse, StrategyConfigUpdateRequest
-from app.services.message_broker import realtime_event_broker
+from app.services.message_broker import publish_realtime_event_background, realtime_event_broker
 from app.services.realtime_events import radar_status_event
 from app.services.strategy_config_service import StrategyConfigValidationError, strategy_config_service
 
@@ -41,4 +41,7 @@ async def _reconfigure_scanner(request: Request) -> None:
     if runner is None:
         return
     await runner.reconfigure()
-    await realtime_event_broker.publish(radar_status_event({"status": "ok", **runner.scanner_status}))
+    publish_realtime_event_background(
+        radar_status_event({"status": "ok", **runner.scanner_status}),
+        broker=realtime_event_broker,
+    )

@@ -90,7 +90,7 @@ class BybitWalletBalanceClientTest(unittest.TestCase):
         self.assertEqual(request.get_header("X-bapi-timestamp"), "1676360412362")
         self.assertEqual(request.get_header("X-bapi-recv-window"), "5000")
         self.assertEqual(request.get_header("X-bapi-sign"), expected_signature)
-        self.assertEqual(captured["timeout"], 10)
+        self.assertEqual(captured["timeout"], 4.0)
         self.assertEqual(balance.account_type, "UNIFIED")
         self.assertEqual(balance.total_equity, Decimal("100.25"))
         self.assertEqual(balance.total_wallet_balance, Decimal("99.75"))

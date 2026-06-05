@@ -40,6 +40,7 @@ export const ImpactRiskSchema = z.enum(["low", "medium", "high"]);
 export const ExecutionGateStatusSchema = z.enum(["passed", "warning", "blocked"]);
 export const RadarRiskRewardStatusSchema = z.enum(["passed", "warning", "failed", "skipped", "unknown"]);
 export const RiskCheckStatusSchema = z.enum(["passed", "warning", "failed"]);
+export const ViewToneSchema = z.enum(["green", "red", "yellow", "blue", "purple", "neutral"]);
 
 const DEFAULT_LIQUIDITY_METRICS = {
   spread_percent: 0,
@@ -168,6 +169,111 @@ export const SignalDecisionSnapshotSchema = z.object({
   warnings: z.array(DecisionReasonSchema).default([])
 });
 
+export const SignalBadgeViewSchema = z.object({
+  code: z.string().min(1),
+  label: z.string(),
+  tone: ViewToneSchema
+}).passthrough();
+
+export const SignalTargetViewSchema = z.object({
+  label: z.string().min(1),
+  price: z.number().nullable().optional(),
+  r_multiple: z.number().nullable().optional(),
+  action: z.string().nullable().optional()
+}).passthrough();
+
+export const SignalTradePlanViewSchema = z.object({
+  has_trade_plan: z.boolean(),
+  entry_type: z.string(),
+  entry_zone: z.string(),
+  entry_price: z.number().nullable().optional(),
+  stop_loss: z.number().nullable().optional(),
+  targets: z.array(SignalTargetViewSchema).default([]),
+  selected_rr: z.number().nullable().optional(),
+  selected_rr_target: z.string().nullable().optional(),
+  min_rr: z.number().nullable().optional(),
+  trade_plan_complete: z.boolean().nullable().optional(),
+  fallback_used: z.boolean().default(false),
+  missing: z.array(z.string()).default([]),
+  invalidation: z.string()
+}).passthrough();
+
+export const SignalCardViewSchema = z.object({
+  status_label: z.string(),
+  status_tone: ViewToneSchema,
+  opportunity_label: z.string(),
+  opportunity_tone: ViewToneSchema,
+  risk_label: z.string(),
+  risk_meta: z.string(),
+  badges: z.array(SignalBadgeViewSchema).default([]),
+  entry_label: z.string(),
+  entry_value: z.string(),
+  stop_loss: z.number().nullable().optional(),
+  targets: z.array(SignalTargetViewSchema).default([]),
+  selected_rr: z.number().nullable().optional(),
+  reason: z.string()
+}).passthrough();
+
+export const SignalDetailsPrimaryStatusSchema = z.enum([
+  "execution_ready",
+  "waiting_entry",
+  "requires_reconfirmation",
+  "blocked",
+  "watchlist",
+  "cancelled",
+  "expired",
+  "unknown"
+]);
+
+export const SignalDetailsBlockerViewSchema = z.object({
+  code: z.string().min(1),
+  severity: z.enum(["blocker", "warning", "info"]),
+  category: z.enum(["entry", "risk", "market_data", "liquidity", "execution", "technical"]),
+  user_message: z.string(),
+  debug_messages: z.array(z.string()).default([])
+}).passthrough();
+
+export const SignalDetailsRiskSummaryViewSchema = z.object({
+  label: z.string(),
+  risk_failed: z.boolean().default(false),
+  risk_reward_blocked: z.boolean().default(false),
+  risk_reward_warning: z.string().nullable().optional(),
+  forming_candle: z.boolean().default(false),
+  open_candle_allowed: z.boolean().default(false),
+  forming_reason: z.string().nullable().optional(),
+  status_allows_trade: z.boolean().default(false),
+  trade_plan_complete: z.boolean().default(false),
+  risk_reward_ok: z.boolean().default(false),
+  is_market_opportunity: z.boolean().default(false)
+}).passthrough();
+
+export const SignalDetailsExecutionSummaryViewSchema = z.object({
+  preview_available: z.boolean().default(false),
+  risk_check_status: z.string().nullable().optional(),
+  risk_decision_status: z.string().nullable().optional(),
+  can_enter: z.boolean().nullable().optional(),
+  quality_gate_status: z.string().nullable().optional(),
+  impact_risk: z.string().nullable().optional(),
+  status_allows_trade: z.boolean().default(false)
+}).passthrough();
+
+export const SignalDetailsViewSchema = z.object({
+  title: z.string(),
+  side: SignalDirectionSchema,
+  primary_status: SignalDetailsPrimaryStatusSchema,
+  primary_status_label: z.string(),
+  primary_status_tone: ViewToneSchema,
+  primary_action_label: z.string(),
+  recommended_action_text: z.string(),
+  can_enter_now: z.boolean().nullable().optional(),
+  trade_plan: SignalTradePlanViewSchema,
+  risk_summary: SignalDetailsRiskSummaryViewSchema,
+  execution_summary: SignalDetailsExecutionSummaryViewSchema,
+  top_reasons: z.array(z.string()).default([]),
+  top_blockers: z.array(SignalDetailsBlockerViewSchema).default([]),
+  warnings: z.array(SignalDetailsBlockerViewSchema).default([])
+}).passthrough();
+
 export const RadarSignalSchema = z.object({
   id: z.string(),
   symbol: z.string(),
@@ -185,6 +291,7 @@ export const RadarSignalSchema = z.object({
   status: SignalStatusSchema.default("active"),
   score: z.number().default(0),
   timeframe: z.string().default("stream"),
+  candle_state: z.enum(["open", "closed"]).default("closed").optional(),
   entry_min: z.number().nullable().optional(),
   entry_max: z.number().nullable().optional(),
   stop_loss: z.number().nullable().optional(),
@@ -254,11 +361,13 @@ export const RadarSignalSchema = z.object({
   risk_gate_status: RiskCheckStatusSchema.nullable().optional(),
   can_enter: z.boolean().nullable().optional(),
   display_reason: z.string().nullable().optional(),
+  card_view: SignalCardViewSchema.nullable().optional(),
+  details_view: SignalDetailsViewSchema.nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   expires_at: z.string().nullable().optional(),
   confirmed_trade_id: z.string().nullable().optional()
-});
+}).passthrough();
 
 export const LiquidityMetricsSchema = z.object({
   spread_percent: z.number().default(0),

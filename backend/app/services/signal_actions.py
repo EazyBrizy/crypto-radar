@@ -40,13 +40,14 @@ from app.services.exchange_connection_service import (
     exchange_connection_service,
 )
 from app.services.execution_service import real_execution_service
-from app.services.message_broker import realtime_event_broker
+from app.services.message_broker import publish_realtime_event_background, realtime_event_broker
 from app.services.pending_entry import pending_entry_intent_service
 from app.services.realtime_events import signal_updated_event, trade_activated_event
 from app.services.risk_fee_rate import risk_fee_rate_service
 from app.services.risk_management import get_user_risk_management_settings
 from app.services.risk_market_data import risk_market_data_service
 from app.services.signal_service import signal_service
+from app.services.signal_views import annotate_signal_views
 from app.services.virtual_trading import virtual_trading_service
 from app.services.virtual_execution_profile import (
     default_virtual_execution_profile,
@@ -356,16 +357,17 @@ class SignalActionService:
                 request=request,
             )
             updated_signal = self._signals.get_signal(signal.id) or signal
-            await self._publish_signal_update(updated_signal)
             next_state = self.state_for_signal(
                 updated_signal,
                 mode=mode,
                 connection_id=connection_id,
                 user_id=user_id,
             )
+            response_signal = annotate_signal_views(updated_signal, action_state=next_state)
+            self._publish_signal_update(response_signal)
             return SignalActionResponse(
                 state=next_state,
-                signal=updated_signal,
+                signal=response_signal,
                 pending_entry_intent=intent,
                 message="Pending entry armed; waiting for accepted entry zone",
             )
@@ -388,9 +390,11 @@ class SignalActionService:
                 connection_id=connection_id,
                 user_id=user_id,
             )
+            response_signal = annotate_signal_views(updated_signal, action_state=next_state)
+            self._publish_signal_update(response_signal)
             return SignalActionResponse(
                 state=next_state,
-                signal=updated_signal,
+                signal=response_signal,
                 pending_entry_intent=cancelled,
                 message="Pending entry cancelled",
             )
@@ -406,16 +410,17 @@ class SignalActionService:
                 request=request,
             )
             updated_signal = self._signals.get_signal(signal.id) or signal
-            await self._publish_signal_update(updated_signal)
             next_state = self.state_for_signal(
                 updated_signal,
                 mode=mode,
                 connection_id=connection_id,
                 user_id=user_id,
             )
+            response_signal = annotate_signal_views(updated_signal, action_state=next_state)
+            self._publish_signal_update(response_signal)
             return SignalActionResponse(
                 state=next_state,
-                signal=updated_signal,
+                signal=response_signal,
                 pending_entry_intent=reconfirmed,
                 message="Pending entry reconfirmed",
             )
@@ -426,26 +431,31 @@ class SignalActionService:
                 request,
                 connection_id=connection_id,
             )
+            response_signal = annotate_signal_views(signal, action_state=state)
             return SignalActionResponse(
                 state=state,
-                signal=signal,
+                signal=response_signal,
                 real_execution=real_execution,
                 real_execution_result=real_execution,
                 message=real_execution.message,
             )
 
         updated_signal, virtual_trade = self._virtual_trading.confirm_signal(signal, request)
-        await self._publish_signal_update(updated_signal)
-        await self._realtime_broker.publish(trade_activated_event(virtual_trade))
         next_state = self.state_for_signal(
             updated_signal,
             mode=mode,
             connection_id=connection_id,
             user_id=user_id,
         )
+        response_signal = annotate_signal_views(updated_signal, action_state=next_state)
+        self._publish_signal_update(response_signal)
+        publish_realtime_event_background(
+            trade_activated_event(virtual_trade),
+            broker=self._realtime_broker,
+        )
         return SignalActionResponse(
             state=next_state,
-            signal=updated_signal,
+            signal=response_signal,
             virtual_trade=virtual_trade,
             message="Virtual trade opened",
         )
@@ -937,8 +947,11 @@ class SignalActionService:
             raise ValueError("Active pending entry intent is not found.")
         return intent
 
-    async def _publish_signal_update(self, signal: RadarSignal) -> None:
-        await self._realtime_broker.publish(signal_updated_event(signal))
+    def _publish_signal_update(self, signal: RadarSignal) -> None:
+        publish_realtime_event_background(
+            signal_updated_event(signal),
+            broker=self._realtime_broker,
+        )
 
     def _get_signal_or_raise(self, signal_id: str) -> RadarSignal:
         signal = self._signals.get_signal(signal_id)

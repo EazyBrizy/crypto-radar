@@ -70,7 +70,7 @@ class BybitFeeRateClientTest(unittest.TestCase):
         self.assertEqual(request.get_header("X-bapi-timestamp"), "1676360412362")
         self.assertEqual(request.get_header("X-bapi-recv-window"), "5000")
         self.assertEqual(request.get_header("X-bapi-sign"), expected_signature)
-        self.assertEqual(captured["timeout"], 10)
+        self.assertEqual(captured["timeout"], 4.0)
         self.assertEqual(rates[0].symbol, "ETHUSDT")
         self.assertEqual(rates[0].maker_fee_rate, 0.0001)
         self.assertEqual(rates[0].taker_fee_rate, 0.0006)
@@ -79,7 +79,7 @@ class BybitFeeRateClientTest(unittest.TestCase):
         def fake_urlopen(url, timeout: int):
             self.assertIn("/v5/market/instruments-info?", url)
             self.assertIn("category=linear", url)
-            self.assertEqual(timeout, 10)
+            self.assertEqual(timeout, 4.0)
             return _Response(
                 {
                     "retCode": 0,

@@ -41,6 +41,7 @@ BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON = (
 BYBIT_TESTNET_API_URL = "https://api-testnet.bybit.com"
 DEFAULT_SYMBOLS = ("DOGEUSDT",)
 LINEAR_SYMBOL_ALIASES = {"PEPEUSDT": "1000PEPEUSDT"}
+DEFAULT_BYBIT_HTTP_TIMEOUT_SECONDS = 4.0
 RECONNECT_DELAY_SEC = 5.0
 MAX_RECONNECT_DELAY_SEC = 60.0
 HEARTBEAT_INTERVAL_SEC = 20.0
@@ -324,7 +325,8 @@ class BybitRealExecutionAdapter:
                 update={"metadata": {**existing.metadata, "idempotent_replay": True}}
             )
         api_key, api_secret = self._credentials()
-        ack = create_bybit_order(
+        ack = await asyncio.to_thread(
+            create_bybit_order,
             api_key=api_key,
             api_secret=api_secret,
             request=create_request,
@@ -332,6 +334,7 @@ class BybitRealExecutionAdapter:
             recv_window=self._recv_window,
             timestamp_ms=self._timestamp_ms,
             urlopen=self._urlopen,
+            timeout_seconds=_bybit_http_timeout_seconds(self._settings),
         )
         placed = order.model_copy(
             update={
@@ -360,7 +363,8 @@ class BybitRealExecutionAdapter:
         stop_loss = _positive_decimal(order.stop_price, "stopLoss")
         take_profit = _optional_positive_decimal(order.metadata.get("native_take_profit"))
         api_key, api_secret = self._credentials()
-        raw_payload = set_bybit_trading_stop(
+        raw_payload = await asyncio.to_thread(
+            set_bybit_trading_stop,
             api_key=api_key,
             api_secret=api_secret,
             category=self._category_for_order(order),
@@ -373,6 +377,7 @@ class BybitRealExecutionAdapter:
             recv_window=self._recv_window,
             timestamp_ms=self._timestamp_ms,
             urlopen=self._urlopen,
+            timeout_seconds=_bybit_http_timeout_seconds(self._settings),
         )
         placed = order.model_copy(
             update={
@@ -578,6 +583,29 @@ def _truthy_metadata_value(value: object) -> bool:
     return bool(value)
 
 
+def _bybit_http_timeout_seconds(settings_obj: Any | None = None) -> float:
+    raw_value = getattr(
+        settings_obj or default_settings,
+        "bybit_http_timeout_seconds",
+        DEFAULT_BYBIT_HTTP_TIMEOUT_SECONDS,
+    )
+    try:
+        timeout = float(raw_value)
+    except (TypeError, ValueError):
+        timeout = DEFAULT_BYBIT_HTTP_TIMEOUT_SECONDS
+    return max(0.1, timeout)
+
+
+def _bybit_http_timeout_seconds_from_value(value: float | None) -> float:
+    if value is None:
+        return _bybit_http_timeout_seconds()
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError):
+        timeout = DEFAULT_BYBIT_HTTP_TIMEOUT_SECONDS
+    return max(0.1, timeout)
+
+
 def create_bybit_order(
     *,
     api_key: str,
@@ -587,6 +615,7 @@ def create_bybit_order(
     recv_window: int = 5_000,
     timestamp_ms: int | None = None,
     urlopen=urllib.request.urlopen,
+    timeout_seconds: float | None = None,
 ) -> BybitOrderAck:
     body = _order_create_payload(request)
     payload = _post_private_json(
@@ -599,6 +628,7 @@ def create_bybit_order(
         timestamp_ms=timestamp_ms,
         urlopen=urlopen,
         label="order-create",
+        timeout_seconds=timeout_seconds,
     )
     result = payload.get("result", {})
     result_payload: Mapping[str, Any] = result if isinstance(result, Mapping) else {}
@@ -629,6 +659,7 @@ def set_bybit_trading_stop(
     recv_window: int = 5_000,
     timestamp_ms: int | None = None,
     urlopen=urllib.request.urlopen,
+    timeout_seconds: float | None = None,
 ) -> Mapping[str, Any]:
     body: dict[str, Any] = {
         "category": _normalize_private_category(category),
@@ -651,6 +682,7 @@ def set_bybit_trading_stop(
         timestamp_ms=timestamp_ms,
         urlopen=urlopen,
         label="trading-stop",
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -816,7 +848,7 @@ def fetch_bybit_fee_rates(
     )
 
     try:
-        with urlopen(request, timeout=10) as response:
+        with urlopen(request, timeout=_bybit_http_timeout_seconds()) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, TimeoutError, json.JSONDecodeError) as exc:
         raise BybitApiError(f"Bybit fee-rate request failed: {exc}") from exc
@@ -1218,7 +1250,7 @@ def fetch_bybit_linear_symbols() -> list[str]:
             params["cursor"] = cursor
         url = f"{BYBIT_INSTRUMENTS_URL}?{urllib.parse.urlencode(params)}"
 
-        with urllib.request.urlopen(url, timeout=10) as response:
+        with urllib.request.urlopen(url, timeout=_bybit_http_timeout_seconds()) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
         result = payload.get("result", {})
@@ -1261,7 +1293,7 @@ def fetch_bybit_klines(
     }
     url = f"{BYBIT_KLINE_URL}?{urllib.parse.urlencode(params)}"
 
-    with urllib.request.urlopen(url, timeout=10) as response:
+    with urllib.request.urlopen(url, timeout=_bybit_http_timeout_seconds()) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
     rows = payload.get("result", {}).get("list", [])
@@ -1406,7 +1438,7 @@ def _get_public_json(
 ) -> dict:
     url = f"{base_url.rstrip('/')}{path}?{urllib.parse.urlencode(params)}"
     try:
-        with urlopen(url, timeout=10) as response:
+        with urlopen(url, timeout=_bybit_http_timeout_seconds()) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, TimeoutError, json.JSONDecodeError) as exc:
         raise BybitApiError(f"Bybit {label} request failed: {exc}") from exc
@@ -1427,6 +1459,7 @@ def _post_private_json(
     timestamp_ms: int | None,
     urlopen,
     label: str,
+    timeout_seconds: float | None = None,
 ) -> dict:
     json_body = json.dumps(body, separators=(",", ":"))
     headers = {
@@ -1446,7 +1479,10 @@ def _post_private_json(
         method="POST",
     )
     try:
-        with urlopen(request, timeout=10) as response:
+        with urlopen(
+            request,
+            timeout=_bybit_http_timeout_seconds_from_value(timeout_seconds),
+        ) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, TimeoutError, json.JSONDecodeError) as exc:
         raise BybitApiError(f"Bybit {label} request failed: {exc}") from exc
@@ -1467,6 +1503,7 @@ def _get_private_json(
     timestamp_ms: int | None,
     urlopen,
     label: str,
+    timeout_seconds: float | None = None,
 ) -> dict:
     query_string = urllib.parse.urlencode(params)
     request = urllib.request.Request(
@@ -1481,7 +1518,10 @@ def _get_private_json(
         method="GET",
     )
     try:
-        with urlopen(request, timeout=10) as response:
+        with urlopen(
+            request,
+            timeout=_bybit_http_timeout_seconds_from_value(timeout_seconds),
+        ) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, TimeoutError, json.JSONDecodeError) as exc:
         raise BybitApiError(f"Bybit {label} request failed: {exc}") from exc

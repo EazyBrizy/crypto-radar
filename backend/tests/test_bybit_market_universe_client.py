@@ -25,7 +25,7 @@ class BybitMarketUniverseClientTest(unittest.TestCase):
         captured_queries: list[dict[str, list[str]]] = []
 
         def fake_urlopen(url, timeout: int):
-            self.assertEqual(timeout, 10)
+            self.assertEqual(timeout, 4.0)
             parsed = urllib.parse.urlparse(url)
             self.assertEqual(parsed.path, "/v5/market/instruments-info")
             query = urllib.parse.parse_qs(parsed.query)

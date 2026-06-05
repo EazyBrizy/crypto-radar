@@ -43,6 +43,8 @@ class RealtimeEventSchemaTest(unittest.TestCase):
         self.assertTrue(event["timestamp"].endswith("Z"))
         self.assertIsInstance(event["payload"]["signal"], dict)
         self.assertEqual(event["payload"]["signal"]["id"], "sig_123")
+        self.assertIsNotNone(event["payload"]["signal"]["card_view"])
+        self.assertIsNotNone(event["payload"]["signal"]["details_view"])
         self.assertEqual(event["payload"]["signalId"], "sig_123")
         self.assertEqual(event["payload"]["pair"], "BTCUSDT")
         self.assertEqual(event["payload"]["side"], "LONG")
@@ -62,6 +64,8 @@ class RealtimeEventSchemaTest(unittest.TestCase):
             json.dumps(event, ensure_ascii=False)
             self.assertIsInstance(event["payload"]["signal"], dict)
             self.assertEqual(event["payload"]["signal"]["id"], "sig_123")
+            self.assertIsNotNone(event["payload"]["signal"]["card_view"])
+            self.assertIsNotNone(event["payload"]["signal"]["details_view"])
 
     def test_notification_created_event_has_persisted_payload(self) -> None:
         notification = NotificationResponse(

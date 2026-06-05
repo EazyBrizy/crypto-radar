@@ -28,11 +28,13 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     prometheus_metrics_enabled: bool = True
     fastapi_slow_request_ms: int = 1000
+    realtime_publish_timeout_seconds: float = 0.75
 
     crypto_radar_scanner_enabled: bool = False
     enable_live_trading: bool = False
     enable_bybit_live_order_placement: bool = False
     enable_bybit_mainnet_order_placement: bool = False
+    bybit_http_timeout_seconds: float = 4.0
     require_protective_stop_for_live_entry: bool = True
     virtual_max_open_positions: int = 3
     virtual_max_slippage_bps: float = 150.0

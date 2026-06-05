@@ -4,10 +4,12 @@ import json
 import logging
 from collections import deque
 from collections.abc import Callable
+from inspect import isawaitable
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 
+from app.core.config import settings
 from app.core.redis_client import get_redis_client
 
 
@@ -58,11 +60,37 @@ class RedisMessageBroker:
         self._publish_local(encoded_event)
         if not self._enable_redis:
             return
+        self._publish_redis_background(encoded_event)
+
+    def _publish_redis_background(self, encoded_event: RealtimeEvent) -> None:
         try:
-            await asyncio.to_thread(
-                self._redis_client_factory().publish,
-                self._channel,
-                json.dumps(encoded_event, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._publish_redis(encoded_event))
+        task.add_done_callback(_log_background_publish_exception)
+
+    async def _publish_redis(self, encoded_event: RealtimeEvent) -> None:
+        timeout_seconds = _configured_publish_timeout_seconds()
+        try:
+            await _await_with_optional_timeout(
+                asyncio.to_thread(
+                    self._redis_client_factory().publish,
+                    self._channel,
+                    json.dumps(
+                        encoded_event,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    ),
+                ),
+                timeout_seconds=timeout_seconds,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Redis realtime publish timed out after %.2f seconds: %s",
+                timeout_seconds,
+                encoded_event.get("type"),
             )
         except Exception as exc:
             logger.warning("Redis realtime publish failed: %s", exc)
@@ -162,6 +190,71 @@ def _running_loop_or_none() -> asyncio.AbstractEventLoop | None:
         return asyncio.get_running_loop()
     except RuntimeError:
         return None
+
+
+async def publish_realtime_event(
+    event: RealtimeEvent,
+    *,
+    broker: Any | None = None,
+    timeout_seconds: float | None = None,
+) -> None:
+    publisher = broker or realtime_event_broker
+    resolved_timeout = _configured_publish_timeout_seconds(timeout_seconds)
+    try:
+        result = publisher.publish(event)
+        if isawaitable(result):
+            await _await_with_optional_timeout(result, timeout_seconds=resolved_timeout)
+    except TimeoutError:
+        logger.warning(
+            "Realtime publish timed out after %.2f seconds: %s",
+            resolved_timeout,
+            event.get("type"),
+        )
+    except Exception as exc:
+        logger.warning("Realtime publish failed: %s", exc)
+
+
+def publish_realtime_event_background(
+    event: RealtimeEvent,
+    *,
+    broker: Any | None = None,
+    timeout_seconds: float | None = None,
+) -> asyncio.Task[None] | None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning("Realtime publish skipped because no running event loop is available")
+        return None
+    task = loop.create_task(
+        publish_realtime_event(
+            event,
+            broker=broker,
+            timeout_seconds=timeout_seconds,
+        )
+    )
+    task.add_done_callback(_log_background_publish_exception)
+    return task
+
+
+async def _await_with_optional_timeout(awaitable: Any, *, timeout_seconds: float) -> Any:
+    if timeout_seconds <= 0:
+        return await awaitable
+    return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+
+
+def _configured_publish_timeout_seconds(value: float | None = None) -> float:
+    raw_value = settings.realtime_publish_timeout_seconds if value is None else value
+    try:
+        return max(0.0, float(raw_value))
+    except (TypeError, ValueError):
+        return 0.75
+
+
+def _log_background_publish_exception(task: asyncio.Task[Any]) -> None:
+    with contextlib.suppress(asyncio.CancelledError):
+        exc = task.exception()
+        if exc is not None:
+            logger.warning("Realtime background publish failed: %s", exc)
 
 
 def encode_realtime_event(event: RealtimeEvent) -> RealtimeEvent:

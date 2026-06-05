@@ -22,6 +22,74 @@ const signal = {
   take_profit_2: 69450,
   explanation: [],
   risks: [],
+  card_view: {
+    status_label: "Execution-ready",
+    status_tone: "green",
+    opportunity_label: "Execution-ready",
+    opportunity_tone: "green",
+    risk_label: "Medium",
+    risk_meta: "Risk: Medium | score 84 | urgency medium",
+    badges: [{ code: "opportunity", label: "Execution-ready", tone: "green" }],
+    entry_label: "trade plan",
+    entry_value: "67850-68100",
+    stop_loss: 67420,
+    targets: [{ label: "TP1", price: 68900, r_multiple: 1.5, action: null }],
+    selected_rr: 2.1,
+    reason: "Backend view model",
+    backend_extra: "card-extra"
+  },
+  details_view: {
+    title: "BTCUSDT LONG Signal",
+    side: "long",
+    primary_status: "execution_ready",
+    primary_status_label: "execution ready",
+    primary_status_tone: "green",
+    primary_action_label: "Enter now",
+    recommended_action_text: "Backend returned action context.",
+    can_enter_now: true,
+    trade_plan: {
+      has_trade_plan: true,
+      entry_type: "trade plan",
+      entry_zone: "67850-68100",
+      entry_price: 67975,
+      stop_loss: 67420,
+      targets: [{ label: "TP1", price: 68900, r_multiple: 1.5, action: null }],
+      selected_rr: 2.1,
+      selected_rr_target: "final",
+      min_rr: 2,
+      trade_plan_complete: true,
+      fallback_used: false,
+      missing: [],
+      invalidation: "-"
+    },
+    risk_summary: {
+      label: "Medium",
+      risk_failed: false,
+      risk_reward_blocked: false,
+      risk_reward_warning: null,
+      forming_candle: false,
+      open_candle_allowed: true,
+      forming_reason: null,
+      status_allows_trade: true,
+      trade_plan_complete: true,
+      risk_reward_ok: true,
+      is_market_opportunity: true
+    },
+    execution_summary: {
+      preview_available: true,
+      risk_check_status: "passed",
+      risk_decision_status: "passed",
+      can_enter: true,
+      quality_gate_status: null,
+      impact_risk: null,
+      status_allows_trade: true
+    },
+    top_reasons: ["Backend view model"],
+    top_blockers: [],
+    warnings: [],
+    backend_extra: "details-extra"
+  },
+  backend_extra: "signal-extra",
   created_at: "2026-05-25T10:12:41.231Z",
   updated_at: "2026-05-25T10:12:41.231Z"
 };
@@ -50,6 +118,13 @@ describe("parseRealtimeMessage", () => {
     }));
 
     expect(parsed?.type).toBe("signal.created");
+    if (parsed?.type === "signal.created") {
+      expect(parsed.payload.signal.card_view?.status_label).toBe("Execution-ready");
+      expect(parsed.payload.signal.details_view?.primary_status).toBe("execution_ready");
+      expect((parsed.payload.signal as Record<string, unknown>).backend_extra).toBe("signal-extra");
+      expect((parsed.payload.signal.card_view as Record<string, unknown> | null)?.backend_extra).toBe("card-extra");
+      expect((parsed.payload.signal.details_view as Record<string, unknown> | null)?.backend_extra).toBe("details-extra");
+    }
   });
 
   it("drops invalid realtime payloads", () => {

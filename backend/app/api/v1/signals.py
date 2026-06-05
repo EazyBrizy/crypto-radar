@@ -14,7 +14,7 @@ from app.schemas.trade import (
     VirtualExecutionReport,
 )
 from app.services.execution_service import real_execution_service
-from app.services.message_broker import realtime_event_broker
+from app.services.message_broker import publish_realtime_event_background, realtime_event_broker
 from app.services.current_user import current_user_identity_service, resolve_current_user
 from app.services.realtime_events import signal_invalidated_event
 from app.services.signal_actions import SignalActionService, SignalActionUnavailable
@@ -96,10 +96,12 @@ async def send_signal_action(
             action,
             user_id=current_user.user_id,
         )
+        updates: dict[str, object] = {
+            "signal": annotate_signal_views(response.signal, action_state=response.state)
+        }
         if response.pending_entry_intent is not None:
-            response = response.model_copy(
-                update={"pending_entry_intent": annotate_pending_entry_view(response.pending_entry_intent)}
-            )
+            updates["pending_entry_intent"] = annotate_pending_entry_view(response.pending_entry_intent)
+        response = response.model_copy(update=updates)
         return response
     except PermissionError as exc:
         raise HTTPException(
@@ -247,7 +249,11 @@ async def reject_signal(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Signal is not found",
         )
-    await realtime_event_broker.publish(signal_invalidated_event(signal, reason=request.reason))
+    signal = annotate_signal_views(signal)
+    publish_realtime_event_background(
+        signal_invalidated_event(signal, reason=request.reason),
+        broker=realtime_event_broker,
+    )
 
     return ManualDecisionResponse(
         signal=signal,

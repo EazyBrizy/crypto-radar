@@ -1,9 +1,11 @@
 import unittest
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.schemas.signal import RadarSignal, SignalConfirmationSnapshot, SignalLayerCheck
+from app.schemas.signal_action import SignalActionState
 from app.schemas.user import RiskManagementSettings
 from app.services.radar_service import RadarFilters, RadarService
 
@@ -70,6 +72,53 @@ class RadarServiceTest(unittest.TestCase):
         self.assertTrue(all("all_market_opportunities" in (signal.display_reason or "") for signal in response.signals))
         self.assertEqual(risk_preview.calls, [])
 
+    def test_radar_list_does_not_call_action_state_by_default(self) -> None:
+        signal = _signal(status="actionable", rr_status="passed")
+        calls: list[str] = []
+
+        def action_state_provider(signal: RadarSignal, _user_id: str, _mode: str) -> SignalActionState:
+            calls.append(signal.id)
+            return SignalActionState(can_enter_now=True)
+
+        service = _service(
+            [signal],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+            action_state_provider=action_state_provider,
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="all_market_opportunities")
+
+        self.assertEqual([item.id for item in response.signals], [signal.id])
+        self.assertEqual(calls, [])
+        self.assertIsNotNone(response.signals[0].card_view)
+        self.assertIsNotNone(response.signals[0].details_view)
+
+    def test_radar_list_include_action_state_true_calls_provider(self) -> None:
+        signal = _signal(status="actionable", rr_status="passed")
+        calls: list[tuple[str, str, str]] = []
+
+        def action_state_provider(signal: RadarSignal, user_id: str, mode: str) -> SignalActionState:
+            calls.append((signal.id, user_id, mode))
+            return SignalActionState(can_enter_now=True, primary_action="enter_now")
+
+        service = _service(
+            [signal],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+            action_state_provider=action_state_provider,
+        )
+
+        response = service.list_signals(
+            user_id="demo_user",
+            mode="all_market_opportunities",
+            include_action_state=True,
+        )
+
+        self.assertEqual(calls, [(signal.id, "demo_user", "virtual")])
+        self.assertTrue(response.signals[0].details_view.can_enter_now)
+        self.assertEqual(response.summary.execution_ready_signals, 1)
+
     def test_execution_ready_returns_only_actionable_or_entry_touched_with_risk_gate_can_enter(self) -> None:
         actionable = _signal(status="actionable", rr_status="passed")
         entry_touched = _signal(status="entry_touched", rr_status="passed")
@@ -123,6 +172,27 @@ class RadarServiceTest(unittest.TestCase):
         self.assertEqual([signal.id for signal in response.signals], [actionable.id])
         self.assertEqual(risk_preview.calls[0]["record_audit"], False)
 
+    def test_strategy_display_mode_override_is_cached_when_request_mode_is_absent(self) -> None:
+        active = _signal(status="active", rr_status="passed")
+        ready = _signal(status="ready", rr_status="passed")
+        strategy_calls: list[str] = []
+
+        def strategy_risk_settings_provider(signal: RadarSignal, *, user_id: str):
+            strategy_calls.append(signal.id)
+            return {"radar_display_mode": "all_market_opportunities"}, "strategy_config"
+
+        service = _service(
+            [active, ready],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="execution_ready",
+            strategy_risk_settings_provider=strategy_risk_settings_provider,
+        )
+
+        response = service.list_signals(user_id="demo_user")
+
+        self.assertEqual([signal.id for signal in response.signals], [active.id, ready.id])
+        self.assertEqual(len(strategy_calls), 1)
+
     def test_filters_apply_before_display_mode(self) -> None:
         btc = _signal(symbol="BTCUSDT", exchange="bybit", timeframe="15m")
         eth = _signal(symbol="ETHUSDT", exchange="bybit", timeframe="15m")
@@ -141,18 +211,56 @@ class RadarServiceTest(unittest.TestCase):
 
         self.assertEqual([signal.id for signal in response.signals], [btc.id])
 
+    def test_radar_list_handles_200_market_opportunities_without_heavy_providers(self) -> None:
+        signals = [
+            _signal(
+                status="active",
+                rr_status="passed",
+                symbol=f"COIN{index}USDT",
+            )
+            for index in range(200)
+        ]
+
+        def action_state_provider(_signal: RadarSignal, _user_id: str, _mode: str) -> SignalActionState:
+            raise AssertionError("action state should not be used by lightweight radar list")
+
+        def strategy_risk_settings_provider(_signal: RadarSignal, *, user_id: str):
+            raise AssertionError("strategy risk settings should not be used by lightweight radar list")
+
+        risk_preview = FakeRiskPreviewEvaluator({})
+        service = _service(
+            signals,
+            risk_preview=risk_preview,
+            user_mode="all_market_opportunities",
+            action_state_provider=action_state_provider,
+            strategy_risk_settings_provider=strategy_risk_settings_provider,
+        )
+
+        started_at = time.perf_counter()
+        response = service.list_signals(user_id="demo_user", mode="all_market_opportunities")
+        duration = time.perf_counter() - started_at
+
+        self.assertEqual(len(response.signals), 200)
+        self.assertEqual(response.summary.total_signals, 200)
+        self.assertEqual(risk_preview.calls, [])
+        self.assertLess(duration, 0.5)
+
 
 def _service(
     signals: list[RadarSignal],
     *,
     risk_preview: FakeRiskPreviewEvaluator,
     user_mode: str,
+    action_state_provider=None,
+    strategy_risk_settings_provider=None,
 ) -> RadarService:
+    provider = strategy_risk_settings_provider or (lambda signal, *, user_id: ({}, "not_configured"))
     return RadarService(
         signal_provider=FakeSignalProvider(signals),
         risk_preview_evaluator=risk_preview,
         user_risk_settings_provider=lambda user_id: RiskManagementSettings(radar_display_mode=user_mode),
-        strategy_risk_settings_provider=lambda signal, *, user_id: ({}, "not_configured"),
+        strategy_risk_settings_provider=provider,
+        action_state_provider=action_state_provider,
     )
 
 

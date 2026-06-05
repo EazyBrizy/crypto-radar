@@ -29,6 +29,7 @@ import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
 import type { PendingEntryIntent, RadarSignal, SignalActionState, SignalStatus } from "@/types";
 import type { ExchangeConnection, RadarDisplayMode } from "@/features/server-state/types";
+import { mergeRadarSnapshotWithRealtime } from "@/features/server-state/radar-cache";
 import { isOpenFeedSignal } from "@/utils";
 
 export function RadarRoute() {
@@ -63,8 +64,22 @@ export function RadarRoute() {
   const rejectSignalMutation = useRejectSignalMutation();
 
   useEffect(() => {
-    if (radarQuery.data) replaceSignals(radarQuery.data.signals.filter((signal) => isOpenFeedSignal(signal, nowMs)));
-  }, [nowMs, radarQuery.data, replaceSignals]);
+    if (!radarQuery.data) return;
+    const snapshotReceivedAt = radarQuery.dataUpdatedAt || Date.now();
+    const signalState = useSignalStore.getState();
+    const currentSignals = signalState.signalIds
+      .map((signalId) => signalState.signalsById[signalId])
+      .filter((signal): signal is RadarSignal => Boolean(signal));
+    replaceSignals(
+      mergeRadarSnapshotWithRealtime(
+        currentSignals,
+        radarQuery.data.signals,
+        snapshotReceivedAt,
+        signalState.signalReceivedAtById
+      ),
+      snapshotReceivedAt
+    );
+  }, [radarQuery.data, radarQuery.dataUpdatedAt, replaceSignals]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 30_000);

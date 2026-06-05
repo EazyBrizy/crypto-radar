@@ -8866,6 +8866,7 @@ export interface operations {
                 exchange?: string | null;
                 symbol?: string | null;
                 timeframe?: string | null;
+                include_action_state?: boolean;
             };
             header?: never;
             path?: never;

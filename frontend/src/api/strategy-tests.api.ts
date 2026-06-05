@@ -1,4 +1,4 @@
-import { API_BASE, API_TIMEOUT_MS } from "./client";
+import { requestJson } from "./client";
 import type {
   StrategyTestReport,
   StrategyTestRunDetailResponse,
@@ -79,22 +79,5 @@ function strategyTestReportsPath(params: StrategyTestReportListParams): string {
 }
 
 async function rawJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const controller = new AbortController();
-  const timeout = globalThis.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(apiErrorMessage(data) ?? `API error ${response.status}`);
-    }
-    return data as T;
-  } finally {
-    globalThis.clearTimeout(timeout);
-  }
-}
-
-function apiErrorMessage(value: unknown): string | null {
-  if (!value || typeof value !== "object" || !("detail" in value)) return null;
-  const detail = (value as { detail?: unknown }).detail;
-  return typeof detail === "string" ? detail : null;
+  return requestJson<T>(path, init);
 }

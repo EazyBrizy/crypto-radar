@@ -2,6 +2,11 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import { normalizePendingEntryIntent } from "@/api/mappers";
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
+import {
+  isRadarDashboardQueryKey,
+  isSignalHistoryQueryKey,
+  radarResponseWithSignals
+} from "@/features/server-state/radar-cache";
 import { queryKeys, serverStateKeys } from "@/features/server-state/query-keys";
 import { translateKey, translateReasonCode, type I18nKey } from "@/i18n";
 import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, detectLocale, normalizeLocale, type Locale } from "@/i18n/locale";
@@ -243,7 +248,7 @@ function applySignalSnapshot(queryClient: QueryClient, signals: RadarSignal[]) {
   useSignalStore.getState().replaceSignals(openSignals);
   queryClient.setQueryData(queryKeys.signals, openSignals);
   queryClient.setQueryData(serverStateKeys.signals.history(), signals);
-  queryClient.setQueryData<RadarResponse>(queryKeys.radar, { signals: openSignals });
+  patchRadarDashboardCaches(queryClient, () => radarResponseWithSignals(openSignals));
 }
 
 function applySignalCreated(queryClient: QueryClient, signal: RadarSignal) {
@@ -256,12 +261,12 @@ function applySignalCreated(queryClient: QueryClient, signal: RadarSignal) {
   queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, (current = []) => {
     return isOpenFeedSignal(signal) ? insertSignalToTop(current, signal) : current.filter((item) => item.id !== signal.id);
   });
-  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), (current = []) => insertSignalToTop(current, signal));
-  queryClient.setQueryData<RadarResponse>(queryKeys.radar, (current) => ({
-    signals: isOpenFeedSignal(signal)
+  patchSignalHistoryCaches(queryClient, (current = []) => insertSignalToTop(current, signal));
+  patchRadarDashboardCaches(queryClient, (current) => radarResponseWithSignals(
+    isOpenFeedSignal(signal)
       ? insertSignalToTop(current?.signals ?? [], signal)
       : (current?.signals ?? []).filter((item) => item.id !== signal.id)
-  }));
+  ));
 }
 
 function applySignalUpdated(queryClient: QueryClient, signal: RadarSignal) {
@@ -274,12 +279,12 @@ function applySignalUpdated(queryClient: QueryClient, signal: RadarSignal) {
   queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, (current = []) => {
     return isOpenFeedSignal(signal) ? upsertById(current, signal).filter(isOpenFeedSignal) : current.filter((item) => item.id !== signal.id);
   });
-  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), (current = []) => upsertById(current, signal));
-  queryClient.setQueryData<RadarResponse>(queryKeys.radar, (current) => ({
-    signals: isOpenFeedSignal(signal)
+  patchSignalHistoryCaches(queryClient, (current = []) => upsertById(current, signal));
+  patchRadarDashboardCaches(queryClient, (current) => radarResponseWithSignals(
+    isOpenFeedSignal(signal)
       ? upsertById(current?.signals ?? [], signal).filter(isOpenFeedSignal)
       : (current?.signals ?? []).filter((item) => item.id !== signal.id)
-  }));
+  ));
 }
 
 function applySignalPatch(queryClient: QueryClient, signalId: string, patch: SignalPatch) {
@@ -359,18 +364,25 @@ function pushExchangeDisconnectedNotification(exchange: string, reason?: string 
 }
 
 function applySignalStatus(queryClient: QueryClient, signalId: string, status: SignalStatus) {
+  const existing = findSignalById(queryClient, signalId);
+  const updatedAt = new Date().toISOString();
+  if (existing) {
+    applySignalUpdated(queryClient, { ...existing, status, updated_at: updatedAt });
+    return;
+  }
+
   useSignalStore.getState().updateSignalStatus(signalId, status);
-  patchSignalInCache(queryClient, signalId, { status, updated_at: new Date().toISOString() });
+  patchSignalInCache(queryClient, signalId, { status, updated_at: updatedAt });
 }
 
 function patchSignalInCache(queryClient: QueryClient, signalId: string, patch: SignalPatch) {
   const patchOpenById = (current: RadarSignal[] = []) => patchBySignalId(current, signalId, patch).filter(isOpenFeedSignal);
   const patchHistoryById = (current: RadarSignal[] = []) => patchBySignalId(current, signalId, patch);
   queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, patchOpenById);
-  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), patchHistoryById);
-  queryClient.setQueryData<RadarResponse>(queryKeys.radar, (current) => ({
-    signals: patchBySignalId(current?.signals ?? [], signalId, patch).filter(isOpenFeedSignal)
-  }));
+  patchSignalHistoryCaches(queryClient, patchHistoryById);
+  patchRadarDashboardCaches(queryClient, (current) => radarResponseWithSignals(
+    patchBySignalId(current?.signals ?? [], signalId, patch).filter(isOpenFeedSignal)
+  ));
 }
 
 function applyTradeUpdate(queryClient: QueryClient, trade: TradeJournalEntry) {
@@ -534,6 +546,46 @@ function patchBySignalId(items: RadarSignal[], signalId: string, patch: SignalPa
 
 function insertSignalToTop<T extends { id: string }>(items: T[], item: T): T[] {
   return [item, ...items.filter((current) => current.id !== item.id)];
+}
+
+function patchRadarDashboardCaches(
+  queryClient: QueryClient,
+  updater: (current: RadarResponse | undefined) => RadarResponse,
+) {
+  queryClient.setQueriesData<RadarResponse>(
+    { predicate: (query) => isRadarDashboardQueryKey(query.queryKey) },
+    (current) => updater(current)
+  );
+  queryClient.setQueryData<RadarResponse>(queryKeys.radar, (current) => updater(current));
+}
+
+function patchSignalHistoryCaches(
+  queryClient: QueryClient,
+  updater: (current: RadarSignal[] | undefined) => RadarSignal[],
+) {
+  queryClient.setQueriesData<RadarSignal[]>(
+    { predicate: (query) => isSignalHistoryQueryKey(query.queryKey) },
+    (current) => updater(current)
+  );
+  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), (current) => updater(current));
+}
+
+function findSignalById(queryClient: QueryClient, signalId: string): RadarSignal | null {
+  const signal = useSignalStore.getState().signalsById[signalId];
+  if (signal) return signal;
+  const openSignal = queryClient.getQueryData<RadarSignal[]>(queryKeys.signals)?.find((item) => item.id === signalId);
+  if (openSignal) return openSignal;
+  const radarQueries = queryClient.getQueryCache().findAll({
+    predicate: (query) => isRadarDashboardQueryKey(query.queryKey)
+  });
+  for (const query of radarQueries) {
+    const data = query.state.data as RadarResponse | undefined;
+    const radarSignal = data?.signals.find((item) => item.id === signalId);
+    if (radarSignal) return radarSignal;
+  }
+  const historySignal = queryClient.getQueryData<RadarSignal[]>(serverStateKeys.signals.history())
+    ?.find((item) => item.id === signalId);
+  return historySignal ?? null;
 }
 
 function isStandardRealtimeEvent(message: RealtimeMessage): message is StandardRealtimeEvent {

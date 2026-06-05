@@ -6,6 +6,8 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
+
 from app.core.redis_client import get_redis_client
 
 
@@ -51,15 +53,16 @@ class RedisMessageBroker:
         self._subscriber_loops.pop(queue, None)
 
     async def publish(self, event: RealtimeEvent) -> None:
-        self._remember_local_event(event)
-        self._publish_local(event)
+        encoded_event = encode_realtime_event(event)
+        self._remember_local_event(encoded_event)
+        self._publish_local(encoded_event)
         if not self._enable_redis:
             return
         try:
             await asyncio.to_thread(
                 self._redis_client_factory().publish,
                 self._channel,
-                json.dumps(event, ensure_ascii=False, default=str, separators=(",", ":")),
+                json.dumps(encoded_event, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
             )
         except Exception as exc:
             logger.warning("Redis realtime publish failed: %s", exc)
@@ -159,6 +162,34 @@ def _running_loop_or_none() -> asyncio.AbstractEventLoop | None:
         return asyncio.get_running_loop()
     except RuntimeError:
         return None
+
+
+def encode_realtime_event(event: RealtimeEvent) -> RealtimeEvent:
+    encoded = jsonable_encoder(event)
+    if not isinstance(encoded, dict):
+        raise TypeError("Realtime event must encode to a JSON object")
+    _assert_json_compatible(encoded)
+    return encoded
+
+
+def _assert_json_compatible(value: Any) -> None:
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        if value != value or value in {float("inf"), float("-inf")}:
+            raise ValueError("Realtime event contains a non-finite float")
+        return
+    if isinstance(value, list):
+        for item in value:
+            _assert_json_compatible(item)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("Realtime event object keys must be strings")
+            _assert_json_compatible(item)
+        return
+    raise TypeError(f"Realtime event is not JSON-compatible: {type(value).__name__}")
 
 
 def _decode_pubsub_event(data: Any) -> RealtimeEvent | None:

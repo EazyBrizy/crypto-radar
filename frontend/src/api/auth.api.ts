@@ -1,4 +1,4 @@
-import { API_BASE, API_TIMEOUT_MS } from "./client";
+import { API_BASE, apiFetch } from "./client";
 import {
   AuthSessionSchema,
   DeviceSessionSchema,
@@ -126,34 +126,15 @@ async function exchangeApiKeySecurity(): Promise<ExchangeApiKeySecurityStatus> {
 }
 
 async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = globalThis.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-  const upstreamSignal = init.signal;
-
-  if (upstreamSignal) {
-    if (upstreamSignal.aborted) controller.abort();
-    upstreamSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  const headers = new Headers(init.headers);
+  for (const [key, value] of Object.entries(jsonHeaders)) {
+    if (!headers.has(key)) headers.set(key, value);
   }
-
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      credentials: "include",
-      headers: {
-        ...jsonHeaders,
-        ...init.headers
-      },
-      signal: controller.signal
-    });
-  } catch (exc) {
-    if (exc instanceof DOMException && exc.name === "AbortError") {
-      throw new Error(`Auth API request timed out after ${API_TIMEOUT_MS}ms at ${API_BASE}.`);
-    }
-    throw exc;
-  } finally {
-    globalThis.clearTimeout(timeout);
-  }
+  const response = await apiFetch(`${API_BASE}${path}`, {
+    ...init,
+    credentials: "include",
+    headers
+  });
 
   if (!response.ok && response.status !== 401) {
     throw new Error(await getApiErrorMessage(response));

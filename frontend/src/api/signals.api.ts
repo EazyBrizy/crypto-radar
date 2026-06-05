@@ -23,6 +23,7 @@ import {
 type RadarRequestOptions = {
   radarDisplayMode?: RadarDisplayMode | null;
   userId?: string | null;
+  includeActionState?: boolean;
 };
 
 type PendingEntryInput = {
@@ -87,12 +88,15 @@ export const signalsApi = {
     return normalizeSignalActionResponse(response);
   },
   async radar(options: RadarRequestOptions = {}): Promise<RadarResponse> {
-    const query: { user_id?: string; radar_display_mode?: RadarDisplayMode } = {};
+    const query: { user_id?: string; radar_display_mode?: RadarDisplayMode; include_action_state?: boolean } = {};
     if (options.userId) {
       query.user_id = options.userId;
     }
     if (options.radarDisplayMode) {
       query.radar_display_mode = options.radarDisplayMode;
+    }
+    if (options.includeActionState) {
+      query.include_action_state = true;
     }
     const response = await request(() =>
       openApiClient.GET("/api/v1/radar", {

@@ -1,6 +1,10 @@
+import math
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel
 
 from app.schemas.notification import NotificationResponse
 from app.schemas.pending_entry import PendingEntryIntentRead
@@ -39,7 +43,7 @@ def create_realtime_event(
         "type": event_type,
         "version": version,
         "timestamp": _utc_timestamp(),
-        "payload": payload,
+        "payload": _to_json_compatible(payload),
     }
 
 
@@ -85,10 +89,11 @@ def trade_closed_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any
 
 
 def trade_invalidation_event(alert: TradeInvalidationAlert) -> dict[str, Any]:
+    alert_payload = _model_payload(alert)
     return create_realtime_event(
         "trade.invalidation",
         {
-            "alert": alert,
+            "alert": alert_payload,
             "tradeId": alert.trade_id,
             "signalId": alert.signal_id,
             "pair": alert.symbol,
@@ -103,6 +108,7 @@ def trade_invalidation_event(alert: TradeInvalidationAlert) -> dict[str, Any]:
 
 def take_profit_hit_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any]:
     target_event = _latest_lifecycle_event(trade, {"partial_take_profit", "take_profit"})
+    trade_payload = _model_payload(trade)
     return create_realtime_event(
         "take_profit.hit",
         {
@@ -115,12 +121,13 @@ def take_profit_hit_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, 
             "targetPrice": target_event.get("metadata", {}).get("trigger_price")
             if target_event
             else (trade.take_profit[-1] if trade.take_profit else None),
-            "trade": trade,
+            "trade": trade_payload,
         },
     )
 
 
 def stop_loss_hit_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any]:
+    trade_payload = _model_payload(trade)
     return create_realtime_event(
         "stop_loss.hit",
         {
@@ -130,7 +137,7 @@ def stop_loss_hit_event(trade: VirtualTrade | TradeJournalEntry) -> dict[str, An
             "exchange": trade.exchange,
             "price": trade.exit_price or trade.current_price,
             "stopLoss": trade.current_stop_loss or trade.stop_loss,
-            "trade": trade,
+            "trade": trade_payload,
         },
     )
 
@@ -186,7 +193,7 @@ def notification_created_event(notification: NotificationResponse) -> dict[str, 
             "kind": _notification_kind(notification.type),
             "title": notification.title,
             "body": notification.body,
-            "payload": notification.payload,
+            "payload": payload["payload"],
             "isRead": notification.is_read,
             "createdAt": notification.created_at.isoformat(),
         },
@@ -216,8 +223,9 @@ def _signal_event(event_type: Literal["signal.created", "signal.updated"], signa
 
 
 def _signal_payload(signal: RadarSignal) -> dict[str, Any]:
+    signal_payload = _model_payload(signal)
     return {
-        "signal": signal,
+        "signal": signal_payload,
         "signalId": signal.id,
         "pair": signal.symbol,
         "exchange": signal.exchange.upper(),
@@ -240,8 +248,9 @@ def _signal_payload(signal: RadarSignal) -> dict[str, Any]:
 
 
 def _trade_payload(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any]:
+    trade_payload = _model_payload(trade)
     return {
-        "trade": trade,
+        "trade": trade_payload,
         "tradeId": trade.id,
         "signalId": trade.signal_id,
         "pair": trade.symbol,
@@ -263,8 +272,8 @@ def _trade_payload(trade: VirtualTrade | TradeJournalEntry) -> dict[str, Any]:
         "exitFees": trade.exit_fees,
         "stopMovedToBreakeven": trade.stop_moved_to_breakeven,
         "trailingActive": trade.trailing_active,
-        "targetStates": trade.target_states,
-        "lifecycleEvents": trade.lifecycle_events,
+        "targetStates": trade_payload["target_states"],
+        "lifecycleEvents": trade_payload["lifecycle_events"],
         "riskAmount": trade.risk_amount,
         "riskReward": trade.risk_reward,
         "pnl": trade.pnl,
@@ -282,6 +291,35 @@ def _latest_lifecycle_event(
         if isinstance(payload, dict) and payload.get("event_type") in event_types:
             return payload
     return {}
+
+
+def _model_payload(value: BaseModel) -> dict[str, Any]:
+    payload = value.model_dump(mode="json")
+    if not isinstance(payload, dict):
+        raise TypeError(f"{type(value).__name__}.model_dump(mode='json') did not return a dict")
+    return payload
+
+
+def _to_json_compatible(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Realtime event payload contains a non-finite float")
+        return value
+    if isinstance(value, BaseModel):
+        return _to_json_compatible(value.model_dump(mode="json"))
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _to_json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_compatible(item) for item in value]
+    raise TypeError(f"Realtime event payload is not JSON-compatible: {type(value).__name__}")
 
 
 def _utc_timestamp() -> str:

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     otel_service_name: str = "crypto-radar-backend"
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     prometheus_metrics_enabled: bool = True
+    fastapi_slow_request_ms: int = 1000
 
     enable_live_trading: bool = False
     enable_bybit_live_order_placement: bool = False

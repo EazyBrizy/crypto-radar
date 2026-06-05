@@ -5570,7 +5570,14 @@ export interface operations {
     };
     get_radar_api_v1_radar_get: {
         parameters: {
-            query?: never;
+            query?: {
+                user_id?: string | null;
+                radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
+                exchange?: string | null;
+                symbol?: string | null;
+                timeframe?: string | null;
+                include_action_state?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;

@@ -21,6 +21,7 @@ async def get_radar(
     exchange: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
     timeframe: str | None = Query(default=None),
+    include_action_state: bool = Query(default=False),
 ) -> RadarResponse:
     try:
         current_user = current_user_identity_service.resolve_from_request(request)
@@ -33,6 +34,7 @@ async def get_radar(
         user_id=user_id or current_user.user_id,
         mode=radar_display_mode,
         filters=RadarFilters(exchange=exchange, symbol=symbol, timeframe=timeframe),
+        include_action_state=include_action_state,
     )
 
 

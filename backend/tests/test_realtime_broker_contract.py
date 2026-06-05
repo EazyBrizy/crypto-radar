@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import unittest
 
 from app.services.message_broker import RedisMessageBroker
@@ -18,6 +19,12 @@ class JsonCollectingWebSocket:
 
 
 class RealtimeBrokerContractTest(unittest.IsolatedAsyncioTestCase):
+    def test_broker_publish_does_not_fallback_to_default_str(self) -> None:
+        source = inspect.getsource(RedisMessageBroker.publish)
+
+        self.assertIn("encode_realtime_event", source)
+        self.assertNotIn("default=str", source)
+
     async def test_gateway_pushes_broker_events_to_subscribed_clients(self) -> None:
         broker = RedisMessageBroker(enable_redis=False)
         gateway = RealtimeGateway()

@@ -14,6 +14,7 @@ from app.core.database import dispose_database_engine
 from app.core.health import get_storage_health
 from app.core.redis_client import close_redis_client
 from app.core.config import settings
+from app.core.request_timing import add_request_timing_middleware
 from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
 from app.services.realtime_gateway import realtime_gateway
 from app.workers.derivative_snapshot_worker import DerivativeSnapshotSyncRunner
@@ -118,6 +119,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Crypto Radar API", lifespan=lifespan)
+add_request_timing_middleware(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

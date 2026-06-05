@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Any, Mapping
 
 from app.domain.signal_status import (
+    is_execution_candidate_status,
     is_market_opportunity_status,
     is_terminal_signal_status,
     is_waiting_entry_status,
@@ -111,9 +112,9 @@ def build_signal_details_view(
             risk_reward_blocked=_rr_state(signal) == "blocked",
             risk_reward_warning=_rr_reason(signal) if _rr_state(signal) == "warning" else None,
             forming_candle=signal.candle_state == "open",
-            open_candle_allowed=bool(action_state and action_state.can_enter_now),
+            open_candle_allowed=bool(can_enter_now),
             forming_reason=_forming_reason(signal, action_state),
-            status_allows_trade=bool(action_state and action_state.can_enter_now),
+            status_allows_trade=bool(can_enter_now),
             trade_plan_complete=bool(trade_plan.trade_plan_complete),
             risk_reward_ok=trade_plan.selected_rr is not None,
             is_market_opportunity=is_market_opportunity_status(signal.status),
@@ -125,7 +126,7 @@ def build_signal_details_view(
             can_enter=can_enter_now,
             quality_gate_status=None,
             impact_risk=None,
-            status_allows_trade=bool(action_state and action_state.can_enter_now),
+            status_allows_trade=bool(can_enter_now),
         ),
         top_reasons=_dedupe_strings([
             _forming_reason(signal, action_state),
@@ -317,6 +318,8 @@ def _primary_status(
             return "blocked"
         if action_state.can_arm_pending:
             return "waiting_entry"
+    if action_state is None and signal.can_enter is True and is_execution_candidate_status(signal.status):
+        return "execution_ready"
     if signal.status == "watchlist":
         return "watchlist"
     if is_waiting_entry_status(signal.status):
@@ -361,6 +364,8 @@ def _primary_action_label(
 def _status_label(signal: RadarSignal, action_state: SignalActionState | None) -> str:
     if action_state is not None and action_state.can_enter_now:
         return "Execution-ready"
+    if action_state is None and signal.can_enter is True and is_execution_candidate_status(signal.status):
+        return "Execution-ready"
     if signal.status == "entry_touched":
         return "Entry touched"
     if is_waiting_entry_status(signal.status):
@@ -370,6 +375,8 @@ def _status_label(signal: RadarSignal, action_state: SignalActionState | None) -
 
 def _status_tone(signal: RadarSignal, action_state: SignalActionState | None) -> ViewTone:
     if action_state is not None and action_state.can_enter_now:
+        return "green"
+    if action_state is None and signal.can_enter is True and is_execution_candidate_status(signal.status):
         return "green"
     if action_state is not None and action_state.disabled_reason_code:
         return "red"
@@ -385,6 +392,8 @@ def _status_tone(signal: RadarSignal, action_state: SignalActionState | None) ->
 def _opportunity_label(signal: RadarSignal, action_state: SignalActionState | None) -> str:
     if action_state is not None and action_state.can_enter_now:
         return "Execution-ready"
+    if action_state is None and signal.can_enter is True and is_execution_candidate_status(signal.status):
+        return "Execution-ready"
     if action_state is not None and action_state.disabled_reason_code:
         return "Risk blocked"
     if signal.status == "entry_touched":
@@ -398,6 +407,8 @@ def _opportunity_label(signal: RadarSignal, action_state: SignalActionState | No
 
 def _opportunity_tone(signal: RadarSignal, action_state: SignalActionState | None) -> ViewTone:
     if action_state is not None and action_state.can_enter_now:
+        return "green"
+    if action_state is None and signal.can_enter is True and is_execution_candidate_status(signal.status):
         return "green"
     if action_state is not None and action_state.disabled_reason_code:
         return "red"

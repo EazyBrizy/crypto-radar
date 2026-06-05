@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
 import { useSignalStore } from "@/stores/signal-store";
@@ -18,6 +18,7 @@ import type { ExchangeConnection } from "@/features/server-state/types";
 const radarRouteMockState = vi.hoisted(() => ({
   pendingEntries: [] as PendingEntryIntent[],
   pendingEntryHistory: [] as PendingEntryIntent[],
+  radarDataUpdatedAt: 0,
   radarResponse: { signals: [] as unknown[] },
   refetch: vi.fn(),
   mutateAsync: vi.fn()
@@ -34,6 +35,7 @@ vi.mock("@/auth/use-auth", () => ({
 vi.mock("@/hooks/use-radar-queries", () => {
   const query = (data: unknown = null) => ({
     data,
+    dataUpdatedAt: radarRouteMockState.radarDataUpdatedAt,
     error: null,
     isFetching: false,
     isLoading: false,
@@ -196,11 +198,16 @@ const baseSignal: RadarSignal = {
 beforeEach(() => {
   radarRouteMockState.pendingEntries = [];
   radarRouteMockState.pendingEntryHistory = [];
+  radarRouteMockState.radarDataUpdatedAt = Date.parse("2026-06-05T09:59:00.000Z");
   radarRouteMockState.radarResponse = { signals: [] };
   radarRouteMockState.refetch.mockResolvedValue(null);
   radarRouteMockState.mutateAsync.mockResolvedValue(null);
   useSignalStore.getState().clearSignals();
   useUiStore.setState({ selectedSignalId: null, signalFilter: "all" });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function signalWithStatus(
@@ -284,6 +291,32 @@ function routeSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {
 }
 
 describe("RadarRoute selection", () => {
+  it("does not reapply an empty REST snapshot over realtime signals on clock ticks", async () => {
+    vi.useFakeTimers({ now: new Date("2026-06-05T10:00:00.000Z") });
+    radarRouteMockState.radarResponse = { signals: [] };
+
+    render(createElement(RadarRoute));
+
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("");
+
+    await act(async () => {
+      vi.setSystemTime(new Date("2026-06-05T10:00:05.000Z"));
+      useSignalStore.getState().addSignal(routeSignal({
+        id: "sig_realtime",
+        expires_at: "2026-06-05T11:00:00.000Z",
+        updated_at: "2026-06-05T10:00:05.000Z"
+      }));
+    });
+
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_realtime");
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_realtime");
+  });
+
   it("does not change the selected signal when a new signal arrives after manual selection", async () => {
     const signalA = routeSignal({ id: "sig_a", direction: "long", symbol: "AAAUSDT" });
     const signalB = routeSignal({ id: "sig_b", direction: "short", symbol: "BBBUSDT" });

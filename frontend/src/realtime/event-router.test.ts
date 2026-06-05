@@ -138,6 +138,42 @@ describe("createRealtimeEventRouter signal feed updates", () => {
     expect(queryClient.getQueryData<RadarSignal[]>(queryKeys.signals)?.[0]?.id).toBe("sig_1");
   });
 
+  it("updates active radar dashboard query caches and keeps RadarResponse summary", () => {
+    const queryClient = new QueryClient();
+    const dashboardKey = serverStateKeys.radar.dashboard("all_market_opportunities", "demo_user");
+    queryClient.setQueryData<RadarResponse>(dashboardKey, { signals: [], summary: radarSummary() });
+    const router = createRealtimeEventRouter({ queryClient, onRealtimeEvent: () => undefined });
+
+    router.route({
+      id: "evt_dashboard_created",
+      type: "signal.created",
+      version: 1,
+      timestamp: "2026-05-25T10:12:42.231Z",
+      payload: {
+        signal: baseSignal,
+        signalId: baseSignal.id,
+        pair: baseSignal.symbol,
+        exchange: baseSignal.exchange,
+        side: "LONG",
+        strategy: baseSignal.strategy,
+        confidence: 84,
+        risk: "MEDIUM",
+        entryZone: { from: baseSignal.entry_min, to: baseSignal.entry_max },
+        stopLoss: baseSignal.stop_loss,
+        takeProfit: [baseSignal.take_profit_1, baseSignal.take_profit_2].filter((price): price is number => typeof price === "number"),
+        timeframe: baseSignal.timeframe
+      }
+    });
+
+    const dashboard = queryClient.getQueryData<RadarResponse>(dashboardKey);
+    expect(dashboard?.signals.map((signal) => signal.id)).toEqual(["sig_1"]);
+    expect(dashboard?.summary).toMatchObject({
+      total_signals: 1,
+      high_confidence_signals: 1
+    });
+    expect(queryClient.getQueryData<RadarResponse>(queryKeys.radar)?.summary).toBeDefined();
+  });
+
   it("applies signal.updated patches without replacing the whole feed", () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(queryKeys.signals, [baseSignal]);
@@ -208,7 +244,10 @@ describe("createRealtimeEventRouter signal feed updates", () => {
 
   it("removes expired signals from the active feed", () => {
     const queryClient = new QueryClient();
+    const dashboardKey = serverStateKeys.radar.dashboard("all_market_opportunities", "demo_user");
     queryClient.setQueryData(queryKeys.signals, [baseSignal]);
+    queryClient.setQueryData<RadarResponse>(dashboardKey, { signals: [baseSignal], summary: radarSummary([baseSignal]) });
+    queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), []);
     useSignalStore.getState().addSignal(baseSignal);
     const router = createRealtimeEventRouter({ queryClient, onRealtimeEvent: () => undefined });
 
@@ -225,6 +264,14 @@ describe("createRealtimeEventRouter signal feed updates", () => {
 
     expect(useSignalStore.getState().signalIds).toEqual([]);
     expect(queryClient.getQueryData<RadarSignal[]>(queryKeys.signals)).toEqual([]);
+    expect(queryClient.getQueryData<RadarResponse>(dashboardKey)).toMatchObject({
+      signals: [],
+      summary: { total_signals: 0 }
+    });
+    expect(queryClient.getQueryData<RadarSignal[]>(serverStateKeys.signals.history())?.[0]).toMatchObject({
+      id: "sig_1",
+      status: "expired"
+    });
   });
 
   it("routes persisted notification.created events into the notification store", () => {
@@ -260,6 +307,8 @@ describe("createRealtimeEventRouter signal feed updates", () => {
 
     expect(useNotificationStore.getState().notifications[0]?.id).toBe("ntf_1");
     expect(useNotificationStore.getState().notifications[0]?.kind).toBe("alert");
+    expect(useSignalStore.getState().signalIds).toEqual([]);
+    expect(queryClient.getQueryData<RadarResponse>(queryKeys.radar)).toBeUndefined();
     expect(queryClient.isFetching({ queryKey: serverStateKeys.notifications.all() })).toBe(0);
   });
 
@@ -377,6 +426,16 @@ describe("createRealtimeEventRouter signal feed updates", () => {
     });
   });
 });
+
+function radarSummary(signals: RadarSignal[] = []) {
+  return {
+    total_signals: signals.length,
+    execution_ready_signals: 0,
+    high_confidence_signals: signals.filter((signal) => signal.score >= 80).length,
+    positive_edge_signals: 0,
+    blocked_ideas: 0
+  };
+}
 
 function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntryIntent {
   return {

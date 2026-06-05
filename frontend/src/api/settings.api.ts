@@ -15,7 +15,7 @@ import type {
 } from "@/features/server-state/types";
 import type { RadarConfig, RadarStatus, RiskStateResponse } from "@/types";
 import { billingApi } from "./billing.api";
-import { API_BASE, openApiClient, request } from "./client";
+import { openApiClient, request, requestJson } from "./client";
 import {
   normalizeAlertRule,
   normalizeConfig,
@@ -216,17 +216,5 @@ function marketUniverseQueryParams(query: MarketUniversePairsQuery): Partial<Mar
 }
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {})
-    }
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null);
-    const detail = payload && typeof payload === "object" && "detail" in payload ? payload.detail : null;
-    throw new Error(typeof detail === "string" ? detail : `API error ${response.status}`);
-  }
-  return response.json() as Promise<T>;
+  return requestJson<T>(path, init);
 }

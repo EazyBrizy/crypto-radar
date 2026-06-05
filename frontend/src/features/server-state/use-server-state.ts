@@ -36,6 +36,7 @@ import type {
   TradeJournalResponse
 } from "@/types";
 import { isOpenFeedSignal } from "@/utils";
+import { radarResponseWithSignals } from "./radar-cache";
 import {
   queryKeys,
   serverStateKeys,
@@ -953,7 +954,7 @@ export function applySignalSnapshot(queryClient: QueryClient, signals: RadarSign
     openSignals.filter((signal) => isExecutionCandidateStatus(signal.status))
   );
   queryClient.setQueryData(serverStateKeys.signals.history(), signals);
-  queryClient.setQueryData<RadarResponse>(queryKeys.radar, { signals: openSignals });
+  queryClient.setQueryData<RadarResponse>(queryKeys.radar, radarResponseWithSignals(openSignals));
 }
 
 export function applyTradeSnapshot(queryClient: QueryClient, trades: TradeJournalResponse) {

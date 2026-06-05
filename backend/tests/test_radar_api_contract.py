@@ -3,6 +3,7 @@ import unittest
 
 from app.api.v1.radar import get_radar
 from app.schemas.signal import RadarResponse
+from starlette.requests import Request
 
 
 class _FakeRadarService:
@@ -15,6 +16,7 @@ class _FakeRadarService:
         user_id: str = "demo_user",
         mode: str | None = None,
         filters=None,
+        include_action_state: bool = False,
     ) -> RadarResponse:
         self.calls.append(
             {
@@ -23,6 +25,7 @@ class _FakeRadarService:
                 "exchange": filters.exchange,
                 "symbol": filters.symbol,
                 "timeframe": filters.timeframe,
+                "include_action_state": include_action_state,
             }
         )
         return RadarResponse(signals=[])
@@ -38,11 +41,13 @@ class RadarApiContractTest(unittest.IsolatedAsyncioTestCase):
         radar_api.radar_service = fake_service
         try:
             response = await get_radar(
+                _request(),
                 user_id="demo_user",
                 radar_display_mode="execution_ready",
                 exchange="bybit",
                 symbol="BTCUSDT",
                 timeframe="15m",
+                include_action_state=True,
             )
         finally:
             radar_api.radar_service = original_service
@@ -57,6 +62,7 @@ class RadarApiContractTest(unittest.IsolatedAsyncioTestCase):
                     "exchange": "bybit",
                     "symbol": "BTCUSDT",
                     "timeframe": "15m",
+                    "include_action_state": True,
                 }
             ],
         )
@@ -68,6 +74,17 @@ class RadarApiContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("RiskGate", source)
         self.assertNotIn("if ", source)
         self.assertNotIn("for ", source)
+
+
+def _request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/radar",
+            "headers": [],
+        }
+    )
 
 
 if __name__ == "__main__":

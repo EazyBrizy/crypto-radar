@@ -2533,6 +2533,16 @@
               ],
               "title": "Timeframe"
             }
+          },
+          {
+            "name": "include_action_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Action State"
+            }
           }
         ],
         "responses": {

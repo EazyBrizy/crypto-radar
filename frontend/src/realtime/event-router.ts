@@ -364,6 +364,9 @@ function applyPendingEntryUpdated(queryClient: QueryClient, payload: PendingEntr
     const activeKey = serverStateKeys.signals.pendingEntry(payload.signal_id, userId);
     const current = queryClient.getQueryData<PendingEntryIntent | null>(activeKey);
     const updated = patchPendingEntryIntent(current, payload);
+    const activeQueueKey = serverStateKeys.signals.pendingEntries("active", userId);
+    const historyQueueKey = serverStateKeys.signals.pendingEntries("history", userId);
+    patchPendingEntryQueue(queryClient, activeQueueKey, historyQueueKey, payload, updated);
     if (updated) {
       queryClient.setQueryData<PendingEntryIntent | null>(
         activeKey,
@@ -478,12 +481,59 @@ function patchPendingEntryIntent(
   };
 }
 
+function patchPendingEntryQueue(
+  queryClient: QueryClient,
+  activeQueueKey: ReturnType<typeof serverStateKeys.signals.pendingEntries>,
+  historyQueueKey: ReturnType<typeof serverStateKeys.signals.pendingEntries>,
+  payload: PendingEntryUpdatedPayload,
+  fallback: PendingEntryIntent | null,
+): PendingEntryIntent | null {
+  const activeQueue = queryClient.getQueryData<PendingEntryIntent[]>(activeQueueKey);
+  const activeIntent = activeQueue?.find((intent) => intent.id === payload.pending_entry_id) ?? null;
+  const updated = patchPendingEntryIntent(activeIntent, payload) ?? fallback;
+
+  if (isActivePendingEntryStatus(payload.status)) {
+    if (updated) {
+      queryClient.setQueryData<PendingEntryIntent[]>(activeQueueKey, (current = []) =>
+        upsertPendingEntryActiveQueue(current, updated)
+      );
+    }
+  } else {
+    queryClient.setQueryData<PendingEntryIntent[]>(activeQueueKey, (current = []) =>
+      current.filter((intent) => intent.id !== payload.pending_entry_id)
+    );
+  }
+
+  if (isTerminalPendingEntryStatus(payload.status) && updated) {
+    queryClient.setQueryData<PendingEntryIntent[]>(historyQueueKey, (history) => upsertPendingEntryHistory(history, updated));
+  }
+
+  void queryClient.invalidateQueries({ queryKey: activeQueueKey });
+  if (isTerminalPendingEntryStatus(payload.status)) {
+    void queryClient.invalidateQueries({ queryKey: historyQueueKey });
+  }
+  return updated;
+}
+
 function upsertPendingEntryHistory(
   current: PendingEntryIntent[] | undefined,
   intent: PendingEntryIntent,
 ): PendingEntryIntent[] {
   return [intent, ...(current ?? []).filter((item) => item.id !== intent.id)]
     .sort((left, right) => pendingEntryUpdatedAt(right) - pendingEntryUpdatedAt(left));
+}
+
+function upsertPendingEntryActiveQueue(
+  current: PendingEntryIntent[] | undefined,
+  intent: PendingEntryIntent,
+): PendingEntryIntent[] {
+  return [intent, ...(current ?? []).filter((item) => item.id !== intent.id)]
+    .sort((left, right) => pendingEntryCreatedAt(left) - pendingEntryCreatedAt(right));
+}
+
+function pendingEntryCreatedAt(intent: PendingEntryIntent): number {
+  const createdAt = Date.parse(intent.created_at);
+  return Number.isFinite(createdAt) ? createdAt : pendingEntryUpdatedAt(intent);
 }
 
 function pendingEntryUpdatedAt(intent: PendingEntryIntent): number {

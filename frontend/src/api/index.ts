@@ -38,6 +38,7 @@ export const api = {
   confirmReal: signalsApi.confirmReal,
   pendingEntry: signalsApi.pendingEntry,
   pendingEntryHistory: signalsApi.pendingEntryHistory,
+  pendingEntries: signalsApi.pendingEntries,
   armPendingEntry: signalsApi.armPendingEntry,
   cancelPendingEntry: signalsApi.cancelPendingEntry,
   reconfirmPendingEntry: signalsApi.reconfirmPendingEntry,

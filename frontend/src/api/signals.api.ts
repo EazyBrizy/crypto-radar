@@ -25,6 +25,8 @@ type PendingEntryInput = {
   connectionId?: string | null;
 };
 
+type PendingEntryListScope = "active" | "history";
+
 type RealConfirmInput = {
   signalId: string;
   connectionId?: string | null;
@@ -119,6 +121,15 @@ export const signalsApi = {
     const params = userQuery({ userId });
     const response = await requestJson<PendingEntryIntentReadDto[]>(
       `/api/v1/signals/${encodeURIComponent(signalId)}/pending-entry/history${querySuffix(params)}`
+    );
+    return response.map(normalizePendingEntryIntent);
+  },
+  async pendingEntries(options: { userId?: string | null; scope?: PendingEntryListScope; limit?: number } = {}): Promise<PendingEntryIntent[]> {
+    const params = userQuery({ userId: options.userId });
+    params.set("scope", options.scope ?? "active");
+    if (options.limit) params.set("limit", String(options.limit));
+    const response = await requestJson<PendingEntryIntentReadDto[]>(
+      `/api/v1/pending-entry${querySuffix(params)}`
     );
     return response.map(normalizePendingEntryIntent);
   },

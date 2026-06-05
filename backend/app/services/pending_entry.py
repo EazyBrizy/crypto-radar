@@ -88,6 +88,32 @@ class PendingEntryService:
     def list_pending_for_market(self, exchange: str, symbol: str) -> list[PendingEntryIntentRead]:
         return self._repository.list_pending_for_market(exchange, symbol)
 
+    def list_active_for_user(
+        self,
+        *,
+        user_id: str | UUID,
+        mode: PendingEntryIntentMode | None = None,
+        limit: int = 100,
+    ) -> list[PendingEntryIntentRead]:
+        user_uuid = self._resolve_user_uuid(user_id)
+        list_active = getattr(self._repository, "list_active_for_user", None)
+        if list_active is None:
+            return []
+        return list_active(user_id=user_uuid, mode=mode, limit=limit)
+
+    def list_history_for_user(
+        self,
+        *,
+        user_id: str | UUID,
+        mode: PendingEntryIntentMode | None = None,
+        limit: int = 50,
+    ) -> list[PendingEntryIntentRead]:
+        user_uuid = self._resolve_user_uuid(user_id)
+        list_history = getattr(self._repository, "list_history_for_user", None)
+        if list_history is None:
+            return []
+        return list_history(user_id=user_uuid, mode=mode, limit=limit)
+
     def transition_status(
         self,
         intent_id: str | UUID,

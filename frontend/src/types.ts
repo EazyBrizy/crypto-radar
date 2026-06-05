@@ -323,6 +323,9 @@ export interface PendingEntryIntent {
   filled_at: string | null;
   filled_trade_id: string | null;
   failure_reason: string | null;
+  current_price?: number | null;
+  reason_code?: string | null;
+  localized_reason?: string | null;
 }
 
 export interface SignalActionBlocker {

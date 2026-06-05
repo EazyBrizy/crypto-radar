@@ -320,8 +320,12 @@ describe("createRealtimeEventRouter signal feed updates", () => {
     const intent = pendingIntent();
     const activeKey = serverStateKeys.signals.pendingEntry("sig_1", "user_1");
     const historyKey = serverStateKeys.signals.pendingEntryHistory("sig_1", "user_1");
+    const activeQueueKey = serverStateKeys.signals.pendingEntries("active", "user_1");
+    const historyQueueKey = serverStateKeys.signals.pendingEntries("history", "user_1");
     queryClient.setQueryData(activeKey, intent);
     queryClient.setQueryData(historyKey, []);
+    queryClient.setQueryData(activeQueueKey, [intent]);
+    queryClient.setQueryData(historyQueueKey, []);
     queryClient.setQueryData(queryKeys.signals, [{
       ...baseSignal,
       auto_entry: {
@@ -378,10 +382,18 @@ describe("createRealtimeEventRouter signal feed updates", () => {
       status: "filled",
       failure_reason: "Virtual trade filled."
     });
+    expect(queryClient.getQueryData<PendingEntryIntent[]>(activeQueueKey)).toEqual([]);
+    expect(queryClient.getQueryData<PendingEntryIntent[]>(historyQueueKey)?.[0]).toMatchObject({
+      id: "intent_1",
+      status: "filled",
+      failure_reason: "Virtual trade filled."
+    });
     expect(useSignalStore.getState().signalsById.sig_1.auto_entry?.status).toBe("filled");
     expect(queryClient.getQueryData<RadarSignal[]>(queryKeys.signals)?.[0]?.auto_entry?.status).toBe("filled");
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: activeKey });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: historyKey });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: activeQueueKey });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: historyQueueKey });
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: serverStateKeys.signals.pendingEntry("sig_1", "demo_user")
     });

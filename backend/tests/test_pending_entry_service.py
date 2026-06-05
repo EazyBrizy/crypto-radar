@@ -269,6 +269,24 @@ class PendingEntryServiceTest(unittest.TestCase):
 
         self.assertEqual([intent.id for intent in intents], [created.id])
 
+    def test_list_user_queue_accepts_usr_demo_alias(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = self._service(repository)
+        active = service.arm_from_signal(
+            user_id="demo_user",
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id="demo_user", auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        cancelled = service.cancel_intent(active.id, user_id="demo_user")
+
+        active_queue = service.list_active_for_user(user_id="usr_demo")
+        history = service.list_history_for_user(user_id="usr_demo")
+
+        self.assertEqual(active_queue, [])
+        self.assertEqual([intent.id for intent in history], [cancelled.id])
+
     def test_cancel_accepts_usr_demo_alias(self) -> None:
         repository = _FakePendingEntryRepository()
         service = self._service(repository)
@@ -470,6 +488,36 @@ class _FakePendingEntryRepository:
             and intent.mode == mode
             and intent.status in {"filled", "failed", "cancelled", "expired"}
         ]
+
+    def list_active_for_user(
+        self,
+        *,
+        user_id: UUID,
+        mode: str | None = None,
+        limit: int = 100,
+    ) -> list[PendingEntryIntentRead]:
+        return [
+            intent
+            for intent in self.records
+            if intent.user_id == user_id
+            and (mode is None or intent.mode == mode)
+            and intent.status in {"pending", "triggered", "filling", "requires_reconfirmation"}
+        ][:limit]
+
+    def list_history_for_user(
+        self,
+        *,
+        user_id: UUID,
+        mode: str | None = None,
+        limit: int = 50,
+    ) -> list[PendingEntryIntentRead]:
+        return [
+            intent
+            for intent in self.records
+            if intent.user_id == user_id
+            and (mode is None or intent.mode == mode)
+            and intent.status in {"filled", "failed", "cancelled", "expired"}
+        ][:limit]
 
     def transition_status(
         self,

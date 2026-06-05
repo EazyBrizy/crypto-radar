@@ -160,6 +160,38 @@ describe("signalsApi.pendingEntryHistory", () => {
   });
 });
 
+describe("signalsApi.pendingEntries", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("loads user-level active pending-entry queue", async () => {
+    const fetchSpy = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      void args;
+      return new Response(JSON.stringify([
+        {
+          id: "intent_1",
+          user_id: "demo_user",
+          signal_id: "sig_1",
+          status: "pending",
+          updated_at: "2026-06-04T12:00:00.000Z"
+        }
+      ]), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await signalsApi.pendingEntries({ userId: "usr_demo", scope: "active", limit: 100 });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: "intent_1", status: "pending" });
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/api/v1/pending-entry?user_id=usr_demo&scope=active&limit=100");
+  });
+});
+
 function actionState(overrides: Record<string, unknown> = {}) {
   return {
     can_enter_now: false,

@@ -185,6 +185,63 @@ class PendingEntryIntentRepository:
             ).all()
             return [_to_read(record) for record in records]
 
+    def list_active_for_user(
+        self,
+        *,
+        user_id: str | UUID,
+        mode: str | None = None,
+        limit: int = 100,
+    ) -> list[PendingEntryIntentRead]:
+        return self._list_for_user(
+            user_id=user_id,
+            statuses=ACTIVE_PENDING_ENTRY_INTENT_STATUSES,
+            mode=mode,
+            limit=limit,
+            active_order=True,
+        )
+
+    def list_history_for_user(
+        self,
+        *,
+        user_id: str | UUID,
+        mode: str | None = None,
+        limit: int = 50,
+    ) -> list[PendingEntryIntentRead]:
+        return self._list_for_user(
+            user_id=user_id,
+            statuses=TERMINAL_PENDING_ENTRY_INTENT_STATUSES,
+            mode=mode,
+            limit=limit,
+            active_order=False,
+        )
+
+    def _list_for_user(
+        self,
+        *,
+        user_id: str | UUID,
+        statuses: tuple[str, ...],
+        mode: str | None,
+        limit: int,
+        active_order: bool,
+    ) -> list[PendingEntryIntentRead]:
+        parsed_user_id = _parse_uuid(user_id)
+        if parsed_user_id is None:
+            return []
+        bounded_limit = max(1, min(limit, 200))
+        with self._session_factory() as session:
+            statement = select(PendingEntryIntent).where(
+                PendingEntryIntent.user_id == parsed_user_id,
+                PendingEntryIntent.status.in_(statuses),
+            )
+            if mode:
+                statement = statement.where(PendingEntryIntent.mode == mode.strip().lower())
+            if active_order:
+                statement = statement.order_by(PendingEntryIntent.created_at.asc(), PendingEntryIntent.updated_at.asc())
+            else:
+                statement = statement.order_by(PendingEntryIntent.updated_at.desc(), PendingEntryIntent.created_at.desc())
+            records = session.scalars(statement.limit(bounded_limit)).all()
+            return [_to_read(record) for record in records]
+
     def transition_status(
         self,
         intent_id: str | UUID,

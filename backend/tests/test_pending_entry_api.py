@@ -110,6 +110,40 @@ class PendingEntryApiTest(unittest.TestCase):
         self.assertEqual(response.json()[0]["status"], "cancelled")
         self.assertEqual(service.history_calls, [(str(SIGNAL_ID), str(USER_ID), "virtual")])
 
+    def test_pending_entry_queue_endpoint_returns_active_intents(self) -> None:
+        service = _FakePendingEntryService()
+        with patch("app.api.v1.pending_entry.pending_entry_intent_service", service):
+            response = self.client.get(
+                "/pending-entry",
+                params={"user_id": str(USER_ID), "scope": "active", "limit": "25"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in response.json()], [str(INTENT_ID)])
+        self.assertEqual(response.json()[0]["status"], "pending")
+        self.assertEqual(service.queue_active_calls, [(str(USER_ID), None, 25)])
+
+    def test_pending_entry_queue_endpoint_returns_history_intents(self) -> None:
+        service = _FakePendingEntryService()
+        cancelled = _pending_intent().model_copy(
+            update={
+                "status": "cancelled",
+                "failure_reason": "Cancelled by user.",
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        service.history = [cancelled]
+        with patch("app.api.v1.pending_entry.pending_entry_intent_service", service):
+            response = self.client.get(
+                "/pending-entry",
+                params={"user_id": str(USER_ID), "scope": "history", "mode": "virtual"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in response.json()], [str(INTENT_ID)])
+        self.assertEqual(response.json()[0]["status"], "cancelled")
+        self.assertEqual(service.queue_history_calls, [(str(USER_ID), "virtual", 50)])
+
     def test_cancel_pending_entry_endpoint_returns_cancelled_intent(self) -> None:
         service = _FakePendingEntryService()
         with patch("app.api.v1.pending_entry.pending_entry_intent_service", service):
@@ -132,6 +166,8 @@ class _FakePendingEntryService:
         self.arm_user_ids: list[str] = []
         self.active_calls: list[tuple[str, str, str]] = []
         self.history_calls: list[tuple[str, str, str]] = []
+        self.queue_active_calls: list[tuple[str, str | None, int]] = []
+        self.queue_history_calls: list[tuple[str, str | None, int]] = []
         self.cancel_calls: list[tuple[str, str]] = []
         self.history: list[PendingEntryIntentRead] = []
 
@@ -153,6 +189,14 @@ class _FakePendingEntryService:
 
     def list_history_for_signal(self, *, signal_id, user_id, mode="virtual") -> list[PendingEntryIntentRead]:
         self.history_calls.append((str(signal_id), str(user_id), str(mode)))
+        return self.history
+
+    def list_active_for_user(self, *, user_id, mode=None, limit=100) -> list[PendingEntryIntentRead]:
+        self.queue_active_calls.append((str(user_id), mode, limit))
+        return [self.intent] if self.intent is not None else []
+
+    def list_history_for_user(self, *, user_id, mode=None, limit=50) -> list[PendingEntryIntentRead]:
+        self.queue_history_calls.append((str(user_id), mode, limit))
         return self.history
 
     def cancel_intent(self, intent_id, *, user_id, reason: str) -> PendingEntryIntentRead:

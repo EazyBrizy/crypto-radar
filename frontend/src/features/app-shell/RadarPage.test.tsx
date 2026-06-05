@@ -31,10 +31,14 @@ describe("RadarPage", () => {
         onPaperTrade={vi.fn()}
         onRefresh={vi.fn()}
         onReject={vi.fn()}
+        onSelectLatestSignal={vi.fn()}
+        onSelectPendingEntrySignal={vi.fn()}
         onSelectSignal={vi.fn()}
         radarStatus={null}
         selectedSignal={null}
         selectedSignalId={null}
+        pendingEntries={[]}
+        pendingEntryHistory={[]}
         signalIds={[]}
         signals={[]}
       />
@@ -66,6 +70,8 @@ describe("RadarPage", () => {
         onPaperTrade={vi.fn()}
         onRefresh={vi.fn()}
         onReject={vi.fn()}
+        onSelectLatestSignal={vi.fn()}
+        onSelectPendingEntrySignal={vi.fn()}
         onSelectSignal={vi.fn()}
         radarStatus={{
           status: "ok",
@@ -100,6 +106,8 @@ describe("RadarPage", () => {
         }}
         selectedSignal={null}
         selectedSignalId={null}
+        pendingEntries={[]}
+        pendingEntryHistory={[]}
         signalIds={[]}
         signals={[]}
       />

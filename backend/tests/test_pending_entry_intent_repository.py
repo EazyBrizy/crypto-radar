@@ -195,6 +195,36 @@ class PendingEntryIntentRepositoryTest(unittest.TestCase):
 
         self.assertEqual([intent.id for intent in active], [pending.id])
 
+    def test_list_for_user_splits_active_queue_and_history(self) -> None:
+        old_pending = self.repository.create_intent(_intent_create(idempotency_key="intent:pending-old"))
+        triggered = self.repository.create_intent(
+            _intent_create(
+                signal_id=uuid4(),
+                idempotency_key="intent:triggered",
+            )
+        )
+        self.repository.transition_status(triggered.id, status="triggered")
+        cancelled = self.repository.create_intent(
+            _intent_create(
+                signal_id=uuid4(),
+                idempotency_key="intent:cancelled",
+            )
+        )
+        cancelled_at = datetime(2026, 6, 4, 12, 0, tzinfo=timezone.utc)
+        self.repository.transition_status(
+            cancelled.id,
+            status="cancelled",
+            failure_reason="Cancelled by user.",
+            now=cancelled_at,
+        )
+
+        active = self.repository.list_active_for_user(user_id=USER_ID)
+        history = self.repository.list_history_for_user(user_id=USER_ID)
+
+        self.assertEqual([intent.id for intent in active], [old_pending.id, triggered.id])
+        self.assertEqual([intent.id for intent in history], [cancelled.id])
+        self.assertEqual(history[0].status, "cancelled")
+
     def test_cancelled_intent_is_not_active_but_is_history_and_can_be_rearmed(self) -> None:
         created = self.repository.create_intent(_intent_create(idempotency_key="intent:first"))
         cancelled_at = datetime(2026, 6, 4, 12, 0, tzinfo=timezone.utc)

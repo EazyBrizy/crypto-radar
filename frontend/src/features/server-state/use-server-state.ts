@@ -40,6 +40,7 @@ import {
   queryKeys,
   serverStateKeys,
   type CandleFilters,
+  type PendingEntryQueueScope,
   type SignalHistoryFilters,
   type StrategyTestReportFilters,
   type StrategyTestRunFilters,
@@ -130,6 +131,53 @@ export function usePendingEntryHistoryQuery(signalId: string | null, userId = "d
     refetchInterval: options.refetchInterval,
     staleTime: serverStatePolicy.realtimeStaleTimeMs
   });
+}
+
+export function usePendingEntriesQuery(
+  userId = "demo_user",
+  scope: PendingEntryQueueScope = "active",
+  options: PlannedQueryOptions & { limit?: number } = {}
+) {
+  return useQuery({
+    queryKey: serverStateKeys.signals.pendingEntries(scope, userId),
+    queryFn: () => api.pendingEntries({ userId, scope, limit: options.limit }),
+    enabled: options.enabled ?? true,
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
+export function usePendingEntryActionStatesQuery(
+  pendingEntries: PendingEntryIntent[],
+  options: PlannedQueryOptions = {}
+) {
+  const actionTargets = uniquePendingActionTargets(pendingEntries);
+  const queries = useQueries({
+    queries: actionTargets.map((target) => ({
+      queryKey: serverStateKeys.signals.actionState(target.signalId, target.mode, target.connectionId ?? "none"),
+      queryFn: () => api.getSignalActionState(target.signalId, target.mode, target.connectionId),
+      enabled: options.enabled ?? true,
+      refetchInterval: options.refetchInterval,
+      staleTime: serverStatePolicy.realtimeStaleTimeMs
+    }))
+  });
+  const targetIndexByKey = new Map(actionTargets.map((target, index) => [pendingActionTargetKey(target), index]));
+  const dataByIntentId: Record<string, SignalActionState | null> = {};
+  const pendingByIntentId: Record<string, boolean> = {};
+
+  for (const intent of pendingEntries) {
+    const targetKey = pendingActionTargetKey({
+      signalId: intent.signal_id,
+      mode: intent.mode,
+      connectionId: pendingEntryConnectionId(intent)
+    });
+    const queryIndex = targetIndexByKey.get(targetKey);
+    const query = queryIndex == null ? null : queries[queryIndex];
+    dataByIntentId[intent.id] = query?.data ?? null;
+    pendingByIntentId[intent.id] = Boolean(query?.isFetching || query?.isLoading || query?.isPending);
+  }
+
+  return { dataByIntentId, pendingByIntentId };
 }
 
 export function useRadarStatusQuery() {
@@ -836,6 +884,38 @@ export function useStopScannerMutation() {
 
 function uniqueIds(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function uniquePendingActionTargets(pendingEntries: PendingEntryIntent[]) {
+  const targets = pendingEntries.map((intent) => ({
+    signalId: intent.signal_id,
+    mode: intent.mode,
+    connectionId: pendingEntryConnectionId(intent)
+  }));
+  const seen = new Set<string>();
+  return targets.filter((target) => {
+    const key = pendingActionTargetKey(target);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function pendingActionTargetKey(target: { signalId: string; mode: SignalActionMode; connectionId?: string | null }): string {
+  return `${target.signalId}:${target.mode}:${target.connectionId ?? "none"}`;
+}
+
+function pendingEntryConnectionId(intent: PendingEntryIntent): string | null {
+  const snapshot = intent.request_snapshot;
+  const metadata = isRecord(snapshot.metadata) ? snapshot.metadata : {};
+  for (const value of [snapshot.connection_id, snapshot.connectionId, metadata.connection_id, metadata.connectionId]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function mapConnectionQueryResults<T>(

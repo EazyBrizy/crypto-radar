@@ -213,7 +213,10 @@ export function normalizePendingEntryIntent(value: unknown): PendingEntryIntent 
     triggered_at: optionalString(intent.triggered_at),
     filled_at: optionalString(intent.filled_at),
     filled_trade_id: optionalString(intent.filled_trade_id),
-    failure_reason: optionalString(intent.failure_reason)
+    failure_reason: optionalString(intent.failure_reason),
+    current_price: optionalNumber(intent.current_price),
+    reason_code: optionalString(intent.reason_code),
+    localized_reason: optionalString(intent.localized_reason)
   };
 }
 

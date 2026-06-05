@@ -16,6 +16,8 @@ import {
 import type { ExchangeConnection } from "@/features/server-state/types";
 
 const radarRouteMockState = vi.hoisted(() => ({
+  pendingEntries: [] as PendingEntryIntent[],
+  pendingEntryHistory: [] as PendingEntryIntent[],
   radarResponse: { signals: [] as unknown[] },
   refetch: vi.fn(),
   mutateAsync: vi.fn()
@@ -54,6 +56,25 @@ vi.mock("@/hooks/use-radar-queries", () => {
     useExchangeConnectionsQuery: () => query([]),
     useHealthQuery: () => query(null),
     useHistoricalSignalsQuery: () => query([]),
+    usePendingEntriesQuery: (_userId: string, scope: "active" | "history") =>
+      query(scope === "history" ? radarRouteMockState.pendingEntryHistory : radarRouteMockState.pendingEntries),
+    usePendingEntryActionStatesQuery: (entries: PendingEntryIntent[]) => ({
+      dataByIntentId: Object.fromEntries(entries.map((entry) => [entry.id, {
+        can_enter_now: false,
+        can_arm_pending: false,
+        can_reconfirm: entry.status === "requires_reconfirmation",
+        can_cancel: entry.status === "pending" || entry.status === "requires_reconfirmation",
+        mode: entry.mode,
+        environment: entry.mode,
+        primary_action: null,
+        disabled_reason_code: null,
+        blockers: [],
+        warnings: [],
+        accepted_trade_plan_snapshot: null,
+        display_labels: {}
+      }])),
+      pendingByIntentId: {}
+    }),
     usePendingEntryHistoryQuery: () => query([]),
     usePendingEntryQuery: () => query(null),
     useRadarQuery: () => query(radarRouteMockState.radarResponse),
@@ -88,7 +109,11 @@ vi.mock("./RadarPage", async () => {
     RadarPage: (props: {
       filter: "all" | "long" | "short";
       onFilterChange: (filter: "all" | "long" | "short") => void;
+      onSelectLatestSignal: () => void;
+      onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
       onSelectSignal: (signal: RadarSignal) => void;
+      missingSelectedSignalId: string | null;
+      pendingEntries: PendingEntryIntent[];
       selectedSignal: RadarSignal | null;
       selectedSignalId: string | null;
       signalIds: string[];
@@ -98,10 +123,19 @@ vi.mock("./RadarPage", async () => {
       { "data-testid": "radar-page" },
       React.createElement("div", { "data-testid": "selected-signal" }, props.selectedSignal?.id ?? "none"),
       React.createElement("div", { "data-testid": "selected-card" }, props.selectedSignalId ?? "none"),
+      React.createElement("div", { "data-testid": "missing-signal" }, props.missingSelectedSignalId ?? "none"),
       React.createElement("div", { "data-testid": "signal-ids" }, props.signalIds.join(",")),
       React.createElement("div", { "data-testid": "active-filter" }, props.filter),
+      props.missingSelectedSignalId
+        ? React.createElement("button", { onClick: props.onSelectLatestSignal, type: "button" }, "choose latest")
+        : null,
       React.createElement("button", { onClick: () => props.onFilterChange("short"), type: "button" }, "filter short"),
       React.createElement("button", { onClick: () => props.onFilterChange("all"), type: "button" }, "filter all"),
+      ...props.pendingEntries.map((intent) => React.createElement(
+        "button",
+        { key: intent.id, onClick: () => props.onSelectPendingEntrySignal(intent), type: "button" },
+        `select pending ${intent.id}`
+      )),
       ...props.signals.map((signal) => React.createElement(
         "button",
         { key: signal.id, onClick: () => props.onSelectSignal(signal), type: "button" },
@@ -160,6 +194,8 @@ const baseSignal: RadarSignal = {
 };
 
 beforeEach(() => {
+  radarRouteMockState.pendingEntries = [];
+  radarRouteMockState.pendingEntryHistory = [];
   radarRouteMockState.radarResponse = { signals: [] };
   radarRouteMockState.refetch.mockResolvedValue(null);
   radarRouteMockState.mutateAsync.mockResolvedValue(null);
@@ -182,36 +218,71 @@ function routeSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {
 }
 
 describe("RadarRoute selection", () => {
-  it("keeps details aligned to the visible selected signal when filters and list data change", async () => {
+  it("does not change the selected signal when a new signal arrives after manual selection", async () => {
     const signalA = routeSignal({ id: "sig_a", direction: "long", symbol: "AAAUSDT" });
     const signalB = routeSignal({ id: "sig_b", direction: "short", symbol: "BBBUSDT" });
+    const signalC = routeSignal({ id: "sig_c", direction: "long", symbol: "CCCUSDT" });
     radarRouteMockState.radarResponse = { signals: [signalA, signalB] };
 
     const { rerender } = render(createElement(RadarRoute));
 
-    fireEvent.click(await screen.findByRole("button", { name: "select sig_a" }));
+    fireEvent.click(await screen.findByRole("button", { name: "select sig_b" }));
 
-    expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_a");
-    expect(screen.getByTestId("selected-card")).toHaveTextContent("sig_a");
-    expect(useUiStore.getState().selectedSignalId).toBe("sig_a");
-
-    fireEvent.click(screen.getByRole("button", { name: "filter short" }));
-
-    await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_b"));
+    expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_b");
     expect(screen.getByTestId("selected-card")).toHaveTextContent("sig_b");
-    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_b");
-    expect(screen.queryByRole("button", { name: "select sig_a" })).not.toBeInTheDocument();
-    await waitFor(() => expect(useUiStore.getState().selectedSignalId).toBe("sig_b"));
+    expect(useUiStore.getState().selectedSignalId).toBe("sig_b");
 
-    radarRouteMockState.radarResponse = { signals: [] };
+    radarRouteMockState.radarResponse = { signals: [signalC, signalA, signalB] };
     await act(async () => {
       rerender(createElement(RadarRoute));
     });
 
+    await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_b"));
+    expect(screen.getByTestId("selected-card")).toHaveTextContent("sig_b");
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_c,sig_a,sig_b");
+    expect(useUiStore.getState().selectedSignalId).toBe("sig_b");
+  });
+
+  it("shows a stable placeholder when the selected signal is filtered out", async () => {
+    const signalA = routeSignal({ id: "sig_a", direction: "long", symbol: "AAAUSDT" });
+    const signalB = routeSignal({ id: "sig_b", direction: "short", symbol: "BBBUSDT" });
+    radarRouteMockState.radarResponse = { signals: [signalA, signalB] };
+
+    render(createElement(RadarRoute));
+
+    await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_a"));
+
+    fireEvent.click(screen.getByRole("button", { name: "filter short" }));
+
     await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("none"));
-    expect(screen.getByTestId("selected-card")).toHaveTextContent("none");
-    expect(screen.getByTestId("signal-ids").textContent).toBe("");
-    expect(useUiStore.getState().selectedSignalId).toBeNull();
+    expect(screen.getByTestId("selected-card")).toHaveTextContent("sig_a");
+    expect(screen.getByTestId("missing-signal")).toHaveTextContent("sig_a");
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_b");
+    expect(useUiStore.getState().selectedSignalId).toBe("sig_a");
+
+    fireEvent.click(screen.getByRole("button", { name: "choose latest" }));
+
+    await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_b"));
+    expect(useUiStore.getState().selectedSignalId).toBe("sig_b");
+  });
+
+  it("selects the related signal when a pending entry is clicked", async () => {
+    const signalA = routeSignal({ id: "sig_a", direction: "long", symbol: "AAAUSDT" });
+    const signalB = routeSignal({ id: "sig_b", direction: "short", symbol: "BBBUSDT" });
+    radarRouteMockState.radarResponse = { signals: [signalA, signalB] };
+    radarRouteMockState.pendingEntries = [pendingIntent({
+      id: "intent_b",
+      signal_id: "sig_b",
+      symbol: signalB.symbol,
+      side: signalB.direction
+    })];
+
+    render(createElement(RadarRoute));
+
+    fireEvent.click(await screen.findByRole("button", { name: "select pending intent_b" }));
+
+    await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_b"));
+    expect(useUiStore.getState().selectedSignalId).toBe("sig_b");
   });
 });
 

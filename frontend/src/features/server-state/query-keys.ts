@@ -36,6 +36,8 @@ export type StrategyTestReportFilters = {
   limit?: number;
 };
 
+export type PendingEntryQueueScope = "active" | "history";
+
 const normalizeTradeFilters = (filters: TradeJournalFilters = {}) => ({
   ...(() => {
     const parsed = TradeJournalFilterSchema.parse(filters);
@@ -164,6 +166,8 @@ export const serverStateKeys = {
     history: (filters?: SignalHistoryFilters) => [...serverStateKeys.signals.all(), "history", normalizeSignalFilters(filters)] as const,
     active: () => [...serverStateKeys.signals.all(), "active"] as const,
     open: () => [...serverStateKeys.signals.all(), "open"] as const,
+    pendingEntries: (scope: PendingEntryQueueScope = "active", userId = "demo_user") =>
+      [...serverStateKeys.signals.all(), "pending-entries", scope, userId] as const,
     pendingEntry: (signalId: string, userId = "demo_user") => [...serverStateKeys.signals.all(), "pending-entry", signalId, userId] as const,
     pendingEntryHistory: (signalId: string, userId = "demo_user") => [...serverStateKeys.signals.all(), "pending-entry-history", signalId, userId] as const,
     actionState: (signalId: string, mode: SignalActionMode, connectionId = "none") =>

@@ -1,12 +1,13 @@
-import { Filter, RadioTower, RefreshCw } from "lucide-react";
+import { FileCheck2, Filter, RadioTower, RefreshCw, XCircle } from "lucide-react";
 
 import { Metric } from "@/components/Metric";
 import { SignalDetails, type RealTradeContext } from "@/components/SignalDetails";
 import { SignalFeed } from "@/components/SignalFeed";
 import { canShowEnterButton, RADAR_STATUS_FILTERS } from "@/domain/signal-status";
 import type { RadarDisplayMode } from "@/features/server-state/types";
+import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
 import type { HealthStatus, PendingEntryIntent, RadarSignal, RadarStatus, SignalActionState, SignalStatus, VirtualExecutionReport } from "@/types";
-import { isRiskRewardBlocked } from "@/utils";
+import { formatPrice, isRiskRewardBlocked } from "@/utils";
 
 interface RadarPageProps {
   busy: boolean;
@@ -28,10 +29,18 @@ interface RadarPageProps {
   onRefresh: () => void;
   onReject: (signal: RadarSignal) => void;
   onSelectSignal: (signal: RadarSignal) => void;
+  onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
+  onSelectLatestSignal: () => void;
   radarStatus: RadarStatus | null;
   selectedSignal: RadarSignal | null;
   selectedSignalId: string | null;
+  missingSelectedSignalId?: string | null;
   selectedPendingEntry?: PendingEntryIntent | null;
+  pendingEntries: PendingEntryIntent[];
+  pendingEntryHistory: PendingEntryIntent[];
+  pendingEntriesLoading?: boolean;
+  pendingEntryActionStates?: Record<string, SignalActionState | null>;
+  pendingEntryActionStatesLoading?: Record<string, boolean>;
   signalIds: string[];
   signals: RadarSignal[];
   actionError?: string | null;
@@ -109,6 +118,19 @@ export function RadarPage(props: RadarPageProps) {
             )) : <span>Candle history is still warming up</span>}
           </div>
         </div>
+
+        <PendingEntriesQueue
+          activeEntries={props.pendingEntries}
+          actionStates={props.pendingEntryActionStates ?? {}}
+          actionStatesLoading={props.pendingEntryActionStatesLoading ?? {}}
+          busy={props.busy || Boolean(props.tradingActionsDisabled)}
+          historyEntries={props.pendingEntryHistory}
+          loading={props.pendingEntriesLoading ?? false}
+          onCancelPendingEntry={props.onCancelPendingEntry}
+          onReconfirmPendingEntry={props.onReconfirmPendingEntry}
+          onSelectPendingEntrySignal={props.onSelectPendingEntrySignal}
+          selectedSignalId={props.selectedSignalId}
+        />
 
         <div className="filter-row">
           <Filter size={16} />
@@ -203,7 +225,223 @@ export function RadarPage(props: RadarPageProps) {
         realTradeContext={props.realTradeContext}
         realTradeBusy={props.realTradeBusy ?? false}
         tradingActionsDisabled={props.tradingActionsDisabled}
+        missingSignalId={props.missingSelectedSignalId ?? null}
+        onSelectLatestSignal={props.onSelectLatestSignal}
       />
     </div>
   );
+}
+
+function PendingEntriesQueue({
+  activeEntries,
+  actionStates,
+  actionStatesLoading,
+  busy,
+  historyEntries,
+  loading,
+  onCancelPendingEntry,
+  onReconfirmPendingEntry,
+  onSelectPendingEntrySignal,
+  selectedSignalId
+}: {
+  activeEntries: PendingEntryIntent[];
+  actionStates: Record<string, SignalActionState | null>;
+  actionStatesLoading: Record<string, boolean>;
+  busy: boolean;
+  historyEntries: PendingEntryIntent[];
+  loading: boolean;
+  onCancelPendingEntry: (intent: PendingEntryIntent) => void;
+  onReconfirmPendingEntry: (intent: PendingEntryIntent) => void;
+  onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
+  selectedSignalId: string | null;
+}) {
+  const active = activeEntries.filter((intent) => isActivePendingEntryStatus(intent.status));
+  const history = historyEntries.filter((intent) => isTerminalPendingEntryStatus(intent.status));
+
+  return (
+    <section className="pending-entries-panel">
+      <div className="pending-entries-head">
+        <div>
+          <span className="muted">Pending Entries Queue</span>
+          <h3>Selected entries</h3>
+        </div>
+        <span className="badge badge-blue">{active.length} active</span>
+      </div>
+      {loading && !active.length ? (
+        <div className="empty-state compact-empty">Loading pending entries</div>
+      ) : active.length ? (
+        <div className="pending-entry-list">
+          {active.map((intent) => (
+            <PendingEntryQueueItem
+              actionState={actionStates[intent.id] ?? null}
+              actionStateLoading={Boolean(actionStatesLoading[intent.id])}
+              busy={busy}
+              intent={intent}
+              key={intent.id}
+              onCancelPendingEntry={onCancelPendingEntry}
+              onReconfirmPendingEntry={onReconfirmPendingEntry}
+              onSelectPendingEntrySignal={onSelectPendingEntrySignal}
+              selected={selectedSignalId === intent.signal_id}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state compact-empty">No active pending entries</div>
+      )}
+      <details className="pending-entry-history-queue">
+        <summary>
+          <span>History</span>
+          <span className="badge">{history.length}</span>
+        </summary>
+        {history.length ? (
+          <div className="pending-entry-list history">
+            {history.map((intent) => (
+              <PendingEntryQueueItem
+                actionState={actionStates[intent.id] ?? null}
+                actionStateLoading={Boolean(actionStatesLoading[intent.id])}
+                busy={busy}
+                intent={intent}
+                key={intent.id}
+                onCancelPendingEntry={onCancelPendingEntry}
+                onReconfirmPendingEntry={onReconfirmPendingEntry}
+                onSelectPendingEntrySignal={onSelectPendingEntrySignal}
+                selected={selectedSignalId === intent.signal_id}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact-empty">No pending entry history</div>
+        )}
+      </details>
+    </section>
+  );
+}
+
+function PendingEntryQueueItem({
+  actionState,
+  actionStateLoading,
+  busy,
+  intent,
+  onCancelPendingEntry,
+  onReconfirmPendingEntry,
+  onSelectPendingEntrySignal,
+  selected
+}: {
+  actionState: SignalActionState | null;
+  actionStateLoading: boolean;
+  busy: boolean;
+  intent: PendingEntryIntent;
+  onCancelPendingEntry: (intent: PendingEntryIntent) => void;
+  onReconfirmPendingEntry: (intent: PendingEntryIntent) => void;
+  onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
+  selected: boolean;
+}) {
+  const reasonCode = pendingEntryReasonCode(intent);
+  const reason = pendingEntryReason(intent, reasonCode);
+  const currentPrice = intent.current_price == null ? "-" : formatPrice(intent.current_price);
+
+  return (
+    <article className={selected ? "pending-entry-item selected" : "pending-entry-item"}>
+      <div className="pending-entry-main">
+        <div>
+          <strong>{intent.symbol}</strong>
+          <span>{intent.exchange} / {intent.side.toUpperCase()}</span>
+        </div>
+        <div className="pending-entry-badges">
+          <span className={`badge badge-${pendingEntryTone(intent.status)}`}>{intent.status.replaceAll("_", " ")}</span>
+          <span className="badge badge-purple">{intent.mode}</span>
+        </div>
+      </div>
+      <div className="pending-entry-metrics">
+        <MetricLine label="Entry zone" value={`${formatPrice(intent.entry_min)} - ${formatPrice(intent.entry_max)}`} />
+        <MetricLine label="Current price" value={currentPrice} />
+        <MetricLine label="Expires" value={formatPendingEntryTtl(intent.expires_at)} />
+        <MetricLine label="Reason code" value={reasonCode ?? "-"} />
+      </div>
+      <p className="pending-entry-reason">{reason}</p>
+      <div className="pending-entry-actions">
+        <button className="secondary-action compact-action" onClick={() => onSelectPendingEntrySignal(intent)} type="button">
+          <FileCheck2 size={15} /> Select signal
+        </button>
+        <button
+          className="secondary-action compact-action"
+          disabled={busy || actionStateLoading || !actionState?.can_reconfirm}
+          onClick={() => onReconfirmPendingEntry(intent)}
+          type="button"
+        >
+          <RefreshCw size={15} /> Reconfirm
+        </button>
+        <button
+          className="secondary-action compact-action"
+          disabled={busy || actionStateLoading || !actionState?.can_cancel}
+          onClick={() => onCancelPendingEntry(intent)}
+          type="button"
+        >
+          <XCircle size={15} /> Cancel
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function MetricLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="execution-quality-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function pendingEntryTone(status: PendingEntryIntent["status"]): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
+  if (status === "pending") return "blue";
+  if (status === "requires_reconfirmation") return "yellow";
+  if (status === "triggered" || status === "filling" || status === "filled") return "green";
+  if (status === "failed" || status === "cancelled" || status === "expired") return "red";
+  return "neutral";
+}
+
+function formatPendingEntryTtl(value: string | null): string {
+  if (!value) return "no expiry";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "unknown";
+  const diffMs = timestamp - Date.now();
+  if (diffMs <= 0) return "expired";
+  const diffMinutes = Math.ceil(diffMs / 60_000);
+  if (diffMinutes < 60) return `${diffMinutes}m left`;
+  return `${Math.ceil(diffMinutes / 60)}h left`;
+}
+
+function pendingEntryReason(intent: PendingEntryIntent, reasonCode: string | null): string {
+  return intent.localized_reason
+    ?? intent.failure_reason
+    ?? pendingEntrySnapshotString(intent, "localized_reason")
+    ?? pendingEntrySnapshotString(intent, "reason")
+    ?? reasonCode?.replaceAll("_", " ")
+    ?? "No reason from backend";
+}
+
+function pendingEntryReasonCode(intent: PendingEntryIntent): string | null {
+  return intent.reason_code
+    ?? pendingEntrySnapshotString(intent, "reason_code")
+    ?? pendingEntryMaterialReasonCode(intent);
+}
+
+function pendingEntrySnapshotString(intent: PendingEntryIntent, key: string): string | null {
+  const value = intent.request_snapshot[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function pendingEntryMaterialReasonCode(intent: PendingEntryIntent): string | null {
+  const review = intent.request_snapshot.current_market_snapshot;
+  if (!isRecord(review)) return null;
+  const summary = review.material_change_summary;
+  if (!isRecord(summary) || !Array.isArray(summary.changes)) return null;
+  const firstChange = summary.changes.find(isRecord);
+  const reasonCode = firstChange?.reason_code;
+  return typeof reasonCode === "string" && reasonCode.trim() ? reasonCode.trim() : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

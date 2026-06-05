@@ -52,6 +52,8 @@ interface SignalDetailsProps {
   tradingActionsDisabled?: boolean;
   realTradeContext?: RealTradeContext;
   realTradeBusy?: boolean;
+  missingSignalId?: string | null;
+  onSelectLatestSignal?: () => void;
 }
 
 export interface RealTradeContext {
@@ -82,13 +84,27 @@ export function SignalDetails({
   realActionState,
   tradingActionsDisabled = false,
   realTradeContext,
-  realTradeBusy = false
+  realTradeBusy = false,
+  missingSignalId = null,
+  onSelectLatestSignal
 }: SignalDetailsProps) {
   const [chartOpen, setChartOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [realConfirmationOpen, setRealConfirmationOpen] = useState(false);
 
   if (!signal) {
+    if (missingSignalId) {
+      return (
+        <section className="details-empty">
+          <FileCheck2 size={32} />
+          <h2>Signal is no longer visible</h2>
+          <p>selected signal is no longer visible / сигнал больше не отображается.</p>
+          <button className="secondary-action" disabled={!onSelectLatestSignal} onClick={onSelectLatestSignal} type="button">
+            <FileCheck2 size={17} /> выбрать последний сигнал
+          </button>
+        </section>
+      );
+    }
     return (
       <section className="details-empty">
         <FileCheck2 size={32} />

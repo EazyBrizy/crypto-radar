@@ -34,12 +34,31 @@ from app.services.risk_management import (
     calculate_trailing_stop_plan,
     position_sizing_for_notional,
 )
+from app.services.reason_codes import normalize_reason_codes
 from app.services.risk_reward_plan import risk_reward_plan_service
 from app.services.trade_plan_completeness import (
     MISSING_CONTEXT_POLICY_KEY,
     MISSING_SCORE_POLICY_KEY,
     trade_plan_completeness_service,
 )
+
+
+def _risk_check_with_reason_codes(risk_check):
+    reason_codes = normalize_reason_codes([
+        *risk_check.blockers,
+        *risk_check.warnings,
+        risk_check.risk_reward_block_reason,
+        risk_check.risk_reward_warning_reason,
+    ])
+    technical_messages = _dedupe([*risk_check.blockers, *risk_check.warnings])
+    return risk_check.model_copy(
+        update={
+            "reason_code": reason_codes[0] if reason_codes else None,
+            "reason_codes": reason_codes,
+            "technical_message": technical_messages[0] if technical_messages else None,
+            "technical_messages": technical_messages,
+        }
+    )
 
 
 class RiskContextService:
@@ -512,6 +531,7 @@ class RiskGateService:
                     "blockers": _dedupe([*risk_check.blockers, *take_profit_blockers]),
                 }
             )
+        risk_check = _risk_check_with_reason_codes(risk_check)
         warnings = [
             *stop_loss_plan.warnings,
             *trailing_stop_plan.warnings,
@@ -519,6 +539,8 @@ class RiskGateService:
             *risk_check.warnings,
         ]
         notes = _dedupe([*warnings, *take_profit_plan.notes, *take_profit_blockers])
+        decision_reason_codes = normalize_reason_codes([*risk_check.reason_codes, *risk_check.blockers, *warnings])
+        decision_technical_messages = _dedupe([*risk_check.technical_messages, *risk_check.blockers, *warnings])
         return RiskDecision(
             mode=context.mode,
             stage=context.stage,
@@ -529,6 +551,10 @@ class RiskGateService:
             execution_profile_sources=context.execution_profile_sources,
             blockers=risk_check.blockers,
             warnings=_dedupe(warnings),
+            reason_code=decision_reason_codes[0] if decision_reason_codes else None,
+            reason_codes=decision_reason_codes,
+            technical_message=decision_technical_messages[0] if decision_technical_messages else None,
+            technical_messages=decision_technical_messages,
             exchange=context.exchange,
             symbol=context.symbol,
             instrument_type=context.instrument_type,

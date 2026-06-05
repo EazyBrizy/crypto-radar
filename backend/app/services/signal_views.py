@@ -24,6 +24,7 @@ from app.schemas.signal import (
 )
 from app.schemas.signal_action import SignalActionBlocker, SignalActionState
 from app.schemas.trade import PnLView, TradeJournalEntry, TradeView
+from app.services.reason_codes import normalize_reason_code
 
 
 def annotate_signal_views(
@@ -208,17 +209,18 @@ def annotate_pending_entry_view(intent: PendingEntryIntentRead) -> PendingEntryI
 
 def build_pending_entry_view(intent: PendingEntryIntentRead) -> PendingEntryView:
     reason_code = _pending_entry_reason_code(intent)
+    technical_message = _first_text(
+        intent.failure_reason,
+        _snapshot_string(intent.request_snapshot, "technical_message"),
+        _snapshot_string(intent.request_snapshot, "reason"),
+        fallback=None,
+    )
     return PendingEntryView(
         status_label=_pending_status_label(intent.status),
         status_tone=_pending_status_tone(intent.status),
         reason_code=reason_code,
-        reason=_first_text(
-            intent.failure_reason,
-            _snapshot_string(intent.request_snapshot, "localized_reason"),
-            _snapshot_string(intent.request_snapshot, "reason"),
-            reason_code.replace("_", " ") if reason_code else None,
-            fallback="No backend reason.",
-        ),
+        reason=reason_code or "no_backend_reason",
+        technical_message=technical_message,
         entry_zone=f"{_format_decimal(intent.entry_min)} - {_format_decimal(intent.entry_max)}",
         current_price=_snapshot_decimal(intent.request_snapshot, "current_price"),
     )
@@ -597,8 +599,8 @@ def _pending_entry_reason_code(intent: PendingEntryIntentRead) -> str | None:
     for key in ("reason_code", "code"):
         value = _snapshot_string(intent.request_snapshot, key)
         if value:
-            return value
-    return None
+            return normalize_reason_code(value) or value
+    return normalize_reason_code(intent.failure_reason)
 
 
 def _trade_status_tone(status: str) -> ViewTone:

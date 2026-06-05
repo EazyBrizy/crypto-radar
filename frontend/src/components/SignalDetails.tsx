@@ -6,6 +6,7 @@ import { BarChart3, FileCheck2, ShieldAlert, XCircle } from "lucide-react";
 
 import { Badge } from "./Badge";
 import type { AccountRiskSnapshot, ExchangeConnection } from "@/features/server-state/types";
+import { useI18n, type I18nKey } from "@/i18n";
 import type {
   PendingEntryIntent,
   RadarSignal,
@@ -21,7 +22,7 @@ import { formatPrice } from "../utils";
 const LazySignalDetailsChart = dynamic(
   () => import("@/components/charts/SignalDetailsChart").then((module) => module.SignalDetailsChart),
   {
-    loading: () => <div className="chart-panel chart-panel-loading">Loading chart...</div>,
+    loading: SignalDetailsChartLoading,
     ssr: false
   }
 );
@@ -59,6 +60,15 @@ export interface RealTradeContext {
   loading?: boolean;
 }
 
+type I18nParams = Record<string, string | number | boolean | null | undefined>;
+type TKey = (key: I18nKey, params?: I18nParams) => string;
+type TReason = (code: string | null | undefined, params?: I18nParams) => string;
+
+function SignalDetailsChartLoading() {
+  const { tKey } = useI18n();
+  return <div className="chart-panel chart-panel-loading">{tKey("trades.loadingChart")}</div>;
+}
+
 export function SignalDetails({
   signal,
   onPaperTrade,
@@ -82,6 +92,7 @@ export function SignalDetails({
   missingSignalId = null,
   onSelectLatestSignal
 }: SignalDetailsProps) {
+  const { t, tKey, tReason } = useI18n();
   const [chartOpen, setChartOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [realConfirmationOpen, setRealConfirmationOpen] = useState(false);
@@ -90,11 +101,11 @@ export function SignalDetails({
     return (
       <section className="details-empty">
         <FileCheck2 size={32} />
-        <h2>{missingSignalId ? "Signal is no longer visible" : "Р’С‹Р±РµСЂРё СЃРёРіРЅР°Р»"}</h2>
-        <p>{missingSignalId ? "selected signal is no longer visible." : "Backend signal details will appear here."}</p>
+        <h2>{missingSignalId ? tKey("signalDetails.missingTitle") : tKey("signalDetails.emptyTitle")}</h2>
+        <p>{missingSignalId ? tKey("signalDetails.missingBody") : tKey("signalDetails.emptyBody")}</p>
         {missingSignalId ? (
           <button className="secondary-action" disabled={!onSelectLatestSignal} onClick={onSelectLatestSignal} type="button">
-            <FileCheck2 size={17} /> РІС‹Р±СЂР°С‚СЊ РїРѕСЃР»РµРґРЅРёР№ СЃРёРіРЅР°Р»
+            <FileCheck2 size={17} /> {tKey("signalDetails.selectLatestSignal")}
           </button>
         ) : null}
       </section>
@@ -104,7 +115,7 @@ export function SignalDetails({
   const viewModel = buildSignalDetailsViewModel(signal, pendingEntry, { actionState: actionState ?? null });
   const activePendingEntry = viewModel.activePendingEntry;
   const terminalPendingEntry = viewModel.terminalPendingEntry;
-  const backendDisabledReason = actionStateDisabledReason(actionState ?? null);
+  const backendDisabledReason = actionStateDisabledReason(actionState ?? null, tReason);
   const entryActionDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_enter_now !== true;
   const acceptPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || pendingEntryLoading || actionState?.can_arm_pending !== true;
   const cancelPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_cancel !== true;
@@ -116,12 +127,12 @@ export function SignalDetails({
     <section className="details-panel">
       <div className="details-header">
         <div>
-          <span className="muted">Signal Details</span>
+          <span className="muted">{tKey("signalDetails.title")}</span>
           <h2>{signal.symbol}</h2>
         </div>
         <div className="details-badges">
           <Badge tone={viewModel.side === "long" ? "green" : "red"}>{viewModel.side.toUpperCase()}</Badge>
-          <Badge tone="yellow">Risk {viewModel.riskSummary.label}</Badge>
+          <Badge tone="yellow">{tKey("signalDetails.risk")} {t(viewModel.riskSummary.label)}</Badge>
           <Badge tone={viewModel.primaryStatusTone}>{viewModel.primaryStatusLabel}</Badge>
           {signal.card_view?.badges.map((badge) => (
             <Badge key={`${badge.code}:${badge.label}`} tone={badge.tone}>{badge.label}</Badge>
@@ -162,7 +173,7 @@ export function SignalDetails({
         onReject={() => onReject(signal)}
         onToggleChart={() => setChartOpen((open) => !open)}
         realActionDisabled={realActionDisabled}
-        realExecutionEnvironment={realActionState?.environment ?? realTradeContext?.connection?.environment ?? "No exchange connection"}
+        realExecutionEnvironment={realActionState?.environment ?? realTradeContext?.connection?.environment ?? tKey("signalDetails.noExchangeConnection")}
         rejectDisabled={rejectDisabled}
         setRealConfirmationOpen={setRealConfirmationOpen}
         tradingActionsDisabled={tradingActionsDisabled}
@@ -218,28 +229,29 @@ function DecisionCard({
   viewModel: SignalDetailsViewModel;
   topBlockers: UiBlocker[];
 }) {
+  const { t, tKey, tReason } = useI18n();
   return (
     <div className="decision-block decision-card">
       <div className="section-title compact-section-title">
         <FileCheck2 size={18} />
-        <h3>Decision</h3>
-        <Badge tone={viewModel.primaryStatusTone}>{viewModel.primaryStatusLabel}</Badge>
+        <h3>{tKey("signalDetails.decision")}</h3>
+        <Badge tone={viewModel.primaryStatusTone}>{t(viewModel.primaryStatusLabel)}</Badge>
       </div>
       <div className="compact-metric-grid decision-card-grid">
-        <MetricLine label="Recommended action" value={primaryActionLabel} />
-        <MetricLine label="Can enter now" value={canEnterNowLabel(canEnterNow)} />
+        <MetricLine label={tKey("signalDetails.recommendedAction")} value={t(primaryActionLabel)} />
+        <MetricLine label={tKey("signalDetails.canEnterNow")} value={canEnterNowLabel(canEnterNow, tKey)} />
       </div>
-      <p>{recommendedActionText}</p>
+      <p>{t(recommendedActionText)}</p>
       <div className="top-blocker-list">
-        <strong>Top blockers</strong>
+        <strong>{tKey("signalDetails.topBlockers")}</strong>
         {topBlockers.length ? (
           <ul className="risk-blocker-list compact-risk-blockers">
             {topBlockers.map((blocker) => (
-              <li key={blockerKey(blocker)}>{blocker.userMessage}</li>
+              <li key={blockerKey(blocker)}>{tReason(blocker.code ?? blocker.userMessage)}</li>
             ))}
           </ul>
         ) : (
-          <p className="compact-empty">No active blockers from backend action-state.</p>
+          <p className="compact-empty">{tKey("signalDetails.noActiveBlockers")}</p>
         )}
       </div>
     </div>
@@ -257,27 +269,29 @@ function ActivePendingEntryCompact({
   busy: boolean;
   canReconfirm?: boolean;
 }) {
+  const { t, tKey, tReason } = useI18n();
   if (!pendingEntry) return null;
   const view = pendingEntry.view;
+  const reasonCode = view?.reason_code ?? pendingEntry.reason_code ?? null;
   return (
     <div className="pending-entry-block active-pending-compact">
       <div className="section-title">
         <FileCheck2 size={18} />
-        <h3>Active Pending Entry</h3>
-        <Badge tone={view?.status_tone ?? pendingEntryTone(pendingEntry.status)}>{view?.status_label ?? pendingEntry.status.replaceAll("_", " ")}</Badge>
+        <h3>{tKey("pendingEntry.activePendingEntry")}</h3>
+        <Badge tone={view?.status_tone ?? pendingEntryTone(pendingEntry.status)}>{view?.status_label ? t(view.status_label) : t(pendingEntry.status.replaceAll("_", " "))}</Badge>
       </div>
       <div className="compact-metric-grid">
-        <MetricLine label="State" value={view?.status_label ?? pendingEntry.status.replaceAll("_", " ")} />
-        <MetricLine label="Entry zone" value={view?.entry_zone ?? `${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
-        <MetricLine label="Stop" value={formatPrice(pendingEntry.stop_loss)} />
-        <MetricLine label="Reason code" value={view?.reason_code ?? pendingEntry.reason_code ?? "-"} />
-        <MetricLine label="Expiry / TTL" value={formatPendingEntryExpiry(pendingEntry)} />
+        <MetricLine label={tKey("pendingEntry.state")} value={view?.status_label ? t(view.status_label) : t(pendingEntry.status.replaceAll("_", " "))} />
+        <MetricLine label={tKey("pendingEntry.entryZone")} value={view?.entry_zone ?? `${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
+        <MetricLine label={tKey("pendingEntry.stop")} value={formatPrice(pendingEntry.stop_loss)} />
+        <MetricLine label={tKey("pendingEntry.reasonCode")} value={reasonCode ?? "-"} />
+        <MetricLine label={tKey("pendingEntry.expiryTtl")} value={formatPendingEntryExpiry(pendingEntry, tKey)} />
       </div>
-      <p>{view?.reason ?? pendingEntry.failure_reason ?? "No backend reason."}</p>
+      <p>{reasonCode ? tReason(reasonCode) : tReason(view?.reason ?? pendingEntry.failure_reason ?? tKey("pendingEntry.noBackendReason"))}</p>
       {pendingEntry.status === "requires_reconfirmation" && onReconfirmPendingEntry ? (
         <div className="detail-actions compact-card-actions">
           <button className="secondary-action" disabled={busy || canReconfirm === false} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
-            <FileCheck2 size={17} /> Reconfirm plan
+            <FileCheck2 size={17} /> {tKey("pendingEntry.reconfirmPlan")}
           </button>
         </div>
       ) : null}
@@ -286,22 +300,23 @@ function ActivePendingEntryCompact({
 }
 
 function TradePlanCompact({ tradePlan }: { tradePlan: SignalTradePlanView }) {
+  const { t, tKey } = useI18n();
   return (
     <div className="risk-reward-detail-block trade-plan-compact">
       <div className="section-title">
         <ShieldAlert size={18} />
-        <h3>Trade Plan</h3>
-        <Badge tone={tradePlan.has_trade_plan ? "blue" : "neutral"}>{tradePlan.entry_type}</Badge>
+        <h3>{tKey("signalDetails.tradePlan")}</h3>
+        <Badge tone={tradePlan.has_trade_plan ? "blue" : "neutral"}>{t(tradePlan.entry_type)}</Badge>
       </div>
       <div className="compact-metric-grid trade-plan-compact-grid">
-        <MetricLine label="Entry type" value={tradePlan.entry_type} />
-        <MetricLine label="Entry zone / price" value={`${tradePlan.entry_zone} / ${formatPrice(tradePlan.entry_price)}`} />
-        <MetricLine label="Stop-loss" value={formatPrice(tradePlan.stop_loss)} />
+        <MetricLine label={tKey("signalDetails.entryType")} value={t(tradePlan.entry_type)} />
+        <MetricLine label={tKey("signalDetails.entryZonePrice")} value={`${tradePlan.entry_zone} / ${formatPrice(tradePlan.entry_price)}`} />
+        <MetricLine label={tKey("signalDetails.stopLoss")} value={formatPrice(tradePlan.stop_loss)} />
         <MetricLine label="TP1" value={formatCompactTarget(tradePlan, 0)} />
         <MetricLine label="TP2" value={formatCompactTarget(tradePlan, 1)} />
-        <MetricLine label="Runner" value={formatCompactRunnerTarget(tradePlan)} />
-        <MetricLine label="Selected RR" value={formatRMultiple(tradePlan.selected_rr)} />
-        <MetricLine label="Invalidation" value={tradePlan.invalidation} />
+        <MetricLine label={tKey("signalDetails.runner")} value={formatCompactRunnerTarget(tradePlan)} />
+        <MetricLine label={tKey("signalDetails.selectedRr")} value={formatRMultiple(tradePlan.selected_rr)} />
+        <MetricLine label={tKey("signalDetails.invalidation")} value={t(tradePlan.invalidation)} />
       </div>
     </div>
   );
@@ -316,31 +331,33 @@ function RiskCompact({
   error: string | null;
   loading: boolean;
 }) {
+  const { t, tKey } = useI18n();
   const riskCheck = execution?.risk_check ?? execution?.risk_decision?.risk_check ?? null;
   const sizing = execution?.position_sizing ?? execution?.risk_decision?.checked_position_sizing ?? null;
   return (
     <div className="risk-reward-detail-block risk-compact">
       <div className="section-title">
         <ShieldAlert size={18} />
-        <h3>Risk</h3>
+        <h3>{tKey("signalDetails.risk")}</h3>
         <Badge tone={riskGateTone(riskCheck?.status ?? execution?.risk_decision?.status ?? null)}>
-          {riskCheck?.status ?? execution?.risk_decision?.status ?? (loading ? "checking" : "not previewed")}
+          {t(riskCheck?.status ?? execution?.risk_decision?.status ?? (loading ? "checking" : "not previewed"))}
         </Badge>
       </div>
       <div className="compact-metric-grid risk-compact-grid">
-        <MetricLine label="Risk amount / %" value={`${formatCurrencyAmount(riskCheck?.effective_risk_amount ?? sizing?.risk_amount)} / ${formatPercentValue(riskCheck?.adjusted_risk_percent ?? sizing?.risk_per_trade_percent)}`} />
-        <MetricLine label="Margin / leverage" value={`${formatCurrencyAmount(riskCheck?.required_margin ?? sizing?.required_margin)} / ${sizing?.leverage == null ? "-" : `${sizing.leverage}x`}`} />
-        <MetricLine label="Execution quality" value={execution ? `${execution.quality_gate.status} / ${execution.liquidity.impact_risk} impact` : error ? "Preview error" : loading ? "Checking" : "not previewed"} />
+        <MetricLine label={tKey("signalDetails.riskAmountPercent")} value={`${formatCurrencyAmount(riskCheck?.effective_risk_amount ?? sizing?.risk_amount)} / ${formatPercentValue(riskCheck?.adjusted_risk_percent ?? sizing?.risk_per_trade_percent)}`} />
+        <MetricLine label={tKey("signalDetails.marginLeverage")} value={`${formatCurrencyAmount(riskCheck?.required_margin ?? sizing?.required_margin)} / ${sizing?.leverage == null ? "-" : `${sizing.leverage}x`}`} />
+        <MetricLine label={tKey("signalDetails.executionQuality")} value={execution ? `${t(execution.quality_gate.status)} / ${t(execution.liquidity.impact_risk)} ${tKey("signalDetails.impactRisk").toLowerCase()}` : error ? tKey("signalDetails.previewError") : loading ? tKey("common.checking") : tKey("signalDetails.notPreviewed")} />
       </div>
     </div>
   );
 }
 
 function WhyThisSignal({ reasons }: { reasons: string[] }) {
+  const { t, tKey } = useI18n();
   return (
     <div className="explanation-block why-signal-block">
-      <h3>Why this signal?</h3>
-      <ul>{reasons.map((reason) => <li key={reason}><span>{reason}</span></li>)}</ul>
+      <h3>{tKey("signalDetails.whyThisSignal")}</h3>
+      <ul>{reasons.map((reason) => <li key={reason}><span>{t(reason)}</span></li>)}</ul>
     </div>
   );
 }
@@ -382,40 +399,41 @@ function ActionsBlock({
   backendDisabledReason: string | null;
   canEnterNow: boolean | null;
 }) {
+  const { tKey } = useI18n();
   return (
     <div className="actions-block">
       <div className="section-title">
         <FileCheck2 size={18} />
-        <h3>Actions</h3>
+        <h3>{tKey("signalDetails.actions")}</h3>
         <Badge tone={canEnterNow === true ? "green" : canEnterNow === false ? "red" : "yellow"}>
-          {canEnterNowLabel(canEnterNow)}
+          {canEnterNowLabel(canEnterNow, tKey)}
         </Badge>
       </div>
-      <p className="compact-action-note">Execution environment: {realExecutionEnvironment}</p>
+      <p className="compact-action-note">{tKey("signalDetails.executionEnvironment", { environment: realExecutionEnvironment })}</p>
       <div className="detail-actions compact-actions">
         <button className="secondary-action" onClick={onAcceptPendingEntry} disabled={acceptPendingDisabled} type="button">
-          <FileCheck2 size={17} /> Virtual wait entry
+          <FileCheck2 size={17} /> {tKey("signalDetails.virtualWaitEntry")}
         </button>
         <button className="real-action" onClick={() => setRealConfirmationOpen(true)} disabled={realActionDisabled} type="button">
-          <ShieldAlert size={17} /> Real wait entry
+          <ShieldAlert size={17} /> {tKey("signalDetails.realWaitEntry")}
         </button>
         <button className="primary-action" onClick={onPaperTrade} disabled={entryActionDisabled} type="button">
-          <FileCheck2 size={17} /> {canEnterNow === true ? "Virtual entry now" : "Virtual entry locked"}
+          <FileCheck2 size={17} /> {canEnterNow === true ? tKey("signalDetails.virtualEntryNow") : tKey("signalDetails.virtualEntryLocked")}
         </button>
         {activePendingEntry ? (
           <button className="secondary-action" onClick={onCancelPendingEntry} disabled={cancelPendingDisabled} type="button">
-            <XCircle size={17} /> Cancel waiting
+            <XCircle size={17} /> {tKey("signalDetails.cancelWaiting")}
           </button>
         ) : null}
         <button className="secondary-action" onClick={onToggleChart} type="button">
-          <BarChart3 size={17} /> {chartOpen ? "Hide chart" : "Open chart"}
+          <BarChart3 size={17} /> {chartOpen ? tKey("signalDetails.hideChart") : tKey("signalDetails.openChart")}
         </button>
         <button className="danger-action" onClick={onReject} disabled={rejectDisabled} type="button">
-          <XCircle size={17} /> Reject / ignore
+          <XCircle size={17} /> {tKey("signalDetails.rejectIgnore")}
         </button>
       </div>
       {tradingActionsDisabled ? (
-        <p className="compact-action-note">Trading actions disabled until realtime data is current.</p>
+        <p className="compact-action-note">{tKey("signalDetails.tradingDisabled")}</p>
       ) : backendDisabledReason ? (
         <p className="compact-action-note">{backendDisabledReason}</p>
       ) : null}
@@ -450,6 +468,7 @@ function DiagnosticsPanel({
   terminalPendingEntry: PendingEntryIntent | null;
   viewModel: SignalDetailsViewModel;
 }) {
+  const { tKey } = useI18n();
   return (
     <div className="diagnostics-panel">
       <button
@@ -461,9 +480,9 @@ function DiagnosticsPanel({
       >
         <span className="section-title">
           <ShieldAlert size={18} />
-          <span>Р”РёР°РіРЅРѕСЃС‚РёРєР°</span>
+          <span>{tKey("signalDetails.diagnostics")}</span>
         </span>
-        <Badge tone={open ? "blue" : "neutral"}>{open ? "open" : "collapsed"}</Badge>
+        <Badge tone={open ? "blue" : "neutral"}>{open ? tKey("common.openLower") : tKey("common.collapsed")}</Badge>
       </button>
       {open ? (
         <div className="diagnostics-content" id="signal-diagnostics-content">
@@ -486,25 +505,26 @@ function BackendViewBlock({
   actionState: SignalActionState | null;
   viewModel: SignalDetailsViewModel;
 }) {
+  const { t, tKey, tReason } = useI18n();
   return (
     <div className="risk-reward-detail-block">
       <div className="section-title">
         <ShieldAlert size={18} />
-        <h3>Backend Action State</h3>
-        <Badge tone={viewModel.primaryStatusTone}>{viewModel.primaryStatusLabel}</Badge>
+        <h3>{tKey("signalDetails.backendActionState")}</h3>
+        <Badge tone={viewModel.primaryStatusTone}>{t(viewModel.primaryStatusLabel)}</Badge>
       </div>
       <div className="risk-reward-detail-grid">
-        <MetricLine label="Signal status" value={signal.status.replaceAll("_", " ")} />
-        <MetricLine label="Primary action" value={actionState?.primary_action ?? "-"} />
-        <MetricLine label="Can enter" value={canEnterNowLabel(actionState?.can_enter_now ?? null)} />
-        <MetricLine label="Can arm pending" value={formatBool(actionState?.can_arm_pending)} />
-        <MetricLine label="Can cancel" value={formatBool(actionState?.can_cancel)} />
-        <MetricLine label="Environment" value={actionState?.environment ?? "-"} />
+        <MetricLine label={tKey("signalDetails.signalStatus")} value={t(signal.status.replaceAll("_", " "))} />
+        <MetricLine label={tKey("signalDetails.primaryAction")} value={actionState?.primary_action ?? "-"} />
+        <MetricLine label={tKey("signalDetails.canEnter")} value={canEnterNowLabel(actionState?.can_enter_now ?? null, tKey)} />
+        <MetricLine label={tKey("signalDetails.canArmPending")} value={formatBool(actionState?.can_arm_pending, tKey)} />
+        <MetricLine label={tKey("signalDetails.canCancel")} value={formatBool(actionState?.can_cancel, tKey)} />
+        <MetricLine label={tKey("signalDetails.environment")} value={actionState?.environment ?? "-"} />
       </div>
       {[...viewModel.topBlockers, ...viewModel.warnings].length ? (
         <ul className="risk-blocker-list">
           {[...viewModel.topBlockers, ...viewModel.warnings].map((blocker) => (
-            <li key={blockerKey(blocker)}>{blocker.userMessage}</li>
+            <li key={blockerKey(blocker)}>{tReason(blocker.code)}</li>
           ))}
         </ul>
       ) : null}
@@ -521,27 +541,32 @@ function PendingEntryBlock({
   onReconfirmPendingEntry?: (intent: PendingEntryIntent) => void;
   busy: boolean;
 }) {
+  const { t, tKey, tReason } = useI18n();
   if (!pendingEntry) return null;
+  const reasonCode = pendingEntry.view?.reason_code ?? pendingEntry.reason_code ?? null;
+  const reason = reasonCode
+    ? tReason(reasonCode)
+    : tReason(pendingEntry.view?.reason ?? pendingEntry.failure_reason ?? tKey("pendingEntry.noBackendReason"));
   return (
     <div className="pending-entry-block">
       <div className="section-title">
         <FileCheck2 size={18} />
-        <h3>Pending Entry</h3>
+        <h3>{tKey("pendingEntry.pendingEntry")}</h3>
         <Badge tone={pendingEntry.view?.status_tone ?? pendingEntryTone(pendingEntry.status)}>
-          {pendingEntry.view?.status_label ?? pendingEntry.status.replaceAll("_", " ")}
+          {t(pendingEntry.view?.status_label ?? pendingEntry.status.replaceAll("_", " "))}
         </Badge>
       </div>
-      <p>{pendingEntry.view?.reason ?? pendingEntry.failure_reason ?? "No backend reason."}</p>
+      <p>{reason}</p>
       <div className="risk-reward-detail-grid">
-        <MetricLine label="Entry zone" value={pendingEntry.view?.entry_zone ?? `${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
-        <MetricLine label="Stop" value={formatPrice(pendingEntry.stop_loss)} />
-        <MetricLine label="Mode" value={pendingEntry.mode} />
-        <MetricLine label="Accepted status" value={pendingEntry.accepted_signal_status.replaceAll("_", " ")} />
+        <MetricLine label={tKey("pendingEntry.entryZone")} value={pendingEntry.view?.entry_zone ?? `${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
+        <MetricLine label={tKey("pendingEntry.stop")} value={formatPrice(pendingEntry.stop_loss)} />
+        <MetricLine label={tKey("pendingEntry.mode")} value={pendingEntry.mode} />
+        <MetricLine label={tKey("pendingEntry.acceptedStatus")} value={t(pendingEntry.accepted_signal_status.replaceAll("_", " "))} />
       </div>
       {pendingEntry.status === "requires_reconfirmation" && onReconfirmPendingEntry ? (
         <div className="detail-actions">
           <button className="secondary-action" disabled={busy} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
-            <FileCheck2 size={17} /> Reconfirm plan
+            <FileCheck2 size={17} /> {tKey("pendingEntry.reconfirmPlan")}
           </button>
         </div>
       ) : null}
@@ -550,22 +575,25 @@ function PendingEntryBlock({
 }
 
 function PendingEntryHistoryCollapsed({ pendingEntry }: { pendingEntry: PendingEntryIntent | null }) {
+  const { t, tKey, tReason } = useI18n();
   if (!pendingEntry) return null;
+  const reasonCode = pendingEntry.view?.reason_code ?? pendingEntry.reason_code ?? null;
+  const reason = reasonCode ? tReason(reasonCode) : tReason(pendingEntry.view?.reason ?? pendingEntry.failure_reason ?? null);
   return (
     <details className="risk-reward-detail-block pending-entry-history-block">
       <summary className="pending-entry-history-summary">
         <span className="section-title">
           <FileCheck2 size={18} />
-          <h3>РСЃС‚РѕСЂРёСЏ РѕР¶РёРґР°РЅРёСЏ РІС…РѕРґР°</h3>
+          <h3>{tKey("pendingEntry.historyTitle")}</h3>
         </span>
         <Badge tone={pendingEntry.view?.status_tone ?? pendingEntryTone(pendingEntry.status)}>
-          {pendingEntry.view?.status_label ?? pendingEntry.status.replaceAll("_", " ")}
+          {t(pendingEntry.view?.status_label ?? pendingEntry.status.replaceAll("_", " "))}
         </Badge>
       </summary>
       <div className="risk-reward-detail-grid">
-        <MetricLine label="Status" value={pendingEntry.status.replaceAll("_", " ")} />
-        <MetricLine label="Reason" value={pendingEntry.view?.reason ?? pendingEntry.failure_reason ?? "-"} />
-        <MetricLine label="Updated" value={formatPendingEntryTimestamp(pendingEntry.updated_at)} />
+        <MetricLine label={tKey("pendingEntry.status")} value={t(pendingEntry.status.replaceAll("_", " "))} />
+        <MetricLine label={tKey("pendingEntry.reason")} value={reason} />
+        <MetricLine label={tKey("pendingEntry.updated")} value={formatPendingEntryTimestamp(pendingEntry.updated_at)} />
       </div>
     </details>
   );
@@ -580,26 +608,27 @@ function ExecutionPreviewBlock({
   error: string | null;
   loading: boolean;
 }) {
+  const { t, tKey, tReason } = useI18n();
   return (
     <div className="execution-quality-block">
       <div className="section-title">
         <ShieldAlert size={18} />
-        <h3>Backend Execution Preview</h3>
+        <h3>{tKey("signalDetails.backendExecutionPreview")}</h3>
         <Badge tone={execution ? riskGateTone(execution.risk_check?.status ?? execution.risk_decision?.status ?? null) : loading ? "yellow" : "neutral"}>
-          {execution?.risk_check?.status ?? execution?.risk_decision?.status ?? (loading ? "checking" : "not previewed")}
+          {t(execution?.risk_check?.status ?? execution?.risk_decision?.status ?? (loading ? tKey("common.checking") : tKey("signalDetails.notPreviewed")))}
         </Badge>
       </div>
       {execution ? (
         <div className="execution-quality-grid">
-          <MetricLine label="Quality gate" value={execution.quality_gate.status} />
-          <MetricLine label="Impact risk" value={execution.liquidity.impact_risk} />
-          <MetricLine label="Requested size" value={formatCurrencyAmount(execution.requested_size_usd)} />
-          <MetricLine label="Filled size" value={formatCurrencyAmount(execution.filled_size_usd)} />
-          <MetricLine label="Entry slippage" value={formatBps(execution.entry_slippage_bps)} />
-          <MetricLine label="Reason" value={execution.reason_code ?? "-"} />
+          <MetricLine label={tKey("signalDetails.qualityGate")} value={t(execution.quality_gate.status)} />
+          <MetricLine label={tKey("signalDetails.impactRisk")} value={t(execution.liquidity.impact_risk)} />
+          <MetricLine label={tKey("signalDetails.requestedSize")} value={formatCurrencyAmount(execution.requested_size_usd)} />
+          <MetricLine label={tKey("signalDetails.filledSize")} value={formatCurrencyAmount(execution.filled_size_usd)} />
+          <MetricLine label={tKey("signalDetails.entrySlippage")} value={formatBps(execution.entry_slippage_bps, tKey)} />
+          <MetricLine label={tKey("signalDetails.reason")} value={execution.reason_code ? tReason(execution.reason_code) : "-"} />
         </div>
       ) : (
-        <p>{error ?? (loading ? "Backend execution preview is loading." : "No execution preview requested.")}</p>
+        <p>{error ?? (loading ? tKey("signalDetails.previewLoading") : tKey("signalDetails.previewNotRequested"))}</p>
       )}
     </div>
   );
@@ -622,6 +651,7 @@ function RealTradeConfirmationModal({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t, tKey, tReason } = useI18n();
   const confirmDisabled = busy || !(actionState?.can_enter_now || actionState?.can_arm_pending);
   const blockers = actionState?.blockers ?? [];
   const warnings = actionState?.warnings ?? [];
@@ -632,8 +662,8 @@ function RealTradeConfirmationModal({
       <div aria-labelledby="real-trade-confirm-title" aria-modal="true" className="real-trade-modal" role="dialog">
         <div className="real-trade-modal-header">
           <div>
-            <span className="muted">Real execution</span>
-            <h3 id="real-trade-confirm-title">РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ СЂРµР°Р»СЊРЅРѕРіРѕ РІС…РѕРґР°</h3>
+            <span className="muted">{tKey("execution.real")}</span>
+            <h3 id="real-trade-confirm-title">{tKey("execution.confirmRealEntry")}</h3>
           </div>
           <div className="details-badges">
             <Badge tone={actionState?.environment === "mainnet" ? "red" : actionState?.environment === "testnet" ? "blue" : "yellow"}>
@@ -647,44 +677,44 @@ function RealTradeConfirmationModal({
 
         <div className="real-trade-warning">
           <ShieldAlert size={18} />
-          <span>Real execution availability is backend-owned. Confirm only sends the selected intent.</span>
+          <span>{tKey("execution.availabilityBackendOwned")}</span>
         </div>
 
         <div className="real-trade-metric-grid">
-          <RealTradeMetric label="Exchange" value={context?.connection ? `${context.connection.exchange_name || context.connection.exchange_code} В· ${context.connection.label}` : signal.exchange} />
-          <RealTradeMetric label="Account equity" value={formatCurrencyAmount(context?.accountSnapshot?.account_equity)} />
-          <RealTradeMetric label="Available balance" value={formatCurrencyAmount(riskCheck?.available_balance)} />
-          <RealTradeMetric label="Symbol / side" value={`${signal.symbol} / ${signal.direction.toUpperCase()}`} />
-          <RealTradeMetric label="Entry zone" value={tradePlan?.entry_zone ?? "-"} />
-          <RealTradeMetric label="Stop-loss" value={formatPrice(tradePlan?.stop_loss)} />
-          <RealTradeMetric label="Selected RR" value={formatRMultiple(tradePlan?.selected_rr ?? null)} />
-          <RealTradeMetric label="RiskGate" value={riskCheck?.status ?? execution?.risk_decision?.status ?? "-"} />
+          <RealTradeMetric label={tKey("common.exchange")} value={context?.connection ? `${context.connection.exchange_name || context.connection.exchange_code} / ${context.connection.label}` : signal.exchange} />
+          <RealTradeMetric label={tKey("execution.accountEquity")} value={formatCurrencyAmount(context?.accountSnapshot?.account_equity)} />
+          <RealTradeMetric label={tKey("execution.availableBalance")} value={formatCurrencyAmount(riskCheck?.available_balance)} />
+          <RealTradeMetric label={tKey("execution.symbolSide")} value={`${signal.symbol} / ${signal.direction.toUpperCase()}`} />
+          <RealTradeMetric label={tKey("pendingEntry.entryZone")} value={tradePlan?.entry_zone ?? "-"} />
+          <RealTradeMetric label={tKey("signalDetails.stopLoss")} value={formatPrice(tradePlan?.stop_loss)} />
+          <RealTradeMetric label={tKey("signalDetails.selectedRr")} value={formatRMultiple(tradePlan?.selected_rr ?? null)} />
+          <RealTradeMetric label={tKey("execution.riskGate")} value={t(riskCheck?.status ?? execution?.risk_decision?.status ?? "-")} />
         </div>
 
         <div className="real-trade-blockers">
-          <strong>Backend blockers / warnings</strong>
+          <strong>{tKey("execution.backendBlockersWarnings")}</strong>
           {blockers.length ? (
             <ul className="risk-blocker-list">
               {blockers.map((blocker) => (
-                <li key={blocker.code}>{blocker.display_label ?? blocker.message ?? blocker.code}</li>
+                <li key={blocker.code}>{tReason(blocker.code)}</li>
               ))}
             </ul>
           ) : (
-            <p>Р‘Р»РѕРєРµСЂРѕРІ РЅРµС‚.</p>
+            <p>{tKey("execution.noBlockers")}</p>
           )}
           {warnings.length ? (
             <div className="real-trade-warning-list">
               {warnings.map((warning) => (
-                <span key={warning.code}>{warning.display_label ?? warning.message ?? warning.code}</span>
+                <span key={warning.code}>{tReason(warning.code)}</span>
               ))}
             </div>
           ) : null}
         </div>
 
         <div className="real-trade-modal-actions">
-          <button className="secondary-action" onClick={onCancel} type="button">РћС‚РјРµРЅР°</button>
+          <button className="secondary-action" onClick={onCancel} type="button">{tKey("execution.cancel")}</button>
           <button className="real-action" disabled={confirmDisabled} onClick={onConfirm} type="button">
-            <ShieldAlert size={17} /> РџРѕРґС‚РІРµСЂРґРёС‚СЊ СЂРµР°Р»СЊРЅС‹Р№ РІС…РѕРґ
+            <ShieldAlert size={17} /> {tKey("execution.confirmReal")}
           </button>
         </div>
       </div>
@@ -728,29 +758,29 @@ function formatRMultiple(value: number | null): string {
   return value == null ? "-" : `${value.toFixed(2)}R`;
 }
 
-function canEnterNowLabel(value: boolean | null): string {
-  if (value == null) return "not evaluated";
-  return value ? "yes" : "no";
+function canEnterNowLabel(value: boolean | null, tKey: TKey): string {
+  if (value == null) return tKey("signalDetails.notEvaluated");
+  return value ? tKey("signalDetails.yes") : tKey("signalDetails.no");
 }
 
-function formatBool(value: boolean | undefined): string {
-  if (value == null) return "not evaluated";
-  return value ? "yes" : "no";
+function formatBool(value: boolean | undefined, tKey: TKey): string {
+  if (value == null) return tKey("signalDetails.notEvaluated");
+  return value ? tKey("signalDetails.yes") : tKey("signalDetails.no");
 }
 
-function formatPendingEntryExpiry(pendingEntry: PendingEntryIntent): string {
-  if (!pendingEntry.expires_at) return "no expiry";
-  return `${formatPendingEntryTimestamp(pendingEntry.expires_at)} / ${formatPendingEntryTtl(pendingEntry.expires_at)}`;
+function formatPendingEntryExpiry(pendingEntry: PendingEntryIntent, tKey: TKey): string {
+  if (!pendingEntry.expires_at) return tKey("pendingEntry.noExpiry");
+  return `${formatPendingEntryTimestamp(pendingEntry.expires_at)} / ${formatPendingEntryTtl(pendingEntry.expires_at, tKey)}`;
 }
 
-function formatPendingEntryTtl(value: string): string {
+function formatPendingEntryTtl(value: string, tKey: TKey): string {
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "TTL unknown";
+  if (!Number.isFinite(timestamp)) return tKey("pendingEntry.ttlUnknown");
   const diffMs = timestamp - Date.now();
-  if (diffMs <= 0) return "expired";
+  if (diffMs <= 0) return tKey("pendingEntry.expired");
   const diffMinutes = Math.ceil(diffMs / 60_000);
-  if (diffMinutes < 60) return `${diffMinutes}m left`;
-  return `${Math.ceil(diffMinutes / 60)}h left`;
+  if (diffMinutes < 60) return tKey("pendingEntry.minutesLeft", { count: diffMinutes });
+  return tKey("pendingEntry.hoursLeft", { count: Math.ceil(diffMinutes / 60) });
 }
 
 function formatPendingEntryTimestamp(value: string | null | undefined): string {
@@ -773,14 +803,13 @@ function riskGateTone(status: string | null | undefined): ViewTone {
   return "neutral";
 }
 
-function actionStateDisabledReason(state: SignalActionState | null): string | null {
+function actionStateDisabledReason(state: SignalActionState | null, tReason: TReason): string | null {
   if (!state) return null;
   const blocker = state.blockers[0] ?? null;
-  return state.display_labels.disabled_reason
-    ?? blocker?.display_label
-    ?? blocker?.message
-    ?? state.disabled_reason_code
-    ?? null;
+  const reasonCode = state.disabled_reason_code ?? blocker?.code ?? null;
+  if (reasonCode) return tReason(reasonCode);
+  const fallback = state.display_labels.disabled_reason ?? blocker?.display_label ?? blocker?.message ?? null;
+  return fallback ? tReason(fallback) : null;
 }
 
 function formatCurrencyAmount(value: number | null | undefined): string {
@@ -799,9 +828,9 @@ function formatPercentValue(value: number | null | undefined): string {
   return `${value.toFixed(value >= 10 ? 1 : 2)}%`;
 }
 
-function formatBps(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "slippage -";
-  return `slippage ${value.toFixed(1)} bps`;
+function formatBps(value: number | null | undefined, tKey: TKey): string {
+  if (value == null || !Number.isFinite(value)) return tKey("signalDetails.slippageUnavailable");
+  return tKey("signalDetails.slippageBps", { value: value.toFixed(1) });
 }
 
 function blockerKey(blocker: UiBlocker): string {

@@ -130,7 +130,7 @@ describe("SettingsPage exchange balance UX", () => {
     expect(screen.getByText(/Snapshot age just now/u)).toBeInTheDocument();
     expect(screen.getByText("Bybit positions are unavailable: timeout")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Обновить баланс" }));
+    await user.click(screen.getByRole("button", { name: "Refresh balance" }));
 
     expect(onRefreshExchangeBalance).toHaveBeenCalledWith(EXCHANGE_CONNECTION_ID);
   });
@@ -149,10 +149,10 @@ describe("SettingsPage exchange connection delete UX", () => {
     await user.click(screen.getByRole("button", { name: /Exchanges/u }));
     await user.click(screen.getByRole("button", { name: "Delete Main Bybit" }));
 
-    expect(screen.getByRole("dialog", { name: /Удалить подключение к бирже/u })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /Delete exchange connection/u })).toBeInTheDocument();
     expect(onDeleteExchangeConnection).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Удалить подключение" }));
+    await user.click(screen.getByRole("button", { name: "Delete exchange connection?" }));
 
     expect(onDeleteExchangeConnection).toHaveBeenCalledWith(EXCHANGE_CONNECTION_ID);
   });
@@ -169,9 +169,9 @@ describe("SettingsPage exchange connection delete UX", () => {
 
     await user.click(screen.getByRole("button", { name: /Exchanges/u }));
     await user.click(screen.getByRole("button", { name: "Delete Main Bybit" }));
-    await user.click(screen.getByRole("button", { name: "Удалить подключение" }));
+    await user.click(screen.getByRole("button", { name: "Delete exchange connection?" }));
 
-    expect(await screen.findByText("Подключение к бирже не найдено.")).toBeInTheDocument();
+    expect(await screen.findByText("Exchange connection is not found.")).toBeInTheDocument();
   });
 
   it("does not render deleted exchange connections in the active list", async () => {
@@ -195,9 +195,9 @@ describe("SettingsPage strategy pair selector", () => {
 
     await openStrategySettings(user);
 
-    expect(screen.getByText("Торговые пары стратегии")).toBeInTheDocument();
+    expect(screen.getByText("Strategy trading pairs")).toBeInTheDocument();
     expect(await screen.findByText("BTCUSDT")).toBeInTheDocument();
-    expect(screen.getAllByText("Все пары из scanner universe").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("All pairs from scanner universe").length).toBeGreaterThan(0);
   });
 
   it("sync button calls market universe sync mutation", async () => {
@@ -205,7 +205,7 @@ describe("SettingsPage strategy pair selector", () => {
     renderSettingsPage({ strategyConfigs: [strategyConfig()] });
 
     await openStrategySettings(user);
-    await user.click(screen.getByRole("button", { name: "Синхронизировать пары с биржи" }));
+    await user.click(screen.getByRole("button", { name: "Sync pairs from exchange" }));
 
     await waitFor(() => {
       expect(api.syncMarketUniverse).toHaveBeenCalledWith({
@@ -224,9 +224,9 @@ describe("SettingsPage strategy pair selector", () => {
     renderSettingsPage({ strategyConfigs: [strategyConfig()] });
 
     await openStrategySettings(user);
-    await user.click(await screen.findByRole("checkbox", { name: "Выбрать пару DOGEUSDT" }));
+    await user.click(await screen.findByRole("checkbox", { name: "Select pair DOGEUSDT" }));
 
-    expect(screen.getAllByText("Выбрано 1 пар").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1 pairs selected").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/DOGEUSDT/u).length).toBeGreaterThan(0);
     expect(screen.getByText(/low-liquidity/u)).toBeInTheDocument();
   });
@@ -237,7 +237,7 @@ describe("SettingsPage strategy pair selector", () => {
     renderSettingsPage({ onUpdateStrategyConfig, strategyConfigs: [strategyConfig()] });
 
     await openStrategySettings(user);
-    await user.click(await screen.findByRole("checkbox", { name: "Выбрать пару BTCUSDT" }));
+    await user.click(await screen.findByRole("checkbox", { name: "Select pair BTCUSDT" }));
     await user.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() => {
@@ -261,7 +261,7 @@ describe("SettingsPage strategy pair selector", () => {
     });
 
     await openStrategySettings(user);
-    await user.click(screen.getByRole("button", { name: "Очистить" }));
+    await user.click(screen.getByRole("button", { name: "Clear" }));
     await user.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() => {

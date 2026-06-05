@@ -1,3 +1,5 @@
+"use client";
+
 import { FileCheck2, Filter, RadioTower, RefreshCw, XCircle } from "lucide-react";
 
 import { Metric } from "@/components/Metric";
@@ -6,6 +8,7 @@ import { SignalFeed } from "@/components/SignalFeed";
 import { RADAR_STATUS_FILTERS } from "@/domain/signal-status";
 import type { RadarDisplayMode } from "@/features/server-state/types";
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
+import { useI18n, type I18nKey } from "@/i18n";
 import type { HealthStatus, PendingEntryIntent, RadarSignal, RadarStatus, RadarSummary, SignalActionState, SignalStatus, VirtualExecutionReport } from "@/types";
 import { formatPrice } from "@/utils";
 
@@ -58,6 +61,7 @@ interface RadarPageProps {
 }
 
 export function RadarPage(props: RadarPageProps) {
+  const { t, tKey } = useI18n();
   const summary = props.radarSummary;
   const scannerPairCount = props.radarStatus?.scanner_pairs_count ?? props.health?.scanner_pairs_count ?? props.radarStatus?.symbols.length ?? 0;
   const scannerUniverse = props.radarStatus?.scanner_universe_source ?? props.health?.scanner_universe_source ?? "default";
@@ -73,47 +77,47 @@ export function RadarPage(props: RadarPageProps) {
       <section className="feed-panel">
         <div className="page-head">
           <div>
-            <span className="muted">Signal First Radar</span>
-            <h1>Market opportunities</h1>
+            <span className="muted">{tKey("radar.eyebrow")}</span>
+            <h1>{tKey("radar.title")}</h1>
           </div>
-          <button className="icon-button" onClick={props.onRefresh} type="button" title="Refresh">
+          <button className="icon-button" onClick={props.onRefresh} type="button" title={tKey("common.refresh")}>
             <RefreshCw size={18} />
           </button>
         </div>
 
         <div className="metrics-grid">
-          <Metric label="Market Status" value={props.health?.scanner_running ? "Online" : "Offline"} hint="scanner" />
-          <Metric label="Execution Ready" value={String(summary?.execution_ready_signals ?? 0)} hint="RiskGate" />
-          <Metric label="High Confidence" value={String(summary?.high_confidence_signals ?? 0)} hint="score 80+" />
-          <Metric label="Positive Edge" value={String(summary?.positive_edge_signals ?? 0)} hint="EV gate" />
-          <Metric label="Blocked Ideas" value={String(summary?.blocked_ideas ?? 0)} hint="backend" />
-          <Metric label="Ticks" value={String(props.radarStatus?.ticks_processed ?? props.health?.ticks_processed ?? 0)} hint="market data" />
-          <Metric label="Strategy Checks" value={String(props.radarStatus?.strategy_evaluations ?? props.health?.strategy_evaluations ?? 0)} hint="evaluated" />
-          <Metric label="Features" value={String(props.radarStatus?.features_built ?? props.health?.features_built ?? 0)} hint="candles analyzed" />
+          <Metric label={tKey("radar.marketStatus")} value={props.health?.scanner_running ? tKey("radar.online") : tKey("radar.offline")} hint={tKey("radar.scanner")} />
+          <Metric label={tKey("radar.executionReady")} value={String(summary?.execution_ready_signals ?? 0)} hint={tKey("radar.riskGate")} />
+          <Metric label={tKey("radar.highConfidence")} value={String(summary?.high_confidence_signals ?? 0)} hint={tKey("radar.score80")} />
+          <Metric label={tKey("radar.positiveEdge")} value={String(summary?.positive_edge_signals ?? 0)} hint={tKey("radar.evGate")} />
+          <Metric label={tKey("radar.blockedIdeas")} value={String(summary?.blocked_ideas ?? 0)} hint={tKey("radar.backend")} />
+          <Metric label={tKey("radar.ticks")} value={String(props.radarStatus?.ticks_processed ?? props.health?.ticks_processed ?? 0)} hint={tKey("radar.marketData")} />
+          <Metric label={tKey("radar.strategyChecks")} value={String(props.radarStatus?.strategy_evaluations ?? props.health?.strategy_evaluations ?? 0)} hint={tKey("radar.evaluated")} />
+          <Metric label={tKey("radar.features")} value={String(props.radarStatus?.features_built ?? props.health?.features_built ?? 0)} hint={tKey("radar.candlesAnalyzed")} />
         </div>
 
         <div className="scanner-panel">
           <div>
-            <span className="muted">Scanner activity</span>
+            <span className="muted">{tKey("radar.scannerActivity")}</span>
             <strong>
               {props.radarStatus?.last_symbol
                 ? `${props.radarStatus.last_exchange ?? ""} ${props.radarStatus.last_symbol} ${props.radarStatus.last_price ?? ""}`
-                : "Waiting for market data"}
+                : tKey("radar.waitingMarketData")}
             </strong>
           </div>
           <div className="scanner-stats">
-            <span>Signals found: {props.radarStatus?.signals_found ?? props.health?.signals_found ?? 0}</span>
-            <span>Seeded candles: {props.radarStatus?.candles_seeded ?? props.health?.candles_seeded ?? 0}</span>
-            <span>Pairs: {scannerPairCount}</span>
-            <span>Universe: {scannerUniverse}</span>
-            <span>Estimated evaluations: {estimatedEvaluations}</span>
-            <span>Timeframes: {props.radarStatus?.timeframes.join(", ") ?? "1m, 5m, 15m, 1h, 4h, 1d"}</span>
-            {scannerWarning ? <span>Warning: {scannerWarning}</span> : null}
+            <span>{tKey("radar.signalsFound", { count: props.radarStatus?.signals_found ?? props.health?.signals_found ?? 0 })}</span>
+            <span>{tKey("radar.seededCandles", { count: props.radarStatus?.candles_seeded ?? props.health?.candles_seeded ?? 0 })}</span>
+            <span>{tKey("radar.pairs", { count: scannerPairCount })}</span>
+            <span>{tKey("radar.universe", { universe: scannerUniverse })}</span>
+            <span>{tKey("radar.estimatedEvaluations", { count: estimatedEvaluations })}</span>
+            <span>{tKey("radar.timeframes", { timeframes: props.radarStatus?.timeframes.join(", ") ?? "1m, 5m, 15m, 1h, 4h, 1d" })}</span>
+            {scannerWarning ? <span>{tKey("radar.warning", { warning: scannerWarning })}</span> : null}
           </div>
           <div className="history-grid">
             {latestSeries.length ? latestSeries.map(([series, candles]) => (
-              <span key={series}>{series}: {candles} candles</span>
-            )) : <span>Candle history is still warming up</span>}
+              <span key={series}>{series}: {tKey("radar.candles", { count: candles })}</span>
+            )) : <span>{tKey("radar.candleHistoryWarming")}</span>}
           </div>
         </div>
 
@@ -139,14 +143,14 @@ export function RadarPage(props: RadarPageProps) {
               onClick={() => props.onSignalViewChange(item)}
               type="button"
             >
-              {item === "open" ? "open ideas" : "history"}
+              {item === "open" ? tKey("radar.openIdeas") : tKey("radar.history")}
             </button>
           ))}
         </div>
         <div className="filter-row">
           {([
-            { label: "all market opportunities", value: "all_market_opportunities" },
-            { label: "execution ready", value: "execution_ready" }
+            { labelKey: "radar.allMarketOpportunities", value: "all_market_opportunities" },
+            { labelKey: "radar.executionReadyFilter", value: "execution_ready" }
           ] as const).map((item) => (
             <button
               className={props.radarDisplayMode === item.value ? "filter-chip active" : "filter-chip"}
@@ -154,7 +158,7 @@ export function RadarPage(props: RadarPageProps) {
               onClick={() => props.onRadarDisplayModeChange(item.value)}
               type="button"
             >
-              {item.label}
+              {tKey(item.labelKey)}
             </button>
           ))}
         </div>
@@ -166,7 +170,7 @@ export function RadarPage(props: RadarPageProps) {
               onClick={() => props.onFilterChange(item)}
               type="button"
             >
-              {item}
+              {tKey(radarDirectionFilterKey(item))}
             </button>
           ))}
         </div>
@@ -178,7 +182,7 @@ export function RadarPage(props: RadarPageProps) {
               onClick={() => props.onStatusFilterChange(item)}
               type="button"
             >
-              {item.replaceAll("_", " ")}
+              {t(item.replaceAll("_", " "))}
             </button>
           ))}
         </div>
@@ -187,11 +191,11 @@ export function RadarPage(props: RadarPageProps) {
           emptyState={
             <div className="empty-state">
               <RadioTower size={26} />
-              <strong>{props.signalView === "history" ? "No historical signals yet" : "No market opportunities yet"}</strong>
+              <strong>{props.signalView === "history" ? tKey("radar.noHistoricalSignals") : tKey("radar.noMarketOpportunities")}</strong>
               <span>
                 {props.signalView === "history"
-                  ? "Invalidated and expired ideas will appear here after lifecycle transitions."
-                  : "The scanner may still be building candle history, or the market has not produced a valid setup."}
+                  ? tKey("radar.historicalSignalsEmpty")
+                  : tKey("radar.marketOpportunitiesEmpty")}
               </span>
             </div>
           }
@@ -253,6 +257,7 @@ function PendingEntriesQueue({
   onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
   selectedSignalId: string | null;
 }) {
+  const { tKey } = useI18n();
   const active = activeEntries.filter((intent) => isActivePendingEntryStatus(intent.status));
   const history = historyEntries.filter((intent) => isTerminalPendingEntryStatus(intent.status));
 
@@ -260,13 +265,13 @@ function PendingEntriesQueue({
     <section className="pending-entries-panel">
       <div className="pending-entries-head">
         <div>
-          <span className="muted">Pending Entries Queue</span>
-          <h3>Selected entries</h3>
+          <span className="muted">{tKey("pendingEntry.queueEyebrow")}</span>
+          <h3>{tKey("pendingEntry.selectedEntries")}</h3>
         </div>
-        <span className="badge badge-blue">{active.length} active</span>
+        <span className="badge badge-blue">{tKey("pendingEntry.activeCount", { count: active.length })}</span>
       </div>
       {loading && !active.length ? (
-        <div className="empty-state compact-empty">Loading pending entries</div>
+        <div className="empty-state compact-empty">{tKey("pendingEntry.loading")}</div>
       ) : active.length ? (
         <div className="pending-entry-list">
           {active.map((intent) => (
@@ -284,11 +289,11 @@ function PendingEntriesQueue({
           ))}
         </div>
       ) : (
-        <div className="empty-state compact-empty">No active pending entries</div>
+        <div className="empty-state compact-empty">{tKey("pendingEntry.noActive")}</div>
       )}
       <details className="pending-entry-history-queue">
         <summary>
-          <span>History</span>
+          <span>{tKey("pendingEntry.history")}</span>
           <span className="badge">{history.length}</span>
         </summary>
         {history.length ? (
@@ -308,7 +313,7 @@ function PendingEntriesQueue({
             ))}
           </div>
         ) : (
-          <div className="empty-state compact-empty">No pending entry history</div>
+          <div className="empty-state compact-empty">{tKey("pendingEntry.noHistory")}</div>
         )}
       </details>
     </section>
@@ -334,8 +339,11 @@ function PendingEntryQueueItem({
   onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
   selected: boolean;
 }) {
+  const { t, tKey, tReason } = useI18n();
   const reasonCode = intent.view?.reason_code ?? intent.reason_code ?? null;
-  const reason = intent.view?.reason ?? intent.failure_reason ?? reasonCode?.replaceAll("_", " ") ?? "No reason from backend";
+  const reason = reasonCode
+    ? tReason(reasonCode)
+    : tReason(intent.view?.reason ?? intent.failure_reason ?? tKey("pendingEntry.noReasonFromBackend"));
   const currentPrice = intent.view?.current_price == null ? formatPrice(intent.current_price) : formatPrice(intent.view.current_price);
 
   return (
@@ -346,20 +354,20 @@ function PendingEntryQueueItem({
           <span>{intent.exchange} / {intent.side.toUpperCase()}</span>
         </div>
         <div className="pending-entry-badges">
-          <span className={`badge badge-${pendingEntryTone(intent.status)}`}>{intent.status.replaceAll("_", " ")}</span>
+          <span className={`badge badge-${pendingEntryTone(intent.status)}`}>{t(intent.status.replaceAll("_", " "))}</span>
           <span className="badge badge-purple">{intent.mode}</span>
         </div>
       </div>
       <div className="pending-entry-metrics">
-        <MetricLine label="Entry zone" value={intent.view?.entry_zone ?? `${formatPrice(intent.entry_min)} - ${formatPrice(intent.entry_max)}`} />
-        <MetricLine label="Current price" value={currentPrice} />
-        <MetricLine label="Expires" value={formatPendingEntryTtl(intent.expires_at)} />
-        <MetricLine label="Reason code" value={reasonCode ?? "-"} />
+        <MetricLine label={tKey("pendingEntry.entryZone")} value={intent.view?.entry_zone ?? `${formatPrice(intent.entry_min)} - ${formatPrice(intent.entry_max)}`} />
+        <MetricLine label={tKey("pendingEntry.currentPrice")} value={currentPrice} />
+        <MetricLine label={tKey("pendingEntry.expires")} value={formatPendingEntryTtl(intent.expires_at, tKey)} />
+        <MetricLine label={tKey("pendingEntry.reasonCode")} value={reasonCode ?? "-"} />
       </div>
       <p className="pending-entry-reason">{reason}</p>
       <div className="pending-entry-actions">
         <button className="secondary-action compact-action" onClick={() => onSelectPendingEntrySignal(intent)} type="button">
-          <FileCheck2 size={15} /> Select signal
+          <FileCheck2 size={15} /> {tKey("pendingEntry.selectSignal")}
         </button>
         <button
           className="secondary-action compact-action"
@@ -367,7 +375,7 @@ function PendingEntryQueueItem({
           onClick={() => onReconfirmPendingEntry(intent)}
           type="button"
         >
-          <RefreshCw size={15} /> Reconfirm
+          <RefreshCw size={15} /> {tKey("pendingEntry.reconfirm")}
         </button>
         <button
           className="secondary-action compact-action"
@@ -375,7 +383,7 @@ function PendingEntryQueueItem({
           onClick={() => onCancelPendingEntry(intent)}
           type="button"
         >
-          <XCircle size={15} /> Cancel
+          <XCircle size={15} /> {tKey("pendingEntry.cancel")}
         </button>
       </div>
     </article>
@@ -399,13 +407,19 @@ function pendingEntryTone(status: PendingEntryIntent["status"]): "green" | "red"
   return "neutral";
 }
 
-function formatPendingEntryTtl(value: string | null): string {
-  if (!value) return "no expiry";
+function formatPendingEntryTtl(value: string | null, tKey: (key: I18nKey, params?: Record<string, string | number | boolean | null | undefined>) => string): string {
+  if (!value) return tKey("pendingEntry.noExpiry");
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "unknown";
+  if (!Number.isFinite(timestamp)) return tKey("common.unknown");
   const diffMs = timestamp - Date.now();
-  if (diffMs <= 0) return "expired";
+  if (diffMs <= 0) return tKey("pendingEntry.expired");
   const diffMinutes = Math.ceil(diffMs / 60_000);
-  if (diffMinutes < 60) return `${diffMinutes}m left`;
-  return `${Math.ceil(diffMinutes / 60)}h left`;
+  if (diffMinutes < 60) return tKey("pendingEntry.minutesLeft", { count: diffMinutes });
+  return tKey("pendingEntry.hoursLeft", { count: Math.ceil(diffMinutes / 60) });
+}
+
+function radarDirectionFilterKey(value: "all" | "long" | "short"): I18nKey {
+  if (value === "long") return "radar.longFilter";
+  if (value === "short") return "radar.shortFilter";
+  return "radar.allFilter";
 }

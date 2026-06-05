@@ -30,6 +30,7 @@ from app.schemas.signal import SignalEdgeSnapshot
 from app.schemas.trade_plan import TradePlan, TradePlanTarget
 from app.schemas.user import RRGuardMode, RiskManagementPatch, RiskManagementSettings, RiskProfileName
 from app.services.liquidation_projection import liquidation_projection_service
+from app.services.reason_codes import normalize_reason_codes
 from app.services.risk_reward_plan import risk_reward_plan_service
 
 RISK_PROFILE_PRESETS: dict[RiskProfileName, RiskManagementSettings] = {
@@ -983,10 +984,24 @@ def calculate_risk_check_result(
                 warnings.append(futures_risk_plan.message)
                 warnings.extend(futures_risk_plan.blockers)
 
+    deduped_blockers = _dedupe(blockers)
+    deduped_warnings = _dedupe(warnings)
+    reason_codes = normalize_reason_codes([
+        *deduped_blockers,
+        *deduped_warnings,
+        risk_reward_block_reason,
+        risk_reward_warning_reason,
+    ])
+    technical_messages = _dedupe([*deduped_blockers, *deduped_warnings])
+
     return RiskCheckResult(
-        status="failed" if blockers else ("warning" if warnings else "passed"),
-        blockers=_dedupe(blockers),
-        warnings=_dedupe(warnings),
+        status="failed" if deduped_blockers else ("warning" if deduped_warnings else "passed"),
+        blockers=deduped_blockers,
+        warnings=deduped_warnings,
+        reason_code=reason_codes[0] if reason_codes else None,
+        reason_codes=reason_codes,
+        technical_message=technical_messages[0] if technical_messages else None,
+        technical_messages=technical_messages,
         rr=rr,
         min_rr_ratio=min_rr_ratio,
         risk_reward_guard_mode=rr_guard_mode,

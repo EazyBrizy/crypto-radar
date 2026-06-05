@@ -1,9 +1,12 @@
+"use client";
+
 import { Plus, Save, SlidersHorizontal, Star, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/Badge";
 import { canShowEnterButton } from "@/domain/signal-status";
 import type { MarketPairOption, StrategyConfig, StrategyConfigPatch, StrategyPairScope } from "@/features/server-state/types";
+import { useI18n } from "@/i18n";
 import type { RadarSignal } from "@/types";
 
 interface WatchlistPageProps {
@@ -23,6 +26,7 @@ export function WatchlistPage({
   busy,
   onUpdateStrategyConfig
 }: WatchlistPageProps) {
+  const { t, tKey } = useI18n();
   const enabledStrategies = useMemo(
     () => strategyConfigs.filter((strategyConfig) => strategyConfig.is_enabled),
     [strategyConfigs]
@@ -88,18 +92,18 @@ export function WatchlistPage({
     <section className="wide-panel">
       <div className="page-head">
         <div>
-          <span className="muted">Watchlist</span>
-          <h1>Strategy watchlist</h1>
+          <span className="muted">{tKey("navigation.watchlist")}</span>
+          <h1>{t("Strategy watchlist")}</h1>
         </div>
         {selectedStrategy ? (
           <div className="inline-form">
           <select
-            aria-label="Pair"
+            aria-label={t("Pair")}
             disabled={busy || loading || addablePairs.length === 0}
             onChange={(event) => setSelectedPairId(event.target.value)}
             value={selectedPairId}
           >
-            <option value="">{addablePairs.length ? "Select pair" : "All seeded pairs added"}</option>
+            <option value="">{addablePairs.length ? t("Select pair") : t("All seeded pairs added")}</option>
             {addablePairs.map((pair) => (
               <option key={pair.id} value={pair.id}>
                 {pair.exchange}:{pair.symbol}
@@ -108,19 +112,19 @@ export function WatchlistPage({
           </select>
           <button className="primary-action" disabled={busy || loading || addablePairs.length === 0} onClick={handleAddPair} type="button">
             <Plus size={16} />
-            Add
+            {tKey("common.add")}
           </button>
           <button className="secondary-action" disabled={busy || loading || selectedPairs.length === 0} onClick={handleUseAllPairs} type="button">
             <Save size={16} />
-            All pairs
+            {tKey("common.allPairs")}
           </button>
         </div>
         ) : null}
       </div>
 
       <div className="watchlist-strategy-grid">
-        {loading ? <div className="empty-state compact-empty">Loading watchlist</div> : null}
-        {!loading && enabledStrategies.length === 0 ? <div className="empty-state compact-empty">No enabled strategies</div> : null}
+        {loading ? <div className="empty-state compact-empty">{t("Loading watchlist")}</div> : null}
+        {!loading && enabledStrategies.length === 0 ? <div className="empty-state compact-empty">{t("No enabled strategies")}</div> : null}
         {enabledStrategies.map((strategyConfig) => {
           const strategySignals = signals.filter((signal) => signal.strategy === strategyConfig.strategy_code);
           const actionableSignals = strategySignals.filter(canShowEnterButton);
@@ -136,11 +140,11 @@ export function WatchlistPage({
                 <strong>{strategyConfig.strategy_name}</strong>
               </div>
               <div className="watch-meta">
-                <span>Pairs</span>
-                <Badge tone="blue">{strategyConfig.pairs.length ? strategyConfig.pairs.length : "all"}</Badge>
+                <span>{t("Pairs")}</span>
+                <Badge tone="blue">{strategyConfig.pairs.length ? strategyConfig.pairs.length : tKey("radar.allFilter")}</Badge>
               </div>
               <div className="watch-meta">
-                <span>Signals</span>
+                <span>{t("Signals")}</span>
                 <Badge tone={actionableSignals.length ? "green" : "yellow"}>{actionableSignals.length}/{strategySignals.length}</Badge>
               </div>
               <div className="watch-meta">
@@ -156,13 +160,13 @@ export function WatchlistPage({
         <div className="watch-strategy-panel">
           <div className="watch-strategy-panel-head">
             <div>
-              <span className="muted">Pairs</span>
+              <span className="muted">{t("Pairs")}</span>
               <h2>{selectedStrategy.strategy_name}</h2>
             </div>
             <div className="status-strip">
               <Badge tone="purple">{selectedStrategy.timeframes.join(", ")}</Badge>
               <Badge tone={selectedStrategy.risk_settings.show_only_active_setups ? "green" : "blue"}>
-                {selectedStrategy.risk_settings.show_only_active_setups ? "Active only" : "All setups"}
+                {selectedStrategy.risk_settings.show_only_active_setups ? tKey("settings.activeOnly") : tKey("settings.allSetups")}
               </Badge>
             </div>
           </div>
@@ -171,8 +175,8 @@ export function WatchlistPage({
             {selectedPairs.length === 0 ? (
               <div className="watch-pair-card all-pairs">
                 <Star size={17} />
-                <strong>All pairs</strong>
-                <span>Quality filter on</span>
+                <strong>{tKey("common.allPairs")}</strong>
+                <span>{t("Quality filter on")}</span>
               </div>
             ) : null}
             {configuredPairOptions.map(({ option, scope }) => {
@@ -186,7 +190,7 @@ export function WatchlistPage({
                       className="icon-button compact"
                       disabled={busy}
                       onClick={() => handleRemovePair(scope)}
-                      title="Remove"
+                      title={tKey("common.remove")}
                       type="button"
                     >
                       <Trash2 size={15} />
@@ -194,21 +198,21 @@ export function WatchlistPage({
                   </div>
                   <div className="watch-meta">
                     <span>{scope.exchange}</span>
-                    {option ? <Badge tone="blue">{option.base_asset}/{option.quote_asset}</Badge> : <Badge>custom</Badge>}
+                    {option ? <Badge tone="blue">{option.base_asset}/{option.quote_asset}</Badge> : <Badge>{tKey("common.custom")}</Badge>}
                   </div>
                   <div className="watch-meta">
-                    <span>Signal</span>
+                    <span>{t("Signal")}</span>
                     {currentSignal ? (
                       <Badge tone={currentSignal.direction === "long" ? "green" : "red"}>
                         {currentSignal.direction} - {currentSignal.score}
                       </Badge>
                     ) : (
-                      <Badge>none</Badge>
+                      <Badge>{tKey("common.none")}</Badge>
                     )}
                   </div>
                   <div className="watch-meta">
-                    <span>Status</span>
-                    <strong>{currentSignal?.status?.replaceAll("_", " ") ?? "Waiting"}</strong>
+                    <span>{tKey("common.status")}</span>
+                    <strong>{currentSignal?.status ? t(currentSignal.status.replaceAll("_", " ")) : t("Waiting")}</strong>
                   </div>
                 </div>
               );

@@ -26,6 +26,7 @@ from app.services.virtual_simulation_model import (
     planned_capability_codes_for_report,
     simulation_tier_for_report,
 )
+from app.services.reason_codes import normalize_reason_code
 from app.services.virtual_execution_profile import fill_policy_for_profile, normalize_virtual_execution_profile
 
 
@@ -458,6 +459,7 @@ class VirtualExecutionEngine:
                     blockers=[reason],
                     suggested_max_size_usd=_suggested_max_size(report),
                     message=_blocked_message(report, reason),
+                    technical_message=_blocked_message(report, reason),
                 )
             }
         )
@@ -676,6 +678,11 @@ class VirtualExecutionEngine:
             warnings=relaxed_warnings,
             blockers=[],
             message=(
+                "Relaxed paper profile used backend fallback price and kept the market-data issue as a warning."
+                if relaxed_warnings
+                else None
+            ),
+            technical_message=(
                 "Relaxed paper profile used backend fallback price and kept the market-data issue as a warning."
                 if relaxed_warnings
                 else None
@@ -911,9 +918,16 @@ def _finalize_report(
         blockers=blockers,
         fill_reason=fill_result.reason,
     )
-    reason_code = fill_result.reason
+    reason_code = fill_result.reason_code or _reason_code(fill_result.reason)
     if reason_code is None:
         reason_code = reason_codes[0] if reason_codes else _status_reason_code(report)
+    technical_messages = _dedupe_strings([
+        fill_result.technical_message,
+        report.rejected_reason,
+        report.quality_gate.technical_message,
+        *blockers,
+        *warnings,
+    ])
     return report.model_copy(
         update={
             "fill_result": fill_result,
@@ -923,6 +937,8 @@ def _finalize_report(
             "blockers": blockers,
             "reason_code": reason_code,
             "reason_codes": reason_codes,
+            "technical_message": technical_messages[0] if technical_messages else None,
+            "technical_messages": technical_messages,
         }
     )
 
@@ -933,6 +949,7 @@ def _fill_result(
     raw_inputs_snapshot: dict[str, Any],
 ) -> VirtualFillResult:
     reason = _fill_reason(report)
+    reason_code = _reason_code(reason)
     return VirtualFillResult(
         status=_fill_status(report),
         requested_notional=report.requested_size_usd,
@@ -942,6 +959,8 @@ def _fill_result(
         spread_bps=report.liquidity.spread_percent * 100,
         market_impact_bps=report.market_impact_percent * 100,
         reason=reason,
+        reason_code=reason_code,
+        technical_message=reason,
         warnings=_fill_warnings(report),
         raw_inputs_snapshot=raw_inputs_snapshot,
     )
@@ -1221,14 +1240,7 @@ def _jsonable_model(value: Any) -> Any:
 
 
 def _reason_code(value: str | None) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if " " in text or "." in text or ":" in text:
-        return None
-    return text.lower()
+    return normalize_reason_code(value)
 
 
 def _liquidity_tier(signal: RadarSignal) -> str:
@@ -1331,13 +1343,15 @@ def _quality_gate(report: VirtualExecutionReport) -> ExecutionQualityGate:
         status = "warning"
 
     suggested_max_size_usd = _suggested_max_size(report) if status == "blocked" else None
+    message = _gate_message(report, blockers, suggested_max_size_usd) if status != "passed" else None
     return ExecutionQualityGate(
         status=status,
         warnings=warnings,
         high_impact_reasons=high_impact_reasons,
         blockers=blockers,
         suggested_max_size_usd=suggested_max_size_usd,
-        message=_gate_message(report, blockers, suggested_max_size_usd) if status != "passed" else None,
+        message=message,
+        technical_message=message,
     )
 
 

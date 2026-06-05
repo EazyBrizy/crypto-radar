@@ -193,6 +193,7 @@ const pendingEntryIntentSchema = z.object({
   filled_at: z.string().nullable().optional(),
   filled_trade_id: z.string().nullable().optional(),
   failure_reason: z.string().nullable().optional(),
+  technical_message: z.string().nullable().optional(),
   current_price: z.coerce.number().nullable().optional(),
   reason_code: z.string().nullable().optional(),
   localized_reason: z.string().nullable().optional(),
@@ -201,6 +202,7 @@ const pendingEntryIntentSchema = z.object({
     status_tone: z.enum(["green", "red", "yellow", "blue", "purple", "neutral"]),
     reason_code: z.string().nullable(),
     reason: z.string(),
+    technical_message: z.string().nullable().optional(),
     entry_zone: z.string(),
     current_price: z.coerce.number().nullable()
   }).nullable().optional()
@@ -426,6 +428,7 @@ export function normalizePendingEntryIntent(value: unknown): PendingEntryIntent 
     filled_at: optionalString(intent.filled_at),
     filled_trade_id: optionalString(intent.filled_trade_id),
     failure_reason: optionalString(intent.failure_reason),
+    technical_message: optionalString(intent.technical_message),
     current_price: optionalNumber(intent.current_price),
     reason_code: optionalString(intent.reason_code),
     localized_reason: optionalString(intent.localized_reason),
@@ -435,6 +438,7 @@ export function normalizePendingEntryIntent(value: unknown): PendingEntryIntent 
           status_tone: intent.view.status_tone,
           reason_code: intent.view.reason_code,
           reason: intent.view.reason,
+          technical_message: optionalString(intent.view.technical_message),
           entry_zone: intent.view.entry_zone,
           current_price: optionalNumber(intent.view.current_price)
         }
@@ -839,6 +843,8 @@ export function normalizeExecutionReport(value: unknown): VirtualExecutionReport
     fill_result: normalizeFillResult(value.fill_result),
     raw_inputs_snapshot: normalizeMetadata(value.raw_inputs_snapshot),
     rejected_reason: value.rejected_reason == null ? null : String(value.rejected_reason),
+    technical_message: value.technical_message == null ? null : String(value.technical_message),
+    technical_messages: normalizeStringList(value.technical_messages),
     warnings: normalizeStringList(value.warnings),
     blockers: normalizeStringList(value.blockers),
     reason_code: value.reason_code == null ? null : String(value.reason_code),
@@ -858,6 +864,8 @@ function normalizeFillResult(value: unknown): VirtualExecutionReport["fill_resul
     spread_bps: Number(value.spread_bps ?? 0),
     market_impact_bps: Number(value.market_impact_bps ?? 0),
     reason: value.reason == null ? null : String(value.reason),
+    reason_code: value.reason_code == null ? null : String(value.reason_code),
+    technical_message: value.technical_message == null ? null : String(value.technical_message),
     warnings: Array.isArray(value.warnings) ? value.warnings.map(String) : [],
     raw_inputs_snapshot: normalizeMetadata(value.raw_inputs_snapshot)
   };
@@ -929,6 +937,10 @@ function normalizeRiskCheckResult(value: unknown): RiskCheckResult | null {
     status: normalizeRiskCheckStatus(value.status),
     blockers: Array.isArray(value.blockers) ? value.blockers.map(String) : [],
     warnings: Array.isArray(value.warnings) ? value.warnings.map(String) : [],
+    reason_code: value.reason_code == null ? null : String(value.reason_code),
+    reason_codes: normalizeStringList(value.reason_codes),
+    technical_message: value.technical_message == null ? null : String(value.technical_message),
+    technical_messages: normalizeStringList(value.technical_messages),
     rr: value.rr == null ? null : Number(value.rr),
     min_rr_ratio: Number(value.min_rr_ratio ?? 0),
     risk_reward_guard_mode: normalizeRRGuardMode(value.risk_reward_guard_mode, "soft"),
@@ -1026,6 +1038,10 @@ export function normalizeRiskDecision(value: unknown): RiskDecision | null {
     execution_profile_sources: normalizeStringRecord(value.execution_profile_sources),
     blockers: Array.isArray(value.blockers) ? value.blockers.map(String) : [],
     warnings: Array.isArray(value.warnings) ? value.warnings.map(String) : [],
+    reason_code: value.reason_code == null ? null : String(value.reason_code),
+    reason_codes: normalizeStringList(value.reason_codes),
+    technical_message: value.technical_message == null ? null : String(value.technical_message),
+    technical_messages: normalizeStringList(value.technical_messages),
     exchange: String(value.exchange ?? ""),
     symbol: String(value.symbol ?? ""),
     instrument_type: normalizeTradeInstrumentType(value.instrument_type),

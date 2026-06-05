@@ -29,6 +29,7 @@ class PendingEntryView(BaseModel):
     status_tone: PendingEntryViewTone = "neutral"
     reason_code: str | None = None
     reason: str
+    technical_message: str | None = None
     entry_zone: str
     current_price: Decimal | None = None
 
@@ -79,4 +80,6 @@ class PendingEntryIntentRead(PendingEntryIntentCreate):
     filled_at: datetime | None = None
     filled_trade_id: UUID | None = None
     failure_reason: str | None = None
+    technical_message: str | None = None
+    reason_code: str | None = None
     view: PendingEntryView | None = None

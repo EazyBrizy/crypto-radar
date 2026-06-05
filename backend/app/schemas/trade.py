@@ -136,6 +136,7 @@ class ExecutionQualityGate(BaseModel):
     blockers: list[str] = Field(default_factory=list)
     suggested_max_size_usd: Optional[float] = Field(default=None, ge=0)
     message: Optional[str] = None
+    technical_message: Optional[str] = None
 
 
 class ExecutionPlannedOrder(BaseModel):
@@ -246,6 +247,8 @@ class VirtualFillResult(BaseModel):
     spread_bps: float = Field(default=0.0, ge=0)
     market_impact_bps: float = Field(default=0.0, ge=0)
     reason: Optional[str] = None
+    reason_code: Optional[str] = None
+    technical_message: Optional[str] = None
     warnings: list[str] = Field(default_factory=list)
     raw_inputs_snapshot: dict[str, Any] = Field(default_factory=dict)
 
@@ -287,6 +290,8 @@ class VirtualExecutionReport(BaseModel):
     fill_result: Optional[VirtualFillResult] = None
     raw_inputs_snapshot: dict[str, Any] = Field(default_factory=dict)
     rejected_reason: Optional[str] = None
+    technical_message: Optional[str] = None
+    technical_messages: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
     reason_code: Optional[str] = None
@@ -510,6 +515,7 @@ class RealExecutionResult(BaseModel):
     exchange: str
     symbol: str
     message: str
+    technical_message: Optional[str] = None
     risk_decision: Optional[RiskDecision] = None
     risk_decision_id: Optional[str] = None
     execution_plan: Optional[RealExecutionPlan] = None

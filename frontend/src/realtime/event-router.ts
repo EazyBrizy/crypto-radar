@@ -3,6 +3,8 @@ import type { QueryClient } from "@tanstack/react-query";
 import { normalizePendingEntryIntent } from "@/api/mappers";
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
 import { queryKeys, serverStateKeys } from "@/features/server-state/query-keys";
+import { translateKey, translateReasonCode, type I18nKey } from "@/i18n";
+import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, detectLocale, normalizeLocale, type Locale } from "@/i18n/locale";
 import { warnIfRealtimeEventExceedsBudget } from "@/performance/budgets";
 import { useNotificationStore } from "@/stores/notification-store";
 import { usePriceStore } from "@/stores/price-store";
@@ -12,6 +14,27 @@ import { isOpenFeedSignal } from "@/utils";
 import type { NotificationRealtimePayload, PendingEntryUpdatedPayload, RealtimeMessage, StandardRealtimeEvent } from "./event-types";
 
 const MAX_RECENT_EVENT_IDS = 1_000;
+type I18nParams = Record<string, string | number | boolean | null | undefined>;
+
+function tKey(key: I18nKey, params?: I18nParams): string {
+  return translateKey(key, currentLocale(), params);
+}
+
+function tReason(value: string | null | undefined): string {
+  return translateReasonCode(value, currentLocale());
+}
+
+function currentLocale(): Locale {
+  if (typeof window === "undefined") return DEFAULT_LOCALE;
+  try {
+    const storedLocale = normalizeLocale(window.localStorage.getItem(LOCALE_STORAGE_KEY));
+    if (storedLocale) return storedLocale;
+  } catch {
+    // Realtime notifications should still render when storage is unavailable.
+  }
+  const documentLocale = typeof document === "undefined" ? null : normalizeLocale(document.documentElement.lang);
+  return documentLocale ?? detectLocale(window.navigator.languages);
+}
 
 export interface RealtimeEventRouter {
   getLastEventId: () => string | null;
@@ -274,9 +297,11 @@ function applySignalEntryTouched(queryClient: QueryClient, signalId: string, pri
   if (signal) usePriceStore.getState().queuePrice(signal.symbol, price);
   useNotificationStore.getState().push({
     kind: "signal",
-    message: signal ? `${signal.symbol} touched the entry zone at ${price}` : `Signal ${signalId} touched the entry zone`,
+    message: signal
+      ? tKey("toast.entryZoneTouched", { price, symbol: signal.symbol })
+      : tKey("toast.signalTouchedEntryZone", { signalId }),
     signalId,
-    title: "Entry zone touched"
+    title: tKey("toast.entryZoneTouchedTitle")
   });
 }
 
@@ -284,8 +309,8 @@ function pushTakeProfitNotification(pair: string, price: number, target = "TP1",
   useNotificationStore.getState().push({
     id: tradeId ? `tp_${tradeId}_${target}` : undefined,
     kind: "trade",
-    message: `${pair} reached ${target} at ${price}`,
-    title: `${target} hit`
+    message: tKey("toast.takeProfitHit", { pair, price, target }),
+    title: tKey("toast.takeProfitHitTitle", { target })
   });
 }
 
@@ -293,8 +318,8 @@ function pushStopLossNotification(pair: string, price: number, tradeId?: string 
   useNotificationStore.getState().push({
     id: tradeId ? `sl_${tradeId}` : undefined,
     kind: "trade",
-    message: `${pair} hit stop loss at ${price}`,
-    title: "SL hit"
+    message: tKey("toast.stopLossHit", { pair, price }),
+    title: tKey("toast.stopLossHitTitle")
   });
 }
 
@@ -313,12 +338,12 @@ function pushPersistedNotification(payload: NotificationRealtimePayload) {
 }
 
 function pushTradeClosedNotification(trade: TradeJournalEntry) {
-  const pnl = typeof trade.pnl === "number" ? ` · PnL ${trade.pnl.toFixed(2)}` : "";
+  const pnl = typeof trade.pnl === "number" ? ` / PnL ${trade.pnl.toFixed(2)}` : "";
   useNotificationStore.getState().push({
     id: `trade_closed_${trade.id}`,
     kind: "trade",
-    message: `${trade.symbol} ${trade.side.toUpperCase()} closed${pnl}`,
-    title: "Trade closed"
+    message: tKey("toast.tradeClosed", { pnl, side: trade.side.toUpperCase(), symbol: trade.symbol }),
+    title: tKey("toast.tradeClosedTitle")
   });
 }
 
@@ -326,8 +351,10 @@ function pushExchangeDisconnectedNotification(exchange: string, reason?: string 
   useNotificationStore.getState().push({
     id: `exchange_disconnected_${exchange}`,
     kind: "connection",
-    message: reason ? `${exchange} disconnected: ${reason}` : `${exchange} disconnected`,
-    title: "Exchange disconnected"
+    message: reason
+      ? tKey("toast.exchangeDisconnectedReason", { exchange, reason: tReason(reason) })
+      : tKey("toast.exchangeDisconnected", { exchange }),
+    title: tKey("toast.exchangeDisconnectedTitle")
   });
 }
 
@@ -394,8 +421,8 @@ function pushTradeInvalidationNotification(alert: TradeInvalidationAlert) {
   useNotificationStore.getState().push({
     id: `trade_invalidation_${alert.trade_id}_${alert.fingerprint ?? "current"}`,
     kind: "trade",
-    message: alert.reason ?? `${alert.symbol} strategy idea is invalidated`,
-    title: "Strategy invalidation"
+    message: alert.reason ? tReason(alert.reason) : tKey("toast.strategyInvalidated", { symbol: alert.symbol }),
+    title: tKey("toast.strategyInvalidationTitle")
   });
 }
 

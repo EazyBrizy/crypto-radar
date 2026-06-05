@@ -1,8 +1,11 @@
+"use client";
+
 import { AlertTriangle, Bell, BookOpen, CheckSquare, ChevronDown, FlaskConical, Gauge, Info, KeyRound, ListChecks, Radio, RefreshCw, Save, Send, Shield, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import { Badge } from "@/components/Badge";
 import { StrategyTestingPanel } from "@/features/strategy-testing/StrategyTestingPanel";
+import { useI18n, type I18nKey } from "@/i18n";
 import {
   RISK_MANAGEMENT_SCHEMA_LIMITS,
   RISK_PROFILE_PRESETS,
@@ -72,6 +75,8 @@ interface SettingsPageProps {
   onUpdateRiskManagement: (patch: UserSettingsPatch) => Promise<unknown>;
 }
 
+type TKey = (key: I18nKey, params?: Record<string, string | number | boolean | null | undefined>) => string;
+
 const SIMULATION_LEVELS: Array<{
   value: VirtualSimulationLevel;
   label: string;
@@ -115,8 +120,8 @@ const RISK_AMOUNT_MODES: Array<{ value: RiskAmountMode; label: string }> = [
 ];
 
 const RADAR_DISPLAY_MODES: Array<{ value: RadarDisplayMode; label: string }> = [
-  { value: "all_market_opportunities", label: "Все market opportunities" },
-  { value: "execution_ready", label: "Только execution-ready" }
+  { value: "all_market_opportunities", label: "All market opportunities" },
+  { value: "execution_ready", label: "Execution-ready only" }
 ];
 
 const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
@@ -124,7 +129,7 @@ const MARKET_UNIVERSE_LIMITS: Array<{ value: MarketUniverseLimit; label: string 
   { value: "top_100", label: "Top 100" },
   { value: "top_200", label: "Top 200" },
   { value: "top_500", label: "Top 500" },
-  { value: "all", label: "Все" }
+  { value: "all", label: "All" }
 ];
 const MARKET_UNIVERSE_CATEGORIES = [
   { value: "linear", label: "USDT Perpetual" }
@@ -133,7 +138,7 @@ const MARKET_UNIVERSE_SORTS = [
   { value: "turnover_24h_desc", label: "24h turnover" }
 ];
 const MARKET_UNIVERSE_TIERS = [
-  { value: "", label: "Все tier" },
+  { value: "", label: "All tiers" },
   { value: "high", label: "High" },
   { value: "medium", label: "Medium" },
   { value: "low", label: "Low" },
@@ -149,6 +154,9 @@ const DEFAULT_MARKET_UNIVERSE_FILTERS = {
   sort: "turnover_24h_desc",
   status: "active/trading"
 };
+const MARKET_UNIVERSE_EXCHANGE_LABELS = {
+  bybit: "Bybit"
+} as const;
 const EMPTY_MARKET_UNIVERSE_PAIRS: MarketUniversePair[] = [];
 const EXECUTION_PROFILE_HELP = {
   fixedRisk: "Fixed risk is the maximum loss budget in the selected currency. Backend RiskGate still caps and sizes the trade.",
@@ -175,11 +183,11 @@ const RR_TARGET_DEFAULTS: Record<string, "final" | "nearest"> = {
 };
 const RR_GUARD_MODES: Array<{
   value: RRGuardMode;
-  label: string;
+  labelKey: I18nKey;
 }> = [
-  { value: "soft", label: "Soft" },
-  { value: "hard", label: "Hard" },
-  { value: "off", label: "Off" }
+  { value: "soft", labelKey: "settings.soft" },
+  { value: "hard", labelKey: "settings.hard" },
+  { value: "off", labelKey: "common.off" }
 ];
 const SQUEEZE_BREAKOUT_FIELD_LABELS: Array<{
   key: string;
@@ -723,6 +731,7 @@ export function SettingsPage({
   onUpdateStrategyConfig,
   onUpdateRiskManagement
 }: SettingsPageProps) {
+  const { t, tKey, tReason } = useI18n();
   const [openSettingsSections, setOpenSettingsSections] = useState<Set<SettingsSectionId>>(() => new Set());
   const [openStrategyIds, setOpenStrategyIds] = useState<Set<string>>(() => new Set());
   const [strategyPairDrafts, setStrategyPairDrafts] = useState<Record<string, StrategyPairScope[]>>({});
@@ -962,7 +971,7 @@ export function SettingsPage({
       setConnectionDeleteCandidate(null);
       setConnectionDeleteError(null);
     } catch (error) {
-      setConnectionDeleteError(exchangeConnectionDeleteErrorMessage(error));
+      setConnectionDeleteError(exchangeConnectionDeleteErrorMessage(error, tKey));
     }
   }
 
@@ -1035,7 +1044,7 @@ export function SettingsPage({
     } catch (exc) {
       setStrategySaveErrors((current) => ({
         ...current,
-        [configItem.id]: strategyUpdateErrorMessage(exc)
+        [configItem.id]: strategyUpdateErrorMessage(exc, tKey)
       }));
     }
   }
@@ -1126,8 +1135,8 @@ export function SettingsPage({
       <section className="wide-panel">
       <div className="page-head">
         <div>
-          <span className="muted">Settings</span>
-          <h1>Radar settings</h1>
+          <span className="muted">{tKey("settings.eyebrow")}</span>
+          <h1>{tKey("settings.title")}</h1>
         </div>
       </div>
 
@@ -1137,12 +1146,15 @@ export function SettingsPage({
           icon={<Radio size={18} />}
           onToggle={() => toggleSettingsSection("exchanges")}
           open={openSettingsSections.has("exchanges")}
-          summary={`${visibleExchangeConnections.length} connection${visibleExchangeConnections.length === 1 ? "" : "s"}`}
-          title="Exchanges"
+          summary={tKey("settings.connectionCount", {
+            count: visibleExchangeConnections.length,
+            suffix: visibleExchangeConnections.length === 1 ? "" : "s"
+          })}
+          title={tKey("settings.exchanges")}
         >
           <div className="inline-form stacked">
             <select
-              aria-label="Exchange"
+              aria-label={tKey("common.exchange")}
               disabled={busy}
               onChange={(event) => setExchangeCode(event.target.value)}
               value={exchangeCode}
@@ -1152,14 +1164,14 @@ export function SettingsPage({
               ))}
             </select>
             <input
-              aria-label="Connection label"
+              aria-label={tKey("exchange.connectionLabel")}
               disabled={busy}
               onChange={(event) => setConnectionLabel(event.target.value)}
-              placeholder="Label"
+              placeholder={tKey("exchange.connectionLabel")}
               value={connectionLabel}
             />
             <select
-              aria-label="Connection environment"
+              aria-label={tKey("exchange.connectionEnvironment")}
               disabled={busy}
               onChange={(event) => {
                 setConnectionEnvironment(event.target.value === "mainnet" ? "mainnet" : "testnet");
@@ -1167,11 +1179,11 @@ export function SettingsPage({
               }}
               value={connectionEnvironment}
             >
-              <option value="testnet">Testnet</option>
-              <option value="mainnet">Mainnet</option>
+              <option value="testnet">{tKey("settings.testnet")}</option>
+              <option value="mainnet">{tKey("settings.mainnet")}</option>
             </select>
             <select
-              aria-label="Order placement mode"
+              aria-label={tKey("exchange.orderPlacementMode")}
               disabled={busy}
               onChange={(event) => {
                 setConnectionOrderMode(normalizeOrderPlacementMode(event.target.value));
@@ -1179,30 +1191,30 @@ export function SettingsPage({
               }}
               value={connectionOrderMode}
             >
-              <option value="disabled">Disabled</option>
-              <option value="dry_run">Dry-run</option>
-              <option value="live">Live</option>
+              <option value="disabled">{tKey("common.disabled")}</option>
+              <option value="dry_run">{tKey("settings.dryRun")}</option>
+              <option value="live">{tKey("settings.live")}</option>
             </select>
             <input
-              aria-label="API key"
+              aria-label={tKey("exchange.apiKey")}
               disabled={busy}
               onChange={(event) => setApiKey(event.target.value)}
-              placeholder="API key"
+              placeholder={tKey("exchange.apiKey")}
               value={apiKey}
             />
             <input
-              aria-label="API secret"
+              aria-label={tKey("exchange.apiSecret")}
               disabled={busy}
               onChange={(event) => setApiSecret(event.target.value)}
-              placeholder="API secret"
+              placeholder={tKey("exchange.apiSecret")}
               type="password"
               value={apiSecret}
             />
             <input
-              aria-label="API passphrase"
+              aria-label={tKey("exchange.apiPassphrase")}
               disabled={busy}
               onChange={(event) => setApiPassphrase(event.target.value)}
-              placeholder="Passphrase"
+              placeholder={tKey("exchange.apiPassphrase")}
               type="password"
               value={apiPassphrase}
             />
@@ -1214,7 +1226,7 @@ export function SettingsPage({
                   onChange={(event) => setMainnetExplicitConfirm(event.target.checked)}
                   type="checkbox"
                 />
-                <span>Confirm mainnet live</span>
+                <span>{tKey("settings.confirmMainnetLive")}</span>
               </label>
             ) : null}
             <button
@@ -1230,11 +1242,11 @@ export function SettingsPage({
               type="button"
             >
               <KeyRound size={16} />
-              Connect
+              {tKey("settings.connect")}
             </button>
           </div>
           <div className="connection-list">
-            {visibleExchangeConnections.length === 0 ? <div className="empty-state compact-empty">No exchange connections</div> : null}
+            {visibleExchangeConnections.length === 0 ? <div className="empty-state compact-empty">{tKey("settings.noExchangeConnections")}</div> : null}
             {visibleExchangeConnections.map((connection) => {
               const walletBalance = exchangeWalletBalances[connection.id] ?? null;
               const accountSnapshot = exchangeAccountSnapshots[connection.id] ?? null;
@@ -1250,27 +1262,27 @@ export function SettingsPage({
                   <div className="connection-main">
                     <strong>{connection.label}</strong>
                     <span>{connection.exchange_code}:{connection.account_type} / {connection.environment}</span>
-                    <span>{orderPlacementModeLabel(connection.order_placement_mode)}</span>
+                    <span>{tKey(orderPlacementModeKey(connection.order_placement_mode))}</span>
                     <code>{shortKeyRef(connection.key_ref)}</code>
                   </div>
                   <div className="connection-balance-panel">
                     <div className="connection-balance-metrics">
                       <span>
-                        <small>Equity</small>
+                        <small>{tKey("exchange.equity")}</small>
                         <strong>{formatBalanceAmount(walletBalance?.total_equity ?? accountSnapshot?.account_equity)}</strong>
                       </span>
                       <span>
-                        <small>Available</small>
+                        <small>{tKey("exchange.available")}</small>
                         <strong>{formatBalanceAmount(walletBalance?.total_available_balance ?? accountSnapshot?.available_balance)}</strong>
                       </span>
                       <span>
-                        <small>Wallet balance</small>
+                        <small>{tKey("exchange.walletBalance")}</small>
                         <strong>{formatBalanceAmount(walletBalance?.total_wallet_balance ?? accountSnapshot?.wallet_balance)}</strong>
                       </span>
                     </div>
                     <div className="connection-freshness-row">
                       <Badge tone={snapshotStatusTone(snapshotStatus)}>{snapshotStatus}</Badge>
-                      <span>Snapshot age {formatSnapshotAge(accountSnapshot?.fetched_at ?? walletBalance?.fetched_at)}</span>
+                      <span>{tKey("exchange.snapshotAge", { value: formatSnapshotAge(accountSnapshot?.fetched_at ?? walletBalance?.fetched_at) })}</span>
                     </div>
                     {balanceWarnings.length ? (
                       <div className="connection-warning-list">
@@ -1281,12 +1293,12 @@ export function SettingsPage({
                     ) : null}
                   </div>
                   <div className="connection-safety-panel">
-                    <Badge tone={connectionBadge.tone}>{connectionBadge.label}</Badge>
-                    <span>{connection.can_place_orders ? "Orders enabled" : safetyBlockerSummary(connection)}</span>
+                    <Badge tone={connectionBadge.tone}>{tKey(connectionBadge.labelKey)}</Badge>
+                    <span>{connection.can_place_orders ? tKey("exchange.ordersEnabled") : tReason(safetyBlockerSummary(connection))}</span>
                   </div>
                   <Badge tone={connection.status === "active" ? "green" : "red"}>{connection.status}</Badge>
                   <select
-                    aria-label={`Order placement mode for ${connection.label}`}
+                    aria-label={`${tKey("exchange.orderPlacementMode")} ${connection.label}`}
                     className="compact-select"
                     disabled={busy}
                     onChange={(event) => onUpdateExchangeConnection(connection.id, {
@@ -1295,9 +1307,9 @@ export function SettingsPage({
                     })}
                     value={connection.order_placement_mode}
                   >
-                    <option value="disabled">Disabled</option>
-                    <option value="dry_run">Dry-run</option>
-                    <option value="live">Live</option>
+                    <option value="disabled">{tKey("common.disabled")}</option>
+                    <option value="dry_run">{tKey("settings.dryRun")}</option>
+                    <option value="live">{tKey("settings.live")}</option>
                   </select>
                   {connection.environment === "mainnet" ? (
                     <label className="toggle-row compact-toggle mainnet-confirm-toggle">
@@ -1309,7 +1321,7 @@ export function SettingsPage({
                         })}
                         type="checkbox"
                       />
-                      <span>Mainnet live</span>
+                      <span>{tKey("settings.mainnetLive")}</span>
                     </label>
                   ) : null}
                   <label className="toggle-row compact-toggle">
@@ -1319,30 +1331,30 @@ export function SettingsPage({
                       onChange={(event) => onToggleExchangeConnection(connection.id, event.target.checked)}
                       type="checkbox"
                     />
-                    <span>{connection.status === "active" ? "On" : "Off"}</span>
+                    <span>{connection.status === "active" ? tKey("common.on") : tKey("common.off")}</span>
                   </label>
                   <button
                     className="secondary-action compact-action balance-refresh-button"
                     disabled={busy || balancePending}
                     onClick={() => onRefreshExchangeBalance(connection.id)}
-                    title="Обновить баланс"
+                    title={tKey("exchange.refreshBalance")}
                     type="button"
                   >
                     <RefreshCw size={15} />
-                    Обновить баланс
+                    {tKey("exchange.refreshBalance")}
                   </button>
-                  <button className="icon-button compact" disabled={busy} onClick={() => onTestExchangeConnection(connection.id)} title="Test" type="button">
+                  <button className="icon-button compact" disabled={busy} onClick={() => onTestExchangeConnection(connection.id)} title={tKey("settings.test")} type="button">
                     <Send size={15} />
                   </button>
-                  <button className="icon-button compact" disabled={busy} onClick={() => onSyncExchangeConnection(connection.id)} title="Sync" type="button">
+                  <button className="icon-button compact" disabled={busy} onClick={() => onSyncExchangeConnection(connection.id)} title={tKey("settings.sync")} type="button">
                     <RefreshCw size={15} />
                   </button>
                   <button
-                    aria-label={`Delete ${connection.label}`}
+                    aria-label={`${tKey("common.delete")} ${connection.label}`}
                     className="icon-button compact danger"
                     disabled={busy}
                     onClick={() => requestDeleteExchangeConnection(connection)}
-                    title="Delete"
+                    title={tKey("common.delete")}
                     type="button"
                   >
                     <Trash2 size={15} />
@@ -1359,11 +1371,11 @@ export function SettingsPage({
           icon={<SlidersHorizontal size={18} />}
           onToggle={() => toggleSettingsSection("strategies")}
           open={openSettingsSections.has("strategies")}
-          summary={`${enabledStrategyCount}/${strategyConfigs.length} on`}
-          title="Strategies"
+          summary={tKey("settings.strategyCount", { enabled: enabledStrategyCount, total: strategyConfigs.length })}
+          title={tKey("settings.strategies")}
         >
           <div className="strategy-config-list">
-            {strategyConfigs.length === 0 ? <div className="empty-state compact-empty">No strategy configs</div> : null}
+            {strategyConfigs.length === 0 ? <div className="empty-state compact-empty">{tKey("settings.noStrategyConfigs")}</div> : null}
             {strategyConfigs.map((strategyConfig) => {
               const strategyExchangeOptions = dedupeStrings([
                 ...availableStrategyExchanges,
@@ -1397,19 +1409,19 @@ export function SettingsPage({
                     </span>
                     <span className="hidden">
                       {strategyConfig.exchanges.join(", ")}
-                      {" · "}
+                      {" / "}
                       {strategyConfig.exchanges.join(", ")}
-                      {" · "}
+                      {" / "}
                       {strategyConfig.timeframes.join(", ")}
-                      {" · "}
+                      {" / "}
                       {pairSummary}
                     </span>
                   </div>
                   <div className="strategy-summary-badges">
                     <Badge tone={strategyConfig.is_enabled ? "green" : "yellow"}>
-                      {strategyConfig.is_enabled ? "On" : "Off"}
+                      {strategyConfig.is_enabled ? tKey("common.on") : tKey("common.off")}
                     </Badge>
-                    {activeSetupsOnly ? <Badge tone="blue">Active only</Badge> : null}
+                    {activeSetupsOnly ? <Badge tone="blue">{tKey("settings.activeOnly")}</Badge> : null}
                     <ChevronDown className="settings-chevron" size={17} />
                   </div>
                 </button>
@@ -1424,7 +1436,7 @@ export function SettingsPage({
                           name="is_enabled"
                           type="checkbox"
                         />
-                        <span>Enabled</span>
+                        <span>{tKey("settings.enabled")}</span>
                       </label>
                       <label className="strategy-scope-chip strategy-enable-chip">
                         <input
@@ -1433,13 +1445,13 @@ export function SettingsPage({
                           name="risk:show_only_active_setups"
                           type="checkbox"
                         />
-                        <span>Only active setups</span>
+                        <span>{tKey("settings.onlyActiveSetups")}</span>
                       </label>
                     </div>
 
                 <div className="strategy-scope-grid">
                   <div>
-                    <span>Exchanges</span>
+                    <span>{tKey("settings.exchanges")}</span>
                     <div className="strategy-chip-row">
                       {strategyExchangeOptions.map((exchange) => (
                         <label className="strategy-scope-chip" key={`${strategyConfig.id}:exchange:${exchange}`}>
@@ -1456,7 +1468,7 @@ export function SettingsPage({
                     </div>
                   </div>
                   <div>
-                    <span>Timeframes</span>
+                    <span>{tKey("settings.timeframes")}</span>
                     <div className="strategy-chip-row">
                       {STRATEGY_TIMEFRAMES.map((timeframe) => (
                         <label className="strategy-scope-chip" key={`${strategyConfig.id}:timeframe:${timeframe}`}>
@@ -1473,7 +1485,7 @@ export function SettingsPage({
                     </div>
                   </div>
                   <div className="strategy-context-grid">
-                    <span>Context TF</span>
+                    <span>{tKey("settings.contextTf")}</span>
                     <div className="strategy-context-row">
                       {strategyConfig.timeframes.map((timeframe) => (
                         <label className="strategy-context-select" key={`${strategyConfig.id}:context:${timeframe}`}>
@@ -1483,7 +1495,7 @@ export function SettingsPage({
                             disabled={busy}
                             name={`context:${timeframe}`}
                           >
-                            <option value="">Default</option>
+                            <option value="">{tKey("common.default")}</option>
                             {contextTimeframeOptions(timeframe).map((option) => (
                               <option key={option} value={option}>{option}</option>
                             ))}
@@ -1503,7 +1515,7 @@ export function SettingsPage({
 
                 <div className="strategy-quality-grid">
                   <label>
-                    <span>Min 24h volume</span>
+                    <span>{tKey("settings.min24hVolume")}</span>
                     <input
                       defaultValue={String(Number(strategyConfig.params.min_24h_volume_quote ?? 10_000_000))}
                       disabled={busy}
@@ -1513,7 +1525,7 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span>Max spread bps</span>
+                    <span>{tKey("settings.maxSpreadBps")}</span>
                     <input
                       defaultValue={String(Number(strategyConfig.params.max_spread_bps ?? 25))}
                       disabled={busy}
@@ -1523,7 +1535,7 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span>Min history</span>
+                    <span>{tKey("settings.minHistory")}</span>
                     <input
                       defaultValue={String(Number(strategyConfig.params.min_history ?? 50))}
                       disabled={busy}
@@ -1533,7 +1545,7 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span>Min S/R ATR</span>
+                    <span>{tKey("settings.minSrAtr")}</span>
                     <input
                       defaultValue={String(Number(strategyConfig.params.context_obstacle_min_atr ?? 1))}
                       disabled={busy}
@@ -1545,7 +1557,7 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span>S/R strength</span>
+                    <span>{tKey("settings.srStrength")}</span>
                     <input
                       defaultValue={String(Number(strategyConfig.params.context_level_min_strength ?? 25))}
                       disabled={busy}
@@ -1558,7 +1570,7 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span>Max body ATR</span>
+                    <span>{tKey("settings.maxBodyAtr")}</span>
                     <input
                       defaultValue={String(Number(strategyConfig.params.max_body_atr ?? defaultMaxBodyAtr(strategyConfig.strategy_code)))}
                       disabled={busy}
@@ -1570,7 +1582,7 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span>Max range ATR</span>
+                    <span>{tKey("settings.maxRangeAtr")}</span>
                     <input
                       defaultValue={String(Number(strategyConfig.params.max_range_atr ?? defaultMaxRangeAtr(strategyConfig.strategy_code)))}
                       disabled={busy}
@@ -1616,19 +1628,19 @@ export function SettingsPage({
                       ))
                     : null}
                   <label>
-                    <span title={EXECUTION_PROFILE_HELP.percentRisk}>Risk mode</span>
+                    <span title={t(EXECUTION_PROFILE_HELP.percentRisk)}>{tKey("settings.riskMode")}</span>
                     <select
                       defaultValue={String(strategyConfig.risk_settings.risk_mode ?? "percent")}
                       disabled={busy}
                       name="risk:risk_mode"
                     >
                       {RISK_AMOUNT_MODES.map((mode) => (
-                        <option key={mode.value} value={mode.value}>{mode.label}</option>
+                        <option key={mode.value} value={mode.value}>{t(mode.label)}</option>
                       ))}
                     </select>
                   </label>
                   <label>
-                    <span title={EXECUTION_PROFILE_HELP.percentRisk}>Strategy risk %</span>
+                    <span title={t(EXECUTION_PROFILE_HELP.percentRisk)}>{tKey("settings.strategyRiskPercent")}</span>
                     <input
                       defaultValue={strategyConfig.risk_settings.risk_percent == null ? "" : String(strategyConfig.risk_settings.risk_percent)}
                       disabled={busy}
@@ -1641,7 +1653,7 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span title={EXECUTION_PROFILE_HELP.fixedRisk}>Fixed risk</span>
+                    <span title={t(EXECUTION_PROFILE_HELP.fixedRisk)}>{tKey("settings.fixedRisk")}</span>
                     <input
                       defaultValue={strategyConfig.risk_settings.fixed_risk_amount == null ? "" : String(strategyConfig.risk_settings.fixed_risk_amount)}
                       disabled={busy}
@@ -1653,7 +1665,7 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span>Fixed currency</span>
+                    <span>{tKey("settings.fixedCurrency")}</span>
                     <input
                       defaultValue={String(strategyConfig.risk_settings.fixed_risk_currency ?? "USDT")}
                       disabled={busy}
@@ -1662,7 +1674,7 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span title={EXECUTION_PROFILE_HELP.leverage}>Leverage</span>
+                    <span title={t(EXECUTION_PROFILE_HELP.leverage)}>{tKey("settings.leverage")}</span>
                     <input
                       defaultValue={strategyConfig.risk_settings.leverage == null ? "" : String(strategyConfig.risk_settings.leverage)}
                       disabled={busy}
@@ -1675,19 +1687,19 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span title={EXECUTION_PROFILE_HELP.radarMode}>Radar mode</span>
+                    <span title={t(EXECUTION_PROFILE_HELP.radarMode)}>{tKey("settings.radarMode")}</span>
                     <select
                       defaultValue={String(strategyConfig.risk_settings.radar_display_mode ?? "all_market_opportunities")}
                       disabled={busy}
                       name="risk:radar_display_mode"
                     >
                       {RADAR_DISPLAY_MODES.map((mode) => (
-                        <option key={mode.value} value={mode.value}>{mode.label}</option>
+                        <option key={mode.value} value={mode.value}>{t(mode.label)}</option>
                       ))}
                     </select>
                   </label>
                   <label>
-                    <span>Min R:R for execution / reporting</span>
+                    <span>{tKey("settings.minRrExecutionReporting")}</span>
                     <input
                       defaultValue={String(Number(strategyConfig.risk_settings.min_rr_ratio ?? riskManagement.min_rr_ratio ?? 2))}
                       disabled={busy}
@@ -1699,30 +1711,30 @@ export function SettingsPage({
                     />
                   </label>
                   <label>
-                    <span>RR target</span>
+                    <span>{tKey("settings.rrTarget")}</span>
                     <select
                       defaultValue={String(strategyConfig.risk_settings.rr_target ?? defaultRrTarget(strategyConfig.strategy_code))}
                       disabled={busy}
                       name="risk:rr_target"
                     >
-                      <option value="final">Final target</option>
-                      <option value="nearest">Nearest target</option>
+                      <option value="final">{tKey("settings.finalTarget")}</option>
+                      <option value="nearest">{tKey("settings.nearestTarget")}</option>
                     </select>
                   </label>
                   <label>
-                    <span title={EXECUTION_PROFILE_HELP.rrGuard}>R:R guard</span>
+                    <span title={t(EXECUTION_PROFILE_HELP.rrGuard)}>{tKey("settings.rrGuard")}</span>
                     <select
                       defaultValue={normalizeRRGuardMode(strategyConfig.risk_settings.rr_guard_mode, riskManagement.discovery_rr_guard_mode)}
                       disabled={busy}
                       name="risk:rr_guard_mode"
                     >
                       {RR_GUARD_MODES.map((mode) => (
-                        <option key={mode.value} value={mode.value}>{mode.label}</option>
+                        <option key={mode.value} value={mode.value}>{tKey(mode.labelKey)}</option>
                       ))}
                     </select>
                   </label>
                   <label className="strategy-risk-toggle">
-                    <span>Hide low-RR cards</span>
+                    <span>{tKey("settings.hideLowRrCards")}</span>
                     <input
                       defaultChecked={Boolean(strategyConfig.risk_settings.hide_failed_rr_signals)}
                       disabled={busy}
@@ -1742,7 +1754,7 @@ export function SettingsPage({
                       <Badge tone="purple">{pairSummary}</Badge>
                       <button className="primary-action compact-action" disabled={busy} type="submit">
                         <Save size={15} />
-                        Apply
+                        {tKey("settings.apply")}
                       </button>
                     </div>
                   </div>
@@ -1760,9 +1772,9 @@ export function SettingsPage({
           onToggle={() => toggleSettingsSection("risk")}
           open={openSettingsSections.has("risk")}
           summary={riskManagement.risk_profile}
-          title="Risk management"
+          title={tKey("settings.riskManagement")}
         >
-          <div className="risk-settings-tabs" role="tablist" aria-label="Risk management sections">
+          <div className="risk-settings-tabs" role="tablist" aria-label={tKey("settings.riskManagementSections")}>
             {RISK_SETTINGS_TABS.map((tab) => (
               <button
                 aria-selected={riskTab === tab.value}
@@ -1772,23 +1784,23 @@ export function SettingsPage({
                 role="tab"
                 type="button"
               >
-                {tab.label}
+                {t(tab.label)}
               </button>
             ))}
           </div>
           {riskState ? (
             <div className="risk-state-strip">
               <Badge tone={riskProtectionTone(riskState.protection_state)}>
-                Protection: {riskState.protection_state}
+                {tKey("settings.protectionLabel")} {riskState.protection_state}
               </Badge>
-              {riskState.close_only ? <Badge tone="yellow">Close-only</Badge> : null}
-              <span>Daily {formatRiskUsageValue(riskState.daily_loss_percent, riskDraft.max_daily_loss_percent)}</span>
-              <span>Weekly {formatRiskUsageValue(riskState.weekly_loss_percent, riskDraft.max_weekly_loss_percent)}</span>
-              <span>Drawdown {formatRiskUsageValue(riskState.account_drawdown_percent, riskState.max_account_drawdown_percent)}</span>
-              <span>Open {formatRiskUsageValue(riskState.open_risk_percent, riskState.max_open_risk_percent)}</span>
-              <span>Correlated {formatRiskUsageValue(riskState.correlated_risk_percent, riskState.max_correlated_risk_percent)}</span>
-              <span>Rules {riskState.exchange_rule_status}</span>
-              <span>Adaptive x{riskState.adaptive_multiplier.toFixed(2)}</span>
+              {riskState.close_only ? <Badge tone="yellow">{tKey("settings.closeOnly")}</Badge> : null}
+              <span>{tKey("settings.daily")} {formatRiskUsageValue(riskState.daily_loss_percent, riskDraft.max_daily_loss_percent, tKey)}</span>
+              <span>{tKey("settings.weekly")} {formatRiskUsageValue(riskState.weekly_loss_percent, riskDraft.max_weekly_loss_percent, tKey)}</span>
+              <span>{tKey("settings.drawdown")} {formatRiskUsageValue(riskState.account_drawdown_percent, riskState.max_account_drawdown_percent, tKey)}</span>
+              <span>{tKey("settings.openRiskShort")} {formatRiskUsageValue(riskState.open_risk_percent, riskState.max_open_risk_percent, tKey)}</span>
+              <span>{tKey("settings.correlated")} {formatRiskUsageValue(riskState.correlated_risk_percent, riskState.max_correlated_risk_percent, tKey)}</span>
+              <span>{tKey("settings.rules")} {riskState.exchange_rule_status}</span>
+              <span>{tKey("settings.adaptiveMultiplier")}{riskState.adaptive_multiplier.toFixed(2)}</span>
             </div>
           ) : null}
 
@@ -1809,10 +1821,10 @@ export function SettingsPage({
                       disabled={busy}
                       key={profile.value}
                       onClick={() => handleSelectRiskProfile(profile.value)}
-                      title={profile.caption}
+                      title={t(profile.caption)}
                       type="button"
                     >
-                      <span>{profile.label}</span>
+                      <span>{t(profile.label)}</span>
                       <small>{presetSummary}</small>
                     </button>
                   );
@@ -1820,10 +1832,10 @@ export function SettingsPage({
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Execution profile</strong>
-                  <HelpTooltip text={EXECUTION_PROFILE_HELP.virtualVsReal} />
+                  <strong>{tKey("settings.executionProfile")}</strong>
+                  <HelpTooltip text={t(EXECUTION_PROFILE_HELP.virtualVsReal)} />
                 </div>
-                <p className="risk-help-note">{EXECUTION_PROFILE_HELP.virtualVsReal}</p>
+                <p className="risk-help-note">{t(EXECUTION_PROFILE_HELP.virtualVsReal)}</p>
                 <div className="risk-mode-grid two-option-grid">
                   {RISK_AMOUNT_MODES.map((mode) => (
                     <button
@@ -1831,20 +1843,20 @@ export function SettingsPage({
                       disabled={busy || !customRiskEnabled}
                       key={mode.value}
                       onClick={() => updateRiskDraft({ risk_mode: mode.value })}
-                      title={mode.value === "percent" ? EXECUTION_PROFILE_HELP.percentRisk : EXECUTION_PROFILE_HELP.fixedRisk}
+                      title={t(mode.value === "percent" ? EXECUTION_PROFILE_HELP.percentRisk : EXECUTION_PROFILE_HELP.fixedRisk)}
                       type="button"
                     >
-                      {mode.label}
+                      {t(mode.label)}
                     </button>
                   ))}
                 </div>
                 <div className="risk-settings-grid compact-risk-grid">
                   <label className="risk-setting-field">
-                    <FieldLabel help={EXECUTION_PROFILE_HELP.fixedRisk} label="Fixed risk" />
+                    <FieldLabel help={t(EXECUTION_PROFILE_HELP.fixedRisk)} label={tKey("settings.fixedRisk")} />
                     <div>
                       <input
                         aria-describedby="fixed-risk-help fixed-risk-error"
-                        aria-label="Fixed risk"
+                        aria-label={tKey("settings.fixedRisk")}
                         aria-invalid={Boolean(riskValidationErrors.fixed_risk_amount)}
                         aria-required={riskDraft.risk_mode === "fixed"}
                         disabled={busy || !customRiskEnabled || riskDraft.risk_mode !== "fixed"}
@@ -1860,16 +1872,16 @@ export function SettingsPage({
                       />
                       <small>{riskDraft.fixed_risk_currency}</small>
                     </div>
-                    <small className="risk-help-text" id="fixed-risk-help">{EXECUTION_PROFILE_HELP.fixedRisk}</small>
+                    <small className="risk-help-text" id="fixed-risk-help">{t(EXECUTION_PROFILE_HELP.fixedRisk)}</small>
                     {riskValidationErrors.fixed_risk_amount ? (
                       <small className="risk-field-error" id="fixed-risk-error">{riskValidationErrors.fixed_risk_amount}</small>
                     ) : null}
                   </label>
                   <label className="risk-setting-field">
-                    <span>Currency</span>
+                    <span>{tKey("settings.currency")}</span>
                     <div>
                       <input
-                        aria-label="Fixed risk currency"
+                        aria-label={tKey("settings.fixedCurrency")}
                         disabled={busy || !customRiskEnabled || riskDraft.risk_mode !== "fixed"}
                         maxLength={16}
                         onChange={(event) => updateRiskDraft({ fixed_risk_currency: event.target.value.toUpperCase() })}
@@ -1878,21 +1890,21 @@ export function SettingsPage({
                     </div>
                   </label>
                   <label className="risk-setting-field">
-                    <FieldLabel help={EXECUTION_PROFILE_HELP.radarMode} label="Radar mode" />
+                    <FieldLabel help={t(EXECUTION_PROFILE_HELP.radarMode)} label={tKey("settings.radarMode")} />
                     <div>
                       <select
-                        aria-label="Radar mode"
-                        title={EXECUTION_PROFILE_HELP.radarMode}
+                        aria-label={tKey("settings.radarMode")}
+                        title={t(EXECUTION_PROFILE_HELP.radarMode)}
                         disabled={busy || !customRiskEnabled}
                         onChange={(event) => updateRiskDraft({ radar_display_mode: event.target.value as RadarDisplayMode })}
                         value={riskDraft.radar_display_mode}
                       >
                         {RADAR_DISPLAY_MODES.map((mode) => (
-                          <option key={mode.value} value={mode.value}>{mode.label}</option>
+                          <option key={mode.value} value={mode.value}>{t(mode.label)}</option>
                         ))}
                       </select>
                     </div>
-                    <small className="risk-help-text">{EXECUTION_PROFILE_HELP.radarMode}</small>
+                    <small className="risk-help-text">{t(EXECUTION_PROFILE_HELP.radarMode)}</small>
                   </label>
                 </div>
               </div>
@@ -1905,11 +1917,11 @@ export function SettingsPage({
 
                   return (
                     <label className="risk-setting-field" key={field.key}>
-                      <FieldLabel help={help} label={field.label} />
+                      <FieldLabel help={help ? t(help) : undefined} label={t(field.label)} />
                       <div>
                         <input
                           aria-describedby={`${field.key}-help ${field.key}-error`}
-                          aria-label={field.label}
+                          aria-label={t(field.label)}
                           aria-invalid={Boolean(error)}
                           aria-required={required}
                           disabled={busy || !customRiskEnabled}
@@ -1919,35 +1931,35 @@ export function SettingsPage({
                           onChange={(event) => updateRiskDraft({ [field.key]: Number(event.target.value) })}
                           required={required}
                           step={field.step}
-                          title={help}
+                          title={help ? t(help) : undefined}
                           type="number"
                           value={riskDraft[field.key]}
                         />
                         <small>{field.suffix}</small>
                       </div>
-                      {help ? <small className="risk-help-text" id={`${field.key}-help`}>{help}</small> : null}
+                      {help ? <small className="risk-help-text" id={`${field.key}-help`}>{t(help)}</small> : null}
                       {error ? <small className="risk-field-error" id={`${field.key}-error`}>{error}</small> : null}
                     </label>
                   );
                 })}
               </div>
               <div className="risk-inclusion-strip">
-                <Badge tone="blue">Fees included</Badge>
-                <Badge tone="blue">Slippage included</Badge>
-                <Badge tone={riskDraft.stop_loss_required ? "green" : "yellow"}>Stop required</Badge>
-                <Badge tone={riskDraft.take_profit_required ? "green" : "yellow"}>TP required</Badge>
+                <Badge tone="blue">{tKey("settings.feesIncluded")}</Badge>
+                <Badge tone="blue">{tKey("settings.slippageIncluded")}</Badge>
+                <Badge tone={riskDraft.stop_loss_required ? "green" : "yellow"}>{tKey("settings.stopRequired")}</Badge>
+                <Badge tone={riskDraft.take_profit_required ? "green" : "yellow"}>{tKey("settings.tpRequired")}</Badge>
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Spot risk</strong>
+                  <strong>{tKey("settings.spotRisk")}</strong>
                 </div>
                 <div className="risk-settings-grid">
                   {SPOT_TRADE_TYPE_FIELD_LABELS.map((field) => (
                     <label className="risk-setting-field" key={field.key}>
-                      <span>{field.label}</span>
+                      <span>{t(field.label)}</span>
                       <div>
                         <input
-                          aria-label={field.label}
+                          aria-label={t(field.label)}
                           disabled={busy || !customRiskEnabled}
                           inputMode="decimal"
                           min="0"
@@ -1968,12 +1980,12 @@ export function SettingsPage({
                     onChange={(event) => updateRiskDraft({ spot_stop_required: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>Spot stop required</span>
+                  <span>{tKey("settings.spotStopRequired")}</span>
                 </label>
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Adaptive risk</strong>
+                  <strong>{tKey("settings.adaptiveRisk")}</strong>
                 </div>
                 <label className="risk-checkbox-row">
                   <input
@@ -1982,7 +1994,7 @@ export function SettingsPage({
                     onChange={(event) => updateRiskDraft({ auto_reduce_risk_after_losses: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>Auto reduce after losses</span>
+                  <span>{tKey("settings.autoReduceAfterLosses")}</span>
                 </label>
                 <label className="risk-checkbox-row">
                   <input
@@ -1991,14 +2003,14 @@ export function SettingsPage({
                     onChange={(event) => updateRiskDraft({ allow_risk_increase_after_profit: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>Allow risk increase</span>
+                  <span>{tKey("settings.allowRiskIncrease")}</span>
                 </label>
                 <div className="risk-settings-grid">
                   <label className="risk-setting-field">
-                    <span>Max risk boost</span>
+                    <span>{tKey("settings.maxRiskBoost")}</span>
                     <div>
                       <input
-                        aria-label="Max risk boost"
+                        aria-label={tKey("settings.maxRiskBoost")}
                         disabled={busy || !customRiskEnabled || !riskDraft.allow_risk_increase_after_profit}
                         inputMode="decimal"
                         min="1"
@@ -2019,24 +2031,24 @@ export function SettingsPage({
             <>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>R:R guard policy</strong>
-                  <HelpTooltip text={EXECUTION_PROFILE_HELP.rrGuard} />
+                  <strong>{tKey("settings.rrGuardPolicy")}</strong>
+                  <HelpTooltip text={t(EXECUTION_PROFILE_HELP.rrGuard)} />
                 </div>
-                <p className="risk-help-note">{EXECUTION_PROFILE_HELP.rrGuard}</p>
+                <p className="risk-help-note">{t(EXECUTION_PROFILE_HELP.rrGuard)}</p>
                 <div className="risk-settings-grid compact-risk-grid">
                   {RR_GUARD_FIELD_LABELS.map((field) => (
                     <label className="risk-setting-field" key={field.key}>
-                      <FieldLabel help={EXECUTION_PROFILE_HELP.rrGuard} label={field.label} />
+                      <FieldLabel help={t(EXECUTION_PROFILE_HELP.rrGuard)} label={t(field.label)} />
                       <div>
                         <select
-                          aria-label={field.label}
+                          aria-label={t(field.label)}
                           disabled={busy || !customRiskEnabled}
                           onChange={(event) => updateRiskDraft({ [field.key]: event.target.value as RRGuardMode })}
-                          title={EXECUTION_PROFILE_HELP.rrGuard}
+                          title={t(EXECUTION_PROFILE_HELP.rrGuard)}
                           value={riskDraft[field.key]}
                         >
                           {RR_GUARD_MODES.map((mode) => (
-                            <option key={mode.value} value={mode.value}>{mode.label}</option>
+                            <option key={mode.value} value={mode.value}>{tKey(mode.labelKey)}</option>
                           ))}
                         </select>
                       </div>
@@ -2047,10 +2059,10 @@ export function SettingsPage({
               <div className="risk-settings-grid compact-risk-grid">
                 {TRADE_RULE_FIELD_LABELS.map((field) => (
                   <label className="risk-setting-field" key={field.key}>
-                    <span>{field.label}</span>
+                    <span>{t(field.label)}</span>
                     <div>
                       <input
-                        aria-label={field.label}
+                        aria-label={t(field.label)}
                         disabled={busy || !customRiskEnabled}
                         inputMode="decimal"
                         min="0"
@@ -2066,7 +2078,7 @@ export function SettingsPage({
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Stop-loss</strong>
+                  <strong>{tKey("settings.stopLoss")}</strong>
                 </div>
                 <div className="risk-mode-grid">
                   {STOP_LOSS_MODES.map((mode) => (
@@ -2075,10 +2087,10 @@ export function SettingsPage({
                       disabled={busy || !customRiskEnabled}
                       key={mode.value}
                       onClick={() => updateRiskDraft({ stop_loss_mode: mode.value })}
-                      title={mode.caption}
+                      title={t(mode.caption)}
                       type="button"
                     >
-                      {mode.label}
+                      {t(mode.label)}
                     </button>
                   ))}
                 </div>
@@ -2087,10 +2099,10 @@ export function SettingsPage({
                     const atrField = field.key === "atr_period" || field.key === "atr_multiplier";
                     return (
                       <label className="risk-setting-field" key={field.key}>
-                        <span>{field.label}</span>
+                        <span>{t(field.label)}</span>
                         <div>
                           <input
-                            aria-label={field.label}
+                            aria-label={t(field.label)}
                             disabled={busy || !customRiskEnabled || (atrField && riskDraft.stop_loss_mode !== "atr")}
                             inputMode="decimal"
                             min="0"
@@ -2108,16 +2120,16 @@ export function SettingsPage({
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Take-profit</strong>
-                  <Badge tone="purple">Risk multiple</Badge>
+                  <strong>{tKey("settings.takeProfit")}</strong>
+                  <Badge tone="purple">{tKey("settings.riskMultiple")}</Badge>
                 </div>
                 <div className="risk-settings-grid">
                   {TAKE_PROFIT_FIELD_LABELS.map((field) => (
                     <label className="risk-setting-field" key={field.key}>
-                      <span>{field.label}</span>
+                      <span>{t(field.label)}</span>
                       <div>
                         <input
-                          aria-label={field.label}
+                          aria-label={t(field.label)}
                           disabled={busy || !customRiskEnabled}
                           inputMode="decimal"
                           min="0"
@@ -2138,15 +2150,15 @@ export function SettingsPage({
                     onChange={(event) => updateRiskDraft({ partial_take_profit_enabled: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>Partial take-profit</span>
+                  <span>{tKey("settings.partialTakeProfit")}</span>
                 </label>
                 <div className="risk-settings-grid">
                   {PARTIAL_TAKE_PROFIT_FIELD_LABELS.map((field) => (
                     <label className="risk-setting-field" key={field.key}>
-                      <span>{field.label}</span>
+                      <span>{t(field.label)}</span>
                       <div>
                         <input
-                          aria-label={field.label}
+                          aria-label={t(field.label)}
                           disabled={busy || !customRiskEnabled || !riskDraft.partial_take_profit_enabled}
                           inputMode="decimal"
                           min="0"
@@ -2163,15 +2175,15 @@ export function SettingsPage({
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Breakeven</strong>
+                  <strong>{tKey("settings.breakeven")}</strong>
                 </div>
                 <div className="risk-settings-grid">
                   {BREAKEVEN_FIELD_LABELS.map((field) => (
                     <label className="risk-setting-field" key={field.key}>
-                      <span>{field.label}</span>
+                      <span>{t(field.label)}</span>
                       <div>
                         <input
-                          aria-label={field.label}
+                          aria-label={t(field.label)}
                           disabled={busy || !customRiskEnabled}
                           inputMode="decimal"
                           min="0"
@@ -2188,7 +2200,7 @@ export function SettingsPage({
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Trailing stop</strong>
+                  <strong>{tKey("settings.trailingStop")}</strong>
                 </div>
                 <label className="risk-checkbox-row">
                   <input
@@ -2197,7 +2209,7 @@ export function SettingsPage({
                     onChange={(event) => updateRiskDraft({ trailing_stop_enabled: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>Enabled</span>
+                  <span>{tKey("settings.enabled")}</span>
                 </label>
                 <div className="risk-mode-grid">
                   {TRAILING_MODES.map((mode) => (
@@ -2206,10 +2218,10 @@ export function SettingsPage({
                       disabled={busy || !customRiskEnabled || !riskDraft.trailing_stop_enabled}
                       key={mode.value}
                       onClick={() => updateRiskDraft({ trailing_mode: mode.value })}
-                      title={mode.caption}
+                      title={t(mode.caption)}
                       type="button"
                     >
-                      {mode.label}
+                      {t(mode.label)}
                     </button>
                   ))}
                 </div>
@@ -2219,10 +2231,10 @@ export function SettingsPage({
                     const percentField = field.key === "trailing_stop_percent";
                     return (
                       <label className="risk-setting-field" key={field.key}>
-                        <span>{field.label}</span>
+                        <span>{t(field.label)}</span>
                         <div>
                           <input
-                            aria-label={field.label}
+                            aria-label={t(field.label)}
                             disabled={
                               busy ||
                               !customRiskEnabled ||
@@ -2246,13 +2258,13 @@ export function SettingsPage({
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Strategy multipliers</strong>
-                  <Badge tone="blue">Risk multiplier</Badge>
+                  <strong>{tKey("settings.strategyMultipliers")}</strong>
+                  <Badge tone="blue">{tKey("settings.riskMultiplier")}</Badge>
                 </div>
                 <div className="strategy-multiplier-grid">
                   {Object.entries(riskDraft.strategy_risk_multipliers).map(([strategy, multiplier]) => (
                     <label className="strategy-multiplier-field" key={strategy}>
-                      <span>{STRATEGY_MULTIPLIER_LABELS[strategy] ?? strategy.replaceAll("_", " ")}</span>
+                      <span>{t(STRATEGY_MULTIPLIER_LABELS[strategy] ?? strategy.replaceAll("_", " "))}</span>
                       <input
                         aria-label={`${STRATEGY_MULTIPLIER_LABELS[strategy] ?? strategy} multiplier`}
                         disabled={busy || !customRiskEnabled}
@@ -2274,7 +2286,7 @@ export function SettingsPage({
             <>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Futures protection</strong>
+                  <strong>{tKey("settings.futuresProtection")}</strong>
                 </div>
                 <label className="risk-checkbox-row">
                   <input
@@ -2283,7 +2295,7 @@ export function SettingsPage({
                     onChange={(event) => updateRiskDraft({ liquidation_buffer_required: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>Liquidation buffer required</span>
+                  <span>{tKey("settings.liquidationBufferRequired")}</span>
                 </label>
                 <div className="risk-settings-grid">
                   {FUTURES_FIELD_LABELS.map((field) => {
@@ -2293,11 +2305,11 @@ export function SettingsPage({
 
                     return (
                       <label className="risk-setting-field" key={field.key}>
-                        <FieldLabel help={help} label={field.label} />
+                        <FieldLabel help={help ? t(help) : undefined} label={t(field.label)} />
                         <div>
                           <input
                             aria-describedby={`${field.key}-help ${field.key}-error`}
-                            aria-label={field.label}
+                            aria-label={t(field.label)}
                             aria-invalid={Boolean(error)}
                             disabled={busy || !customRiskEnabled}
                             inputMode="decimal"
@@ -2305,13 +2317,13 @@ export function SettingsPage({
                             min={limits?.min ?? 0}
                             onChange={(event) => updateRiskDraft({ [field.key]: Number(event.target.value) })}
                             step={field.step}
-                            title={help}
+                            title={help ? t(help) : undefined}
                             type="number"
                             value={riskDraft[field.key]}
                           />
                           <small>{field.suffix}</small>
                         </div>
-                        {help ? <small className="risk-help-text" id={`${field.key}-help`}>{help}</small> : null}
+                        {help ? <small className="risk-help-text" id={`${field.key}-help`}>{t(help)}</small> : null}
                         {error ? <small className="risk-field-error" id={`${field.key}-error`}>{error}</small> : null}
                       </label>
                     );
@@ -2320,7 +2332,7 @@ export function SettingsPage({
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Futures risk budget</strong>
+                  <strong>{tKey("settings.futuresRiskBudget")}</strong>
                 </div>
                 <div className="risk-settings-grid">
                   {FUTURES_TRADE_TYPE_FIELD_LABELS.map((field) => {
@@ -2330,11 +2342,11 @@ export function SettingsPage({
 
                     return (
                       <label className="risk-setting-field" key={field.key}>
-                        <FieldLabel help={help} label={field.label} />
+                        <FieldLabel help={help ? t(help) : undefined} label={t(field.label)} />
                         <div>
                           <input
                             aria-describedby={`${field.key}-help ${field.key}-error`}
-                            aria-label={field.label}
+                            aria-label={t(field.label)}
                             aria-invalid={Boolean(error)}
                             disabled={busy || !customRiskEnabled}
                             inputMode="decimal"
@@ -2342,13 +2354,13 @@ export function SettingsPage({
                             min={limits?.min ?? 0}
                             onChange={(event) => updateRiskDraft({ [field.key]: Number(event.target.value) })}
                             step={field.step}
-                            title={help}
+                            title={help ? t(help) : undefined}
                             type="number"
                             value={riskDraft[field.key]}
                           />
                           <small>{field.suffix}</small>
                         </div>
-                        {help ? <small className="risk-help-text" id={`${field.key}-help`}>{help}</small> : null}
+                        {help ? <small className="risk-help-text" id={`${field.key}-help`}>{t(help)}</small> : null}
                         {error ? <small className="risk-field-error" id={`${field.key}-error`}>{error}</small> : null}
                       </label>
                     );
@@ -2361,7 +2373,7 @@ export function SettingsPage({
                     onChange={(event) => updateRiskDraft({ futures_liquidation_buffer_required: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>Futures liquidation buffer required</span>
+                  <span>{tKey("settings.futuresLiquidationBufferRequired")}</span>
                 </label>
               </div>
             </>
@@ -2371,10 +2383,10 @@ export function SettingsPage({
             <>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Virtual risk budget</strong>
-                  <HelpTooltip text={EXECUTION_PROFILE_HELP.virtualVsReal} />
+                  <strong>{tKey("settings.virtualRiskBudget")}</strong>
+                  <HelpTooltip text={t(EXECUTION_PROFILE_HELP.virtualVsReal)} />
                 </div>
-                <p className="risk-help-note">{EXECUTION_PROFILE_HELP.virtualVsReal}</p>
+                <p className="risk-help-note">{t(EXECUTION_PROFILE_HELP.virtualVsReal)}</p>
                 <div className="risk-mode-grid two-option-grid">
                   {VIRTUAL_RISK_MODES.map((mode) => (
                     <button
@@ -2384,7 +2396,7 @@ export function SettingsPage({
                       onClick={() => updateRiskDraft({ virtual_risk_mode: mode.value })}
                       type="button"
                     >
-                      {mode.label}
+                      {t(mode.label)}
                     </button>
                   ))}
                 </div>
@@ -2393,10 +2405,10 @@ export function SettingsPage({
                     const virtualRisk = field.key === "virtual_risk_per_trade_percent";
                     return (
                       <label className="risk-setting-field" key={field.key}>
-                        <span>{field.label}</span>
+                        <span>{t(field.label)}</span>
                         <div>
                           <input
-                            aria-label={field.label}
+                            aria-label={t(field.label)}
                             disabled={busy || !customRiskEnabled || (virtualRisk && riskDraft.virtual_risk_mode !== "custom")}
                             inputMode="decimal"
                             min="0"
@@ -2414,8 +2426,8 @@ export function SettingsPage({
               </div>
               <div className="risk-plan-block">
                 <div className="risk-plan-heading">
-                  <strong>Virtual execution</strong>
-                  <HelpTooltip text={EXECUTION_PROFILE_HELP.virtualVsReal} />
+                  <strong>{tKey("settings.virtualExecution")}</strong>
+                  <HelpTooltip text={t(EXECUTION_PROFILE_HELP.virtualVsReal)} />
                 </div>
                 <div className="risk-mode-grid">
                   {VIRTUAL_SLIPPAGE_MODELS.map((model) => (
@@ -2426,7 +2438,7 @@ export function SettingsPage({
                       onClick={() => updateRiskDraft({ virtual_slippage_model: model.value })}
                       type="button"
                     >
-                      {model.label}
+                      {t(model.label)}
                     </button>
                   ))}
                 </div>
@@ -2439,7 +2451,7 @@ export function SettingsPage({
                       onClick={() => updateRiskDraft({ virtual_fee_model: model.value })}
                       type="button"
                     >
-                      {model.label}
+                      {t(model.label)}
                     </button>
                   ))}
                 </div>
@@ -2450,7 +2462,7 @@ export function SettingsPage({
                     onChange={(event) => updateRiskDraft({ virtual_trading_uses_realistic_execution: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>Realistic execution</span>
+                  <span>{tKey("settings.realisticExecution")}</span>
                 </label>
               </div>
             </>
@@ -2463,7 +2475,7 @@ export function SettingsPage({
           <div className="risk-profile-footer">
             <span>
               {riskDraftValid
-                ? "Balanced is the default profile. Limits reduce risk exposure but cannot guarantee safety."
+                ? tKey("settings.balancedDefaultSafety")
                 : Object.values(riskValidationErrors)[0]}
             </span>
             <button
@@ -2472,7 +2484,7 @@ export function SettingsPage({
               onClick={handleSaveCustomRisk}
               type="button"
             >
-              Save custom
+              {tKey("settings.saveCustom")}
             </button>
           </div>
         </SettingsAccordionSection>
@@ -2483,7 +2495,7 @@ export function SettingsPage({
           onToggle={() => toggleSettingsSection("simulation")}
           open={openSettingsSections.has("simulation")}
           summary={simulationLevel}
-          title="Simulation"
+          title={tKey("settings.simulation")}
         >
           <div className="simulation-mode-grid">
             {SIMULATION_LEVELS.map((level) => (
@@ -2495,10 +2507,10 @@ export function SettingsPage({
                 type="button"
               >
                 <span>
-                  <strong>{level.label}</strong>
-                  <small>{level.caption}</small>
+                  <strong>{t(level.label)}</strong>
+                  <small>{t(level.caption)}</small>
                 </span>
-                <Badge tone={level.status === "active" ? "green" : "yellow"}>{level.status}</Badge>
+                <Badge tone={level.status === "active" ? "green" : "yellow"}>{t(level.status)}</Badge>
               </button>
             ))}
           </div>
@@ -2510,8 +2522,8 @@ export function SettingsPage({
           icon={<FlaskConical size={18} />}
           onToggle={() => toggleSettingsSection("strategyTesting")}
           open={openSettingsSections.has("strategyTesting")}
-          summary="Backtest Lab"
-          title="Strategy Testing"
+          summary={tKey("settings.backtestLab")}
+          title={tKey("settings.strategyTesting")}
         >
           <StrategyTestingPanel availablePairs={availablePairs} strategyConfigs={strategyConfigs} />
         </SettingsAccordionSection>
@@ -2522,52 +2534,52 @@ export function SettingsPage({
           icon={<Bell size={18} />}
           onToggle={() => toggleSettingsSection("alerts")}
           open={openSettingsSections.has("alerts")}
-          summary={`${alertRules.length} rule${alertRules.length === 1 ? "" : "s"}`}
-          title="Alerts"
+          summary={tKey("settings.ruleCount", { count: alertRules.length, suffix: alertRules.length === 1 ? "" : "s" })}
+          title={tKey("settings.alerts")}
         >
           <div className="inline-form stacked">
             <select
-              aria-label="Alert pair"
+              aria-label={tKey("settings.alertPair")}
               disabled={busy || availablePairs.length === 0}
               onChange={(event) => setPairId(event.target.value)}
               value={pairId}
             >
-              <option value="">{availablePairs.length ? "Select pair" : "No pairs"}</option>
+              <option value="">{availablePairs.length ? tKey("settings.selectPairOption") : tKey("settings.noPairs")}</option>
               {availablePairs.map((pair) => (
                 <option key={pair.id} value={pair.id}>{pair.exchange}:{pair.symbol}</option>
               ))}
             </select>
             <select
-              aria-label="Alert condition"
+              aria-label={tKey("settings.alertCondition")}
               disabled={busy}
               onChange={(event) => setConditionType(event.target.value)}
               value={conditionType}
             >
-              <option value="price_above">Price above</option>
-              <option value="price_below">Price below</option>
-              <option value="signal_generated">Signal generated</option>
+              <option value="price_above">{tKey("settings.priceAbove")}</option>
+              <option value="price_below">{tKey("settings.priceBelow")}</option>
+              <option value="signal_generated">{tKey("settings.signalGenerated")}</option>
             </select>
             <input
-              aria-label="Alert price"
+              aria-label={tKey("settings.alertPrice")}
               disabled={busy}
               inputMode="decimal"
               onChange={(event) => setTargetPrice(event.target.value)}
-              placeholder="Price"
+              placeholder={tKey("settings.alertPrice")}
               type="number"
               value={targetPrice}
             />
             <button className="primary-action" disabled={busy || !selectedPair || !targetPrice} onClick={handleCreateAlert} type="button">
               <Bell size={16} />
-              Add
+              {tKey("common.add")}
             </button>
           </div>
 
           <div className="alert-list">
-            {alertRules.length === 0 ? <div className="empty-state compact-empty">No alert rules</div> : null}
+            {alertRules.length === 0 ? <div className="empty-state compact-empty">{tKey("settings.noAlertRules")}</div> : null}
             {alertRules.map((alert) => (
               <div className="alert-row" key={alert.id}>
                 <div>
-                  <strong>{alert.pair?.symbol ?? "Global"}</strong>
+                  <strong>{alert.pair?.symbol ?? tKey("settings.global")}</strong>
                   <span>{alert.condition_type} {formatCondition(alert.condition_body)}</span>
                 </div>
                 <label className="toggle-row compact-toggle">
@@ -2577,12 +2589,12 @@ export function SettingsPage({
                     onChange={(event) => onToggleAlert(alert.id, event.target.checked)}
                     type="checkbox"
                   />
-                  <span>{alert.is_enabled ? "On" : "Off"}</span>
+                  <span>{alert.is_enabled ? tKey("common.on") : tKey("common.off")}</span>
                 </label>
-                <button className="icon-button compact" disabled={busy} onClick={() => onTestAlert(alert.id)} title="Test" type="button">
+                <button className="icon-button compact" disabled={busy} onClick={() => onTestAlert(alert.id)} title={tKey("settings.test")} type="button">
                   <Send size={15} />
                 </button>
-                <button className="icon-button compact" disabled={busy} onClick={() => onDeleteAlert(alert.id)} title="Delete" type="button">
+                <button className="icon-button compact" disabled={busy} onClick={() => onDeleteAlert(alert.id)} title={tKey("common.delete")} type="button">
                   <Trash2 size={15} />
                 </button>
               </div>
@@ -2595,8 +2607,8 @@ export function SettingsPage({
           icon={<Gauge size={18} />}
           onToggle={() => toggleSettingsSection("timeframes")}
           open={openSettingsSections.has("timeframes")}
-          summary={`${(config?.timeframes ?? ["1m", "5m", "15m", "1h", "4h", "1d"]).length} active`}
-          title="Timeframes"
+          summary={`${(config?.timeframes ?? ["1m", "5m", "15m", "1h", "4h", "1d"]).length} ${tKey("common.active").toLowerCase()}`}
+          title={tKey("settings.timeframes")}
         >
           <div className="chip-cloud">
             {(config?.timeframes ?? ["1m", "5m", "15m", "1h", "4h", "1d"]).map((timeframe) => (
@@ -2611,15 +2623,18 @@ export function SettingsPage({
           <div aria-labelledby="exchange-delete-title" aria-modal="true" className="real-trade-modal exchange-delete-modal" role="dialog">
             <div className="real-trade-modal-header">
               <div>
-                <span className="muted">Exchange connection</span>
-                <h3 id="exchange-delete-title">Удалить подключение к бирже?</h3>
+                <span className="muted">{tKey("exchange.connection")}</span>
+                <h3 id="exchange-delete-title">{tKey("settings.deleteExchangeConnection")}</h3>
               </div>
-              <Badge tone="red">soft delete</Badge>
+              <Badge tone="red">{tKey("settings.softDelete")}</Badge>
             </div>
             <div className="real-trade-warning">
               <AlertTriangle size={18} />
               <span>
-                Подключение {connectionDeleteCandidate.exchange_name} · {connectionDeleteCandidate.label} будет скрыто из активного списка. Исторические ордера и сделки останутся связаны с ним.
+                {tKey("settings.deleteExchangeConnectionBody", {
+                  exchange: connectionDeleteCandidate.exchange_name,
+                  label: connectionDeleteCandidate.label
+                })}
               </span>
             </div>
             {connectionDeleteError ? (
@@ -2629,10 +2644,10 @@ export function SettingsPage({
             ) : null}
             <div className="real-trade-modal-actions">
               <button className="secondary-action" disabled={busy} onClick={cancelDeleteExchangeConnection} type="button">
-                Отмена
+                {tKey("common.cancel")}
               </button>
               <button className="danger-action" disabled={busy} onClick={handleDeleteExchangeConnection} type="button">
-                <Trash2 size={17} /> Удалить подключение
+                <Trash2 size={17} /> {tKey("settings.deleteExchangeConnection")}
               </button>
             </div>
           </div>
@@ -2655,6 +2670,7 @@ function StrategyPairSelector({
   selectedPairs,
   strategyId
 }: StrategyPairSelectorProps) {
+  const { t, tKey } = useI18n();
   const [exchange, setExchange] = useState(DEFAULT_MARKET_UNIVERSE_FILTERS.exchange);
   const [category, setCategory] = useState(DEFAULT_MARKET_UNIVERSE_FILTERS.category);
   const [limit, setLimit] = useState<MarketUniverseLimit>(DEFAULT_MARKET_UNIVERSE_FILTERS.limit);
@@ -2690,7 +2706,9 @@ function StrategyPairSelector({
   );
   const visibleLimitLabel = MARKET_UNIVERSE_LIMITS.find((option) => option.value === limit)?.label ?? "Top N";
   const lastSyncAt = syncUniverseMutation.data?.synced_at ?? latestSyncedAt(universePairs);
-  const selectedSummary = selectedPairs.length ? `Выбрано ${selectedPairs.length} пар` : "Все пары из scanner universe";
+  const selectedSummary = selectedPairs.length
+    ? tKey("settings.selectedPairsCount", { count: selectedPairs.length })
+    : tKey("settings.allPairsFromScannerUniverse");
   const selectorTitleId = `strategy-pair-selector-${strategyId}`;
 
   function togglePair(pair: MarketUniversePair, checked: boolean) {
@@ -2733,11 +2751,11 @@ function StrategyPairSelector({
     <section className="strategy-pair-selector" aria-labelledby={selectorTitleId}>
       <div className="strategy-pair-selector-head">
         <div>
-          <span id={selectorTitleId}>Торговые пары стратегии</span>
+          <span id={selectorTitleId}>{tKey("settings.strategyPairs")}</span>
           <strong>{selectedSummary}</strong>
         </div>
         <div className="strategy-pair-sync">
-          <span>Последняя синхронизация: {lastSyncAt ? formatDateTime(lastSyncAt) : "нет данных"}</span>
+          <span>{tKey("settings.lastSync", { value: lastSyncAt ? formatDateTime(lastSyncAt) : tKey("settings.noData") })}</span>
           <button
             className="secondary-action compact-action"
             disabled={busy || syncUniverseMutation.isPending}
@@ -2745,25 +2763,25 @@ function StrategyPairSelector({
             type="button"
           >
             <RefreshCw size={15} />
-            Синхронизировать пары с биржи
+            {tKey("settings.syncPairsFromExchange")}
           </button>
         </div>
       </div>
 
       <div className="strategy-pair-filter-grid">
         <label>
-          <span>Exchange</span>
+          <span>{tKey("common.exchange")}</span>
           <select
-            aria-label="Exchange universe"
+            aria-label={tKey("common.exchange")}
             disabled={busy}
             onChange={(event) => setExchange(event.target.value)}
             value={exchange}
           >
-            <option value="bybit">Bybit</option>
+            <option value="bybit">{MARKET_UNIVERSE_EXCHANGE_LABELS.bybit}</option>
           </select>
         </label>
         <label>
-          <span>Market</span>
+          <span>{tKey("common.market")}</span>
           <select
             aria-label="Market category universe"
             disabled={busy}
@@ -2776,20 +2794,20 @@ function StrategyPairSelector({
           </select>
         </label>
         <label>
-          <span>Universe size</span>
+          <span>{tKey("settings.universeSize")}</span>
           <select
-            aria-label="Universe size"
+            aria-label={tKey("settings.universeSize")}
             disabled={busy}
             onChange={(event) => setLimit(event.target.value as MarketUniverseLimit)}
             value={limit}
           >
             {MARKET_UNIVERSE_LIMITS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
+              <option key={option.value} value={option.value}>{t(option.label)}</option>
             ))}
           </select>
         </label>
         <label>
-          <span>Search</span>
+          <span>{tKey("common.search")}</span>
           <input
             aria-label="Search pair symbol"
             disabled={busy}
@@ -2799,20 +2817,20 @@ function StrategyPairSelector({
           />
         </label>
         <label>
-          <span>Liquidity tier</span>
+          <span>{tKey("settings.liquidityTier")}</span>
           <select
-            aria-label="Liquidity tier"
+            aria-label={tKey("settings.liquidityTier")}
             disabled={busy}
             onChange={(event) => setLiquidityTier(event.target.value)}
             value={liquidityTier}
           >
             {MARKET_UNIVERSE_TIERS.map((option) => (
-              <option key={option.value || "all"} value={option.value}>{option.label}</option>
+              <option key={option.value || "all"} value={option.value}>{t(option.label)}</option>
             ))}
           </select>
         </label>
         <label>
-          <span>Sort</span>
+          <span>{tKey("common.sort")}</span>
           <select
             aria-label="Sort market universe"
             disabled={busy}
@@ -2820,7 +2838,7 @@ function StrategyPairSelector({
             value={sort}
           >
             {MARKET_UNIVERSE_SORTS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
+              <option key={option.value} value={option.value}>{t(option.label)}</option>
             ))}
           </select>
         </label>
@@ -2834,7 +2852,7 @@ function StrategyPairSelector({
           type="button"
         >
           <CheckSquare size={15} />
-          Выбрать видимые
+          {tKey("settings.selectVisible")}
         </button>
         <button
           className="secondary-action compact-action"
@@ -2843,7 +2861,7 @@ function StrategyPairSelector({
           type="button"
         >
           <ListChecks size={15} />
-          Выбрать {visibleLimitLabel} видимых
+          {tKey("settings.selectVisibleLimit", { limit: visibleLimitLabel })}
         </button>
         <button
           className="secondary-action compact-action"
@@ -2852,7 +2870,7 @@ function StrategyPairSelector({
           type="button"
         >
           <Trash2 size={15} />
-          Очистить
+          {tKey("settings.clear")}
         </button>
         <Badge tone={selectedPairs.length ? "blue" : "purple"}>{selectedSummary}</Badge>
       </div>
@@ -2860,15 +2878,15 @@ function StrategyPairSelector({
       {lowLiquidityPairs.length ? (
         <div className="strategy-liquidity-warning" role="alert">
           <AlertTriangle size={16} />
-          <span>Выбраны low-liquidity пары: {lowLiquidityPairs.map((pair) => pair.symbol).join(", ")}</span>
+          <span>{tKey("settings.selectedLowLiquidityPairs", { pairs: lowLiquidityPairs.map((pair) => pair.symbol).join(", ") })}</span>
         </div>
       ) : null}
 
       {pairsQuery.error || syncUniverseMutation.error ? (
         <div className="strategy-error-message" role="alert">
           {pairsQuery.error
-            ? `Не удалось загрузить universe: ${errorMessage(pairsQuery.error)}`
-            : `Не удалось синхронизировать universe: ${errorMessage(syncUniverseMutation.error)}`}
+            ? tKey("settings.universeLoadFailed", { error: errorMessage(pairsQuery.error) })
+            : tKey("settings.universeSyncFailed", { error: errorMessage(syncUniverseMutation.error) })}
         </div>
       ) : null}
 
@@ -2876,14 +2894,14 @@ function StrategyPairSelector({
         <table className="strategy-pair-table">
           <thead>
             <tr>
-              <th aria-label="Выбор пары" />
-              <th>Symbol</th>
-              <th>24h turnover</th>
-              <th>Spread bps</th>
-              <th>Liquidity tier</th>
-              <th>Funding</th>
-              <th>Status</th>
-              <th>Rank</th>
+              <th aria-label={tKey("settings.selectPair", { symbol: "" })} />
+              <th>{tKey("settings.symbol")}</th>
+              <th>{tKey("settings.turnover24h")}</th>
+              <th>{tKey("settings.spreadBps")}</th>
+              <th>{tKey("settings.liquidityTier")}</th>
+              <th>{tKey("settings.funding")}</th>
+              <th>{tKey("common.status")}</th>
+              <th>{tKey("settings.rank")}</th>
             </tr>
           </thead>
           <tbody>
@@ -2893,7 +2911,7 @@ function StrategyPairSelector({
                 <tr key={pair.id || pairKey(pair)}>
                   <td>
                     <input
-                      aria-label={`Выбрать пару ${pair.symbol}`}
+                      aria-label={tKey("settings.selectPair", { symbol: pair.symbol })}
                       checked={checked}
                       disabled={busy}
                       onChange={(event) => togglePair(pair, event.target.checked)}
@@ -2917,12 +2935,12 @@ function StrategyPairSelector({
             })}
             {pairsQuery.isLoading ? (
               <tr>
-                <td colSpan={8}>Загрузка universe...</td>
+                <td colSpan={8}>{tKey("settings.universeLoading")}</td>
               </tr>
             ) : null}
             {!pairsQuery.isLoading && universePairs.length === 0 ? (
               <tr>
-                <td colSpan={8}>Нет пар в локальном universe. Синхронизируйте пары с биржи.</td>
+                <td colSpan={8}>{tKey("settings.universeEmpty")}</td>
               </tr>
             ) : null}
           </tbody>
@@ -2997,76 +3015,77 @@ function RiskManagementGuide({
   riskDraft: RiskManagementSettings;
   riskState: RiskStateResponse | null;
 }) {
+  const { tKey } = useI18n();
   return (
     <div className="risk-guide">
       <div className="risk-guide-intro">
         <div className="risk-guide-title">
           <BookOpen size={18} />
           <div>
-            <strong>Как настраивать risk management</strong>
-            <span>Backend проверяет допустимый риск, размер позиции, маржу и причины блокировки перед входом.</span>
+            <strong>{tKey("settings.riskGuideTitle")}</strong>
+            <span>{tKey("settings.riskGuideIntro")}</span>
           </div>
         </div>
       </div>
 
       <div className="risk-guide-snapshot">
         <div>
-          <span>Текущий профиль</span>
+          <span>{tKey("settings.currentProfile")}</span>
           <strong>{riskDraft.risk_profile}</strong>
         </div>
         <div>
-          <span>Risk / trade</span>
+          <span>{tKey("settings.riskPerTrade")}</span>
           <strong>{formatPercentValue(riskDraft.risk_per_trade_percent)}</strong>
         </div>
         <div>
-          <span>Open risk</span>
+          <span>{tKey("settings.openRiskShort")}</span>
           <strong>
             {riskState
-              ? formatRiskUsageValue(riskState.open_risk_percent, riskState.max_open_risk_percent)
+              ? formatRiskUsageValue(riskState.open_risk_percent, riskState.max_open_risk_percent, tKey)
               : "-"}
           </strong>
         </div>
         <div>
-          <span>Correlated</span>
+          <span>{tKey("settings.correlated")}</span>
           <strong>
             {riskState
-              ? formatRiskUsageValue(riskState.correlated_risk_percent, riskState.max_correlated_risk_percent)
+              ? formatRiskUsageValue(riskState.correlated_risk_percent, riskState.max_correlated_risk_percent, tKey)
               : "-"}
           </strong>
         </div>
         <div>
-          <span>Drawdown</span>
+          <span>{tKey("settings.drawdown")}</span>
           <strong>
             {riskState
-              ? formatRiskUsageValue(riskState.account_drawdown_percent, riskState.max_account_drawdown_percent)
+              ? formatRiskUsageValue(riskState.account_drawdown_percent, riskState.max_account_drawdown_percent, tKey)
               : "-"}
           </strong>
         </div>
         <div>
-          <span>Protection</span>
+          <span>{tKey("risk.protection")}</span>
           <strong>{riskState?.protection_state ?? "-"}</strong>
         </div>
       </div>
 
       <div className="risk-guide-playbook">
         <div className="risk-guide-block">
-          <h4>Если не открывается ни одна сделка</h4>
+          <h4>{tKey("settings.riskGuideBlockedTitle")}</h4>
           <ol>
-            <li>Проверьте Open risk в строке состояния. Если он выше лимита, закройте старые virtual-позиции или временно увеличьте Open risk cap в Custom.</li>
-            <li>Проверьте Correlated risk. Несколько сделок в одном кластере и направлении могут блокировать новый вход раньше общего лимита.</li>
-            <li>Для paper trading включите Virtual Trading &gt; Separate и задайте отдельный virtual risk, balance и лимиты.</li>
-            <li>Чтобы выключить конкретный лимит, поставьте 0. В интерфейсе такой лимит будет показан как Off.</li>
-            <li>Если блокирует R:R или price drift, значит цена ушла от сигнала. Лучше дождаться нового сигнала, а не расширять все лимиты сразу.</li>
-            <li>Меняйте только одно поле за раз и смотрите на risk card в Radar: backend должен показать passed, warning или failed и точную причину.</li>
+            <li>{tKey("settings.riskGuideBlocked1")}</li>
+            <li>{tKey("settings.riskGuideBlocked2")}</li>
+            <li>{tKey("settings.riskGuideBlocked3")}</li>
+            <li>{tKey("settings.riskGuideBlocked4")}</li>
+            <li>{tKey("settings.riskGuideBlocked5")}</li>
+            <li>{tKey("settings.riskGuideBlocked6")}</li>
           </ol>
         </div>
         <div className="risk-guide-block">
-          <h4>Что можно ослабить для обучения</h4>
+          <h4>{tKey("settings.riskGuideRelaxTitle")}</h4>
           <ul>
-            <li>Min R:R for execution / reporting: временно 1.5R вместо 2R для virtual.</li>
-            <li>Open risk cap: выше, если на virtual много параллельных тестов.</li>
-            <li>Correlated risk: выше, если вы сознательно тестируете один сектор.</li>
-            <li>Virtual balance: ближе к реальному размеру учебного депозита.</li>
+            <li>{tKey("settings.riskGuideRelax1")}</li>
+            <li>{tKey("settings.riskGuideRelax2")}</li>
+            <li>{tKey("settings.riskGuideRelax3")}</li>
+            <li>{tKey("settings.riskGuideRelax4")}</li>
           </ul>
         </div>
       </div>
@@ -3246,24 +3265,24 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
 }
 
-function strategyUpdateErrorMessage(error: unknown): string {
+function strategyUpdateErrorMessage(error: unknown, tKey: TKey): string {
   const message = errorMessage(error);
   if (/not found in market_pairs|market pair .* is not found/i.test(message)) {
-    return "Пара не найдена в локальном universe. Сначала синхронизируйте пары с биржи.";
+    return tKey("commonErrors.marketPairNotFoundInUniverse");
   }
   return message;
 }
 
-function exchangeConnectionDeleteErrorMessage(error: unknown): string {
+function exchangeConnectionDeleteErrorMessage(error: unknown, tKey: TKey): string {
   const message = errorMessage(error);
   if (/not found|не найден/i.test(message)) {
-    return "Подключение к бирже не найдено.";
+    return tKey("commonErrors.exchangeConnectionNotFound");
   }
   if (/external history|historical|истор/i.test(message)) {
-    return "Подключение связано с историческими ордерами или сделками, поэтому физическое удаление недоступно.";
+    return tKey("commonErrors.exchangeConnectionHasHistory");
   }
   if (/hard delete|admin|администратор/i.test(message)) {
-    return "Физическое удаление доступно только внутреннему администратору.";
+    return tKey("commonErrors.hardDeleteRequiresAdmin");
   }
   return message;
 }
@@ -3277,29 +3296,29 @@ function normalizeOrderPlacementMode(value: string): ExchangeConnection["order_p
   return "dry_run";
 }
 
-function orderPlacementModeLabel(mode: ExchangeConnection["order_placement_mode"]): string {
-  if (mode === "disabled") return "Order placement disabled";
-  if (mode === "live") return "Order placement live";
-  return "Order placement dry-run";
+function orderPlacementModeKey(mode: ExchangeConnection["order_placement_mode"]): I18nKey {
+  if (mode === "disabled") return "exchange.orderPlacementDisabled";
+  if (mode === "live") return "exchange.orderPlacementLive";
+  return "exchange.orderPlacementDryRun";
 }
 
-function exchangeConnectionExecutionBadge(connection: ExchangeConnection): { label: string; tone: "blue" | "green" | "red" | "yellow" } {
+function exchangeConnectionExecutionBadge(connection: ExchangeConnection): { labelKey: I18nKey; tone: "blue" | "green" | "red" | "yellow" } {
   if (connection.environment === "testnet") {
     if (connection.order_placement_mode === "live" && connection.can_place_orders) {
-      return { label: "Testnet live", tone: "green" };
+      return { labelKey: "exchange.testnetLive", tone: "green" };
     }
-    return { label: "Testnet dry-run", tone: "blue" };
+    return { labelKey: "exchange.testnetDryRun", tone: "blue" };
   }
   if (connection.can_place_orders) {
-    return { label: "Mainnet live enabled", tone: "green" };
+    return { labelKey: "exchange.mainnetLiveEnabled", tone: "green" };
   }
-  return { label: "Mainnet blocked", tone: "red" };
+  return { labelKey: "exchange.mainnetBlocked", tone: "red" };
 }
 
 function safetyBlockerSummary(connection: ExchangeConnection): string {
-  if (connection.order_placement_mode === "dry_run") return "No exchange order will be sent";
-  if (connection.order_placement_mode === "disabled") return "Order placement disabled";
-  if (connection.safety_blockers.length === 0) return "Live safety pending";
+  if (connection.order_placement_mode === "dry_run") return "order_placement_dry_run";
+  if (connection.order_placement_mode === "disabled") return "order_placement_disabled";
+  if (connection.safety_blockers.length === 0) return "live_safety_pending";
   return connection.safety_blockers.slice(0, 2).join(", ");
 }
 
@@ -3355,8 +3374,8 @@ function formatPercentValue(value: number): string {
   return `${value.toFixed(2)}%`;
 }
 
-function formatRiskUsageValue(used: number, limit: number): string {
-  return `${formatPercentValue(used)} / ${limit <= 0 ? "Off" : formatPercentValue(limit)}`;
+function formatRiskUsageValue(used: number, limit: number, tKey: TKey): string {
+  return `${formatPercentValue(used)} / ${limit <= 0 ? tKey("common.off") : formatPercentValue(limit)}`;
 }
 
 function validateRiskDraft(settings: RiskManagementSettings): RiskValidationErrors {

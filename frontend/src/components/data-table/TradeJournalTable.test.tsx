@@ -95,9 +95,9 @@ describe("TradeJournalTable", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close market ETHUSDT" })).toBeInTheDocument();
 
-    await user.click(screen.getByLabelText("Close ETHUSDT at market"));
+    await user.click(screen.getByLabelText("Close market ETHUSDT"));
 
     expect(onCloseMarket).toHaveBeenCalledWith(baseTrade);
     expect(onSelectTrade).not.toHaveBeenCalled();
@@ -116,7 +116,7 @@ describe("TradeJournalTable", () => {
 
     render(<TradeJournalTable onCloseMarket={onCloseMarket} trades={[partialTrade]} />);
 
-    const closeButton = screen.getByLabelText("Close ETHUSDT at market");
+    const closeButton = screen.getByLabelText("Close market ETHUSDT");
     expect(closeButton).toBeEnabled();
 
     await user.click(closeButton);
@@ -140,7 +140,7 @@ describe("TradeJournalTable", () => {
     expect(screen.getByText("backtest")).toBeInTheDocument();
     expect(screen.getByText("run 11111111")).toBeInTheDocument();
 
-    const closeButton = screen.getByLabelText("Close ETHUSDT at market");
+    const closeButton = screen.getByLabelText("Close market ETHUSDT");
     expect(closeButton).toBeDisabled();
 
     await user.click(closeButton);
@@ -189,7 +189,7 @@ describe("TradeJournalTable", () => {
 
     expect(screen.getByText("TP1 hit")).toBeInTheDocument();
     expect(screen.getByText("BE")).toBeInTheDocument();
-    expect(screen.getByText("Trail")).toBeInTheDocument();
+    expect(screen.getByText("Trailing")).toBeInTheDocument();
     expect(screen.getByText(/Remain/u)).toBeInTheDocument();
     expect(screen.getByText(/R \+\$3\.25 \/ U \+\$1\.75/u)).toBeInTheDocument();
   });
@@ -215,7 +215,7 @@ describe("TradeJournalTable", () => {
 
     render(<TradeJournalTable trades={[pendingTrade]} />);
 
-    expect(screen.getByText("Pending intent-o")).toBeInTheDocument();
+    expect(screen.getByText("Pending entry intent-o")).toBeInTheDocument();
     expect(screen.getByTitle(/accepted_trade_plan_hash: sha256:accepted-plan/u)).toBeInTheDocument();
   });
 });

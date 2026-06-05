@@ -324,6 +324,7 @@ export interface PendingEntryIntent {
   filled_at: string | null;
   filled_trade_id: string | null;
   failure_reason: string | null;
+  technical_message?: string | null;
   current_price?: number | null;
   reason_code?: string | null;
   localized_reason?: string | null;
@@ -335,6 +336,7 @@ export interface PendingEntryView {
   status_tone: ViewTone;
   reason_code: string | null;
   reason: string;
+  technical_message?: string | null;
   entry_zone: string;
   current_price: number | null;
 }
@@ -657,6 +659,10 @@ export interface RiskCheckResult {
   status: RiskCheckStatus;
   blockers: string[];
   warnings: string[];
+  reason_code?: string | null;
+  reason_codes?: string[];
+  technical_message?: string | null;
+  technical_messages?: string[];
   rr: number | null;
   min_rr_ratio: number;
   risk_reward_guard_mode: RRGuardMode;
@@ -729,6 +735,10 @@ export interface RiskDecision {
   execution_profile_sources: Record<string, string>;
   blockers: string[];
   warnings: string[];
+  reason_code?: string | null;
+  reason_codes?: string[];
+  technical_message?: string | null;
+  technical_messages?: string[];
   exchange: string;
   symbol: string;
   instrument_type: TradeInstrumentType;
@@ -905,6 +915,8 @@ export interface VirtualExecutionReport {
   blockers: string[];
   reason_code: string | null;
   reason_codes: string[];
+  technical_message?: string | null;
+  technical_messages?: string[];
   notes: string[];
 }
 
@@ -917,6 +929,8 @@ export interface VirtualFillResult {
   spread_bps: number;
   market_impact_bps: number;
   reason: string | null;
+  reason_code?: string | null;
+  technical_message?: string | null;
   warnings: string[];
   raw_inputs_snapshot: Record<string, unknown>;
 }

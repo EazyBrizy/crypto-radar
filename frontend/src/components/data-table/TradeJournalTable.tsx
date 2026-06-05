@@ -7,6 +7,7 @@ import { CircleStop } from "lucide-react";
 import { Badge } from "@/components/Badge";
 import { DataTable } from "@/components/data-table/DataTable";
 import { isActiveTradeStatus } from "@/domain/trade-status";
+import { useI18n, type I18nKey } from "@/i18n";
 import type { TradeJournalEntry } from "@/types";
 import {
   formatPercent,
@@ -36,6 +37,7 @@ export function TradeJournalTable({
   selectedTradeId,
   trades
 }: TradeJournalTableProps) {
+  const { t, tKey } = useI18n();
   const [globalFilter, setGlobalFilter] = useState("");
   const [sorting, setSorting] = useState<SortingState>([{ id: "updated_at", desc: true }]);
   const columns = useMemo<ColumnDef<TradeJournalEntry>[]>(
@@ -43,11 +45,11 @@ export function TradeJournalTable({
       const tableColumns: ColumnDef<TradeJournalEntry>[] = [
       {
         accessorKey: "symbol",
-        header: "Pair",
+        header: tKey("trades.pair"),
         cell: ({ row }) => (
           <div className="table-pair-cell">
             <strong>{row.original.symbol}</strong>
-            <span>{row.original.strategy.replaceAll("_", " ")} · {row.original.timeframe}</span>
+            <span>{row.original.strategy.replaceAll("_", " ")} / {row.original.timeframe}</span>
             {row.original.source === "backtest" && row.original.run_id ? (
               <Badge tone="yellow">run {shortRunId(row.original.run_id)}</Badge>
             ) : null}
@@ -56,7 +58,7 @@ export function TradeJournalTable({
       },
       {
         accessorKey: "source",
-        header: "Mode",
+        header: tKey("trades.mode"),
         cell: ({ row }) => (
           <div className="table-target-state-cell">
             <Badge tone={sourceTone(row.original)}>{row.original.source}</Badge>
@@ -66,11 +68,11 @@ export function TradeJournalTable({
       },
       {
         id: "execution",
-        header: "Exec",
+        header: tKey("trades.executionShort"),
         cell: ({ row }) => (
           <div className="table-execution-cell">
             <Badge tone={executionTone(row.original)}>
-              {formatExecutionMode(row.original)}
+              {tKey(formatExecutionModeKey(row.original))}
             </Badge>
             <span>{formatExecutionDetail(row.original)}</span>
           </div>
@@ -78,22 +80,22 @@ export function TradeJournalTable({
       },
       {
         accessorKey: "side",
-        header: "Side",
+        header: tKey("trades.side"),
         cell: ({ row }) => <Badge tone={row.original.side === "long" ? "green" : "red"}>{row.original.side}</Badge>
       },
       {
         accessorKey: "entry_price",
-        header: "Entry",
+        header: tKey("trades.entry"),
         cell: ({ row }) => formatPrice(row.original.entry_price)
       },
       {
         accessorKey: "current_price",
-        header: "Current",
+        header: tKey("common.current"),
         cell: ({ row }) => formatPrice(row.original.current_price)
       },
       {
         accessorKey: "stop_loss",
-        header: "Stop",
+        header: tKey("trades.stop"),
         cell: ({ row }) => formatPrice(tradeCurrentStop(row.original))
       },
       {
@@ -103,7 +105,7 @@ export function TradeJournalTable({
       },
       {
         id: "lifecycle",
-        header: "Lifecycle",
+        header: tKey("trades.lifecycle"),
         cell: ({ row }) => <LifecycleCell trade={row.original} />
       },
       {
@@ -122,17 +124,17 @@ export function TradeJournalTable({
       },
       {
         accessorKey: "risk_amount",
-        header: "Risk",
+        header: tKey("signalDetails.risk"),
         cell: ({ row }) => `$${(row.original.risk_amount ?? 0).toFixed(2)}`
       },
       {
         accessorKey: "status",
-        header: "Status",
-        cell: ({ row }) => row.original.close_reason ?? row.original.status
+        header: tKey("common.status"),
+        cell: ({ row }) => t(row.original.close_reason ?? row.original.status)
       },
       {
         accessorKey: "updated_at",
-        header: "Updated",
+        header: tKey("common.updated"),
         cell: ({ row }) => new Date(row.original.updated_at).toLocaleString()
       }
       ];
@@ -140,7 +142,7 @@ export function TradeJournalTable({
       if (onCloseMarket) {
         tableColumns.unshift({
           id: "actions",
-          header: "Close",
+          header: tKey("common.close"),
           enableSorting: false,
           cell: ({ row }) => {
             const trade = row.original;
@@ -149,7 +151,7 @@ export function TradeJournalTable({
             return (
               <div className="table-action-cell">
                 <button
-                  aria-label={`Close ${trade.symbol} at market`}
+                  aria-label={`${tKey("trades.closeMarket")} ${trade.symbol}`}
                   className="icon-button compact table-action-button danger"
                   disabled={disabled}
                   onClick={(event) => {
@@ -157,7 +159,7 @@ export function TradeJournalTable({
                     if (!disabled) onCloseMarket(trade);
                   }}
                   onKeyDown={(event) => event.stopPropagation()}
-                  title={closeMarketTitle(trade)}
+                  title={closeMarketTitle(trade, tKey)}
                   type="button"
                 >
                   <CircleStop size={16} />
@@ -170,7 +172,7 @@ export function TradeJournalTable({
 
       return tableColumns;
     },
-    [closingTradeId, onCloseMarket]
+    [closingTradeId, onCloseMarket, t, tKey]
   );
 
   return (
@@ -191,13 +193,14 @@ export function TradeJournalTable({
 }
 
 function TargetStateCell({ trade }: { trade: TradeJournalEntry }) {
+  const { tKey } = useI18n();
   const targets = tradeTargetStates(trade);
   if (!targets.length) return <span className="muted">-</span>;
   return (
     <div className="table-target-state-cell">
       {targets.slice(0, 3).map((target) => (
         <Badge tone={target.hit ? "green" : "neutral"} key={`${target.label}:${target.price}`}>
-          {target.label} {target.hit ? "hit" : formatPrice(target.price)}
+          {target.label} {target.hit ? tKey("trades.hit") : formatPrice(target.price)}
         </Badge>
       ))}
     </div>
@@ -205,18 +208,19 @@ function TargetStateCell({ trade }: { trade: TradeJournalEntry }) {
 }
 
 function LifecycleCell({ trade }: { trade: TradeJournalEntry }) {
+  const { tKey } = useI18n();
   const remaining = tradeRemainingQuantity(trade);
   const pendingIntentId = trade.pending_entry_intent_id ?? trade.origin?.pending_entry_intent_id ?? null;
   return (
     <div className="table-lifecycle-cell">
-      <span>Remain {formatQuantity(remaining)}</span>
-      <span>Stop {formatPrice(tradeCurrentStop(trade))}</span>
+      <span>{tKey("trades.remain")} {formatQuantity(remaining)}</span>
+      <span>{tKey("trades.stop")} {formatPrice(tradeCurrentStop(trade))}</span>
       <div>
         {trade.stop_moved_to_breakeven ? <Badge tone="blue">BE</Badge> : null}
-        {trade.trailing_active ? <Badge tone="purple">Trail</Badge> : null}
+        {trade.trailing_active ? <Badge tone="purple">{tKey("trades.trailing")}</Badge> : null}
         {pendingIntentId ? (
           <span title={originTitle(trade)}>
-            <Badge tone="blue">Pending {shortOriginId(pendingIntentId)}</Badge>
+            <Badge tone="blue">{tKey("pendingEntry.pendingEntry")} {shortOriginId(pendingIntentId)}</Badge>
           </span>
         ) : null}
       </div>
@@ -234,9 +238,9 @@ function formatQuantity(value: number): string {
   return value.toPrecision(4);
 }
 
-function formatExecutionMode(trade: TradeJournalEntry): string {
-  if (trade.execution_status === "partially_filled") return "Partial";
-  return trade.simulation_mode === "impact_aware" ? "Impact" : "Passive";
+function formatExecutionModeKey(trade: TradeJournalEntry): I18nKey {
+  if (trade.execution_status === "partially_filled") return "trades.partial";
+  return trade.simulation_mode === "impact_aware" ? "trades.impact" : "trades.passive";
 }
 
 function sourceTone(trade: TradeJournalEntry): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
@@ -264,9 +268,9 @@ function originTitle(trade: TradeJournalEntry): string {
   ].filter(Boolean).join("\n");
 }
 
-function closeMarketTitle(trade: TradeJournalEntry): string {
-  if (trade.source === "backtest") return "Backtest trades cannot be closed from the journal";
-  return trade.mode === "real" ? "Real close stub" : "Close at market";
+function closeMarketTitle(trade: TradeJournalEntry, tKey: (key: I18nKey) => string): string {
+  if (trade.source === "backtest") return tKey("trades.backtestCloseUnavailable");
+  return trade.mode === "real" ? tKey("trades.realCloseStub") : tKey("trades.closeMarket");
 }
 
 function formatExecutionDetail(trade: TradeJournalEntry): string {

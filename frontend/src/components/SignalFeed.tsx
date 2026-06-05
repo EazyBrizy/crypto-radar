@@ -1,7 +1,10 @@
+"use client";
+
 import { type ReactNode, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { SignalCard, SignalCardById } from "@/components/SignalCard";
+import { useI18n } from "@/i18n";
 import type { RadarSignal } from "@/types";
 
 interface SignalFeedProps {
@@ -14,6 +17,7 @@ interface SignalFeedProps {
 }
 
 export function SignalFeed({ emptyState, loading, onSelectSignal, selectedSignalId, signalIds, signals }: SignalFeedProps) {
+  const { t } = useI18n();
   const parentRef = useRef<HTMLDivElement | null>(null);
   const renderedSignalIds = signals ? signals.map((signal) => signal.id) : signalIds;
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -25,7 +29,7 @@ export function SignalFeed({ emptyState, loading, onSelectSignal, selectedSignal
   });
   const virtualItems = virtualizer.getVirtualItems();
 
-  if (loading) return <div className="empty-state">Loading signals...</div>;
+  if (loading) return <div className="empty-state">{t("Loading signals...")}</div>;
   if (!renderedSignalIds.length) return <>{emptyState}</>;
 
   return (

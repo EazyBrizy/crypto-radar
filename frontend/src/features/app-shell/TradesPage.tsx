@@ -1,23 +1,26 @@
+"use client";
+
 import dynamic from "next/dynamic";
 import { BarChart3, History, ListFilter } from "lucide-react";
 
 import { Metric } from "@/components/Metric";
 import { isActiveTradeStatus } from "@/domain/trade-status";
+import { useI18n } from "@/i18n";
 import type { TradeCloseReason, TradeInvalidationAlert, TradeJournalEntry, VirtualAccount } from "@/types";
 
 const LazyTradeJournalTable = dynamic(
   () => import("@/components/data-table/TradeJournalTable").then((module) => module.TradeJournalTable),
-  { loading: () => <div className="empty-state">Loading table...</div> }
+  { loading: TradeJournalLoading }
 );
 
 const LazyTradesAnalyticsPanel = dynamic(
   () => import("./TradesAnalyticsPanel").then((module) => module.TradesAnalyticsPanel),
-  { loading: () => <div className="empty-state">Loading analytics...</div> }
+  { loading: TradesAnalyticsLoading }
 );
 
 const LazyActiveTradeChart = dynamic(
   () => import("./ActiveTradeChart").then((module) => module.ActiveTradeChart),
-  { loading: () => <div className="chart-panel chart-panel-loading">Loading chart...</div> }
+  { loading: ActiveTradeChartLoading }
 );
 
 interface TradesPageProps {
@@ -49,6 +52,7 @@ export function TradesPage({
   selectedTradeId = null,
   trades
 }: TradesPageProps) {
+  const { tKey } = useI18n();
   const activeTrade = selectedTrade ?? trades.find((trade) => isActiveTradeStatus(trade.status)) ?? null;
   const openPositions = account?.open_positions ?? (activeTrade ? 1 : 0);
 
@@ -56,42 +60,42 @@ export function TradesPage({
     <section className="wide-panel">
       <div className="page-head">
         <div>
-          <span className="muted">Trades</span>
-          <h1>Trades and journal</h1>
+          <span className="muted">{tKey("trades.eyebrow")}</span>
+          <h1>{tKey("trades.title")}</h1>
         </div>
       </div>
 
       <div className="tab-row">
         <button className={activeTab === "active" ? "tab active" : "tab"} onClick={() => onTabChange("active")} type="button">
-          <ListFilter size={16} /> Active
+          <ListFilter size={16} /> {tKey("trades.active")}
         </button>
         <button className={activeTab === "journal" ? "tab active" : "tab"} onClick={() => onTabChange("journal")} type="button">
-          <History size={16} /> Journal
+          <History size={16} /> {tKey("trades.journal")}
         </button>
         <button className={activeTab === "analytics" ? "tab active" : "tab"} onClick={() => onTabChange("analytics")} type="button">
-          <BarChart3 size={16} /> Analytics
+          <BarChart3 size={16} /> {tKey("trades.analytics")}
         </button>
       </div>
 
       <div className="virtual-account-strip">
         <Metric
-          hint={`Risk ${formatUsd(account?.risk_per_trade ?? 10)} per trade`}
-          label="Balance"
+          hint={tKey("trades.riskPerTrade", { amount: formatUsd(account?.risk_per_trade ?? 10) })}
+          label={tKey("trades.balance")}
           value={formatUsd(account?.balance ?? 100)}
         />
         <Metric
-          hint={`Unrealized ${formatSignedUsd(account?.unrealized_pnl ?? 0)}`}
-          label="Equity"
+          hint={tKey("trades.unrealized", { amount: formatSignedUsd(account?.unrealized_pnl ?? 0) })}
+          label={tKey("trades.equity")}
           value={formatUsd(account?.equity ?? account?.balance ?? 100)}
         />
         <Metric
-          hint={`${account?.wins ?? 0}W / ${account?.losses ?? 0}L / ${account?.breakeven ?? 0}BE`}
-          label="Realized PnL"
+          hint={tKey("trades.winLossBreakeven", { wins: account?.wins ?? 0, losses: account?.losses ?? 0, breakeven: account?.breakeven ?? 0 })}
+          label={tKey("trades.realizedPnl")}
           value={formatSignedUsd(account?.realized_pnl ?? 0)}
         />
         <Metric
-          hint={`RR 1:${account?.risk_reward ?? 3}`}
-          label="Open positions"
+          hint={tKey("trades.rr", { value: account?.risk_reward ?? 3 })}
+          label={tKey("trades.openPositions")}
           value={`${openPositions}`}
         />
       </div>
@@ -113,7 +117,7 @@ export function TradesPage({
       ) : (
         <LazyTradeJournalTable
           closingTradeId={activeTab === "active" ? closingTradeId : null}
-          emptyLabel={activeTab === "active" ? "No active trades" : "Journal is empty"}
+          emptyLabel={activeTab === "active" ? tKey("trades.noActiveTrades") : tKey("trades.journalEmpty")}
           onCloseMarket={activeTab === "active" ? onCloseMarket : undefined}
           onSelectTrade={activeTab === "active" ? onSelectTrade : undefined}
           selectedTradeId={activeTab === "active" ? activeTrade?.id ?? selectedTradeId : null}
@@ -122,6 +126,21 @@ export function TradesPage({
       )}
     </section>
   );
+}
+
+function TradeJournalLoading() {
+  const { tKey } = useI18n();
+  return <div className="empty-state">{tKey("trades.loadingTable")}</div>;
+}
+
+function TradesAnalyticsLoading() {
+  const { tKey } = useI18n();
+  return <div className="empty-state">{tKey("trades.loadingAnalytics")}</div>;
+}
+
+function ActiveTradeChartLoading() {
+  const { tKey } = useI18n();
+  return <div className="chart-panel chart-panel-loading">{tKey("trades.loadingChart")}</div>;
 }
 
 function formatUsd(value: number): string {

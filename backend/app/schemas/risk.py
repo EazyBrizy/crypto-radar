@@ -261,6 +261,10 @@ class RiskCheckResult(BaseModel):
     status: RiskCheckStatus
     blockers: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    reason_code: str | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    technical_message: str | None = None
+    technical_messages: list[str] = Field(default_factory=list)
     rr: float | None = Field(default=None, ge=0)
     min_rr_ratio: float = Field(..., ge=0)
     risk_reward_guard_mode: RRGuardMode = "soft"
@@ -533,6 +537,10 @@ class RiskDecision(BaseModel):
     execution_profile_sources: dict[str, str] = Field(default_factory=dict)
     blockers: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    reason_code: str | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    technical_message: str | None = None
+    technical_messages: list[str] = Field(default_factory=list)
     exchange: str
     symbol: str
     instrument_type: TradeInstrumentType

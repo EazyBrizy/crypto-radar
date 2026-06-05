@@ -101,7 +101,7 @@ describe("SignalDetails", () => {
       />
     );
 
-    expect(screen.getByRole("heading", { name: "Active Pending Entry" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Active pending entry" })).toBeInTheDocument();
     expect(screen.getAllByText("Backend waiting").length).toBeGreaterThan(0);
     expect(screen.getByText("backend_waiting_entry")).toBeInTheDocument();
     expect(screen.getByText("Backend trigger service is waiting for entry.")).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe("SignalDetails", () => {
     const dialog = screen.getByRole("dialog");
 
     expect(within(dialog).getByText("Real execution availability is backend-owned. Confirm only sends the selected intent.")).toBeInTheDocument();
-    expect(within(dialog).getByText("Dry-run exchange")).toBeInTheDocument();
+    expect(within(dialog).getByText("Dry-run")).toBeInTheDocument();
 
     const buttons = within(dialog).getAllByRole("button");
     fireEvent.click(buttons[1] as HTMLButtonElement);

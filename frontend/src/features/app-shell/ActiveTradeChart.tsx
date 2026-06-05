@@ -4,6 +4,7 @@ import { Activity, AlertTriangle, Crosshair, DollarSign, Gauge, LogOut, ShieldAl
 
 import { PositionChartPanel } from "@/components/charts/PositionChartPanel";
 import { useCandlesQuery } from "@/hooks/use-radar-queries";
+import { useI18n } from "@/i18n";
 import type { Timeframe, TradeInvalidationAlert, TradeJournalEntry } from "@/types";
 import { formatPercent, formatPrice, tradePnlClass } from "@/utils";
 
@@ -24,6 +25,7 @@ export function ActiveTradeChart({
   onKeepStopLoss,
   trade
 }: ActiveTradeChartProps) {
+  const { tKey, tReason } = useI18n();
   const timeframe = normalizeTimeframe(trade.timeframe);
   const candlesQuery = useCandlesQuery(
     {
@@ -55,17 +57,17 @@ export function ActiveTradeChart({
       <div className="active-trade-summary">
         <div>
           <Crosshair size={15} />
-          <span>Entry</span>
+          <span>{tKey("trades.entry")}</span>
           <strong>{formatPrice(trade.entry_price)}</strong>
         </div>
         <div>
           <ShieldAlert size={15} />
-          <span>Stop</span>
+          <span>{tKey("trades.stop")}</span>
           <strong>{formatPrice(trade.stop_loss)}</strong>
         </div>
         <div>
           <Target size={15} />
-          <span>TP 1:3</span>
+          <span>{tKey("trades.takeProfit")} 1:3</span>
           <strong>{formatPrice(takeProfit)}</strong>
         </div>
         <div>
@@ -77,24 +79,24 @@ export function ActiveTradeChart({
         </div>
         <div>
           <Gauge size={15} />
-          <span>Execution</span>
+          <span>{tKey("trades.execution")}</span>
           <strong>{formatExecutionSummary(trade)}</strong>
         </div>
         <div>
           <Gauge size={15} />
-          <span>Model</span>
+          <span>{tKey("trades.model")}</span>
           <strong>{trade.execution?.simulation_tier.toUpperCase() ?? "MVP"}</strong>
         </div>
         {simulatedPath ? (
           <>
             <div>
               <Activity size={15} />
-              <span>Post-impact</span>
+              <span>{tKey("trades.postImpact")}</span>
               <strong>{formatPrice(simulatedPath.post_trade_price)}</strong>
             </div>
             <div>
               <Gauge size={15} />
-              <span>Decay 60s</span>
+              <span>{tKey("trades.decay60s")}</span>
               <strong>{formatPrice(simulatedPath.simulated_candle.close)}</strong>
             </div>
           </>
@@ -106,23 +108,23 @@ export function ActiveTradeChart({
           <div className="trade-invalidation-copy">
             <AlertTriangle size={18} />
             <div>
-              <strong>Strategy invalidation</strong>
-              <span>{invalidationAlert.reason ?? invalidationAlert.triggered_conditions.join("; ")}</span>
+              <strong>{tKey("toast.strategyInvalidationTitle")}</strong>
+              <span>{invalidationAlert.reason ? tReason(invalidationAlert.reason) : invalidationAlert.triggered_conditions.map((condition) => tReason(condition)).join("; ")}</span>
             </div>
           </div>
           <div className="trade-invalidation-meta">
-            <span>Current {formatPrice(invalidationAlert.current_price)}</span>
-            <span>Stop {formatPrice(invalidationAlert.stop_loss)}</span>
+            <span>{tKey("common.current")} {formatPrice(invalidationAlert.current_price)}</span>
+            <span>{tKey("trades.stop")} {formatPrice(invalidationAlert.stop_loss)}</span>
             {invalidationAlert.invalidation_price != null ? (
-              <span>Invalidation {formatPrice(invalidationAlert.invalidation_price)}</span>
+              <span>{tKey("signalDetails.invalidation")} {formatPrice(invalidationAlert.invalidation_price)}</span>
             ) : null}
           </div>
           <div className="trade-invalidation-actions">
             <button className="danger-action compact-action" disabled={closing || !onCloseInvalidated} onClick={onCloseInvalidated} type="button">
-              <LogOut size={15} /> Close market
+              <LogOut size={15} /> {tKey("trades.closeMarket")}
             </button>
             <button className="secondary-action compact-action" disabled={closing || !onKeepStopLoss} onClick={onKeepStopLoss} type="button">
-              <ShieldCheck size={15} /> Keep stop loss
+              <ShieldCheck size={15} /> {tKey("trades.keepStopLoss")}
             </button>
           </div>
         </div>
@@ -132,7 +134,7 @@ export function ActiveTradeChart({
         <PositionChartPanel candles={candlesQuery.data.candles} height={340} trade={trade} />
       ) : (
         <div className="chart-panel chart-panel-loading">
-          {candlesQuery.isLoading ? "Loading chart..." : "No candle data for this trade"}
+          {candlesQuery.isLoading ? tKey("trades.loadingChart") : tKey("trades.noCandleData")}
         </div>
       )}
     </div>

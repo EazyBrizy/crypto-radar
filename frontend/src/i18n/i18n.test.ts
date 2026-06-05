@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import ts from "typescript";
 
-import { detectLocale, normalizeLocale, translateText } from "@/i18n";
+import { detectLocale, normalizeLocale, normalizeReasonCode, REASON_CODE_KEYS, translateReasonCode, translateText } from "@/i18n";
 
 describe("i18n locale helpers", () => {
   it("normalizes supported browser locales", () => {
@@ -60,4 +63,86 @@ describe("i18n locale helpers", () => {
       "Цена тестирует предыдущий swing low; ждём liquidity sweep и reclaim"
     );
   });
+
+  it("has RU and EN translations for every typed reason code", () => {
+    for (const code of REASON_CODE_KEYS) {
+      expect(normalizeReasonCode(code), code).toBe(code);
+      for (const locale of ["ru", "en"] as const) {
+        const translated = translateReasonCode(code, locale);
+        expect(translated.trim(), `${locale}:${code}`).not.toBe("");
+        expect(translated, `${locale}:${code}`).not.toBe(code);
+      }
+    }
+  });
+
+  it("covers backend known reason codes in the frontend dictionary", () => {
+    const repoRoot = path.resolve(process.cwd(), "..");
+    const source = fs.readFileSync(path.join(repoRoot, "backend/app/services/reason_codes.py"), "utf8");
+    const backendCodes = Array.from(source.matchAll(/"([a-z][a-z0-9_]+)"/g), (match) => match[1])
+      .filter((code) => code.includes("_") || REASON_CODE_KEYS.includes(code as (typeof REASON_CODE_KEYS)[number]));
+    for (const code of new Set(backendCodes)) {
+      expect(normalizeReasonCode(code), code).toBe(code);
+    }
+  });
+
+  it("rejects raw JSX text on localized app surfaces", () => {
+    const files = [
+      "src/components/SignalDetails.tsx",
+      "src/components/SignalFeed.tsx",
+      "src/components/TradeRow.tsx",
+      "src/components/data-table/TradeJournalTable.tsx",
+      "src/features/app-shell/ActiveTradeChart.tsx",
+      "src/features/app-shell/RadarPage.tsx",
+      "src/features/app-shell/SettingsPage.tsx",
+      "src/features/app-shell/TradesPage.tsx",
+      "src/features/app-shell/WatchlistPage.tsx"
+    ];
+    const violations = files.flatMap((file) => rawJsxTextViolations(path.join(process.cwd(), file), file));
+    expect(violations).toEqual([]);
+  });
 });
+
+function rawJsxTextViolations(filePath: string, label: string): string[] {
+  const source = fs.readFileSync(filePath, "utf8");
+  const ast = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const violations: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isJsxText(node)) {
+      const text = normalizeJsxText(node.getText());
+      if (text && !rawJsxWhitelist(text)) {
+        const pos = ast.getLineAndCharacterOfPosition(node.getStart(ast));
+        violations.push(`${label}:${pos.line + 1} "${text}"`);
+      }
+    }
+    if (ts.isJsxExpression(node) && node.expression && ts.isStringLiteralLike(node.expression)) {
+      const text = normalizeJsxText(node.expression.text);
+      if (text && !rawJsxWhitelist(text)) {
+        const pos = ast.getLineAndCharacterOfPosition(node.expression.getStart(ast));
+        violations.push(`${label}:${pos.line + 1} "${text}"`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(ast);
+  return violations;
+}
+
+function normalizeJsxText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function rawJsxWhitelist(value: string): boolean {
+  return (
+    value === "|" ||
+    value === "/" ||
+    value === "-" ||
+    value === "PnL" ||
+    value === "run" ||
+    value === "/ U" ||
+    value === "x" ||
+    /^[A-Z0-9.$:%/+_-]+$/u.test(value) ||
+    /^\$[0-9.,]+$/u.test(value)
+  );
+}

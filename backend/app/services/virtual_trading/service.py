@@ -32,7 +32,7 @@ from app.domain.virtual_trade_status import (
 )
 from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import RadarSignal
-from app.schemas.risk import ResolvedExecutionProfile, RiskDecision
+from app.schemas.risk import ResolvedExecutionProfile, RiskDecision, VirtualExecutionProfile
 from app.schemas.trade import (
     CloseReason,
     CloseVirtualTradeRequest,
@@ -55,7 +55,12 @@ from app.services.risk_management import (
     request_risk_override_to_execution_settings,
     resolved_risk_profile_source,
 )
-from app.services.risk_market_data import RiskMarketDataService, RiskMarketDataSnapshot, risk_market_data_service
+from app.services.risk_market_data import (
+    RiskMarketDataService,
+    RiskMarketDataSnapshot,
+    offline_virtual_market_data_snapshot,
+    risk_market_data_service,
+)
 from app.services.risk_state import RiskStateService, risk_state_service
 from app.services.signal_risk_reward import ensure_signal_execution_eligible, signal_rr_warning_reason
 from app.services.signal_service import ClickHouseSignalAnalyticsWriter, RedisSignalHotStore
@@ -76,6 +81,11 @@ from app.services.virtual_trade_lifecycle import (
 from app.services.virtual_trading.execution_engine import (
     VirtualExecutionEngine,
     VirtualExecutionRejected,
+)
+from app.services.virtual_execution_profile import (
+    default_virtual_execution_profile,
+    fill_policy_for_profile,
+    normalize_virtual_execution_profile,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,6 +127,15 @@ class RiskSettingsProvider(Protocol):
         ...
 
 
+class VirtualExecutionProfileProvider(Protocol):
+    def __call__(
+        self,
+        user_id: str,
+        risk_settings: RiskManagementSettings | None = None,
+    ) -> VirtualExecutionProfile:
+        ...
+
+
 class VirtualTradingService:
     """Coordinates virtual-only trade execution through the configured repository."""
 
@@ -133,6 +152,7 @@ class VirtualTradingService:
         risk_state: RiskStateService | None = None,
         market_data_service: RiskMarketDataService | None = None,
         fee_rate_service: RiskFeeRateService | None = None,
+        virtual_execution_profile_provider: VirtualExecutionProfileProvider | None = None,
     ) -> None:
         self._repository = repository or PostgresVirtualTradeRepository()
         self._signal_analytics_writer = signal_analytics_writer or ClickHouseSignalAnalyticsWriter()
@@ -145,6 +165,9 @@ class VirtualTradingService:
         self._risk_state = risk_state
         self._market_data_service = market_data_service or risk_market_data_service
         self._fee_rate_service = fee_rate_service or risk_fee_rate_service
+        self._virtual_execution_profile_provider = (
+            virtual_execution_profile_provider or default_virtual_execution_profile
+        )
         self._trade_by_signal: dict[str, str] = {}
         self._account_balance_by_user: dict[str, float] = {}
         self._realized_pnl_by_user: dict[str, float] = {}
@@ -349,7 +372,7 @@ class VirtualTradingService:
         request, risk_settings, execution_profile, _ = self._resolved_execution_profile(
             signal=signal,
             request=request,
-            risk_settings=risk_settings,
+            risk_settings=risk_settings_for_gate,
         )
         if existing is None or signal.status != "confirmed":
             ensure_signal_execution_eligible(
@@ -476,6 +499,15 @@ class VirtualTradingService:
             request=request,
             risk_settings=risk_settings,
         )
+        virtual_execution_profile = self._virtual_execution_profile_for_user(request.user_id, risk_settings)
+        risk_settings_for_gate = _risk_settings_for_virtual_execution_profile(
+            risk_settings,
+            virtual_execution_profile,
+        )
+        request = _request_with_virtual_execution_profile(
+            request,
+            virtual_execution_profile,
+        )
         risk_profile_source = resolved_risk_profile_source(execution_profile)
         virtual_rr_guard_mode = execution_profile.rr_guard_mode
         rr_warning = (
@@ -488,12 +520,14 @@ class VirtualTradingService:
             request,
             raw_entry,
             instrument_type=execution_profile.instrument_type,
+            virtual_execution_profile=virtual_execution_profile,
         )
         fee_rate = self._risk_fee_snapshot(
             signal,
             request,
             risk_settings,
             instrument_type=execution_profile.instrument_type,
+            virtual_execution_profile=virtual_execution_profile,
         )
         gate_request = request.model_copy(
             update={
@@ -589,7 +623,7 @@ class VirtualTradingService:
                 execution_profile=execution_profile,
                 instrument_type=execution_profile.instrument_type,
             ),
-            risk_settings=risk_settings,
+            risk_settings=risk_settings_for_gate,
         )
         if not raw_decision.can_enter:
             self._record_blocked_risk_decision(
@@ -615,7 +649,8 @@ class VirtualTradingService:
             execution_profile=execution_profile,
             entry_spread_limit_bps=_entry_spread_limit_bps(risk_settings),
             allow_low_liquidity=_strategy_allows_low_liquidity(signal, user_id=gate_request.user_id),
-            enforce_conservative_rules=risk_settings.virtual_trading_uses_realistic_execution,
+            enforce_conservative_rules=virtual_execution_profile == "realistic",
+            virtual_execution_profile=virtual_execution_profile,
         )
         execution = self._execution_with_risk_decision(
             execution,
@@ -795,6 +830,15 @@ class VirtualTradingService:
             request=request,
             risk_settings=risk_settings,
         )
+        virtual_execution_profile = self._virtual_execution_profile_for_user(request.user_id, risk_settings)
+        risk_settings_for_gate = _risk_settings_for_virtual_execution_profile(
+            risk_settings,
+            virtual_execution_profile,
+        )
+        request = _request_with_virtual_execution_profile(
+            request,
+            virtual_execution_profile,
+        )
         risk_profile_source = resolved_risk_profile_source(execution_profile)
         virtual_rr_guard_mode = execution_profile.rr_guard_mode
         rr_warning = (
@@ -807,12 +851,14 @@ class VirtualTradingService:
             request,
             raw_entry,
             instrument_type=execution_profile.instrument_type,
+            virtual_execution_profile=virtual_execution_profile,
         )
         fee_rate = self._risk_fee_snapshot(
             signal,
             request,
             risk_settings,
             instrument_type=execution_profile.instrument_type,
+            virtual_execution_profile=virtual_execution_profile,
         )
         gate_request = request.model_copy(
             update={
@@ -910,7 +956,7 @@ class VirtualTradingService:
                 execution_profile=execution_profile,
                 instrument_type=execution_profile.instrument_type,
             ),
-            risk_settings=risk_settings,
+            risk_settings=risk_settings_for_gate,
         )
         self._record_preview_risk_decision(
             signal,
@@ -933,7 +979,8 @@ class VirtualTradingService:
             execution_profile=execution_profile,
             entry_spread_limit_bps=_entry_spread_limit_bps(risk_settings),
             allow_low_liquidity=_strategy_allows_low_liquidity(signal, user_id=gate_request.user_id),
-            enforce_conservative_rules=risk_settings.virtual_trading_uses_realistic_execution,
+            enforce_conservative_rules=virtual_execution_profile == "realistic",
+            virtual_execution_profile=virtual_execution_profile,
         )
         execution = self._execution_with_risk_decision(
             execution,
@@ -978,6 +1025,15 @@ class VirtualTradingService:
             strategy_risk_settings_source,
         )
 
+    def _virtual_execution_profile_for_user(
+        self,
+        user_id: str,
+        risk_settings: RiskManagementSettings,
+    ) -> VirtualExecutionProfile:
+        return normalize_virtual_execution_profile(
+            self._virtual_execution_profile_provider(user_id, risk_settings)
+        )
+
     def _risk_market_snapshot(
         self,
         signal: RadarSignal,
@@ -985,21 +1041,53 @@ class VirtualTradingService:
         fallback_entry_price: float,
         *,
         instrument_type: str,
+        virtual_execution_profile: VirtualExecutionProfile,
     ) -> RiskMarketDataSnapshot:
-        return self._market_data_service.build_snapshot(
-            exchange=signal.exchange,
-            symbol=signal.symbol,
-            side=signal.direction,
-            mode="virtual",
-            instrument_type=instrument_type,
-            fallback_entry_price=fallback_entry_price,
-            manual_entry_price=_market_snapshot_reference_price(
-                request.market_snapshot,
-                signal.direction,
-            ),
-            manual_slippage_bps=request.slippage_bps,
-            user_id=request.user_id,
+        manual_entry_price = _market_snapshot_reference_price(
+            request.market_snapshot,
+            signal.direction,
         )
+        if virtual_execution_profile == "deterministic_test":
+            return offline_virtual_market_data_snapshot(
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                side=signal.direction,
+                instrument_type=instrument_type,
+                fallback_entry_price=fallback_entry_price,
+                manual_entry_price=manual_entry_price,
+                manual_slippage_bps=0.0,
+                status="fresh",
+                source="deterministic_test",
+                warnings=("deterministic_test_profile_no_market_data",),
+            )
+        try:
+            return self._market_data_service.build_snapshot(
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                side=signal.direction,
+                mode="virtual",
+                instrument_type=instrument_type,
+                fallback_entry_price=fallback_entry_price,
+                manual_entry_price=manual_entry_price,
+                manual_slippage_bps=request.slippage_bps,
+                user_id=request.user_id,
+            )
+        except Exception as exc:
+            if virtual_execution_profile != "relaxed_paper":
+                raise
+            logger.warning("Relaxed virtual market snapshot fallback used: %s", exc)
+            return offline_virtual_market_data_snapshot(
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                side=signal.direction,
+                instrument_type=instrument_type,
+                fallback_entry_price=fallback_entry_price,
+                manual_entry_price=manual_entry_price,
+                manual_slippage_bps=request.slippage_bps,
+                status="missing",
+                source="relaxed_paper_market_fallback",
+                warnings=("market_data_service_failed_relaxed_fallback",),
+            )
 
     def _risk_fee_snapshot(
         self,
@@ -1008,7 +1096,18 @@ class VirtualTradingService:
         risk_settings: RiskManagementSettings,
         *,
         instrument_type: str,
+        virtual_execution_profile: VirtualExecutionProfile,
     ) -> RiskFeeRateSnapshot:
+        if virtual_execution_profile == "deterministic_test":
+            return RiskFeeRateSnapshot(
+                fee_rate=0.0,
+                maker_fee_rate=0.0,
+                taker_fee_rate=0.0,
+                source="deterministic_test",
+                exchange=signal.exchange.strip().lower(),
+                symbol=signal.symbol.strip().upper(),
+                warnings=("deterministic_test_profile_no_fee_lookup",),
+            )
         return self._fee_rate_service.resolve(
             user_id=request.user_id,
             exchange=signal.exchange,
@@ -1466,6 +1565,29 @@ def _publish_portfolio_event(event: VirtualTradePersistenceEvent) -> None:
         f"pubsub:portfolio:{event.user_id}",
         json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":")),
     )
+
+
+def _risk_settings_for_virtual_execution_profile(
+    risk_settings: RiskManagementSettings,
+    virtual_execution_profile: VirtualExecutionProfile,
+) -> RiskManagementSettings:
+    if virtual_execution_profile == "realistic":
+        return risk_settings
+    return risk_settings.model_copy(
+        update={
+            "max_orderbook_liquidity_ratio": 0.0,
+        }
+    )
+
+
+def _request_with_virtual_execution_profile(
+    request: ManualConfirmRequest,
+    virtual_execution_profile: VirtualExecutionProfile,
+) -> ManualConfirmRequest:
+    metadata = dict(request.metadata)
+    metadata["virtual_execution_profile"] = virtual_execution_profile
+    metadata["virtual_fill_policy"] = fill_policy_for_profile(virtual_execution_profile)
+    return request.model_copy(update={"metadata": metadata})
 
 
 def _market_context_kwargs(market_data: RiskMarketDataSnapshot) -> dict[str, Any]:

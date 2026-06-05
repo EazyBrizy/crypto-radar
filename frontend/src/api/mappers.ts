@@ -49,7 +49,9 @@ import type {
   TradeJournalResponse,
   VirtualAccount,
   VirtualExecutionReport,
+  VirtualExecutionProfile,
   VirtualExecutionStatus,
+  VirtualFillPolicy,
   VirtualFillStatus,
   BreakevenPlan,
   FuturesRiskPlan,
@@ -511,6 +513,8 @@ export function normalizeExecutionReport(value: unknown): VirtualExecutionReport
     simulation_tier: normalizeSimulationTier(value.simulation_tier),
     active_capabilities: Array.isArray(value.active_capabilities) ? value.active_capabilities.map(String) : [],
     planned_capabilities: Array.isArray(value.planned_capabilities) ? value.planned_capabilities.map(String) : [],
+    execution_profile: normalizeVirtualExecutionProfile(value.execution_profile),
+    fill_policy: normalizeVirtualFillPolicy(value.fill_policy),
     status: normalizeExecutionStatus(value.status),
     requested_size_usd: Number(value.requested_size_usd ?? 0),
     filled_size_usd: Number(value.filled_size_usd ?? 0),
@@ -518,6 +522,7 @@ export function normalizeExecutionReport(value: unknown): VirtualExecutionReport
     fill_ratio: Number(value.fill_ratio ?? 1),
     reference_price: Number(value.reference_price ?? 0),
     average_price: value.average_price == null ? null : Number(value.average_price),
+    estimated_fill_price: value.estimated_fill_price == null ? null : Number(value.estimated_fill_price),
     entry_slippage_bps: Number(value.entry_slippage_bps ?? 0),
     exit_slippage_bps: Number(value.exit_slippage_bps ?? 0),
     market_impact_percent: Number(value.market_impact_percent ?? 0),
@@ -539,6 +544,10 @@ export function normalizeExecutionReport(value: unknown): VirtualExecutionReport
     fill_result: normalizeFillResult(value.fill_result),
     raw_inputs_snapshot: normalizeMetadata(value.raw_inputs_snapshot),
     rejected_reason: value.rejected_reason == null ? null : String(value.rejected_reason),
+    warnings: normalizeStringList(value.warnings),
+    blockers: normalizeStringList(value.blockers),
+    reason_code: value.reason_code == null ? null : String(value.reason_code),
+    reason_codes: normalizeStringList(value.reason_codes),
     notes: Array.isArray(value.notes) ? value.notes.map(String) : []
   };
 }
@@ -798,6 +807,8 @@ export function riskPreviewToExecutionReport(preview: RiskPreviewResponse): Virt
     simulation_tier: "mvp",
     active_capabilities: ["backend_risk_gate", "risk_decision_audit"],
     planned_capabilities: [],
+    execution_profile: "realistic",
+    fill_policy: "strict_orderbook",
     status: "filled",
     requested_size_usd: decision.requested_notional ?? sizing.notional,
     filled_size_usd: sizing.notional,
@@ -805,6 +816,7 @@ export function riskPreviewToExecutionReport(preview: RiskPreviewResponse): Virt
     fill_ratio: 1,
     reference_price: sizing.entry_price,
     average_price: sizing.entry_price,
+    estimated_fill_price: sizing.entry_price,
     entry_slippage_bps: sizing.slippage_bps,
     exit_slippage_bps: sizing.slippage_bps,
     market_impact_percent: 0,
@@ -871,6 +883,10 @@ export function riskPreviewToExecutionReport(preview: RiskPreviewResponse): Virt
       spread_bps: decision.risk_check.spread_bps ?? 0
     },
     rejected_reason: decision.status === "failed" ? decision.blockers.join("; ") : null,
+    warnings: decision.warnings,
+    blockers: decision.blockers,
+    reason_code: decision.status === "failed" ? (decision.blockers[0] ?? "risk_gate_blocked") : "filled",
+    reason_codes: decision.status === "failed" ? decision.blockers : decision.warnings,
     notes: [
       ...decision.notes,
       `Protection: ${preview.state.protection_state}`,
@@ -1043,6 +1059,16 @@ function normalizeSimulationMode(value: unknown): VirtualSimulationMode {
 function normalizeSimulationTier(value: unknown): VirtualSimulationTier {
   if (value === "advanced" || value === "pro") return value;
   return "mvp";
+}
+
+function normalizeVirtualExecutionProfile(value: unknown): VirtualExecutionProfile {
+  if (value === "relaxed_paper" || value === "deterministic_test") return value;
+  return "realistic";
+}
+
+function normalizeVirtualFillPolicy(value: unknown): VirtualFillPolicy {
+  if (value === "relaxed_market_fallback" || value === "deterministic_market_fill") return value;
+  return "strict_orderbook";
 }
 
 function normalizeExecutionStatus(value: unknown): VirtualExecutionStatus {

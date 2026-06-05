@@ -55,6 +55,8 @@ export type TradeInvalidationAction = "none" | "close_market_or_wait_stop";
 export type TradeInvalidationUserAction = "close_market" | "keep_stop_loss" | "dismissed";
 export type VirtualSimulationMode = "passive" | "impact_aware";
 export type VirtualSimulationTier = "mvp" | "advanced" | "pro";
+export type VirtualExecutionProfile = "realistic" | "relaxed_paper" | "deterministic_test";
+export type VirtualFillPolicy = "strict_orderbook" | "relaxed_market_fallback" | "deterministic_market_fill";
 export type VirtualExecutionStatus = "filled" | "partially_filled" | "rejected_virtual_execution";
 export type VirtualFillStatus = "filled" | "partial_filled" | "blocked" | "rejected";
 export type ImpactRisk = "low" | "medium" | "high";
@@ -739,6 +741,8 @@ export interface VirtualExecutionReport {
   simulation_tier: VirtualSimulationTier;
   active_capabilities: string[];
   planned_capabilities: string[];
+  execution_profile: VirtualExecutionProfile;
+  fill_policy: VirtualFillPolicy;
   status: VirtualExecutionStatus;
   requested_size_usd: number;
   filled_size_usd: number;
@@ -746,6 +750,7 @@ export interface VirtualExecutionReport {
   fill_ratio: number;
   reference_price: number;
   average_price: number | null;
+  estimated_fill_price: number | null;
   entry_slippage_bps: number;
   exit_slippage_bps: number;
   market_impact_percent: number;
@@ -767,6 +772,10 @@ export interface VirtualExecutionReport {
   fill_result: VirtualFillResult | null;
   raw_inputs_snapshot: Record<string, unknown>;
   rejected_reason: string | null;
+  warnings: string[];
+  blockers: string[];
+  reason_code: string | null;
+  reason_codes: string[];
   notes: string[];
 }
 

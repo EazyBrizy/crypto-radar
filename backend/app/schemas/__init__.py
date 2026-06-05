@@ -103,6 +103,8 @@ from app.schemas.risk import (
     TakeProfitPlan,
     TakeProfitTarget,
     TrailingStopPlan,
+    VirtualExecutionProfile,
+    VirtualFillPolicy,
 )
 from app.schemas.signal import (
     ErrorResponse,
@@ -321,6 +323,8 @@ __all__ = [
     "UserProfileResponse",
     "UserSettingsPatchRequest",
     "VirtualExecutionReport",
+    "VirtualExecutionProfile",
+    "VirtualFillPolicy",
     "VirtualSimulationCapability",
     "VirtualSimulationModelInfo",
     "VirtualTrade",

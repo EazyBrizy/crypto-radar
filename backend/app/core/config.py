@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     virtual_max_slippage_bps: float = 150.0
     virtual_allow_partial_fill: bool = True
     virtual_min_fill_ratio: float = 0.25
+    virtual_execution_profile: str = "realistic"
 
     exchange_instrument_sync_enabled: bool = True
     exchange_instrument_sync_interval_seconds: int = 21_600

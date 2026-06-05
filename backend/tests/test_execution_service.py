@@ -1,6 +1,6 @@
 import json
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
 from app.exchanges.bybit import (
@@ -283,6 +283,17 @@ class _FakeMarketDataService:
             orderbook_depth_usd=100_000.0,
             market_data_status="fresh",
             market_data_source="test",
+        )
+
+
+class _StaleMarketDataService(_FakeMarketDataService):
+    def build_snapshot(self, *args, **kwargs) -> RiskMarketDataSnapshot:
+        snapshot = super().build_snapshot(*args, **kwargs)
+        return replace(
+            snapshot,
+            market_data_status="stale",
+            market_data_source="test_stale",
+            warnings=("Bybit market data is stale.",),
         )
 
 
@@ -748,6 +759,29 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(order.status == "submitted" for order in result.planned_orders))
         self.assertTrue(result.execution_plan.metadata["reconciliation_required"])
+
+    async def test_real_mode_ignores_virtual_relaxed_policy_and_blocks_stale_market_data(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            None,
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            market_data_service=_StaleMarketDataService(),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(
+                real_execution_enabled=True,
+                real_requires_fresh_market_data=True,
+            ),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "risk_failed")
+        self.assertFalse(result.execution_allowed)
+        self.assertEqual(adapter.calls, [])
+        self.assertIsNotNone(result.risk_decision)
+        assert result.risk_decision is not None
+        self.assertTrue(any("stale" in blocker.lower() for blocker in result.risk_decision.blockers))
 
     async def test_live_missing_take_profit_blocks_before_adapter_call(self) -> None:
         adapter = _FakeExecutionAdapter()
@@ -1422,6 +1456,7 @@ def _risk_settings(
     tp3_r_multiple: float = 3.0,
     real_execution_enabled: bool = False,
     real_fee_rate_ttl_seconds: int = 86_400,
+    real_requires_fresh_market_data: bool = False,
 ) -> RiskManagementSettings:
     return RiskManagementSettings(
         risk_profile="balanced",
@@ -1437,7 +1472,7 @@ def _risk_settings(
         tp3_r_multiple=tp3_r_multiple,
         real_execution_enabled=real_execution_enabled,
         real_fee_rate_ttl_seconds=real_fee_rate_ttl_seconds,
-        real_requires_fresh_market_data=False,
+        real_requires_fresh_market_data=real_requires_fresh_market_data,
         real_requires_positive_edge=False,
     )
 

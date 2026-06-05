@@ -13,7 +13,7 @@ from app.domain.signal_status import (
     is_waiting_entry_status,
 )
 from app.schemas.pending_entry import PendingEntryIntentRead
-from app.schemas.risk import ResolvedExecutionProfile, StrategyExecutionSettings
+from app.schemas.risk import ResolvedExecutionProfile, StrategyExecutionSettings, VirtualExecutionProfile
 from app.schemas.signal import RadarSignal
 from app.schemas.signal_action import (
     SignalActionBlocker,
@@ -40,6 +40,11 @@ from app.services.risk_management import get_user_risk_management_settings
 from app.services.risk_market_data import risk_market_data_service
 from app.services.signal_service import signal_service
 from app.services.virtual_trading import virtual_trading_service
+from app.services.virtual_execution_profile import (
+    default_virtual_execution_profile,
+    fill_policy_for_profile,
+    normalize_virtual_execution_profile,
+)
 
 
 class SignalActionUnavailable(ValueError):
@@ -84,6 +89,7 @@ class SignalActionService:
         exchange_connections: Any = exchange_connection_service,
         account_snapshots: Any = exchange_account_snapshot_service,
         realtime_broker: Any = realtime_event_broker,
+        virtual_execution_profile_provider: Any = default_virtual_execution_profile,
     ) -> None:
         self._signals = signals
         self._pending_entries = pending_entries
@@ -95,6 +101,7 @@ class SignalActionService:
         self._exchange_connections = exchange_connections
         self._account_snapshots = account_snapshots
         self._realtime_broker = realtime_broker
+        self._virtual_execution_profile_provider = virtual_execution_profile_provider
 
     def get_action_state(
         self,
@@ -585,9 +592,35 @@ class SignalActionService:
                 virtual_max_slippage_bps,
                 float(risk_settings.max_slippage_bps),
             )
+        virtual_execution_profile: VirtualExecutionProfile | None = None
+        if mode == "virtual":
+            try:
+                virtual_execution_profile = normalize_virtual_execution_profile(
+                    self._virtual_execution_profile_provider(
+                        user_id,
+                        risk_settings,
+                    )
+                )
+            except Exception as exc:
+                virtual_execution_profile = "realistic"
+                blockers.append(
+                    _blocker(
+                        "virtual_execution_profile_unavailable",
+                        f"Virtual execution profile is unavailable: {exc}",
+                        display_label="Virtual profile unavailable",
+                    )
+                )
         execution_settings = StrategyExecutionSettings(
             instrument_type=instrument_type,
             leverage=Decimal(str(leverage)),
+        )
+        virtual_profile_metadata = (
+            {
+                "virtual_execution_profile": virtual_execution_profile,
+                "virtual_fill_policy": fill_policy_for_profile(virtual_execution_profile),
+            }
+            if virtual_execution_profile is not None
+            else {}
         )
         request = ManualConfirmRequest(
             mode=mode,
@@ -605,6 +638,7 @@ class SignalActionService:
                 "source": "signal_action_service",
                 "backend_owned_execution_context": True,
                 "environment": environment,
+                **virtual_profile_metadata,
                 **({"connection_id": connection_id} if connection_id else {}),
                 **({"exchange_connection": connection_metadata} if connection_metadata else {}),
             },
@@ -633,6 +667,7 @@ class SignalActionService:
             mode=mode,
             risk_settings=risk_settings,
             execution_profile=execution_profile,
+            virtual_execution_profile=virtual_execution_profile,
         )
         warnings.extend(market_fee_context.warnings)
         if market_fee_context.request_updates:
@@ -728,8 +763,11 @@ class SignalActionService:
         mode: SignalActionMode,
         risk_settings: RiskManagementSettings | None,
         execution_profile: ResolvedExecutionProfile | None,
+        virtual_execution_profile: VirtualExecutionProfile | None = None,
     ) -> _MarketFeeContext:
         if risk_settings is None or execution_profile is None:
+            return _MarketFeeContext()
+        if mode == "virtual" and virtual_execution_profile == "deterministic_test":
             return _MarketFeeContext()
         warnings: list[SignalActionBlocker] = []
         request_updates: dict[str, Any] = {}

@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 import math
 from typing import Any, Iterable
 
+from app.schemas.risk import VirtualExecutionProfile, VirtualFillPolicy
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import (
     ExecutionQualityGate,
@@ -25,6 +26,7 @@ from app.services.virtual_simulation_model import (
     planned_capability_codes_for_report,
     simulation_tier_for_report,
 )
+from app.services.virtual_execution_profile import fill_policy_for_profile, normalize_virtual_execution_profile
 
 
 class VirtualExecutionRejected(ValueError):
@@ -66,8 +68,11 @@ class VirtualExecutionEngine:
         entry_spread_limit_bps: float | None = None,
         allow_low_liquidity: bool | None = None,
         enforce_conservative_rules: bool = True,
+        virtual_execution_profile: VirtualExecutionProfile = "realistic",
     ) -> VirtualExecutionReport:
         snapshot = request.market_snapshot
+        execution_profile_name = normalize_virtual_execution_profile(virtual_execution_profile)
+        fill_policy = fill_policy_for_profile(execution_profile_name)
         metrics = self._liquidity_metrics(
             snapshot=snapshot,
             signal=signal,
@@ -98,9 +103,35 @@ class VirtualExecutionEngine:
             execution_profile=execution_profile,
             entry_spread_limit_bps=entry_spread_limit_bps,
             allow_low_liquidity=allow_low_liquidity,
-            enforce_conservative_rules=enforce_conservative_rules,
+            enforce_conservative_rules=enforce_conservative_rules and execution_profile_name == "realistic",
+            virtual_execution_profile=execution_profile_name,
+            fill_policy=fill_policy,
         )
-        if enforce_conservative_rules:
+        if execution_profile_name == "deterministic_test":
+            report = self._simulate_deterministic(
+                request=request,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=requested_size_usd,
+                buy_side=signal.direction == "long",
+            )
+            report = _with_execution_profile(
+                report,
+                execution_profile=execution_profile_name,
+                fill_policy=fill_policy,
+            )
+            return _finalize_report(report, raw_inputs_snapshot=raw_inputs_snapshot)
+
+        strict_conservative_rules = enforce_conservative_rules and execution_profile_name == "realistic"
+        policy_warnings = _profile_warnings(
+            profile=execution_profile_name,
+            market_data_status=market_data_status,
+            market_data_warnings=market_data_warnings,
+            snapshot=snapshot,
+            signal=signal,
+            allow_low_liquidity=allow_low_liquidity,
+        )
+        if strict_conservative_rules:
             preflight = self._preflight_conservative_block(
                 mode=mode,
                 request=request,
@@ -113,6 +144,11 @@ class VirtualExecutionEngine:
                 allow_low_liquidity=allow_low_liquidity,
             )
             if preflight is not None:
+                preflight = _with_execution_profile(
+                    preflight,
+                    execution_profile=execution_profile_name,
+                    fill_policy=fill_policy,
+                )
                 return _finalize_report(preflight, raw_inputs_snapshot=raw_inputs_snapshot)
         if mode == "passive":
             report = self._simulate_passive(
@@ -133,7 +169,18 @@ class VirtualExecutionEngine:
                 buy_side=signal.direction == "long",
             )
         report = self._apply_quality_gate(report)
-        if enforce_conservative_rules:
+        if execution_profile_name == "relaxed_paper":
+            report = self._apply_relaxed_paper_policy(
+                report,
+                request=request,
+                snapshot=snapshot,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=requested_size_usd,
+                buy_side=signal.direction == "long",
+                policy_warnings=policy_warnings,
+            )
+        if strict_conservative_rules:
             report = self._apply_conservative_fill_policy(
                 report,
                 request=request,
@@ -143,6 +190,11 @@ class VirtualExecutionEngine:
                 requested_size_usd=requested_size_usd,
                 buy_side=signal.direction == "long",
             )
+        report = _with_execution_profile(
+            report,
+            execution_profile=execution_profile_name,
+            fill_policy=fill_policy,
+        )
         return _finalize_report(report, raw_inputs_snapshot=raw_inputs_snapshot)
 
     def _simulate_passive(
@@ -481,6 +533,179 @@ class VirtualExecutionEngine:
             )
         return None
 
+    def _simulate_deterministic(
+        self,
+        *,
+        request: ManualConfirmRequest,
+        metrics: LiquidityMetrics,
+        reference_price: float,
+        requested_size_usd: float,
+        buy_side: bool,
+    ) -> VirtualExecutionReport:
+        del buy_side
+        best_bid, best_ask = _best_prices(request.market_snapshot)
+        return _with_simulation_capabilities(VirtualExecutionReport(
+            mode="passive",
+            status="filled",
+            requested_size_usd=requested_size_usd,
+            filled_size_usd=requested_size_usd,
+            unfilled_size_usd=0.0,
+            fill_ratio=1.0,
+            reference_price=reference_price,
+            average_price=reference_price,
+            estimated_fill_price=reference_price,
+            entry_slippage_bps=0.0,
+            exit_slippage_bps=0.0,
+            market_impact_percent=0.0,
+            best_bid_before=best_bid,
+            best_ask_before=best_ask,
+            liquidity=metrics,
+            quality_gate=ExecutionQualityGate(status="passed"),
+            notes=[
+                "deterministic_test_fill",
+                "Deterministic test fill: full notional at reference price; no market network data used.",
+            ],
+        ))
+
+    def _apply_relaxed_paper_policy(
+        self,
+        report: VirtualExecutionReport,
+        *,
+        request: ManualConfirmRequest,
+        snapshot: VirtualMarketSnapshot | None,
+        metrics: LiquidityMetrics,
+        reference_price: float,
+        requested_size_usd: float,
+        buy_side: bool,
+        policy_warnings: Iterable[str],
+    ) -> VirtualExecutionReport:
+        warnings = _dedupe_strings([
+            *report.warnings,
+            *policy_warnings,
+        ])
+        notes = _dedupe_strings([
+            *report.notes,
+            *warnings,
+        ])
+        report = report.model_copy(update={"warnings": warnings, "notes": notes})
+
+        hard_blockers = _relaxed_hard_blockers(report)
+        if report.status == "rejected_virtual_execution":
+            if hard_blockers:
+                return _rejected_with_blockers(report, hard_blockers, warnings=warnings)
+            if _can_relaxed_fallback(report):
+                return self._relaxed_fallback_fill(
+                    original=report,
+                    request=request,
+                    snapshot=snapshot,
+                    metrics=metrics,
+                    reference_price=reference_price,
+                    requested_size_usd=requested_size_usd,
+                    buy_side=buy_side,
+                    warnings=warnings,
+                )
+            return report
+
+        if report.quality_gate.status != "blocked":
+            return _with_relaxed_warnings(report, warnings)
+
+        soft_blockers = [
+            blocker
+            for blocker in report.quality_gate.blockers
+            if blocker in _RELAXED_SOFT_BLOCKERS
+        ]
+        hard_blockers = [
+            blocker
+            for blocker in report.quality_gate.blockers
+            if blocker not in _RELAXED_SOFT_BLOCKERS
+        ]
+        if hard_blockers:
+            return _rejected_with_blockers(report, hard_blockers, warnings=warnings)
+
+        relaxed_warnings = _dedupe_strings([
+            *warnings,
+            *report.quality_gate.warnings,
+            *report.quality_gate.high_impact_reasons,
+            *soft_blockers,
+            "relaxed_paper_liquidity_warning",
+        ])
+        gate = report.quality_gate.model_copy(
+            update={
+                "status": "warning",
+                "warnings": relaxed_warnings,
+                "blockers": [],
+                "suggested_max_size_usd": None,
+                "message": "Relaxed paper profile allowed the virtual fill with liquidity warnings.",
+            }
+        )
+        return report.model_copy(
+            update={
+                "quality_gate": gate,
+                "warnings": relaxed_warnings,
+                "blockers": [],
+                "notes": _dedupe_strings([*report.notes, *relaxed_warnings]),
+            }
+        )
+
+    def _relaxed_fallback_fill(
+        self,
+        *,
+        original: VirtualExecutionReport,
+        request: ManualConfirmRequest,
+        snapshot: VirtualMarketSnapshot | None,
+        metrics: LiquidityMetrics,
+        reference_price: float,
+        requested_size_usd: float,
+        buy_side: bool,
+        warnings: Iterable[str],
+    ) -> VirtualExecutionReport:
+        best_bid, best_ask = _best_prices(snapshot)
+        spread_slippage_bps = min(metrics.spread_percent * 50, request.max_virtual_slippage_bps)
+        entry_slippage_bps = min(
+            max(request.slippage_bps, spread_slippage_bps),
+            request.max_virtual_slippage_bps,
+        )
+        average_price = _apply_price_slippage(reference_price, buy_side, entry_slippage_bps)
+        relaxed_warnings = _dedupe_strings([
+            *warnings,
+            original.rejected_reason,
+            "relaxed_paper_market_fallback_fill",
+        ])
+        gate = ExecutionQualityGate(
+            status="warning" if relaxed_warnings else "passed",
+            warnings=relaxed_warnings,
+            blockers=[],
+            message=(
+                "Relaxed paper profile used backend fallback price and kept the market-data issue as a warning."
+                if relaxed_warnings
+                else None
+            ),
+        )
+        return _with_simulation_capabilities(VirtualExecutionReport(
+            mode=original.mode,
+            status="filled",
+            requested_size_usd=requested_size_usd,
+            filled_size_usd=requested_size_usd,
+            unfilled_size_usd=0.0,
+            fill_ratio=1.0,
+            reference_price=reference_price,
+            average_price=average_price,
+            estimated_fill_price=average_price,
+            entry_slippage_bps=entry_slippage_bps,
+            exit_slippage_bps=entry_slippage_bps,
+            market_impact_percent=0.0,
+            best_bid_before=best_bid,
+            best_ask_before=best_ask,
+            liquidity=metrics,
+            quality_gate=gate,
+            warnings=relaxed_warnings,
+            notes=_dedupe_strings([
+                *original.notes,
+                *relaxed_warnings,
+                "Relaxed paper fallback: full virtual notional filled at backend reference price.",
+            ]),
+        ))
+
     def _apply_conservative_fill_policy(
         self,
         report: VirtualExecutionReport,
@@ -652,6 +877,18 @@ _SIZE_OR_IMPACT_BLOCKERS = {
     "expected_slippage_above_1_5_percent",
 }
 
+_RELAXED_SOFT_BLOCKERS = {
+    "position_above_50_percent_depth_1",
+    "position_above_30_percent_volume_5m",
+}
+
+_RELAXED_FALLBACK_REASONS = {
+    "insufficient_liquidity",
+    "market_data_missing",
+    "market_data_stale",
+    "low_liquidity_not_allowed",
+}
+
 
 def _execution_levels(snapshot: VirtualMarketSnapshot | None, buy_side: bool) -> list[OrderBookLevel]:
     if snapshot is None:
@@ -666,10 +903,26 @@ def _finalize_report(
     raw_inputs_snapshot: dict[str, Any],
 ) -> VirtualExecutionReport:
     fill_result = _fill_result(report, raw_inputs_snapshot=raw_inputs_snapshot)
+    warnings = _execution_warnings(report)
+    blockers = _execution_blockers(report)
+    reason_codes = _execution_reason_codes(
+        report,
+        warnings=warnings,
+        blockers=blockers,
+        fill_reason=fill_result.reason,
+    )
+    reason_code = fill_result.reason
+    if reason_code is None:
+        reason_code = reason_codes[0] if reason_codes else _status_reason_code(report)
     return report.model_copy(
         update={
             "fill_result": fill_result,
             "raw_inputs_snapshot": raw_inputs_snapshot,
+            "estimated_fill_price": report.average_price,
+            "warnings": warnings,
+            "blockers": blockers,
+            "reason_code": reason_code,
+            "reason_codes": reason_codes,
         }
     )
 
@@ -716,10 +969,56 @@ def _fill_reason(report: VirtualExecutionReport) -> str | None:
 
 def _fill_warnings(report: VirtualExecutionReport) -> list[str]:
     return _dedupe_strings([
+        *report.warnings,
         *report.quality_gate.warnings,
         *report.quality_gate.high_impact_reasons,
         *report.notes,
     ])
+
+
+def _execution_warnings(report: VirtualExecutionReport) -> list[str]:
+    return _dedupe_strings([
+        *report.warnings,
+        *report.quality_gate.warnings,
+        *report.quality_gate.high_impact_reasons,
+        *report.notes,
+    ])
+
+
+def _execution_blockers(report: VirtualExecutionReport) -> list[str]:
+    blockers = list(report.blockers)
+    blockers.extend(report.quality_gate.blockers)
+    if report.status == "rejected_virtual_execution":
+        blockers.append(report.rejected_reason)
+    return _dedupe_strings(blockers)
+
+
+def _execution_reason_codes(
+    report: VirtualExecutionReport,
+    *,
+    warnings: Iterable[str],
+    blockers: Iterable[str],
+    fill_reason: str | None,
+) -> list[str]:
+    codes = [
+        fill_reason,
+        *blockers,
+        *report.quality_gate.blockers,
+        *report.quality_gate.warnings,
+        *report.quality_gate.high_impact_reasons,
+        *warnings,
+    ]
+    if report.execution_profile == "deterministic_test":
+        codes.append("deterministic_test_fill")
+    return _dedupe_strings([_reason_code(value) for value in codes])
+
+
+def _status_reason_code(report: VirtualExecutionReport) -> str:
+    if report.status == "partially_filled":
+        return "partial_filled"
+    if report.status == "rejected_virtual_execution":
+        return "rejected_virtual_execution"
+    return "filled"
 
 
 def _raw_inputs_snapshot(
@@ -739,6 +1038,8 @@ def _raw_inputs_snapshot(
     entry_spread_limit_bps: float | None,
     allow_low_liquidity: bool | None,
     enforce_conservative_rules: bool,
+    virtual_execution_profile: VirtualExecutionProfile,
+    fill_policy: VirtualFillPolicy,
 ) -> dict[str, Any]:
     best_bid, best_ask = _best_prices(snapshot)
     return {
@@ -761,6 +1062,8 @@ def _raw_inputs_snapshot(
         "spread_bps": metrics.spread_percent * 100,
         "market_spread_bps": market_spread_bps,
         "execution_profile": _jsonable_model(execution_profile),
+        "virtual_execution_profile": virtual_execution_profile,
+        "fill_policy": fill_policy,
         "request_execution_profile": _jsonable_model(request.execution_profile),
         "low_liquidity_tier": _liquidity_tier(signal),
         "allow_low_liquidity": allow_low_liquidity,
@@ -777,6 +1080,121 @@ def _raw_inputs_snapshot(
         "simulation_mode": request.simulation_mode,
         "enforce_conservative_rules": enforce_conservative_rules,
     }
+
+
+def _with_execution_profile(
+    report: VirtualExecutionReport,
+    *,
+    execution_profile: VirtualExecutionProfile,
+    fill_policy: VirtualFillPolicy,
+) -> VirtualExecutionReport:
+    return report.model_copy(
+        update={
+            "execution_profile": execution_profile,
+            "fill_policy": fill_policy,
+        }
+    )
+
+
+def _profile_warnings(
+    *,
+    profile: VirtualExecutionProfile,
+    market_data_status: str,
+    market_data_warnings: Iterable[str],
+    snapshot: VirtualMarketSnapshot | None,
+    signal: RadarSignal,
+    allow_low_liquidity: bool | None,
+) -> list[str]:
+    warnings = list(market_data_warnings)
+    if profile != "relaxed_paper":
+        return _dedupe_strings(warnings)
+
+    normalized_status = _normalized_market_data_status(market_data_status)
+    if normalized_status == "stale":
+        warnings.append("market_data_stale_relaxed_fallback")
+    elif normalized_status == "missing":
+        warnings.append("market_data_missing_relaxed_fallback")
+
+    buy_side = signal.direction == "long"
+    if snapshot is None or not _execution_levels(snapshot, buy_side):
+        warnings.append("orderbook_missing_relaxed_fallback")
+
+    if _liquidity_tier(signal) == "low_liquidity" and allow_low_liquidity is False:
+        warnings.append("low_liquidity_tier_relaxed_warning")
+
+    return _dedupe_strings(warnings)
+
+
+def _with_relaxed_warnings(
+    report: VirtualExecutionReport,
+    warnings: Iterable[str],
+) -> VirtualExecutionReport:
+    relaxed_warnings = _dedupe_strings([
+        *report.warnings,
+        *warnings,
+        *report.quality_gate.warnings,
+    ])
+    if not relaxed_warnings:
+        return report
+    gate_status = "warning" if report.quality_gate.status == "passed" else report.quality_gate.status
+    gate = report.quality_gate.model_copy(
+        update={
+            "status": gate_status,
+            "warnings": relaxed_warnings,
+        }
+    )
+    return report.model_copy(
+        update={
+            "quality_gate": gate,
+            "warnings": relaxed_warnings,
+            "notes": _dedupe_strings([*report.notes, *relaxed_warnings]),
+        }
+    )
+
+
+def _can_relaxed_fallback(report: VirtualExecutionReport) -> bool:
+    return report.rejected_reason in _RELAXED_FALLBACK_REASONS
+
+
+def _relaxed_hard_blockers(report: VirtualExecutionReport) -> list[str]:
+    blockers: list[str] = []
+    if report.liquidity.spread_percent > 1.0:
+        blockers.append("spread_above_1_percent_market_order_blocked")
+    if report.entry_slippage_bps > 150:
+        blockers.append("expected_slippage_above_1_5_percent")
+    blockers.extend(
+        blocker
+        for blocker in report.quality_gate.blockers
+        if blocker not in _RELAXED_SOFT_BLOCKERS
+        and blocker not in _RELAXED_FALLBACK_REASONS
+    )
+    return _dedupe_strings(blockers)
+
+
+def _rejected_with_blockers(
+    report: VirtualExecutionReport,
+    blockers: Iterable[str],
+    *,
+    warnings: Iterable[str],
+) -> VirtualExecutionReport:
+    hard_blockers = _dedupe_strings(blockers)
+    gate = report.quality_gate.model_copy(
+        update={
+            "status": "blocked",
+            "warnings": _dedupe_strings([*warnings, *report.quality_gate.warnings]),
+            "blockers": hard_blockers,
+            "message": _gate_message(report, hard_blockers, report.quality_gate.suggested_max_size_usd),
+        }
+    )
+    rejected = report.model_copy(
+        update={
+            "quality_gate": gate,
+            "warnings": gate.warnings,
+            "blockers": hard_blockers,
+            "notes": _dedupe_strings([*report.notes, *gate.warnings]),
+        }
+    )
+    return _rejected_from_blocked_report(rejected)
 
 
 def _entry_plan_snapshot(signal: RadarSignal) -> dict[str, Any]:
@@ -800,6 +1218,17 @@ def _jsonable_model(value: Any) -> Any:
     if isinstance(value, dict):
         return dict(value)
     return value
+
+
+def _reason_code(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if " " in text or "." in text or ":" in text:
+        return None
+    return text.lower()
 
 
 def _liquidity_tier(signal: RadarSignal) -> str:

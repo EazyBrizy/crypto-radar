@@ -235,6 +235,73 @@ class VirtualExecutionEngineTest(unittest.TestCase):
         self.assertTrue(any("no book levels" in warning for warning in report.fill_result.warnings))
         self.assertEqual(report.raw_inputs_snapshot["orderbook_depth"]["bid_levels"], 0)
 
+    def test_realistic_rejects_stale_orderbook(self) -> None:
+        report = VirtualExecutionEngine().simulate_entry(
+            signal=_signal(),
+            request=ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                market_snapshot=_snapshot(),
+                max_virtual_slippage_bps=300,
+            ),
+            reference_price=100.0,
+            requested_size_usd=100.0,
+            market_data_status="stale",
+            virtual_execution_profile="realistic",
+        )
+
+        self.assertEqual(report.execution_profile, "realistic")
+        self.assertEqual(report.fill_policy, "strict_orderbook")
+        self.assertEqual(report.status, "rejected_virtual_execution")
+        self.assertEqual(report.rejected_reason, "market_data_stale")
+        self.assertIn("market_data_stale", report.blockers)
+        self.assertEqual(report.reason_code, "market_data_stale")
+
+    def test_relaxed_paper_opens_with_warning_on_stale_orderbook(self) -> None:
+        report = VirtualExecutionEngine().simulate_entry(
+            signal=_signal(),
+            request=ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                market_snapshot=_snapshot_without_book_levels(),
+                max_virtual_slippage_bps=300,
+            ),
+            reference_price=100.0,
+            requested_size_usd=100.0,
+            market_data_status="stale",
+            market_data_warnings=("Bybit L2 orderbook snapshot is stale.",),
+            virtual_execution_profile="relaxed_paper",
+        )
+
+        self.assertEqual(report.execution_profile, "relaxed_paper")
+        self.assertEqual(report.fill_policy, "relaxed_market_fallback")
+        self.assertEqual(report.status, "filled")
+        self.assertIsNotNone(report.average_price)
+        self.assertIn("market_data_stale_relaxed_fallback", report.warnings)
+        self.assertIn("orderbook_missing_relaxed_fallback", report.reason_codes)
+        self.assertEqual(report.blockers, [])
+
+    def test_deterministic_test_opens_deterministic_trade(self) -> None:
+        report = VirtualExecutionEngine().simulate_entry(
+            signal=_signal(),
+            request=ManualConfirmRequest(
+                simulation_mode="impact_aware",
+                market_snapshot=None,
+                max_virtual_slippage_bps=0,
+            ),
+            reference_price=100.0,
+            requested_size_usd=123.45,
+            market_data_status="missing",
+            virtual_execution_profile="deterministic_test",
+        )
+
+        self.assertEqual(report.execution_profile, "deterministic_test")
+        self.assertEqual(report.fill_policy, "deterministic_market_fill")
+        self.assertEqual(report.status, "filled")
+        self.assertEqual(report.filled_size_usd, 123.45)
+        self.assertEqual(report.average_price, 100.0)
+        self.assertEqual(report.estimated_fill_price, 100.0)
+        self.assertEqual(report.entry_slippage_bps, 0.0)
+        self.assertIn("deterministic_test_fill", report.reason_codes)
+
     def test_long_entry_uses_ask_side_worse_fill(self) -> None:
         report = VirtualExecutionEngine().simulate_entry(
             signal=_signal(direction="long"),

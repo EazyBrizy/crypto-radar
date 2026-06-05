@@ -231,6 +231,48 @@ class VirtualTradingServiceBoundaryTest(unittest.TestCase):
         self.assertIsNone(exc.exception.report.average_price)
         self.assertEqual(repository.list_virtual_trades(), [])
 
+    def test_relaxed_paper_opens_virtual_trade_with_stale_orderbook_warning(self) -> None:
+        service = _service(
+            RiskManagementSettings(max_price_deviation_bps=0),
+            market_data_service=_StaleVirtualMarketDataService(),
+            virtual_execution_profile_provider=lambda _user_id, _risk_settings=None: "relaxed_paper",
+        )
+
+        trade = service.open_virtual_trade(
+            _signal("sig_relaxed_stale_orderbook"),
+            _request().model_copy(update={"market_snapshot": None}),
+        )
+
+        self.assertEqual(trade.status, "open")
+        self.assertIsNotNone(trade.execution)
+        assert trade.execution is not None
+        self.assertEqual(trade.execution.execution_profile, "relaxed_paper")
+        self.assertEqual(trade.execution.fill_policy, "relaxed_market_fallback")
+        self.assertEqual(trade.execution.blockers, [])
+        self.assertIn("market_data_stale_relaxed_fallback", trade.execution.reason_codes)
+        self.assertTrue(any("stale" in warning for warning in trade.execution.warnings))
+
+    def test_deterministic_test_opens_without_market_or_fee_lookup(self) -> None:
+        service = _service(
+            RiskManagementSettings(max_price_deviation_bps=0),
+            market_data_service=_NoNetworkMarketDataService(),
+            fee_rate_service=_NoNetworkFeeRateService(),
+            virtual_execution_profile_provider=lambda _user_id, _risk_settings=None: "deterministic_test",
+        )
+
+        trade = service.open_virtual_trade(
+            _signal("sig_deterministic_virtual"),
+            _request().model_copy(update={"market_snapshot": None}),
+        )
+
+        self.assertEqual(trade.status, "open")
+        self.assertIsNotNone(trade.execution)
+        assert trade.execution is not None
+        self.assertEqual(trade.execution.execution_profile, "deterministic_test")
+        self.assertEqual(trade.execution.fill_policy, "deterministic_market_fill")
+        self.assertEqual(trade.execution.average_price, 100.0)
+        self.assertIn("deterministic_test_fill", trade.execution.reason_codes)
+
     def test_execution_quality_block_prevents_virtual_trade_creation(self) -> None:
         repository = _EphemeralTradeRepository()
         service = _service(
@@ -391,6 +433,25 @@ class _StaticMarketDataService:
         )
 
 
+class _StaleVirtualMarketDataService:
+    def build_snapshot(self, **kwargs) -> RiskMarketDataSnapshot:
+        return RiskMarketDataSnapshot(
+            exchange=kwargs["exchange"],
+            symbol=kwargs["symbol"],
+            category=None,
+            entry_price=kwargs.get("manual_entry_price") or kwargs["fallback_entry_price"],
+            slippage_bps=0.0,
+            market_data_status="stale",
+            market_data_source="test_stale",
+            warnings=("Bybit L2 orderbook snapshot is stale.",),
+        )
+
+
+class _NoNetworkMarketDataService:
+    def build_snapshot(self, **kwargs) -> RiskMarketDataSnapshot:
+        raise AssertionError("deterministic_test must not request market data")
+
+
 class _ZeroFeeRateService:
     def resolve(self, **kwargs) -> RiskFeeRateSnapshot:
         return RiskFeeRateSnapshot(
@@ -399,6 +460,11 @@ class _ZeroFeeRateService:
             taker_fee_rate=0.0,
             source="test",
         )
+
+
+class _NoNetworkFeeRateService:
+    def resolve(self, **kwargs) -> RiskFeeRateSnapshot:
+        raise AssertionError("deterministic_test must not request fee rates")
 
 
 class _StaticRiskGateService:
@@ -434,14 +500,18 @@ def _service(
     repository: _EphemeralTradeRepository | None = None,
     risk_gate_service: Any | None = None,
     risk_audit: Any | None = None,
+    market_data_service: Any | None = None,
+    fee_rate_service: Any | None = None,
+    virtual_execution_profile_provider: Any | None = None,
 ) -> VirtualTradingService:
     return VirtualTradingService(
         repository=repository or _EphemeralTradeRepository(),
         risk_settings_provider=lambda _user_id: risk_settings,
-        market_data_service=_StaticMarketDataService(),
-        fee_rate_service=_ZeroFeeRateService(),
+        market_data_service=market_data_service or _StaticMarketDataService(),
+        fee_rate_service=fee_rate_service or _ZeroFeeRateService(),
         risk_gate_service=risk_gate_service,
         risk_audit=risk_audit,
+        virtual_execution_profile_provider=virtual_execution_profile_provider,
     )
 
 

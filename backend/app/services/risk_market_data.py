@@ -342,6 +342,44 @@ class RiskMarketDataService:
         return None
 
 
+def offline_virtual_market_data_snapshot(
+    *,
+    exchange: str,
+    symbol: str,
+    side: str,
+    instrument_type: str,
+    fallback_entry_price: float,
+    manual_entry_price: float | None = None,
+    manual_slippage_bps: float = 0.0,
+    status: str = "missing",
+    source: str = "virtual_execution_profile_offline",
+    warnings: tuple[str, ...] = (),
+) -> RiskMarketDataSnapshot:
+    category = _instrument_category(instrument_type)
+    entry_price = manual_entry_price or fallback_entry_price
+    side_label = "ask" if side == "long" else "bid"
+    return RiskMarketDataSnapshot(
+        exchange=exchange.strip().lower(),
+        symbol=symbol.strip().upper(),
+        category=category,
+        entry_price=entry_price,
+        slippage_bps=manual_slippage_bps,
+        best_bid=entry_price if side != "long" else None,
+        best_ask=entry_price if side == "long" else None,
+        mark_price=entry_price,
+        spread_percent=0.0,
+        spread_bps=0.0,
+        orderbook_depth_usd=None,
+        orderbook_snapshot=None,
+        market_data_status=status,
+        market_data_source=source,
+        warnings=(
+            f"Offline virtual market snapshot used {side_label}/signal entry fallback.",
+            *warnings,
+        ),
+    )
+
+
 def _instrument_category(instrument_type: str) -> str:
     return "linear" if instrument_type == "futures" else "spot"
 

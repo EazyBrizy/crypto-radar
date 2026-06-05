@@ -1713,6 +1713,21 @@ function ExecutionQualityBlock({
   const riskAdjustmentPlan = execution?.risk_adjustment_plan ?? null;
   const riskCheck = execution?.risk_check ?? null;
   const riskDecision = execution?.risk_decision ?? null;
+  const executionWarnings = execution
+    ? dedupe([
+      ...execution.warnings,
+      ...execution.quality_gate.warnings,
+      ...execution.quality_gate.high_impact_reasons,
+      ...(execution.fill_result?.warnings ?? [])
+    ])
+    : [];
+  const executionBlockers = execution
+    ? dedupe([
+      ...execution.blockers,
+      ...execution.quality_gate.blockers
+    ])
+    : [];
+  const estimatedFillPrice = execution?.estimated_fill_price ?? execution?.average_price ?? null;
 
   return (
     <div className="execution-quality-block">
@@ -1727,6 +1742,10 @@ function ExecutionQualityBlock({
         <span>Execution: {executionQualityText(gateStatus, impactRisk).toLowerCase()}</span>
       </div>
       <div className="execution-quality-grid">
+        <MetricLine label="Profile" value={execution ? formatExecutionProfile(execution.execution_profile) : "-"} />
+        <MetricLine label="Fill policy" value={execution ? formatFillPolicy(execution.fill_policy) : "-"} />
+        <MetricLine label="Estimated fill" value={estimatedFillPrice == null ? "-" : formatExecutionPrice(estimatedFillPrice)} />
+        <MetricLine label="Reason" value={execution?.reason_code ? execution.reason_code.replaceAll("_", " ") : "-"} />
         <MetricLine label="Expected slippage" value={execution ? formatCompactPercent(execution.entry_slippage_bps / 100) : error ? "Preview error" : "Preview pending"} />
         <MetricLine label="Market impact" value={impactRiskLabel(impactRisk)} />
         <MetricLine label="Safe size" value={safeSize == null ? "-" : `$${safeSize.toFixed(0)}`} />
@@ -1774,6 +1793,20 @@ function ExecutionQualityBlock({
           ))}
         </ul>
       ) : null}
+      {executionBlockers.length ? (
+        <ul className="risk-blocker-list">
+          {executionBlockers.map((blocker) => (
+            <li key={blocker}>{blocker}</li>
+          ))}
+        </ul>
+      ) : null}
+      {executionWarnings.length ? (
+        <ul className="risk-blocker-list">
+          {executionWarnings.slice(0, 6).map((warning) => (
+            <li key={warning}>{warning.replaceAll("_", " ")}</li>
+          ))}
+        </ul>
+      ) : null}
       {error && !execution ? (
         <p className="execution-quality-message">Risk preview unavailable: {error}</p>
       ) : null}
@@ -1800,6 +1833,18 @@ function formatExecutionPrice(price: number): string {
   if (Math.abs(price) >= 1000) return price.toFixed(0);
   if (Math.abs(price) >= 1) return price.toFixed(2);
   return price.toPrecision(4);
+}
+
+function formatExecutionProfile(profile: VirtualExecutionReport["execution_profile"]): string {
+  if (profile === "relaxed_paper") return "Relaxed paper";
+  if (profile === "deterministic_test") return "Deterministic test";
+  return "Realistic";
+}
+
+function formatFillPolicy(policy: VirtualExecutionReport["fill_policy"]): string {
+  if (policy === "relaxed_market_fallback") return "Relaxed fallback";
+  if (policy === "deterministic_market_fill") return "Deterministic fill";
+  return "Strict orderbook";
 }
 
 function formatRiskUsage(used?: number | null, limit?: number | null): string {

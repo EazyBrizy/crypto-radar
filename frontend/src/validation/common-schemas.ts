@@ -32,6 +32,8 @@ export const TradeCloseReasonSchema = z.enum([
 ]);
 export const VirtualSimulationModeSchema = z.enum(["passive", "impact_aware"]);
 export const VirtualSimulationTierSchema = z.enum(["mvp", "advanced", "pro"]);
+export const VirtualExecutionProfileSchema = z.enum(["realistic", "relaxed_paper", "deterministic_test"]);
+export const VirtualFillPolicySchema = z.enum(["strict_orderbook", "relaxed_market_fallback", "deterministic_market_fill"]);
 export const VirtualExecutionStatusSchema = z.enum(["filled", "partially_filled", "rejected_virtual_execution"]);
 export const VirtualFillStatusSchema = z.enum(["filled", "partial_filled", "blocked", "rejected"]);
 export const ImpactRiskSchema = z.enum(["low", "medium", "high"]);
@@ -278,6 +280,8 @@ export const VirtualExecutionReportSchema = z.object({
   simulation_tier: VirtualSimulationTierSchema.default("mvp"),
   active_capabilities: z.array(z.string()).default([]),
   planned_capabilities: z.array(z.string()).default([]),
+  execution_profile: VirtualExecutionProfileSchema.default("realistic"),
+  fill_policy: VirtualFillPolicySchema.default("strict_orderbook"),
   status: VirtualExecutionStatusSchema.default("filled"),
   requested_size_usd: z.number().default(0),
   filled_size_usd: z.number().default(0),
@@ -285,6 +289,7 @@ export const VirtualExecutionReportSchema = z.object({
   fill_ratio: z.number().default(1),
   reference_price: z.number().default(0),
   average_price: z.number().nullable().optional(),
+  estimated_fill_price: z.number().nullable().optional(),
   entry_slippage_bps: z.number().default(0),
   exit_slippage_bps: z.number().default(0),
   market_impact_percent: z.number().default(0),
@@ -338,6 +343,10 @@ export const VirtualExecutionReportSchema = z.object({
   }).nullable().optional(),
   raw_inputs_snapshot: z.record(z.string(), z.unknown()).default({}),
   rejected_reason: z.string().nullable().optional(),
+  warnings: z.array(z.string()).default([]),
+  blockers: z.array(z.string()).default([]),
+  reason_code: z.string().nullable().optional(),
+  reason_codes: z.array(z.string()).default([]),
   notes: z.array(z.string()).default([])
 });
 

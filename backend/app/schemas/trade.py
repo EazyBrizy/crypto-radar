@@ -17,6 +17,8 @@ from app.schemas.risk import (
     StrategyExecutionSettings,
     TakeProfitPlan,
     TrailingStopPlan,
+    VirtualExecutionProfile,
+    VirtualFillPolicy,
 )
 from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.signal import RadarSignal
@@ -252,6 +254,8 @@ class VirtualExecutionReport(BaseModel):
     simulation_tier: VirtualSimulationTier = "mvp"
     active_capabilities: list[str] = Field(default_factory=list)
     planned_capabilities: list[str] = Field(default_factory=list)
+    execution_profile: VirtualExecutionProfile = "realistic"
+    fill_policy: VirtualFillPolicy = "strict_orderbook"
     status: VirtualExecutionStatus = "filled"
     requested_size_usd: float = Field(default=0.0, ge=0)
     filled_size_usd: float = Field(default=0.0, ge=0)
@@ -259,6 +263,7 @@ class VirtualExecutionReport(BaseModel):
     fill_ratio: float = Field(default=1.0, ge=0, le=1)
     reference_price: float = Field(default=0.0, ge=0)
     average_price: Optional[float] = Field(default=None, gt=0)
+    estimated_fill_price: Optional[float] = Field(default=None, gt=0)
     entry_slippage_bps: float = Field(default=0.0, ge=0)
     exit_slippage_bps: float = Field(default=0.0, ge=0)
     market_impact_percent: float = Field(default=0.0, ge=0)
@@ -281,6 +286,10 @@ class VirtualExecutionReport(BaseModel):
     fill_result: Optional[VirtualFillResult] = None
     raw_inputs_snapshot: dict[str, Any] = Field(default_factory=dict)
     rejected_reason: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    reason_code: Optional[str] = None
+    reason_codes: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
 

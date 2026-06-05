@@ -136,6 +136,58 @@ describe("SettingsPage exchange balance UX", () => {
   });
 });
 
+describe("SettingsPage exchange connection delete UX", () => {
+  it("opens a confirmation modal before deleting an exchange connection", async () => {
+    const user = userEvent.setup();
+    const onDeleteExchangeConnection = vi.fn<SettingsPagePropsForTest["onDeleteExchangeConnection"]>().mockResolvedValue(null);
+
+    renderSettingsPage({
+      exchangeConnections: [exchangeConnection()],
+      onDeleteExchangeConnection
+    });
+
+    await user.click(screen.getByRole("button", { name: /Exchanges/u }));
+    await user.click(screen.getByRole("button", { name: "Delete Main Bybit" }));
+
+    expect(screen.getByRole("dialog", { name: /Удалить подключение к бирже/u })).toBeInTheDocument();
+    expect(onDeleteExchangeConnection).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Удалить подключение" }));
+
+    expect(onDeleteExchangeConnection).toHaveBeenCalledWith(EXCHANGE_CONNECTION_ID);
+  });
+
+  it("shows a localized delete reason when the backend rejects deletion", async () => {
+    const user = userEvent.setup();
+    const onDeleteExchangeConnection = vi.fn<SettingsPagePropsForTest["onDeleteExchangeConnection"]>()
+      .mockRejectedValue(new Error("Exchange connection not found: missing"));
+
+    renderSettingsPage({
+      exchangeConnections: [exchangeConnection()],
+      onDeleteExchangeConnection
+    });
+
+    await user.click(screen.getByRole("button", { name: /Exchanges/u }));
+    await user.click(screen.getByRole("button", { name: "Delete Main Bybit" }));
+    await user.click(screen.getByRole("button", { name: "Удалить подключение" }));
+
+    expect(await screen.findByText("Подключение к бирже не найдено.")).toBeInTheDocument();
+  });
+
+  it("does not render deleted exchange connections in the active list", async () => {
+    const user = userEvent.setup();
+
+    renderSettingsPage({
+      exchangeConnections: [exchangeConnection({ status: "deleted" })]
+    });
+
+    await user.click(screen.getByRole("button", { name: /Exchanges/u }));
+
+    expect(screen.queryByText("Main Bybit")).not.toBeInTheDocument();
+    expect(screen.getByText("No exchange connections")).toBeInTheDocument();
+  });
+});
+
 describe("SettingsPage strategy pair selector", () => {
   it("renders pair selector for an opened strategy config", async () => {
     const user = userEvent.setup();
@@ -238,6 +290,7 @@ type RenderSettingsPageOptions = {
   exchangeBalanceLoading?: Record<string, boolean>;
   exchangeConnections?: ExchangeConnection[];
   exchangeWalletBalances?: Record<string, ExchangeWalletBalance | null>;
+  onDeleteExchangeConnection?: SettingsPagePropsForTest["onDeleteExchangeConnection"];
   onRefreshExchangeBalance?: SettingsPagePropsForTest["onRefreshExchangeBalance"];
   onUpdateStrategyConfig?: SettingsPagePropsForTest["onUpdateStrategyConfig"];
   strategyConfigs?: StrategyConfig[];
@@ -272,7 +325,7 @@ function renderSettingsPage(options: RenderSettingsPageOptions = {}) {
         onCreateAlert={vi.fn<SettingsPagePropsForTest["onCreateAlert"]>().mockResolvedValue(null)}
         onCreateExchangeConnection={vi.fn<SettingsPagePropsForTest["onCreateExchangeConnection"]>().mockResolvedValue(null)}
         onDeleteAlert={vi.fn<SettingsPagePropsForTest["onDeleteAlert"]>().mockResolvedValue(null)}
-        onDeleteExchangeConnection={vi.fn<SettingsPagePropsForTest["onDeleteExchangeConnection"]>().mockResolvedValue(null)}
+        onDeleteExchangeConnection={options.onDeleteExchangeConnection ?? vi.fn<SettingsPagePropsForTest["onDeleteExchangeConnection"]>().mockResolvedValue(null)}
         onRefreshExchangeBalance={options.onRefreshExchangeBalance ?? vi.fn<SettingsPagePropsForTest["onRefreshExchangeBalance"]>().mockResolvedValue(null)}
         onSelectSimulationLevel={vi.fn<SettingsPagePropsForTest["onSelectSimulationLevel"]>().mockResolvedValue(null)}
         onSyncExchangeConnection={vi.fn<SettingsPagePropsForTest["onSyncExchangeConnection"]>().mockResolvedValue(null)}
@@ -378,10 +431,12 @@ function marketUniversePair({
   };
 }
 
-function exchangeConnection(): ExchangeConnection {
+function exchangeConnection(overrides: Partial<ExchangeConnection> = {}): ExchangeConnection {
   return {
     account_type: "linear",
     created_at: "2026-06-04T00:00:00.000Z",
+    deleted_at: null,
+    deletion_reason: null,
     exchange_code: "bybit",
     exchange_id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
     exchange_name: "Bybit",
@@ -391,8 +446,10 @@ function exchangeConnection(): ExchangeConnection {
     last_sync_at: null,
     metadata: {},
     permissions: { read: true, trade: false },
+    revoked_at: null,
     status: "active",
-    user_id: "demo_user"
+    user_id: "demo_user",
+    ...overrides
   };
 }
 

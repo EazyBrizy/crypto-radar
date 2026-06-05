@@ -1,6 +1,7 @@
 export type SubscriptionTier = "free" | "pro" | "team";
 export type SubscriptionState = "active" | "trialing" | "past_due" | "canceled" | "none";
 export type ExchangeConnectionState = "available" | "connected" | "disconnected" | "error";
+export type ExchangeConnectionLifecycleStatus = "active" | "disabled" | "revoked" | "deleted";
 export type VirtualSimulationLevel = "mvp" | "advanced" | "pro";
 export type VirtualSimulationLevelStatus = "active" | "stub";
 export type RiskProfileName = "conservative" | "balanced" | "aggressive" | "custom";
@@ -355,8 +356,11 @@ export interface ExchangeConnection {
   account_type: string;
   key_ref: string;
   permissions: Record<string, unknown>;
-  status: string;
+  status: ExchangeConnectionLifecycleStatus;
   last_sync_at: string | null;
+  revoked_at: string | null;
+  deleted_at: string | null;
+  deletion_reason: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
 }

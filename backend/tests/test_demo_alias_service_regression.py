@@ -304,6 +304,9 @@ _SQLITE_DDL = [
         permissions JSON,
         status TEXT,
         last_sync_at DATETIME,
+        revoked_at DATETIME,
+        deleted_at DATETIME,
+        deletion_reason TEXT,
         metadata JSON,
         created_at DATETIME
     )

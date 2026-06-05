@@ -96,7 +96,9 @@ class ExchangeAccountSnapshotApiTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 404)
-        self.assertIn("User is not seeded: missing_user", response.json()["detail"])
+        detail = response.json()["detail"]
+        self.assertIn("User is not seeded: missing_user", detail["message"])
+        self.assertEqual(detail["reason_code"], "resource_not_found")
 
     def test_wrong_user_connection_ownership_is_rejected(self) -> None:
         with self._patched_services():
@@ -106,7 +108,9 @@ class ExchangeAccountSnapshotApiTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn("does not belong to the resolved user", response.json()["detail"])
+        detail = response.json()["detail"]
+        self.assertIn("does not belong to the resolved user", detail["message"])
+        self.assertEqual(detail["reason_code"], "permission_denied")
 
     def test_wallet_response_does_not_expose_api_secrets(self) -> None:
         with self._patched_services():
@@ -353,6 +357,9 @@ _SQLITE_DDL = [
         permissions JSON,
         status TEXT,
         last_sync_at DATETIME,
+        revoked_at DATETIME,
+        deleted_at DATETIME,
+        deletion_reason TEXT,
         metadata JSON,
         created_at DATETIME
     )

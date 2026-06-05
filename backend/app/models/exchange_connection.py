@@ -2,8 +2,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text
-from sqlalchemy import UniqueConstraint, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Text
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,11 +22,17 @@ class UserExchangeConnection(Base):
             name="ck_user_exchange_connections_account_type_not_blank",
         ),
         CheckConstraint("length(trim(key_ref)) > 0", name="ck_user_exchange_connections_key_ref_not_blank"),
-        UniqueConstraint(
+        CheckConstraint(
+            "status IN ('active', 'disabled', 'revoked', 'deleted')",
+            name="ck_user_exchange_connections_status",
+        ),
+        Index(
+            "uq_user_exchange_connections_active_label",
             "user_id",
             "exchange_id",
             "label",
-            name="uq_user_exchange_connections_user_exchange_label",
+            unique=True,
+            postgresql_where=text("status NOT IN ('deleted', 'revoked')"),
         ),
     )
 
@@ -53,6 +59,9 @@ class UserExchangeConnection(Base):
     )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"), index=True)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deletion_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
         JSONB,

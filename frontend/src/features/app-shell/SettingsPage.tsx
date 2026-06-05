@@ -737,6 +737,8 @@ export function SettingsPage({
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [apiPassphrase, setApiPassphrase] = useState("");
+  const [connectionDeleteCandidate, setConnectionDeleteCandidate] = useState<ExchangeConnection | null>(null);
+  const [connectionDeleteError, setConnectionDeleteError] = useState<string | null>(null);
   const [riskTab, setRiskTab] = useState<RiskSettingsTab>("profile");
   const selectedPair = useMemo(
     () => availablePairs.find((pair) => pair.id === pairId) ?? availablePairs[0] ?? null,
@@ -752,6 +754,10 @@ export function SettingsPage({
   const enabledStrategyCount = useMemo(
     () => strategyConfigs.filter((strategyConfig) => strategyConfig.is_enabled).length,
     [strategyConfigs]
+  );
+  const visibleExchangeConnections = useMemo(
+    () => exchangeConnections.filter(isVisibleExchangeConnection),
+    [exchangeConnections]
   );
   const strategyPairSourceKey = useMemo(
     () =>
@@ -928,6 +934,27 @@ export function SettingsPage({
     setApiPassphrase("");
   }
 
+  function requestDeleteExchangeConnection(connection: ExchangeConnection) {
+    setConnectionDeleteCandidate(connection);
+    setConnectionDeleteError(null);
+  }
+
+  function cancelDeleteExchangeConnection() {
+    setConnectionDeleteCandidate(null);
+    setConnectionDeleteError(null);
+  }
+
+  async function handleDeleteExchangeConnection() {
+    if (!connectionDeleteCandidate) return;
+    try {
+      await onDeleteExchangeConnection(connectionDeleteCandidate.id);
+      setConnectionDeleteCandidate(null);
+      setConnectionDeleteError(null);
+    } catch (error) {
+      setConnectionDeleteError(exchangeConnectionDeleteErrorMessage(error));
+    }
+  }
+
   async function handleApplyStrategyConfig(event: FormEvent<HTMLFormElement>, configItem: StrategyConfig) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
@@ -1084,7 +1111,8 @@ export function SettingsPage({
   }
 
   return (
-    <section className="wide-panel">
+    <>
+      <section className="wide-panel">
       <div className="page-head">
         <div>
           <span className="muted">Settings</span>
@@ -1098,7 +1126,7 @@ export function SettingsPage({
           icon={<Radio size={18} />}
           onToggle={() => toggleSettingsSection("exchanges")}
           open={openSettingsSections.has("exchanges")}
-          summary={`${exchangeConnections.length} connection${exchangeConnections.length === 1 ? "" : "s"}`}
+          summary={`${visibleExchangeConnections.length} connection${visibleExchangeConnections.length === 1 ? "" : "s"}`}
           title="Exchanges"
         >
           <div className="inline-form stacked">
@@ -1153,8 +1181,8 @@ export function SettingsPage({
             </button>
           </div>
           <div className="connection-list">
-            {exchangeConnections.length === 0 ? <div className="empty-state compact-empty">No exchange connections</div> : null}
-            {exchangeConnections.map((connection) => {
+            {visibleExchangeConnections.length === 0 ? <div className="empty-state compact-empty">No exchange connections</div> : null}
+            {visibleExchangeConnections.map((connection) => {
               const walletBalance = exchangeWalletBalances[connection.id] ?? null;
               const accountSnapshot = exchangeAccountSnapshots[connection.id] ?? null;
               const balancePending = Boolean(exchangeBalanceLoading[connection.id]);
@@ -1223,7 +1251,14 @@ export function SettingsPage({
                   <button className="icon-button compact" disabled={busy} onClick={() => onSyncExchangeConnection(connection.id)} title="Sync" type="button">
                     <RefreshCw size={15} />
                   </button>
-                  <button className="icon-button compact" disabled={busy} onClick={() => onDeleteExchangeConnection(connection.id)} title="Delete" type="button">
+                  <button
+                    aria-label={`Delete ${connection.label}`}
+                    className="icon-button compact danger"
+                    disabled={busy}
+                    onClick={() => requestDeleteExchangeConnection(connection)}
+                    title="Delete"
+                    type="button"
+                  >
                     <Trash2 size={15} />
                   </button>
                 </div>
@@ -2484,7 +2519,40 @@ export function SettingsPage({
           </div>
         </SettingsAccordionSection>
       </div>
-    </section>
+      </section>
+      {connectionDeleteCandidate ? (
+        <div className="real-trade-modal-backdrop">
+          <div aria-labelledby="exchange-delete-title" aria-modal="true" className="real-trade-modal exchange-delete-modal" role="dialog">
+            <div className="real-trade-modal-header">
+              <div>
+                <span className="muted">Exchange connection</span>
+                <h3 id="exchange-delete-title">Удалить подключение к бирже?</h3>
+              </div>
+              <Badge tone="red">soft delete</Badge>
+            </div>
+            <div className="real-trade-warning">
+              <AlertTriangle size={18} />
+              <span>
+                Подключение {connectionDeleteCandidate.exchange_name} · {connectionDeleteCandidate.label} будет скрыто из активного списка. Исторические ордера и сделки останутся связаны с ним.
+              </span>
+            </div>
+            {connectionDeleteError ? (
+              <div className="strategy-error-message exchange-delete-error" role="alert">
+                {connectionDeleteError}
+              </div>
+            ) : null}
+            <div className="real-trade-modal-actions">
+              <button className="secondary-action" disabled={busy} onClick={cancelDeleteExchangeConnection} type="button">
+                Отмена
+              </button>
+              <button className="danger-action" disabled={busy} onClick={handleDeleteExchangeConnection} type="button">
+                <Trash2 size={17} /> Удалить подключение
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -3098,6 +3166,24 @@ function strategyUpdateErrorMessage(error: unknown): string {
     return "Пара не найдена в локальном universe. Сначала синхронизируйте пары с биржи.";
   }
   return message;
+}
+
+function exchangeConnectionDeleteErrorMessage(error: unknown): string {
+  const message = errorMessage(error);
+  if (/not found|не найден/i.test(message)) {
+    return "Подключение к бирже не найдено.";
+  }
+  if (/external history|historical|истор/i.test(message)) {
+    return "Подключение связано с историческими ордерами или сделками, поэтому физическое удаление недоступно.";
+  }
+  if (/hard delete|admin|администратор/i.test(message)) {
+    return "Физическое удаление доступно только внутреннему администратору.";
+  }
+  return message;
+}
+
+function isVisibleExchangeConnection(connection: ExchangeConnection): boolean {
+  return connection.status !== "deleted" && connection.status !== "revoked";
 }
 
 function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {

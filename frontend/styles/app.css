@@ -319,6 +319,12 @@ a {
   height: 30px;
 }
 
+.icon-button.danger {
+  border-color: #7f1d1d;
+  background: #3b0a0a;
+  color: #fca5a5;
+}
+
 .notification-center {
   position: relative;
 }
@@ -1434,6 +1440,14 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .real-trade-modal-actions {
   flex-wrap: wrap;
   margin-top: 16px;
+}
+
+.exchange-delete-modal {
+  width: min(560px, 100%);
+}
+
+.exchange-delete-error {
+  margin-top: 12px;
 }
 
 .wide-panel { max-width: 1180px; }

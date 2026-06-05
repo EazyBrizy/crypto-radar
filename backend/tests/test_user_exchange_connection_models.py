@@ -13,9 +13,20 @@ class UserExchangeConnectionModelsTest(unittest.TestCase):
     def test_metadata_column_keeps_database_name(self) -> None:
         self.assertEqual(UserExchangeConnection.metadata_.property.columns[0].name, "metadata")
 
-    def test_unique_user_exchange_label_constraint_is_present(self) -> None:
+    def test_active_user_exchange_label_unique_index_is_present(self) -> None:
+        index_names = {index.name for index in UserExchangeConnection.__table__.indexes}
+        self.assertIn("uq_user_exchange_connections_active_label", index_names)
+
+    def test_status_constraint_is_present(self) -> None:
         constraint_names = {constraint.name for constraint in UserExchangeConnection.__table__.constraints}
-        self.assertIn("uq_user_exchange_connections_user_exchange_label", constraint_names)
+        self.assertIn("ck_user_exchange_connections_status", constraint_names)
+
+    def test_soft_delete_columns_are_present(self) -> None:
+        column_names = set(UserExchangeConnection.__table__.c.keys())
+
+        self.assertIn("revoked_at", column_names)
+        self.assertIn("deleted_at", column_names)
+        self.assertIn("deletion_reason", column_names)
 
     def test_user_foreign_key_cascades_on_delete(self) -> None:
         user_id_column = UserExchangeConnection.__table__.c.user_id

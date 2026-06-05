@@ -1636,11 +1636,19 @@ export function normalizeExchangeConnection(value: unknown): ExchangeConnection 
     account_type: String(connection.account_type ?? "spot"),
     key_ref: String(connection.key_ref ?? ""),
     permissions: isRecord(connection.permissions) ? connection.permissions : {},
-    status: String(connection.status ?? "active"),
+    status: normalizeExchangeConnectionStatus(connection.status),
     last_sync_at: connection.last_sync_at == null ? null : String(connection.last_sync_at),
+    revoked_at: connection.revoked_at == null ? null : String(connection.revoked_at),
+    deleted_at: connection.deleted_at == null ? null : String(connection.deleted_at),
+    deletion_reason: connection.deletion_reason == null ? null : String(connection.deletion_reason),
     metadata: isRecord(connection.metadata) ? connection.metadata : {},
     created_at: String(connection.created_at ?? new Date().toISOString())
   };
+}
+
+function normalizeExchangeConnectionStatus(value: unknown): ExchangeConnection["status"] {
+  if (value === "disabled" || value === "revoked" || value === "deleted") return value;
+  return "active";
 }
 
 export function normalizeHealth(value: unknown): HealthStatus {

@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+ExchangeConnectionStatus = Literal["active", "disabled", "revoked", "deleted"]
+
 
 class ExchangeConnectionResponse(BaseModel):
     id: UUID
@@ -16,8 +18,11 @@ class ExchangeConnectionResponse(BaseModel):
     account_type: str
     key_ref: str
     permissions: dict[str, Any]
-    status: str
+    status: ExchangeConnectionStatus
     last_sync_at: datetime | None
+    revoked_at: datetime | None = None
+    deleted_at: datetime | None = None
+    deletion_reason: str | None = None
     metadata: dict[str, Any]
     created_at: datetime
 
@@ -41,7 +46,7 @@ class ExchangeConnectionUpdateRequest(BaseModel):
     api_secret: str | None = None
     api_passphrase: str | None = None
     permissions: dict[str, Any] | None = None
-    status: str | None = None
+    status: ExchangeConnectionStatus | None = None
     metadata: dict[str, Any] | None = None
 
 

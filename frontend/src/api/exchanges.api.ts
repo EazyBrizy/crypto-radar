@@ -62,7 +62,7 @@ export const exchangesApi = {
       params: { path: { connection_id: connectionId } }
     });
     if (result.error || !result.response.ok) {
-      throw new Error(`Exchange connection delete failed: ${result.response.status}`);
+      throw new Error(exchangeConnectionDeleteError(result.error, result.response.status));
     }
   },
   async testConnection(connectionId: string) {
@@ -123,3 +123,43 @@ export const exchangesApi = {
     );
   }
 };
+
+function exchangeConnectionDeleteError(error: unknown, statusCode: number): string {
+  const reasonCode = apiReasonCode(error);
+  if (reasonCode === "exchange_connection_not_found") {
+    return "Подключение к бирже не найдено.";
+  }
+  if (reasonCode === "invalid_exchange_connection_id") {
+    return "Некорректный идентификатор подключения к бирже.";
+  }
+  if (reasonCode === "exchange_connection_has_external_history") {
+    return "Подключение связано с историческими ордерами или сделками, поэтому физическое удаление недоступно.";
+  }
+  if (reasonCode === "exchange_connection_hard_delete_protected") {
+    return "Физическое удаление доступно только внутреннему администратору.";
+  }
+  const message = apiErrorMessage(error);
+  return message ?? `Не удалось удалить подключение к бирже: HTTP ${statusCode}`;
+}
+
+function apiReasonCode(error: unknown): string | null {
+  const detail = apiErrorDetail(error);
+  if (isRecord(detail) && typeof detail.reason_code === "string") return detail.reason_code;
+  return null;
+}
+
+function apiErrorMessage(error: unknown): string | null {
+  if (isRecord(error) && typeof error.message === "string") return error.message;
+  const detail = apiErrorDetail(error);
+  if (typeof detail === "string") return detail;
+  if (isRecord(detail) && typeof detail.message === "string") return detail.message;
+  return null;
+}
+
+function apiErrorDetail(error: unknown): unknown {
+  return isRecord(error) && "detail" in error ? error.detail : error;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}

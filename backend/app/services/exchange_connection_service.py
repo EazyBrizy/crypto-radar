@@ -4,11 +4,12 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from app.core.database import SessionLocal
+from app.models.external_exchange import ExternalExchangeOrder, ExternalExchangeTrade
 from app.models.exchange_connection import UserExchangeConnection
 from app.models.market import MarketExchange
 from app.models.user import AppUser
@@ -21,6 +22,40 @@ from app.schemas.exchange_connection import (
     ExchangeConnectionUpdateRequest,
 )
 from app.services.user_identity import resolve_app_user
+
+DELETED_CONNECTION_STATUSES = ("deleted", "revoked")
+
+
+class ExchangeConnectionServiceError(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.details = details or {}
+
+
+class ExchangeConnectionHardDeleteConflict(ExchangeConnectionServiceError):
+    def __init__(self, connection_id: str, dependency_counts: dict[str, int]) -> None:
+        super().__init__(
+            "Exchange connection has external exchange history and cannot be hard deleted.",
+            reason_code="exchange_connection_has_external_history",
+            details={
+                "connection_id": connection_id,
+                "dependencies": dependency_counts,
+            },
+        )
+
+
+class ExchangeConnectionHardDeleteProtected(PermissionError):
+    def __init__(self) -> None:
+        super().__init__("Hard delete requires an explicit internal/admin confirmation.")
+        self.reason_code = "exchange_connection_hard_delete_protected"
+        self.details: dict[str, Any] = {}
 
 
 class SecretRefProvider(Protocol):
@@ -35,6 +70,9 @@ class SecretRefProvider(Protocol):
         ...
 
     def load_exchange_credentials(self, key_ref: str) -> dict[str, str] | None:
+        ...
+
+    def revoke_exchange_credentials(self, key_ref: str) -> bool:
         ...
 
 
@@ -66,6 +104,9 @@ class StubSecretRefProvider:
         credentials = self._credentials_by_ref.get(key_ref)
         return dict(credentials) if credentials is not None else None
 
+    def revoke_exchange_credentials(self, key_ref: str) -> bool:
+        return self._credentials_by_ref.pop(key_ref, None) is not None
+
 
 class ExchangeConnectionService:
     def __init__(
@@ -82,6 +123,7 @@ class ExchangeConnectionService:
             records = session.scalars(
                 _connection_select()
                 .where(UserExchangeConnection.user_id == user.id)
+                .where(~UserExchangeConnection.status.in_(DELETED_CONNECTION_STATUSES))
                 .order_by(UserExchangeConnection.created_at.desc())
             ).all()
             return [_connection_to_response(record) for record in records]
@@ -178,9 +220,36 @@ class ExchangeConnectionService:
                 raise ValueError("Exchange connection label must be unique per user and exchange") from exc
             return self.get_connection(connection_id)
 
-    def delete_connection(self, connection_id: str) -> None:
+    def delete_connection(self, connection_id: str, *, reason: str = "user_requested_delete") -> None:
         with self._session_factory() as session:
             connection = _get_connection(session, connection_id)
+            now = datetime.now(timezone.utc)
+            credentials_revoked = _revoke_credentials(self._secret_provider, connection.key_ref)
+            if connection.status != "deleted":
+                connection.status = "deleted"
+            if connection.deleted_at is None:
+                connection.deleted_at = now
+            if credentials_revoked and connection.revoked_at is None:
+                connection.revoked_at = now
+            connection.deletion_reason = reason
+            connection.metadata_ = _soft_delete_metadata(
+                connection.metadata_,
+                deleted_at=connection.deleted_at,
+                revoked_at=connection.revoked_at,
+                deletion_reason=reason,
+                credentials_revoked=credentials_revoked,
+            )
+            session.commit()
+
+    def hard_delete_connection(self, connection_id: str, *, admin_confirm: bool = False) -> None:
+        if not admin_confirm:
+            raise ExchangeConnectionHardDeleteProtected()
+
+        with self._session_factory() as session:
+            connection = _get_connection(session, connection_id)
+            dependency_counts = _connection_dependency_counts(session, connection.id)
+            if any(count > 0 for count in dependency_counts.values()):
+                raise ExchangeConnectionHardDeleteConflict(connection_id, dependency_counts)
             session.delete(connection)
             session.commit()
 
@@ -429,6 +498,33 @@ def _get_exchange(session: Session, exchange_code: str) -> MarketExchange:
     return exchange
 
 
+def _connection_dependency_counts(session: Session, connection_id: UUID) -> dict[str, int]:
+    orders_count = session.scalar(
+        select(func.count())
+        .select_from(ExternalExchangeOrder)
+        .where(ExternalExchangeOrder.connection_id == connection_id)
+    )
+    trades_count = session.scalar(
+        select(func.count())
+        .select_from(ExternalExchangeTrade)
+        .where(ExternalExchangeTrade.connection_id == connection_id)
+    )
+    return {
+        "external_exchange_orders": int(orders_count or 0),
+        "external_exchange_trades": int(trades_count or 0),
+    }
+
+
+def _revoke_credentials(secret_provider: SecretRefProvider, key_ref: str) -> bool:
+    revoke = getattr(secret_provider, "revoke_exchange_credentials", None)
+    if not callable(revoke):
+        return False
+    try:
+        return bool(revoke(key_ref))
+    except Exception:
+        return False
+
+
 def _extract_credentials(request: ExchangeConnectionCreateRequest | ExchangeConnectionUpdateRequest) -> dict[str, str]:
     credentials: dict[str, str] = {}
     for field in ("api_key", "api_secret", "api_passphrase"):
@@ -523,6 +619,26 @@ def _write_fee_rate_cache(
     connection.metadata_ = metadata
 
 
+def _soft_delete_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    deleted_at: datetime,
+    revoked_at: datetime | None,
+    deletion_reason: str,
+    credentials_revoked: bool,
+) -> dict[str, Any]:
+    return {
+        **dict(metadata or {}),
+        "deletion": {
+            "status": "deleted",
+            "reason": deletion_reason,
+            "deleted_at": deleted_at.isoformat(),
+            "revoked_at": revoked_at.isoformat() if revoked_at is not None else None,
+            "credentials_revoked": credentials_revoked,
+        },
+    }
+
+
 def _parse_uuid(value: str | UUID) -> UUID | None:
     if isinstance(value, UUID):
         return value
@@ -545,6 +661,9 @@ def _connection_to_response(connection: UserExchangeConnection) -> ExchangeConne
         permissions=connection.permissions,
         status=connection.status,
         last_sync_at=connection.last_sync_at,
+        revoked_at=connection.revoked_at,
+        deleted_at=connection.deleted_at,
+        deletion_reason=connection.deletion_reason,
         metadata=connection.metadata_,
         created_at=connection.created_at,
     )

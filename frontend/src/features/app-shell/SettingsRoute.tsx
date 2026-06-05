@@ -38,7 +38,9 @@ export function SettingsRoute() {
   const strategyConfigsQuery = useStrategyConfigsQuery();
   const alertRulesQuery = useAlertRulesQuery();
   const exchangeConnectionsQuery = useExchangeConnectionsQuery();
-  const exchangeConnectionIds = (exchangeConnectionsQuery.data ?? []).map((connection) => connection.id);
+  const exchangeConnectionIds = (exchangeConnectionsQuery.data ?? [])
+    .filter((connection) => connection.status !== "deleted" && connection.status !== "revoked")
+    .map((connection) => connection.id);
   const exchangeWalletBalancesQuery = useExchangeConnectionWalletBalancesQuery(exchangeConnectionIds);
   const exchangeAccountSnapshotsQuery = useExchangeConnectionAccountSnapshotsQuery(exchangeConnectionIds);
   const userProfileQuery = useUserProfileQuery({ enabled: true });

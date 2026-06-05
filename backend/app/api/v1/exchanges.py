@@ -20,7 +20,11 @@ from app.schemas.external_exchange import (
     RealTradeImportResult,
 )
 from app.services.exchange_account_snapshot import exchange_account_snapshot_service
-from app.services.exchange_connection_service import exchange_connection_service
+from app.services.exchange_connection_service import (
+    ExchangeConnectionHardDeleteConflict,
+    ExchangeConnectionServiceError,
+    exchange_connection_service,
+)
 from app.services.exchange_instrument_service import exchange_instrument_rule_service
 from app.services.real_trade_import_service import RealTradeImportNotReadyError, real_trade_import_service
 
@@ -28,11 +32,39 @@ router = APIRouter(prefix="/exchanges", tags=["exchanges"])
 
 
 def _http_error(exc: Exception) -> HTTPException:
+    reason_code = _reason_code(exc)
+    detail: dict[str, object] = {
+        "message": str(exc),
+        "reason_code": reason_code,
+    }
+    extra_details = getattr(exc, "details", None)
+    if isinstance(extra_details, dict):
+        detail.update(extra_details)
+    if isinstance(exc, ExchangeConnectionHardDeleteConflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
     if isinstance(exc, LookupError):
-        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
     if isinstance(exc, PermissionError):
-        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
-    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+def _reason_code(exc: Exception) -> str:
+    explicit = getattr(exc, "reason_code", None)
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    message = str(exc).lower()
+    if isinstance(exc, LookupError):
+        if "exchange connection" in message:
+            return "exchange_connection_not_found"
+        return "resource_not_found"
+    if isinstance(exc, PermissionError):
+        return "permission_denied"
+    if "invalid exchange connection id" in message:
+        return "invalid_exchange_connection_id"
+    if "label must be unique" in message:
+        return "exchange_connection_label_conflict"
+    return "bad_request"
 
 
 @router.get("")
@@ -48,7 +80,7 @@ async def list_exchanges() -> dict[str, list[str]]:
 async def list_exchange_connections(user_id: str = "demo_user") -> list[ExchangeConnectionResponse]:
     try:
         return exchange_connection_service.list_connections(user_id)
-    except ValueError as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -56,7 +88,7 @@ async def list_exchange_connections(user_id: str = "demo_user") -> list[Exchange
 async def create_exchange_connection(request: ExchangeConnectionCreateRequest) -> ExchangeConnectionResponse:
     try:
         return exchange_connection_service.create_connection(request)
-    except (LookupError, ValueError) as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -64,7 +96,7 @@ async def create_exchange_connection(request: ExchangeConnectionCreateRequest) -
 async def get_exchange_connection(connection_id: str) -> ExchangeConnectionResponse:
     try:
         return exchange_connection_service.get_connection(connection_id)
-    except (LookupError, ValueError) as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -75,7 +107,7 @@ async def update_exchange_connection(
 ) -> ExchangeConnectionResponse:
     try:
         return exchange_connection_service.update_connection(connection_id, request)
-    except (LookupError, ValueError) as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -83,7 +115,7 @@ async def update_exchange_connection(
 async def delete_exchange_connection(connection_id: str) -> Response:
     try:
         exchange_connection_service.delete_connection(connection_id)
-    except (LookupError, ValueError) as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -92,7 +124,7 @@ async def delete_exchange_connection(connection_id: str) -> Response:
 async def test_exchange_connection(connection_id: str) -> ExchangeConnectionActionResponse:
     try:
         return exchange_connection_service.test_connection(connection_id)
-    except (LookupError, ValueError) as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -108,7 +140,7 @@ async def get_exchange_connection_fee_rates(
             category=category,
             symbol=symbol,
         )
-    except (LookupError, ValueError) as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -126,7 +158,7 @@ async def get_exchange_connection_wallet_balance(
             connection_id=connection.id,
             force_refresh=force_refresh,
         )
-    except (LookupError, PermissionError, ValueError) as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -145,7 +177,7 @@ async def get_exchange_connection_account_snapshot(
             mode="real",
             force_refresh=force_refresh,
         )
-    except (LookupError, PermissionError, ValueError) as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 
@@ -175,7 +207,7 @@ async def list_exchange_instrument_rules(
             symbol=symbol,
             limit=limit,
         )
-    except (LookupError, ValueError) as exc:
+    except (LookupError, PermissionError, ValueError, ExchangeConnectionServiceError) as exc:
         raise _http_error(exc) from exc
 
 

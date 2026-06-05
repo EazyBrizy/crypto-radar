@@ -746,8 +746,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           }
@@ -1080,8 +1086,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           },
@@ -1142,8 +1154,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           },
@@ -1204,8 +1222,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           }
@@ -2001,8 +2025,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           },
@@ -2160,8 +2190,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           },
@@ -2234,8 +2270,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           },
@@ -2413,8 +2455,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           },
@@ -6938,9 +6986,15 @@
       "ExchangeConnectionCreateRequest": {
         "properties": {
           "user_id": {
-            "type": "string",
-            "title": "User Id",
-            "default": "demo_user"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
           },
           "exchange_code": {
             "type": "string",
@@ -10091,9 +10145,15 @@
       "PendingEntryActionRequest": {
         "properties": {
           "user_id": {
-            "type": "string",
-            "title": "User Id",
-            "default": "demo_user"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
           }
         },
         "type": "object",
@@ -10335,6 +10395,16 @@
               }
             ],
             "title": "Failure Reason"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PendingEntryView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -10357,6 +10427,116 @@
           "updated_at"
         ],
         "title": "PendingEntryIntentRead"
+      },
+      "PendingEntryView": {
+        "properties": {
+          "status_label": {
+            "type": "string",
+            "title": "Status Label"
+          },
+          "status_tone": {
+            "type": "string",
+            "enum": [
+              "green",
+              "red",
+              "yellow",
+              "blue",
+              "purple",
+              "neutral"
+            ],
+            "title": "Status Tone",
+            "default": "neutral"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "entry_zone": {
+            "type": "string",
+            "title": "Entry Zone"
+          },
+          "current_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Price"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status_label",
+          "reason",
+          "entry_zone"
+        ],
+        "title": "PendingEntryView"
+      },
+      "PnLView": {
+        "properties": {
+          "realized_pnl": {
+            "type": "number",
+            "title": "Realized Pnl",
+            "default": 0
+          },
+          "unrealized_pnl": {
+            "type": "number",
+            "title": "Unrealized Pnl",
+            "default": 0
+          },
+          "total_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Pnl"
+          },
+          "pnl_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Percent"
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "green",
+              "red",
+              "yellow",
+              "blue",
+              "purple",
+              "neutral"
+            ],
+            "title": "Tone",
+            "default": "neutral"
+          }
+        },
+        "type": "object",
+        "title": "PnLView"
       },
       "PositionRiskSummary": {
         "properties": {
@@ -10798,6 +10978,9 @@
             },
             "type": "array",
             "title": "Signals"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RadarSummary"
           }
         },
         "type": "object",
@@ -11291,6 +11474,26 @@
             ],
             "title": "Display Reason"
           },
+          "card_view": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalCardView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details_view": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalDetailsView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "lifecycle_trace": {
             "$ref": "#/components/schemas/LifecycleTrace"
           }
@@ -11307,6 +11510,37 @@
           "updated_at"
         ],
         "title": "RadarSignal"
+      },
+      "RadarSummary": {
+        "properties": {
+          "total_signals": {
+            "type": "integer",
+            "title": "Total Signals",
+            "default": 0
+          },
+          "execution_ready_signals": {
+            "type": "integer",
+            "title": "Execution Ready Signals",
+            "default": 0
+          },
+          "high_confidence_signals": {
+            "type": "integer",
+            "title": "High Confidence Signals",
+            "default": 0
+          },
+          "positive_edge_signals": {
+            "type": "integer",
+            "title": "Positive Edge Signals",
+            "default": 0
+          },
+          "blocked_ideas": {
+            "type": "integer",
+            "title": "Blocked Ideas",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "RadarSummary"
       },
       "RealConfirmRequest": {
         "properties": {
@@ -14941,6 +15175,142 @@
         "type": "object",
         "title": "SignalAutoEntrySnapshot"
       },
+      "SignalBadgeView": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "green",
+              "red",
+              "yellow",
+              "blue",
+              "purple",
+              "neutral"
+            ],
+            "title": "Tone",
+            "default": "neutral"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "label"
+        ],
+        "title": "SignalBadgeView"
+      },
+      "SignalCardView": {
+        "properties": {
+          "status_label": {
+            "type": "string",
+            "title": "Status Label"
+          },
+          "status_tone": {
+            "type": "string",
+            "enum": [
+              "green",
+              "red",
+              "yellow",
+              "blue",
+              "purple",
+              "neutral"
+            ],
+            "title": "Status Tone"
+          },
+          "opportunity_label": {
+            "type": "string",
+            "title": "Opportunity Label"
+          },
+          "opportunity_tone": {
+            "type": "string",
+            "enum": [
+              "green",
+              "red",
+              "yellow",
+              "blue",
+              "purple",
+              "neutral"
+            ],
+            "title": "Opportunity Tone"
+          },
+          "risk_label": {
+            "type": "string",
+            "title": "Risk Label"
+          },
+          "risk_meta": {
+            "type": "string",
+            "title": "Risk Meta"
+          },
+          "badges": {
+            "items": {
+              "$ref": "#/components/schemas/SignalBadgeView"
+            },
+            "type": "array",
+            "title": "Badges"
+          },
+          "entry_label": {
+            "type": "string",
+            "title": "Entry Label"
+          },
+          "entry_value": {
+            "type": "string",
+            "title": "Entry Value"
+          },
+          "stop_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/SignalTargetView"
+            },
+            "type": "array",
+            "title": "Targets"
+          },
+          "selected_rr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Rr"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status_label",
+          "status_tone",
+          "opportunity_label",
+          "opportunity_tone",
+          "risk_label",
+          "risk_meta",
+          "entry_label",
+          "entry_value",
+          "reason"
+        ],
+        "title": "SignalCardView"
+      },
       "SignalConfirmationSnapshot": {
         "properties": {
           "passed": {
@@ -15022,6 +15392,308 @@
           "signal_actionable"
         ],
         "title": "SignalDecisionSnapshot"
+      },
+      "SignalDetailsBlockerView": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "warning",
+              "info"
+            ],
+            "title": "Severity",
+            "default": "blocker"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "entry",
+              "risk",
+              "market_data",
+              "liquidity",
+              "execution",
+              "technical"
+            ],
+            "title": "Category",
+            "default": "technical"
+          },
+          "user_message": {
+            "type": "string",
+            "title": "User Message"
+          },
+          "debug_messages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Debug Messages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "user_message"
+        ],
+        "title": "SignalDetailsBlockerView"
+      },
+      "SignalDetailsExecutionSummaryView": {
+        "properties": {
+          "preview_available": {
+            "type": "boolean",
+            "title": "Preview Available",
+            "default": false
+          },
+          "risk_check_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Check Status"
+          },
+          "risk_decision_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Decision Status"
+          },
+          "can_enter": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can Enter"
+          },
+          "quality_gate_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Gate Status"
+          },
+          "impact_risk": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impact Risk"
+          },
+          "status_allows_trade": {
+            "type": "boolean",
+            "title": "Status Allows Trade",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "SignalDetailsExecutionSummaryView"
+      },
+      "SignalDetailsRiskSummaryView": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "risk_failed": {
+            "type": "boolean",
+            "title": "Risk Failed",
+            "default": false
+          },
+          "risk_reward_blocked": {
+            "type": "boolean",
+            "title": "Risk Reward Blocked",
+            "default": false
+          },
+          "risk_reward_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Reward Warning"
+          },
+          "forming_candle": {
+            "type": "boolean",
+            "title": "Forming Candle",
+            "default": false
+          },
+          "open_candle_allowed": {
+            "type": "boolean",
+            "title": "Open Candle Allowed",
+            "default": false
+          },
+          "forming_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forming Reason"
+          },
+          "status_allows_trade": {
+            "type": "boolean",
+            "title": "Status Allows Trade",
+            "default": false
+          },
+          "trade_plan_complete": {
+            "type": "boolean",
+            "title": "Trade Plan Complete",
+            "default": false
+          },
+          "risk_reward_ok": {
+            "type": "boolean",
+            "title": "Risk Reward Ok",
+            "default": false
+          },
+          "is_market_opportunity": {
+            "type": "boolean",
+            "title": "Is Market Opportunity",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "SignalDetailsRiskSummaryView"
+      },
+      "SignalDetailsView": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side"
+          },
+          "primary_status": {
+            "type": "string",
+            "enum": [
+              "execution_ready",
+              "waiting_entry",
+              "requires_reconfirmation",
+              "blocked",
+              "watchlist",
+              "cancelled",
+              "expired",
+              "unknown"
+            ],
+            "title": "Primary Status"
+          },
+          "primary_status_label": {
+            "type": "string",
+            "title": "Primary Status Label"
+          },
+          "primary_status_tone": {
+            "type": "string",
+            "enum": [
+              "green",
+              "red",
+              "yellow",
+              "blue",
+              "purple",
+              "neutral"
+            ],
+            "title": "Primary Status Tone"
+          },
+          "primary_action_label": {
+            "type": "string",
+            "title": "Primary Action Label"
+          },
+          "recommended_action_text": {
+            "type": "string",
+            "title": "Recommended Action Text"
+          },
+          "can_enter_now": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can Enter Now"
+          },
+          "trade_plan": {
+            "$ref": "#/components/schemas/SignalTradePlanView"
+          },
+          "risk_summary": {
+            "$ref": "#/components/schemas/SignalDetailsRiskSummaryView"
+          },
+          "execution_summary": {
+            "$ref": "#/components/schemas/SignalDetailsExecutionSummaryView"
+          },
+          "top_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Top Reasons"
+          },
+          "top_blockers": {
+            "items": {
+              "$ref": "#/components/schemas/SignalDetailsBlockerView"
+            },
+            "type": "array",
+            "title": "Top Blockers"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/SignalDetailsBlockerView"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "side",
+          "primary_status",
+          "primary_status_label",
+          "primary_status_tone",
+          "primary_action_label",
+          "recommended_action_text",
+          "trade_plan",
+          "risk_summary"
+        ],
+        "title": "SignalDetailsView"
       },
       "SignalEdgeSnapshot": {
         "properties": {
@@ -15329,6 +16001,165 @@
         },
         "type": "object",
         "title": "SignalScoreBreakdown"
+      },
+      "SignalTargetView": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "r_multiple": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "R Multiple"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "SignalTargetView"
+      },
+      "SignalTradePlanView": {
+        "properties": {
+          "has_trade_plan": {
+            "type": "boolean",
+            "title": "Has Trade Plan",
+            "default": false
+          },
+          "entry_type": {
+            "type": "string",
+            "title": "Entry Type"
+          },
+          "entry_zone": {
+            "type": "string",
+            "title": "Entry Zone"
+          },
+          "entry_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Price"
+          },
+          "stop_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/SignalTargetView"
+            },
+            "type": "array",
+            "title": "Targets"
+          },
+          "selected_rr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Rr"
+          },
+          "selected_rr_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Rr Target"
+          },
+          "min_rr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Rr"
+          },
+          "trade_plan_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Plan Complete"
+          },
+          "fallback_used": {
+            "type": "boolean",
+            "title": "Fallback Used",
+            "default": false
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing"
+          },
+          "invalidation": {
+            "type": "string",
+            "title": "Invalidation",
+            "default": "-"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entry_type",
+          "entry_zone"
+        ],
+        "title": "SignalTradePlanView"
       },
       "StopLossPlan": {
         "properties": {
@@ -18783,6 +19614,16 @@
           },
           "lifecycle_trace": {
             "$ref": "#/components/schemas/LifecycleTrace"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradeView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -19245,6 +20086,41 @@
           "label"
         ],
         "title": "TradePlanTarget"
+      },
+      "TradeView": {
+        "properties": {
+          "status_label": {
+            "type": "string",
+            "title": "Status Label"
+          },
+          "status_tone": {
+            "type": "string",
+            "enum": [
+              "green",
+              "red",
+              "yellow",
+              "blue",
+              "purple",
+              "neutral"
+            ],
+            "title": "Status Tone",
+            "default": "neutral"
+          },
+          "source_label": {
+            "type": "string",
+            "title": "Source Label"
+          },
+          "pnl": {
+            "$ref": "#/components/schemas/PnLView"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status_label",
+          "source_label",
+          "pnl"
+        ],
+        "title": "TradeView"
       },
       "TrailingStopPlan": {
         "properties": {
@@ -20902,6 +21778,16 @@
           },
           "lifecycle_trace": {
             "$ref": "#/components/schemas/LifecycleTrace"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradeView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

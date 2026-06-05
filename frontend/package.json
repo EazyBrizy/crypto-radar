@@ -17,6 +17,7 @@
     "lint:fix": "eslint --fix",
     "test": "vitest run",
     "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
     "openapi:export": "node scripts/export-openapi.mjs",
     "openapi:types": "openapi-typescript src/api/generated/openapi.json -o src/api/generated/openapi-types.ts",

@@ -1,33 +1,12 @@
-crypto-radar/
-│
-├── backend/
-│   ├── app/
-│   │   ├── api/
-│   │   ├── core/
-│   │   ├── models/
-│   │   ├── services/
-│   │   ├── strategies/
-│   │   └── main.py
-│   │
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-├── frontend/
-│   ├── components/
-│   ├── pages/
-│   ├── store/
-│   └── styles/
-│
-├── infra/
-│   ├── docker-compose.yml
-│
-├── docs/   ← ВАЖНО (контекст для Codex)
-│   ├── product.md
-│   ├── architecture.md
-│   ├── strategies.md
-│   ├── db_schema.md
-│   ├── scoring.md
-│   ├── journal.md
-│   └── tasks.md
-│
-└── README.md
+This file is retained only as a compatibility pointer.
+
+The current project structure source of truth is:
+
+- docs/PROJECT_STRUCTURE.md
+- docs/BACKEND.md
+- docs/DATABASE.md
+- docs/FRONTEND.md
+- README.md
+
+Do not use older long-form planning docs or removed architecture notes as the
+source of truth for current paths, APIs, storage, or trading safety behavior.

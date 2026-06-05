@@ -2108,11 +2108,8 @@ export interface components {
         };
         /** ExchangeConnectionCreateRequest */
         ExchangeConnectionCreateRequest: {
-            /**
-             * User Id
-             * @default demo_user
-             */
-            user_id: string;
+            /** User Id */
+            user_id?: string | null;
             /** Exchange Code */
             exchange_code: string;
             /** Label */
@@ -3225,11 +3222,8 @@ export interface components {
         };
         /** PendingEntryActionRequest */
         PendingEntryActionRequest: {
-            /**
-             * User Id
-             * @default demo_user
-             */
-            user_id: string;
+            /** User Id */
+            user_id?: string | null;
         };
         /** PendingEntryIntentRead */
         PendingEntryIntentRead: {
@@ -3327,6 +3321,49 @@ export interface components {
             filled_trade_id?: string | null;
             /** Failure Reason */
             failure_reason?: string | null;
+            view?: components["schemas"]["PendingEntryView"] | null;
+        };
+        /** PendingEntryView */
+        PendingEntryView: {
+            /** Status Label */
+            status_label: string;
+            /**
+             * Status Tone
+             * @default neutral
+             * @enum {string}
+             */
+            status_tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Reason */
+            reason: string;
+            /** Entry Zone */
+            entry_zone: string;
+            /** Current Price */
+            current_price?: string | null;
+        };
+        /** PnLView */
+        PnLView: {
+            /**
+             * Realized Pnl
+             * @default 0
+             */
+            realized_pnl: number;
+            /**
+             * Unrealized Pnl
+             * @default 0
+             */
+            unrealized_pnl: number;
+            /** Total Pnl */
+            total_pnl?: number | null;
+            /** Pnl Percent */
+            pnl_percent?: number | null;
+            /**
+             * Tone
+             * @default neutral
+             * @enum {string}
+             */
+            tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
         };
         /** PositionRiskSummary */
         PositionRiskSummary: {
@@ -3475,6 +3512,7 @@ export interface components {
         RadarResponse: {
             /** Signals */
             signals: components["schemas"]["RadarSignal"][];
+            summary?: components["schemas"]["RadarSummary"];
         };
         /** RadarSignal */
         RadarSignal: {
@@ -3591,7 +3629,37 @@ export interface components {
             can_enter?: boolean | null;
             /** Display Reason */
             display_reason?: string | null;
+            card_view?: components["schemas"]["SignalCardView"] | null;
+            details_view?: components["schemas"]["SignalDetailsView"] | null;
             lifecycle_trace?: components["schemas"]["LifecycleTrace"];
+        };
+        /** RadarSummary */
+        RadarSummary: {
+            /**
+             * Total Signals
+             * @default 0
+             */
+            total_signals: number;
+            /**
+             * Execution Ready Signals
+             * @default 0
+             */
+            execution_ready_signals: number;
+            /**
+             * High Confidence Signals
+             * @default 0
+             */
+            high_confidence_signals: number;
+            /**
+             * Positive Edge Signals
+             * @default 0
+             */
+            positive_edge_signals: number;
+            /**
+             * Blocked Ideas
+             * @default 0
+             */
+            blocked_ideas: number;
         };
         /** RealConfirmRequest */
         RealConfirmRequest: {
@@ -4777,6 +4845,54 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** SignalBadgeView */
+        SignalBadgeView: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+            /**
+             * Tone
+             * @default neutral
+             * @enum {string}
+             */
+            tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
+        };
+        /** SignalCardView */
+        SignalCardView: {
+            /** Status Label */
+            status_label: string;
+            /**
+             * Status Tone
+             * @enum {string}
+             */
+            status_tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
+            /** Opportunity Label */
+            opportunity_label: string;
+            /**
+             * Opportunity Tone
+             * @enum {string}
+             */
+            opportunity_tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
+            /** Risk Label */
+            risk_label: string;
+            /** Risk Meta */
+            risk_meta: string;
+            /** Badges */
+            badges?: components["schemas"]["SignalBadgeView"][];
+            /** Entry Label */
+            entry_label: string;
+            /** Entry Value */
+            entry_value: string;
+            /** Stop Loss */
+            stop_loss?: number | null;
+            /** Targets */
+            targets?: components["schemas"]["SignalTargetView"][];
+            /** Selected Rr */
+            selected_rr?: number | null;
+            /** Reason */
+            reason: string;
+        };
         /** SignalConfirmationSnapshot */
         SignalConfirmationSnapshot: {
             /**
@@ -4805,6 +4921,136 @@ export interface components {
             blockers?: components["schemas"]["DecisionReason"][];
             /** Warnings */
             warnings?: components["schemas"]["DecisionReason"][];
+        };
+        /** SignalDetailsBlockerView */
+        SignalDetailsBlockerView: {
+            /** Code */
+            code: string;
+            /**
+             * Severity
+             * @default blocker
+             * @enum {string}
+             */
+            severity: "blocker" | "warning" | "info";
+            /**
+             * Category
+             * @default technical
+             * @enum {string}
+             */
+            category: "entry" | "risk" | "market_data" | "liquidity" | "execution" | "technical";
+            /** User Message */
+            user_message: string;
+            /** Debug Messages */
+            debug_messages?: string[];
+        };
+        /** SignalDetailsExecutionSummaryView */
+        SignalDetailsExecutionSummaryView: {
+            /**
+             * Preview Available
+             * @default false
+             */
+            preview_available: boolean;
+            /** Risk Check Status */
+            risk_check_status?: string | null;
+            /** Risk Decision Status */
+            risk_decision_status?: string | null;
+            /** Can Enter */
+            can_enter?: boolean | null;
+            /** Quality Gate Status */
+            quality_gate_status?: string | null;
+            /** Impact Risk */
+            impact_risk?: string | null;
+            /**
+             * Status Allows Trade
+             * @default false
+             */
+            status_allows_trade: boolean;
+        };
+        /** SignalDetailsRiskSummaryView */
+        SignalDetailsRiskSummaryView: {
+            /** Label */
+            label: string;
+            /**
+             * Risk Failed
+             * @default false
+             */
+            risk_failed: boolean;
+            /**
+             * Risk Reward Blocked
+             * @default false
+             */
+            risk_reward_blocked: boolean;
+            /** Risk Reward Warning */
+            risk_reward_warning?: string | null;
+            /**
+             * Forming Candle
+             * @default false
+             */
+            forming_candle: boolean;
+            /**
+             * Open Candle Allowed
+             * @default false
+             */
+            open_candle_allowed: boolean;
+            /** Forming Reason */
+            forming_reason?: string | null;
+            /**
+             * Status Allows Trade
+             * @default false
+             */
+            status_allows_trade: boolean;
+            /**
+             * Trade Plan Complete
+             * @default false
+             */
+            trade_plan_complete: boolean;
+            /**
+             * Risk Reward Ok
+             * @default false
+             */
+            risk_reward_ok: boolean;
+            /**
+             * Is Market Opportunity
+             * @default false
+             */
+            is_market_opportunity: boolean;
+        };
+        /** SignalDetailsView */
+        SignalDetailsView: {
+            /** Title */
+            title: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /**
+             * Primary Status
+             * @enum {string}
+             */
+            primary_status: "execution_ready" | "waiting_entry" | "requires_reconfirmation" | "blocked" | "watchlist" | "cancelled" | "expired" | "unknown";
+            /** Primary Status Label */
+            primary_status_label: string;
+            /**
+             * Primary Status Tone
+             * @enum {string}
+             */
+            primary_status_tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
+            /** Primary Action Label */
+            primary_action_label: string;
+            /** Recommended Action Text */
+            recommended_action_text: string;
+            /** Can Enter Now */
+            can_enter_now?: boolean | null;
+            trade_plan: components["schemas"]["SignalTradePlanView"];
+            risk_summary: components["schemas"]["SignalDetailsRiskSummaryView"];
+            execution_summary?: components["schemas"]["SignalDetailsExecutionSummaryView"];
+            /** Top Reasons */
+            top_reasons?: string[];
+            /** Top Blockers */
+            top_blockers?: components["schemas"]["SignalDetailsBlockerView"][];
+            /** Warnings */
+            warnings?: components["schemas"]["SignalDetailsBlockerView"][];
         };
         /** SignalEdgeSnapshot */
         SignalEdgeSnapshot: {
@@ -4944,6 +5190,55 @@ export interface components {
              * @default 0
              */
             total: number;
+        };
+        /** SignalTargetView */
+        SignalTargetView: {
+            /** Label */
+            label: string;
+            /** Price */
+            price?: number | null;
+            /** R Multiple */
+            r_multiple?: number | null;
+            /** Action */
+            action?: string | null;
+        };
+        /** SignalTradePlanView */
+        SignalTradePlanView: {
+            /**
+             * Has Trade Plan
+             * @default false
+             */
+            has_trade_plan: boolean;
+            /** Entry Type */
+            entry_type: string;
+            /** Entry Zone */
+            entry_zone: string;
+            /** Entry Price */
+            entry_price?: number | null;
+            /** Stop Loss */
+            stop_loss?: number | null;
+            /** Targets */
+            targets?: components["schemas"]["SignalTargetView"][];
+            /** Selected Rr */
+            selected_rr?: number | null;
+            /** Selected Rr Target */
+            selected_rr_target?: string | null;
+            /** Min Rr */
+            min_rr?: number | null;
+            /** Trade Plan Complete */
+            trade_plan_complete?: boolean | null;
+            /**
+             * Fallback Used
+             * @default false
+             */
+            fallback_used: boolean;
+            /** Missing */
+            missing?: string[];
+            /**
+             * Invalidation
+             * @default -
+             */
+            invalidation: string;
         };
         /** StopLossPlan */
         StopLossPlan: {
@@ -6194,6 +6489,7 @@ export interface components {
             /** Lifecycle Events */
             lifecycle_events?: components["schemas"]["VirtualTradeLifecycleEvent"][];
             lifecycle_trace?: components["schemas"]["LifecycleTrace"];
+            view?: components["schemas"]["TradeView"] | null;
         };
         /** TradeJournalResponse */
         TradeJournalResponse: {
@@ -6315,6 +6611,20 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             };
+        };
+        /** TradeView */
+        TradeView: {
+            /** Status Label */
+            status_label: string;
+            /**
+             * Status Tone
+             * @default neutral
+             * @enum {string}
+             */
+            status_tone: "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
+            /** Source Label */
+            source_label: string;
+            pnl: components["schemas"]["PnLView"];
         };
         /** TrailingStopPlan */
         TrailingStopPlan: {
@@ -6955,6 +7265,7 @@ export interface components {
             /** Lifecycle Events */
             lifecycle_events?: components["schemas"]["VirtualTradeLifecycleEvent"][];
             lifecycle_trace?: components["schemas"]["LifecycleTrace"];
+            view?: components["schemas"]["TradeView"] | null;
         };
         /** VirtualTradeLifecycleEvent */
         VirtualTradeLifecycleEvent: {
@@ -7570,7 +7881,7 @@ export interface operations {
     list_exchange_connections_api_v1_exchanges_connections_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -7794,7 +8105,7 @@ export interface operations {
     get_exchange_connection_wallet_balance_api_v1_exchanges_connections__connection_id__wallet_balance_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
                 force_refresh?: boolean;
             };
             header?: never;
@@ -7828,7 +8139,7 @@ export interface operations {
     get_exchange_connection_account_snapshot_api_v1_exchanges_connections__connection_id__account_snapshot_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
                 force_refresh?: boolean;
             };
             header?: never;
@@ -7862,7 +8173,7 @@ export interface operations {
     refresh_exchange_connection_account_snapshot_api_v1_exchanges_connections__connection_id__account_snapshot_refresh_post: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
             };
             header?: never;
             path: {
@@ -8343,7 +8654,7 @@ export interface operations {
     list_pending_entries_api_v1_pending_entry_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
                 scope?: "active" | "history";
                 mode?: ("virtual" | "real") | null;
                 limit?: number;
@@ -8377,7 +8688,7 @@ export interface operations {
     get_active_pending_entry_for_signal_api_v1_signals__signal_id__pending_entry_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
                 mode?: "virtual" | "real";
             };
             header?: never;
@@ -8446,7 +8757,7 @@ export interface operations {
     list_pending_entry_history_for_signal_api_v1_signals__signal_id__pending_entry_history_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
                 mode?: "virtual" | "real";
             };
             header?: never;
@@ -8550,7 +8861,7 @@ export interface operations {
     get_radar_api_v1_radar_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
                 radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
                 exchange?: string | null;
                 symbol?: string | null;

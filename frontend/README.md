@@ -34,10 +34,10 @@ Next.js owns UI, routing, SaaS shell, SSR-friendly pages, settings, auth shell, 
 
 FastAPI owns market data, signal engine, strategy engine, exchange connectors, paper trading, real trade sync, risk engine, REST API and realtime gateway.
 
-Trading mode semantics and backend safety gates are documented in
-`../docs/trading-modes-and-safety.md`. The frontend should treat real exchange
-order placement as a backend-controlled capability; browser code must not store
-exchange API secrets or infer mainnet readiness locally.
+Trading mode semantics and backend safety gates are documented in `../README.md`,
+`../docs/BACKEND.md`, and `../docs/FRONTEND.md`. The frontend should treat real
+exchange order placement as a backend-controlled capability; browser code must
+not store exchange API secrets or infer mainnet readiness locally.
 
 Critical signal flow should stay direct:
 

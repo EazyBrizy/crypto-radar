@@ -19,12 +19,12 @@ from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, RecentTradePrint, VirtualMarketSnapshot, VirtualTrade
 from app.services.pending_entry import (
     TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
-    accepted_trade_plan_hash,
     pending_entry_service,
 )
 from app.services.pending_entry_events import PendingEntryUpdatePublisher, pending_entry_update_publisher
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.signal_service import signal_service
+from app.services.trade_plan_fingerprint import fingerprint_signal_trade_plan
 from app.services.virtual_trading import VirtualExecutionRejected, virtual_trading_service
 
 logger = logging.getLogger(__name__)
@@ -175,7 +175,8 @@ class PendingEntryTriggerService:
                 self._publish_locked_update(record)
                 return _result(record, touched=False, reason=record.failure_reason)
             try:
-                current_hash = accepted_trade_plan_hash(signal)
+                current_fingerprint = fingerprint_signal_trade_plan(signal)
+                current_hash = current_fingerprint.hash
             except ValueError as exc:
                 _transition_locked(
                     record,
@@ -190,6 +191,7 @@ class PendingEntryTriggerService:
                 _mark_requires_reconfirmation_locked(
                     record,
                     current_trade_plan_hash=current_hash,
+                    current_trade_plan_snapshot=current_fingerprint.normalized,
                     now=now,
                 )
                 session.commit()
@@ -585,6 +587,7 @@ def _mark_requires_reconfirmation_locked(
     record: PendingEntryIntent,
     *,
     current_trade_plan_hash: str,
+    current_trade_plan_snapshot: dict[str, Any],
     now: datetime,
 ) -> None:
     _transition_locked(
@@ -606,10 +609,90 @@ def _mark_requires_reconfirmation_locked(
             "accepted_trade_plan_hash": record.accepted_trade_plan_hash,
             "current_trade_plan_hash": current_trade_plan_hash,
             "accepted_trade_plan_snapshot": record.accepted_trade_plan_snapshot,
+            "current_trade_plan_snapshot": current_trade_plan_snapshot,
+            "change_summary": _trade_plan_change_summary(
+                record.accepted_trade_plan_snapshot,
+                current_trade_plan_snapshot,
+            ),
         }
     )
     snapshot["pending_entry_lifecycle_events"] = lifecycle_events[-20:]
     record.request_snapshot = snapshot
+
+
+def _trade_plan_change_summary(
+    accepted_snapshot: dict[str, Any] | None,
+    current_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    accepted = accepted_snapshot if isinstance(accepted_snapshot, dict) else {}
+    current = current_snapshot if isinstance(current_snapshot, dict) else {}
+    changes: list[dict[str, Any]] = []
+
+    accepted_entry = accepted.get("entry") if isinstance(accepted.get("entry"), dict) else {}
+    current_entry = current.get("entry") if isinstance(current.get("entry"), dict) else {}
+    for key in ("min_price", "max_price", "price"):
+        accepted_value = _summary_string(accepted_entry.get(key))
+        current_value = _summary_string(current_entry.get(key))
+        if accepted_value != current_value:
+            changes.append(
+                {
+                    "field": f"entry.{key}",
+                    "accepted": accepted_value,
+                    "current": current_value,
+                }
+            )
+
+    accepted_stop = _summary_string(accepted.get("stop_loss"))
+    current_stop = _summary_string(current.get("stop_loss"))
+    if accepted_stop != current_stop:
+        changes.append(
+            {
+                "field": "stop_loss",
+                "accepted": accepted_stop,
+                "current": current_stop,
+            }
+        )
+
+    accepted_targets = _targets_summary(accepted.get("targets"))
+    current_targets = _targets_summary(current.get("targets"))
+    if accepted_targets != current_targets:
+        changes.append(
+            {
+                "field": "targets",
+                "accepted": accepted_targets,
+                "current": current_targets,
+            }
+        )
+
+    return {
+        "changed_fields": [change["field"] for change in changes],
+        "changes": changes,
+    }
+
+
+def _targets_summary(value: Any) -> list[dict[str, str | None]]:
+    if not isinstance(value, list):
+        return []
+    targets: list[dict[str, str | None]] = []
+    for index, target in enumerate(value):
+        if not isinstance(target, dict):
+            continue
+        targets.append(
+            {
+                "label": _summary_string(target.get("label")) or f"target_{index + 1}",
+                "price": _summary_string(target.get("price")),
+                "action": _summary_string(target.get("action")),
+                "close_percent": _summary_string(target.get("close_percent")),
+            }
+        )
+    return targets
+
+
+def _summary_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _result(

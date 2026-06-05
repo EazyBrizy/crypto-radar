@@ -1041,7 +1041,7 @@ app/
     strategy.py
   services/
     signal_service.py
-    trade_service.py
+    virtual_trading/
     ai_review_service.py
     billing_service.py
   exchanges/

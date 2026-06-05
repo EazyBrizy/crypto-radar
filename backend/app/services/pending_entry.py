@@ -47,8 +47,6 @@ from app.services.user_identity import resolve_app_user_uuid
 SignalLoader = Callable[[str], RadarSignal | None]
 RiskSettingsProvider = Callable[[str], RiskManagementSettings]
 UserProfileProvider = Callable[[str], Any]
-AutoEntryUpdater = Callable[..., Any]
-AutoEntryArm = Callable[..., Any]
 
 TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON = (
     "Trade plan changed after acceptance; reconfirmation required."
@@ -216,7 +214,6 @@ class PendingEntryService:
         *,
         signal_id: str | UUID,
         request: ManualConfirmRequest | dict[str, Any] | None = None,
-        auto_entry_arm: AutoEntryArm | None = None,
     ) -> PendingEntryIntentRead:
         request_model = _manual_confirm_request(request)
         raw_mode = str(request_model.mode or "virtual").strip().lower()
@@ -239,9 +236,6 @@ class PendingEntryService:
             request=request_model,
             execution_profile=execution_profile,
         )
-        if auto_entry_arm is not None:
-            mirror_request = request_model.model_dump(mode="json")
-            auto_entry_arm(str(signal.id), mirror_request, pending_entry_intent=intent)
         return intent
 
     def reconfirm_intent(
@@ -249,7 +243,6 @@ class PendingEntryService:
         intent_id: str | UUID,
         *,
         request: ManualConfirmRequest | dict[str, Any] | None = None,
-        auto_entry_arm: AutoEntryArm | None = None,
     ) -> PendingEntryIntentRead:
         request_model = _manual_confirm_request(request)
         intent = self._get_visible_intent(intent_id, user_id=request_model.user_id)
@@ -327,19 +320,11 @@ class PendingEntryService:
         if updated is None:
             raise LookupError("Pending entry intent is not found")
         self._publish_update(updated, message="Pending entry reconfirmed.")
-        if auto_entry_arm is not None:
-            auto_entry_arm(
-                str(signal.id),
-                next_request.model_dump(mode="json"),
-                pending_entry_intent=updated,
-            )
         return updated
 
     def reconcile_signal_trade_plan(
         self,
         signal: RadarSignal,
-        *,
-        auto_entry_updater: AutoEntryUpdater | None = None,
     ) -> list[PendingEntryIntentRead]:
         list_active = getattr(self._repository, "list_active_for_signal", None)
         if list_active is None:
@@ -395,12 +380,6 @@ class PendingEntryService:
             if updated is not None:
                 changed.append(updated)
 
-        if changed and auto_entry_updater is not None:
-            auto_entry_updater(
-                str(signal.id),
-                status=changed[0].status,
-                message=changed[0].failure_reason,
-            )
         return changed
 
     def resolve_execution_profile(

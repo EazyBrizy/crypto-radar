@@ -419,7 +419,7 @@ export function canSendPaperTrade(signal: RadarSignal | null): boolean {
   return signal != null && isActionableSignal(signal);
 }
 
-export function canArmAutoEntry(signal: RadarSignal | null): boolean {
+export function canArmPendingEntry(signal: RadarSignal | null): boolean {
   return signal?.details_view?.primary_action_label === "Wait for entry"
     || signal?.details_view?.primary_status === "waiting_entry";
 }

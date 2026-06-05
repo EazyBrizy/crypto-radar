@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from app.schemas.signal import (
@@ -31,7 +32,6 @@ from app.schemas.user import RiskManagementSettings
 from app.services.risk_fee_rate import RiskFeeRateSnapshot
 from app.services.risk_market_data import RiskMarketDataSnapshot
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
-from app.services.trade_service import trade_service as compatibility_trade_service
 from app.services.virtual_trading import (
     VirtualExecutionEngine,
     VirtualExecutionRejected,
@@ -44,7 +44,16 @@ from app.services.virtual_trading import (
 class VirtualTradingServiceBoundaryTest(unittest.TestCase):
     def test_virtual_trading_package_is_primary_service_entrypoint(self) -> None:
         self.assertIsInstance(virtual_trading_service, VirtualTradingService)
-        self.assertIs(compatibility_trade_service, virtual_trading_service)
+
+    def test_production_code_does_not_import_trade_service_facade(self) -> None:
+        app_root = Path(__file__).resolve().parents[1] / "app"
+        offenders = [
+            path.relative_to(app_root)
+            for path in app_root.rglob("*.py")
+            if "app.services.trade_service" in path.read_text(encoding="utf-8")
+        ]
+
+        self.assertEqual(offenders, [])
 
     def test_virtual_trading_package_exports_execution_dependencies(self) -> None:
         self.assertIsNotNone(VirtualExecutionEngine)

@@ -66,17 +66,6 @@ class SignalProvider(Protocol):
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         ...
 
-    def update_auto_entry(
-        self,
-        signal_id: str,
-        *,
-        status: str,
-        message: str | None = None,
-        trade_id: str | None = None,
-        event_type: str = "signal.updated",
-    ) -> RadarSignal | None:
-        ...
-
 
 class VirtualEntryExecutor(Protocol):
     def confirm_signal(self, signal: RadarSignal, request: ManualConfirmRequest) -> tuple[RadarSignal, VirtualTrade]:
@@ -191,11 +180,6 @@ class PendingEntryTriggerService:
                 )
                 session.commit()
                 self._publish_locked_update(record)
-                self._mirror_auto_entry(
-                    record.signal_id,
-                    status="requires_reconfirmation",
-                    message=TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
-                )
                 return _result(record, touched=False, reason=record.failure_reason)
             if (
                 material.current_hash is not None
@@ -306,7 +290,6 @@ class PendingEntryTriggerService:
             failure_reason=None,
             now=_utc_now(),
         )
-        self._mirror_auto_entry(intent.signal_id, status="filled", message=None, trade_id=trade.id)
         return PendingEntryTriggerResult(
             intent_id=str(intent.id),
             status=filled.status if filled is not None else "filled",
@@ -332,7 +315,6 @@ class PendingEntryTriggerService:
             failure_reason=reason,
             now=_utc_now(),
         )
-        self._mirror_auto_entry(intent.signal_id, status="pending", message=reason)
         return PendingEntryTriggerResult(
             intent_id=str(intent.id),
             status=updated.status if updated is not None else "pending",
@@ -357,7 +339,6 @@ class PendingEntryTriggerService:
             failure_reason=reason,
             now=_utc_now(),
         )
-        self._mirror_auto_entry(intent.signal_id, status="failed", message=reason)
         return PendingEntryTriggerResult(
             intent_id=str(intent.id),
             status=updated.status if updated is not None else "failed",
@@ -369,24 +350,6 @@ class PendingEntryTriggerService:
             warnings=touch.warnings,
             lifecycle_trace=_intent_lifecycle_trace(intent),
         )
-
-    def _mirror_auto_entry(
-        self,
-        signal_id: str | UUID,
-        *,
-        status: str,
-        message: str | None,
-        trade_id: str | None = None,
-    ) -> None:
-        update = getattr(self._signals, "update_auto_entry", None)
-        if update is None:
-            return
-        try:
-            # TODO(frontend-migration): remove this legacy auto_entry mirror after
-            # frontend reads canonical pending_entry_intents status directly.
-            update(str(signal_id), status=status, message=message, trade_id=trade_id)
-        except Exception as exc:
-            logger.warning("Pending entry legacy auto-entry mirror update failed: %s", exc)
 
     def _transition_status(
         self,

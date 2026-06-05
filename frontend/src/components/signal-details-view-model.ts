@@ -49,7 +49,6 @@ export interface SignalDetailsDiagnostics {
   riskGateStatus: RadarSignal["risk_gate_status"] | null;
   canEnter: RadarSignal["can_enter"] | null;
   pendingEntryStatus: PendingEntryIntent["status"] | null;
-  legacyAutoEntryStatus: NonNullable<RadarSignal["auto_entry"]>["status"] | null;
   actionState: SignalActionState | null;
   rawBlockers: UiBlocker[];
   rawWarnings: UiBlocker[];
@@ -66,9 +65,6 @@ export interface SignalDetailsViewModel {
   canEnterNow: boolean | null;
   activePendingEntry: PendingEntryIntent | null;
   terminalPendingEntry: PendingEntryIntent | null;
-  activeLegacyAutoEntry: RadarSignal["auto_entry"];
-  terminalLegacyAutoEntry: RadarSignal["auto_entry"];
-  shouldShowLegacyAutoEntryInDefault: boolean;
   tradePlanSummary: SignalTradePlanView;
   riskSummary: SignalDetailsRiskSummary;
   executionSummary: SignalDetailsExecutionSummary;
@@ -108,13 +104,6 @@ export function buildSignalDetailsViewModel(
   const actionState = options.actionState ?? null;
   const activePendingEntry = pendingEntry && isActivePendingEntryStatus(pendingEntry.status) ? pendingEntry : null;
   const terminalPendingEntry = pendingEntry && isTerminalPendingEntryStatus(pendingEntry.status) ? pendingEntry : null;
-  const hasPendingEntryIntent = pendingEntry != null;
-  const activeLegacyAutoEntry = !hasPendingEntryIntent && signal.auto_entry && isActivePendingEntryStatus(signal.auto_entry.status)
-    ? signal.auto_entry
-    : null;
-  const terminalLegacyAutoEntry = !hasPendingEntryIntent && signal.auto_entry && isTerminalPendingEntryStatus(signal.auto_entry.status)
-    ? signal.auto_entry
-    : null;
   const contractError = details ? null : "API contract error: SignalDetailsView is missing";
   const topBlockers = mergeActionBlockers(
     actionState,
@@ -138,9 +127,6 @@ export function buildSignalDetailsViewModel(
     canEnterNow: actionState?.can_enter_now ?? details?.can_enter_now ?? null,
     activePendingEntry,
     terminalPendingEntry,
-    activeLegacyAutoEntry,
-    terminalLegacyAutoEntry,
-    shouldShowLegacyAutoEntryInDefault: activeLegacyAutoEntry != null || terminalLegacyAutoEntry != null,
     tradePlanSummary: details?.trade_plan ?? EMPTY_TRADE_PLAN,
     riskSummary: {
       label: details?.risk_summary.label ?? "-",
@@ -172,7 +158,6 @@ export function buildSignalDetailsViewModel(
       riskGateStatus: signal.risk_gate_status ?? null,
       canEnter: signal.can_enter ?? null,
       pendingEntryStatus: pendingEntry?.status ?? null,
-      legacyAutoEntryStatus: signal.auto_entry?.status ?? null,
       actionState,
       rawBlockers: topBlockers,
       rawWarnings: warnings

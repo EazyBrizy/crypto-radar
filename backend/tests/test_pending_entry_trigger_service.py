@@ -172,8 +172,7 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertIn("tolerance", change)
         self.assertIn("severity", change)
         self.assertIn("reason_code", change)
-        self.assertEqual(self.signals.auto_entry_updates[-1]["status"], "requires_reconfirmation")
-        self.assertEqual(self.signals.auto_entry_updates[-1]["message"], TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON)
+        self.assertFalse(hasattr(self.signals, "update_auto_entry"))
         self.assertEqual(self.virtual.calls, [])
         self.assertEqual(self.events.statuses(), ["requires_reconfirmation"])
 
@@ -364,15 +363,10 @@ class EntryTouchHelperTest(unittest.TestCase):
 class _FakeSignalProvider:
     def __init__(self, signal: RadarSignal | None) -> None:
         self.signal = signal
-        self.auto_entry_updates: list[dict[str, Any]] = []
 
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         if self.signal is None or self.signal.id != signal_id:
             return None
-        return self.signal
-
-    def update_auto_entry(self, signal_id: str, **kwargs: Any) -> RadarSignal | None:
-        self.auto_entry_updates.append({"signal_id": signal_id, **kwargs})
         return self.signal
 
 

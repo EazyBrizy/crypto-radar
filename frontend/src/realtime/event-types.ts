@@ -1,4 +1,4 @@
-import type { HealthStatus, PendingEntryIntentStatus, RadarSignal, RadarStatus, TradeInvalidationAlert, TradeJournalEntry, TradeMode } from "@/types";
+import type { HealthStatus, PendingEntryIntent, PendingEntryIntentStatus, RadarSignal, RadarStatus, TradeInvalidationAlert, TradeJournalEntry, TradeMode } from "@/types";
 
 export type RealtimeConnectionStatus =
   | "idle"
@@ -147,6 +147,7 @@ export interface OrderStatusChangedPayload {
 }
 
 export interface PendingEntryUpdatedPayload {
+  pending_entry?: PendingEntryIntent;
   user_id: string;
   signal_id: string;
   pending_entry_id: string;

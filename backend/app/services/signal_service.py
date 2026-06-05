@@ -272,6 +272,8 @@ class SignalService:
         *,
         pending_entry_intent: PendingEntryIntentRead | None = None,
     ) -> SignalAutoEntryArmResult | None:
+        # TODO(migration-v2.2): remove this legacy signal.auto_entry compatibility
+        # writer after old signal snapshots are migrated to pending_entry_intents.
         signal = self._repository.get_signal(signal_id)
         if signal is None:
             return None
@@ -332,6 +334,8 @@ class SignalService:
         real_execution: dict[str, Any] | None = None,
         event_type: str = "signal.updated",
     ) -> RadarSignal | None:
+        # TODO(migration-v2.2): remove this legacy signal.auto_entry compatibility
+        # writer after old signal snapshots are migrated to pending_entry_intents.
         update = getattr(self._repository, "update_auto_entry", None)
         if update is None:
             return None
@@ -364,7 +368,6 @@ class SignalService:
 
             pending_entry_intent_service.reconcile_signal_trade_plan(
                 result.signal,
-                auto_entry_updater=self.update_auto_entry,
             )
         except Exception as exc:
             logger.warning("Pending entry trade-plan reconciliation failed: %s", exc)

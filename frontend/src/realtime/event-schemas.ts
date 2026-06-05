@@ -133,6 +133,7 @@ const TradeInvalidationPayloadSchema = z.object({
 });
 
 const PendingEntryUpdatedPayloadSchema = z.object({
+  pending_entry: z.unknown().optional(),
   user_id: z.string().min(1),
   signal_id: z.string().min(1),
   pending_entry_id: z.string().min(1),

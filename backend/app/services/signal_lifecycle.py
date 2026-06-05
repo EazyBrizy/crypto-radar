@@ -20,11 +20,6 @@ class RealtimePublisher(Protocol):
         ...
 
 
-class AutoEntryExecutor(Protocol):
-    async def execute_if_ready(self, signal: RadarSignal) -> RadarSignal | None:
-        ...
-
-
 @dataclass(frozen=True)
 class SignalLifecycleTransition:
     signal: RadarSignal
@@ -50,11 +45,9 @@ class SignalLifecycleWorker:
         *,
         signals: SignalService | None = None,
         publisher: RealtimePublisher | None = None,
-        auto_entry: AutoEntryExecutor | None = None,
     ) -> None:
         self._signals = signals or signal_service
         self._publisher = publisher or realtime_event_broker
-        self._auto_entry = auto_entry
 
     async def process_closed_candle(self, features: Features) -> list[SignalLifecycleTransition]:
         candidates = self._signals.list_open_signals_for_series(
@@ -197,9 +190,9 @@ def _funding_blocks_confirmation(signal: RadarSignal, features: Features) -> str
     if signal.strategy != "trend_pullback_continuation" or features.funding_rate is None:
         return None
     if signal.direction == "long" and features.funding_rate >= FUNDING_ENTRY_BLOCK_THRESHOLD:
-        return "Funding became extreme against long continuation; auto-entry waits for funding to normalize"
+        return "Funding became extreme against long continuation; pending entry waits for funding to normalize"
     if signal.direction == "short" and features.funding_rate <= -FUNDING_ENTRY_BLOCK_THRESHOLD:
-        return "Funding became extreme against short continuation; auto-entry waits for funding to normalize"
+        return "Funding became extreme against short continuation; pending entry waits for funding to normalize"
     return None
 
 

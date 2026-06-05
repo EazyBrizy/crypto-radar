@@ -6,6 +6,7 @@ from app.services.risk_reward_assessment import RiskRewardAssessment
 
 
 class AutoEntryEligibilityService:
+    # TODO(migration-v2.2): remove this legacy StrategySignal.auto_entry snapshot builder.
     """Builds explicit auto-entry disable snapshots from finalized pipeline gates."""
 
     def evaluate(

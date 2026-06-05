@@ -6,7 +6,7 @@ import type { PendingEntryIntent, RadarSignal, SignalStatus } from "@/types";
 import { useSignalStore } from "@/stores/signal-store";
 import { useUiStore } from "@/stores/ui-store";
 import {
-  canArmAutoEntry,
+  canArmPendingEntry,
   canSendPaperTrade,
   RadarRoute,
   selectPendingEntryForDetails,
@@ -406,33 +406,19 @@ describe("paper trade eligibility", () => {
       }
     };
 
-    expect(canArmAutoEntry(lowRrSignal)).toBe(true);
+    expect(canArmPendingEntry(lowRrSignal)).toBe(true);
     expect(canSendPaperTrade(lowRrSignal)).toBe(false);
   });
 
   it("uses backend details view to expose the pending-entry affordance", () => {
-    expect(canArmAutoEntry(signalWithStatus("active", {
+    expect(canArmPendingEntry(signalWithStatus("active", {
       primary_status: "waiting_entry",
       primary_action_label: "Wait for entry"
     }))).toBe(true);
-    expect(canArmAutoEntry({
-      ...signalWithStatus("ready", {
-        primary_status: "execution_ready",
-        primary_action_label: "Enter now"
-      }),
-      auto_entry: {
-        enabled: true,
-        status: "pending",
-        mode: "virtual",
-        user_id: "user_1",
-        armed_at: "2026-05-31T07:00:00.000Z",
-        triggered_at: null,
-        message: null,
-        request: {},
-        trade_id: null,
-        real_execution: null
-      }
-    })).toBe(false);
+    expect(canArmPendingEntry(signalWithStatus("ready", {
+      primary_status: "execution_ready",
+      primary_action_label: "Enter now"
+    }))).toBe(false);
   });
 });
 

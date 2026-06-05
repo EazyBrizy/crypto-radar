@@ -56,6 +56,33 @@ describe("buildSignalDetailsViewModel", () => {
     expect(reconfirm.activePendingEntry?.status).toBe("requires_reconfirmation");
     expect(reconfirm.primaryStatus).toBe("requires_reconfirmation");
   });
+
+  it("ignores legacy signal auto_entry when pending-entry DTO is absent", () => {
+    const viewModel = buildSignalDetailsViewModel(
+      baseSignal({
+        auto_entry: {
+          enabled: true,
+          status: "pending",
+          mode: "virtual",
+          user_id: "user_1",
+          armed_at: "2026-05-31T07:00:00.000Z",
+          triggered_at: null,
+          message: "Legacy mirror",
+          request: {},
+          trade_id: null,
+          real_execution: null
+        }
+      }),
+      null,
+      { actionState: actionState({ can_enter_now: true, can_arm_pending: false }) }
+    );
+
+    expect(viewModel.activePendingEntry).toBeNull();
+    expect(viewModel.terminalPendingEntry).toBeNull();
+    expect(viewModel.canEnterNow).toBe(true);
+    expect(viewModel.primaryActionLabel).toBe("Enter now");
+    expect(viewModel.diagnostics.pendingEntryStatus).toBeNull();
+  });
 });
 
 function baseSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {

@@ -12,7 +12,7 @@ from app.services.trade_repository import (
     VirtualTradePersistenceEvent,
 )
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
-from app.services.trade_service import TradeService
+from app.services.virtual_trading import TradeService
 
 
 class FakeConfirmRepository:

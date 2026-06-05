@@ -17,7 +17,7 @@ from app.schemas.user import RiskManagementSettings
 from app.services.risk_fee_rate import RiskFeeRateSnapshot
 from app.services.risk_market_data import RiskMarketDataSnapshot
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
-from app.services.trade_service import TradeService
+from app.services.virtual_trading import TradeService
 from app.services.virtual_execution_engine import VirtualExecutionEngine
 
 

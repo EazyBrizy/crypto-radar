@@ -63,6 +63,8 @@ class TradingSignal(Base):
         nullable=False,
         server_default=text("'{}'::jsonb"),
     )
+    # TODO(migration-v2.2): old snapshots may contain legacy auto_entry only
+    # for migration/backward compatibility; pending_entry_intents is canonical.
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

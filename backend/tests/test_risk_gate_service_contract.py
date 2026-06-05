@@ -9,7 +9,7 @@ from app.schemas.trade_plan import TradePlan, TradePlanEntry, TradePlanInvalidat
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualAccount, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_gate import RiskContextService, RiskGateService
-from app.services.trade_service import TradeService
+from app.services.virtual_trading import TradeService
 
 
 class EphemeralTradeRepository:

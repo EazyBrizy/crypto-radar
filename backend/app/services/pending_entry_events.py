@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from app.schemas.pending_entry import PendingEntryIntentRead
 from app.services.message_broker import RedisMessageBroker, realtime_event_broker
 from app.services.realtime_events import pending_entry_updated_event
+from app.services.signal_views import annotate_pending_entry_view
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class RealtimePendingEntryUpdatePublisher:
         *,
         message: str | None = None,
     ) -> None:
-        event = pending_entry_updated_event(intent, message=message)
+        event = pending_entry_updated_event(annotate_pending_entry_view(intent), message=message)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:

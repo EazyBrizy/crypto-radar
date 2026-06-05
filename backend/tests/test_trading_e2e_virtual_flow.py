@@ -241,15 +241,10 @@ class TradingE2EVirtualFlowTest(unittest.IsolatedAsyncioTestCase):
 class _FakeSignalProvider:
     def __init__(self, signal: RadarSignal | None) -> None:
         self.signal = signal
-        self.auto_entry_updates: list[dict[str, Any]] = []
 
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         if self.signal is None or self.signal.id != signal_id:
             return None
-        return self.signal
-
-    def update_auto_entry(self, signal_id: str, **kwargs: Any) -> RadarSignal | None:
-        self.auto_entry_updates.append({"signal_id": signal_id, **kwargs})
         return self.signal
 
 

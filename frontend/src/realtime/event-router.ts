@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 
+import { normalizePendingEntryIntent } from "@/api/mappers";
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
 import { queryKeys, serverStateKeys } from "@/features/server-state/query-keys";
 import { warnIfRealtimeEventExceedsBudget } from "@/performance/budgets";
@@ -360,30 +361,32 @@ function applyTradeInvalidation(queryClient: QueryClient, alert: TradeInvalidati
 }
 
 function applyPendingEntryUpdated(queryClient: QueryClient, payload: PendingEntryUpdatedPayload) {
-  for (const userId of pendingEntryUserIds(payload.user_id)) {
-    const activeKey = serverStateKeys.signals.pendingEntry(payload.signal_id, userId);
+  const eventIntent = pendingEntryIntentFromPayload(payload);
+  const status = eventIntent?.status ?? payload.status;
+  const signalId = eventIntent?.signal_id ?? payload.signal_id;
+  for (const userId of pendingEntryUserIds(eventIntent?.user_id ?? payload.user_id)) {
+    const activeKey = serverStateKeys.signals.pendingEntry(signalId, userId);
     const current = queryClient.getQueryData<PendingEntryIntent | null>(activeKey);
-    const updated = patchPendingEntryIntent(current, payload);
+    const updated = eventIntent ?? patchPendingEntryIntent(current, payload);
     const activeQueueKey = serverStateKeys.signals.pendingEntries("active", userId);
     const historyQueueKey = serverStateKeys.signals.pendingEntries("history", userId);
     patchPendingEntryQueue(queryClient, activeQueueKey, historyQueueKey, payload, updated);
     if (updated) {
       queryClient.setQueryData<PendingEntryIntent | null>(
         activeKey,
-        isActivePendingEntryStatus(payload.status) ? updated : null
+        isActivePendingEntryStatus(status) ? updated : null
       );
     }
     void queryClient.invalidateQueries({ queryKey: activeKey });
 
-    if (!isTerminalPendingEntryStatus(payload.status)) continue;
-    const historyKey = serverStateKeys.signals.pendingEntryHistory(payload.signal_id, userId);
+    if (!isTerminalPendingEntryStatus(status)) continue;
+    const historyKey = serverStateKeys.signals.pendingEntryHistory(signalId, userId);
     if (updated) {
       queryClient.setQueryData<PendingEntryIntent[]>(historyKey, (history) => upsertPendingEntryHistory(history, updated));
     }
     void queryClient.invalidateQueries({ queryKey: historyKey });
   }
 
-  patchPendingEntrySignalState(queryClient, payload);
 }
 
 function pushTradeInvalidationNotification(alert: TradeInvalidationAlert) {
@@ -394,74 +397,6 @@ function pushTradeInvalidationNotification(alert: TradeInvalidationAlert) {
     message: alert.reason ?? `${alert.symbol} strategy idea is invalidated`,
     title: "Strategy invalidation"
   });
-}
-
-function patchPendingEntrySignalState(queryClient: QueryClient, payload: PendingEntryUpdatedPayload) {
-  const signal = useSignalStore.getState().signalsById[payload.signal_id];
-  if (signal) {
-    useSignalStore.getState().updateSignal(payload.signal_id, {
-      auto_entry: pendingEntryAutoEntry(signal, payload),
-      updated_at: payload.updated_at
-    });
-  }
-
-  const patchSignals = (signals: RadarSignal[] = []) =>
-    signals.map((item) => patchPendingEntrySignal(item, payload));
-
-  queryClient.setQueryData<RadarSignal[]>(queryKeys.signals, patchSignals);
-  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.active(), patchSignals);
-  queryClient.setQueryData<RadarSignal[]>(serverStateKeys.signals.history(), patchSignals);
-  queryClient.setQueriesData<RadarResponse>(
-    { queryKey: serverStateKeys.radar.all() },
-    (current) => patchRadarPendingEntrySignal(current, payload)
-  );
-}
-
-function patchPendingEntrySignal(signal: RadarSignal, payload: PendingEntryUpdatedPayload): RadarSignal {
-  if (signal.id !== payload.signal_id) return signal;
-  return {
-    ...signal,
-    auto_entry: pendingEntryAutoEntry(signal, payload),
-    updated_at: payload.updated_at
-  };
-}
-
-function patchRadarPendingEntrySignal(
-  current: RadarResponse | undefined,
-  payload: PendingEntryUpdatedPayload,
-): RadarResponse | undefined {
-  if (!current || !Array.isArray(current.signals)) return current;
-  return {
-    ...current,
-    signals: current.signals.map((signal) => patchPendingEntrySignal(signal, payload))
-  };
-}
-
-function pendingEntryAutoEntry(
-  signal: RadarSignal,
-  payload: PendingEntryUpdatedPayload,
-): NonNullable<RadarSignal["auto_entry"]> {
-  const current = signal.auto_entry;
-  const message = pendingEntryMessage(payload);
-  return {
-    enabled: isActivePendingEntryStatus(payload.status),
-    status: payload.status,
-    mode: payload.mode,
-    user_id: payload.user_id,
-    armed_at: current?.armed_at ?? (payload.status === "pending" ? payload.updated_at : null),
-    triggered_at: current?.triggered_at ?? pendingEntryTriggeredAt(payload),
-    message,
-    request: current?.request ?? {},
-    trade_id: current?.trade_id ?? null,
-    real_execution: current?.real_execution ?? null
-  };
-}
-
-function pendingEntryTriggeredAt(payload: PendingEntryUpdatedPayload): string | null {
-  if (payload.status === "triggered" || payload.status === "filling" || payload.status === "filled" || payload.status === "failed") {
-    return payload.updated_at;
-  }
-  return null;
 }
 
 function patchPendingEntryIntent(
@@ -488,11 +423,13 @@ function patchPendingEntryQueue(
   payload: PendingEntryUpdatedPayload,
   fallback: PendingEntryIntent | null,
 ): PendingEntryIntent | null {
+  const status = fallback?.status ?? payload.status;
+  const intentId = fallback?.id ?? payload.pending_entry_id;
   const activeQueue = queryClient.getQueryData<PendingEntryIntent[]>(activeQueueKey);
-  const activeIntent = activeQueue?.find((intent) => intent.id === payload.pending_entry_id) ?? null;
+  const activeIntent = activeQueue?.find((intent) => intent.id === intentId) ?? null;
   const updated = patchPendingEntryIntent(activeIntent, payload) ?? fallback;
 
-  if (isActivePendingEntryStatus(payload.status)) {
+  if (isActivePendingEntryStatus(status)) {
     if (updated) {
       queryClient.setQueryData<PendingEntryIntent[]>(activeQueueKey, (current = []) =>
         upsertPendingEntryActiveQueue(current, updated)
@@ -500,19 +437,28 @@ function patchPendingEntryQueue(
     }
   } else {
     queryClient.setQueryData<PendingEntryIntent[]>(activeQueueKey, (current = []) =>
-      current.filter((intent) => intent.id !== payload.pending_entry_id)
+      current.filter((intent) => intent.id !== intentId)
     );
   }
 
-  if (isTerminalPendingEntryStatus(payload.status) && updated) {
+  if (isTerminalPendingEntryStatus(status) && updated) {
     queryClient.setQueryData<PendingEntryIntent[]>(historyQueueKey, (history) => upsertPendingEntryHistory(history, updated));
   }
 
   void queryClient.invalidateQueries({ queryKey: activeQueueKey });
-  if (isTerminalPendingEntryStatus(payload.status)) {
+  if (isTerminalPendingEntryStatus(status)) {
     void queryClient.invalidateQueries({ queryKey: historyQueueKey });
   }
   return updated;
+}
+
+function pendingEntryIntentFromPayload(payload: PendingEntryUpdatedPayload): PendingEntryIntent | null {
+  if (!payload.pending_entry) return null;
+  try {
+    return normalizePendingEntryIntent(payload.pending_entry);
+  } catch {
+    return null;
+  }
 }
 
 function upsertPendingEntryHistory(

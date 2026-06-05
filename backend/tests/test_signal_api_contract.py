@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from app.api.v1 import signals as signals_api
 from app.api.v1.signals import confirm_signal, list_active_signals, list_open_signals
 from app.schemas.pending_entry import PendingEntryIntentRead
-from app.schemas.risk import ResolvedExecutionProfile
 from app.api.v1.trades import confirm_real_trade
 from app.schemas.signal import RadarSignal
 from app.schemas.trade import ManualConfirmRequest, RealConfirmRequest, RealExecutionResult, VirtualTrade
@@ -50,16 +49,7 @@ class _FakePendingEntryService:
         self.calls = 0
         self.intent = _pending_intent()
 
-    def resolve_execution_profile(
-        self,
-        signal: RadarSignal,
-        request: ManualConfirmRequest,
-        *,
-        mode: str,
-    ) -> ResolvedExecutionProfile:
-        return _execution_profile(mode=mode)
-
-    def arm_from_signal(self, **kwargs) -> PendingEntryIntentRead:
+    def arm_signal_workflow(self, *, signal_id: str, request: ManualConfirmRequest) -> PendingEntryIntentRead:
         self.calls += 1
         return self.intent
 
@@ -248,7 +238,7 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([signal.id for signal in signals], ["sig_watchlist", "sig_wait_for_pullback"])
 
-    async def test_confirm_endpoint_arms_auto_entry_for_non_actionable_signal(self) -> None:
+    async def test_confirm_endpoint_arms_pending_entry_for_non_actionable_signal(self) -> None:
         now = datetime.now(timezone.utc)
         signal = RadarSignal(
             id="sig_ready",
@@ -274,17 +264,16 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
             response = await confirm_signal(
                 signal.id,
                 ManualConfirmRequest(mode="virtual", user_id="demo_user", auto_enter_on_confirmation=True),
-            )
+        )
 
         self.assertEqual(response.signal.status, "ready")
-        self.assertEqual(response.signal.auto_entry.status if response.signal.auto_entry else None, "pending")
-        self.assertEqual(response.signal.auto_entry.mode if response.signal.auto_entry else None, "virtual")
+        self.assertIsNone(response.signal.model_dump(mode="json").get("auto_entry"))
         self.assertEqual(response.pending_entry_intent.id, pending_service.intent.id)
-        self.assertIn("Auto-entry armed", response.message)
+        self.assertIn("Pending entry armed", response.message)
         self.assertEqual(pending_service.calls, 1)
         self.assertEqual(broker.events[0]["type"], "signal.updated")
 
-    async def test_confirm_endpoint_allows_auto_entry_when_virtual_rr_guard_is_soft(self) -> None:
+    async def test_confirm_endpoint_allows_pending_entry_when_virtual_rr_guard_is_soft(self) -> None:
         now = datetime.now(timezone.utc)
         signal = _rr_failed_signal("sig_low_rr", now=now, status="ready")
         self.signal_service.add_signal(signal)
@@ -299,12 +288,12 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
             response = await confirm_signal(
                 signal.id,
                 ManualConfirmRequest(mode="virtual", user_id="demo_user", auto_enter_on_confirmation=True),
-            )
+        )
 
         self.assertEqual(response.signal.status, "ready")
-        self.assertEqual(response.signal.auto_entry.status if response.signal.auto_entry else None, "pending")
+        self.assertIsNone(response.signal.model_dump(mode="json").get("auto_entry"))
         self.assertEqual(response.pending_entry_intent.status, "pending")
-        self.assertIn("Auto-entry armed", response.message)
+        self.assertIn("Pending entry armed", response.message)
 
     async def test_confirm_endpoint_enters_immediately_for_entry_touched_signal(self) -> None:
         now = datetime.now(timezone.utc)
@@ -585,21 +574,6 @@ def _rr_failed_signal(signal_id: str, *, now: datetime, status: str) -> RadarSig
         take_profit_2=99.5,
         created_at=now,
         updated_at=now,
-    )
-
-
-def _execution_profile(*, mode: str) -> ResolvedExecutionProfile:
-    return ResolvedExecutionProfile(
-        execution_mode="real" if mode == "real" else "virtual",
-        instrument_type="spot",
-        risk_mode="percent",
-        risk_percent=Decimal("1.0"),
-        fixed_risk_currency="USDT",
-        leverage=Decimal("1"),
-        rr_guard_mode="soft",
-        min_rr_ratio=Decimal("2.0"),
-        rr_target="final",
-        radar_display_mode="all_market_opportunities",
     )
 
 

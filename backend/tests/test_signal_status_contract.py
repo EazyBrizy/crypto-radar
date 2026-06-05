@@ -8,8 +8,7 @@ from app.domain.signal_status import (
     is_terminal_signal_status,
     is_waiting_entry_status,
 )
-from app.schemas.signal import RadarSignal, SignalAutoEntrySnapshot
-from app.services.auto_entry import SignalAutoEntryService
+from app.schemas.signal import RadarSignal
 
 
 class SignalStatusContractTest(unittest.IsolatedAsyncioTestCase):
@@ -79,29 +78,10 @@ class SignalStatusContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(is_market_opportunity_status("invalidated"))
         self.assertFalse(is_market_opportunity_status("expired"))
 
-    async def test_auto_entry_does_not_trigger_for_active(self) -> None:
-        service = SignalAutoEntryService(signals=None)
-        signal = _signal(
-            status="active",
-            auto_entry=SignalAutoEntrySnapshot(
-                enabled=True,
-                status="pending",
-                mode="virtual",
-                user_id="demo_user",
-                request={"mode": "virtual", "user_id": "demo_user"},
-            ),
-        )
-
-        result = await service.execute_if_ready(signal)
-
-        self.assertIsNone(result)
-
-
 def _signal(
     *,
     status: str,
     can_enter: bool | None = None,
-    auto_entry: SignalAutoEntrySnapshot | None = None,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
@@ -120,7 +100,6 @@ def _signal(
         take_profit_1=104.0,
         take_profit_2=106.0,
         risk_reward=3.0,
-        auto_entry=auto_entry,
         can_enter=can_enter,
         created_at=now,
         updated_at=now,

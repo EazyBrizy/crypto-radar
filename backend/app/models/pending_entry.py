@@ -23,6 +23,8 @@ def _sql_in(values: tuple[str, ...]) -> str:
 
 
 class PendingEntryIntent(Base):
+    """Canonical persisted state for pending/wait-entry execution intents."""
+
     __tablename__ = "pending_entry_intents"
     __table_args__ = (
         CheckConstraint("mode IN ('virtual', 'real')", name="ck_pending_entry_intents_mode"),

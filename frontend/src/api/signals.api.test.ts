@@ -45,7 +45,7 @@ describe("signalsApi.armPendingEntry", () => {
         state: actionState({ primary_action: "arm_pending_entry" }),
         signal: signalDto(),
         pending_entry_intent: pendingEntryIntentDto(),
-        message: "Auto-entry armed"
+        message: "Pending entry armed"
       }), {
         headers: { "Content-Type": "application/json" },
         status: 200

@@ -447,6 +447,8 @@ class PostgresSignalRepository:
         *,
         request: dict[str, Any],
     ) -> SignalWriteResult | None:
+        # TODO(migration-v2.2): remove this deprecated signal.auto_entry writer.
+        # New pending-entry state must be written to pending_entry_intents.
         with self._session_factory() as session:
             record = _get_signal_record(session, signal_id)
             if record is None:
@@ -485,6 +487,8 @@ class PostgresSignalRepository:
         real_execution: dict[str, Any] | None = None,
         event_type: str = SIGNAL_UPDATED_EVENT,
     ) -> SignalWriteResult | None:
+        # TODO(migration-v2.2): remove this deprecated signal.auto_entry writer.
+        # New pending-entry state must be written to pending_entry_intents.
         with self._session_factory() as session:
             record = _get_signal_record(session, signal_id)
             if record is None:
@@ -756,7 +760,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         invalidation=snapshot.get("invalidation") if isinstance(snapshot.get("invalidation"), dict) else None,
         exit_plan=snapshot.get("exit_plan") if isinstance(snapshot.get("exit_plan"), dict) else None,
         trade_plan=trade_plan,
-        auto_entry=snapshot.get("auto_entry") if isinstance(snapshot.get("auto_entry"), dict) else None,
+        auto_entry=None,
         edge=snapshot.get("edge") if isinstance(snapshot.get("edge"), dict) else None,
         no_trade_filter=snapshot.get("no_trade_filter") if isinstance(snapshot.get("no_trade_filter"), dict) else None,
         decision=snapshot.get("decision_snapshot") if isinstance(snapshot.get("decision_snapshot"), dict) else None,
@@ -954,7 +958,6 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "invalidation": _model_dump_optional(signal.invalidation),
         "exit_plan": _model_dump_optional(signal.exit_plan),
         "trade_plan": _trade_plan_snapshot(signal),
-        "auto_entry": _model_dump_optional(signal.auto_entry),
         "edge": _model_dump_optional(signal.edge),
         "no_trade_filter": _model_dump_optional(signal.no_trade_filter),
         "decision_snapshot": _model_dump_optional(signal.decision),
@@ -994,7 +997,6 @@ def _snapshot_from_strategy_signal(
         "invalidation": _model_dump_optional(signal.invalidation),
         "exit_plan": _model_dump_optional(signal.exit_plan),
         "trade_plan": _trade_plan_snapshot(signal),
-        "auto_entry": _model_dump_optional(signal.auto_entry),
         "edge": _model_dump_optional(signal.edge),
         "no_trade_filter": _model_dump_optional(signal.no_trade_filter),
         "decision_snapshot": _model_dump_optional(signal.decision),

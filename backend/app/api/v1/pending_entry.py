@@ -9,7 +9,6 @@ from app.schemas.pending_entry import PendingEntryIntentMode, PendingEntryIntent
 from app.schemas.trade import ManualConfirmRequest
 from app.services.pending_entry import RealPendingEntryNotImplemented, pending_entry_intent_service
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
-from app.services.signal_service import signal_service
 from app.services.current_user import current_user_identity_service
 from app.services.signal_views import annotate_pending_entry_view
 
@@ -81,7 +80,6 @@ async def arm_pending_entry(
         return annotate_pending_entry_view(pending_entry_intent_service.arm_signal_workflow(
             signal_id=signal_id,
             request=request,
-            auto_entry_arm=signal_service.arm_auto_entry,
         ))
     except StrategyRiskRewardBlocked as exc:
         raise HTTPException(
@@ -224,7 +222,6 @@ async def reconfirm_pending_entry(
         return annotate_pending_entry_view(pending_entry_intent_service.reconfirm_intent(
             intent_id,
             request=request,
-            auto_entry_arm=signal_service.arm_auto_entry,
         ))
     except StrategyRiskRewardBlocked as exc:
         raise HTTPException(

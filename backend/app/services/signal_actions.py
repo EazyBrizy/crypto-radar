@@ -349,17 +349,12 @@ class SignalActionService:
 
         if kind == "arm_pending_entry":
             arm_workflow = getattr(self._pending_entries, "arm_signal_workflow", None)
-            if callable(arm_workflow):
-                intent = arm_workflow(
-                    signal_id=signal.id,
-                    request=request,
-                    auto_entry_arm=self._signals.arm_auto_entry,
-                )
-            else:
-                arm_result = self._signals.arm_auto_entry(signal.id, request.model_dump(mode="json"))
-                if arm_result is None:
-                    raise LookupError("Signal is not found")
-                intent = arm_result.pending_entry_intent
+            if not callable(arm_workflow):
+                raise SignalActionUnavailable("Pending entry service is unavailable.")
+            intent = arm_workflow(
+                signal_id=signal.id,
+                request=request,
+            )
             updated_signal = self._signals.get_signal(signal.id) or signal
             await self._publish_signal_update(updated_signal)
             next_state = self.state_for_signal(
@@ -372,7 +367,7 @@ class SignalActionService:
                 state=next_state,
                 signal=updated_signal,
                 pending_entry_intent=intent,
-                message="Auto-entry armed; waiting for accepted entry zone",
+                message="Pending entry armed; waiting for accepted entry zone",
             )
 
         if kind == "cancel_pending_entry":
@@ -409,7 +404,6 @@ class SignalActionService:
             reconfirmed = self._pending_entries.reconfirm_intent(
                 intent.id,
                 request=request,
-                auto_entry_arm=self._signals.arm_auto_entry,
             )
             updated_signal = self._signals.get_signal(signal.id) or signal
             await self._publish_signal_update(updated_signal)

@@ -20,7 +20,7 @@ from app.schemas.trade import (
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_fee_rate import RiskFeeRateSnapshot
 from app.services.risk_market_data import RiskMarketDataSnapshot
-from app.services.trade_service import TradeService
+from app.services.virtual_trading import TradeService
 from app.services.virtual_trade_lifecycle import (
     apply_virtual_trade_candle,
     apply_virtual_trade_market_price,

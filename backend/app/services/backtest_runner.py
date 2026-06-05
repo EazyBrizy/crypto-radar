@@ -1664,6 +1664,8 @@ def _radar_signal_from_strategy_signal(signal: StrategySignal, candle: OHLCVCand
         invalidation=signal.invalidation,
         exit_plan=signal.exit_plan,
         trade_plan=signal.trade_plan,
+        # TODO(migration-v2.2): remove this legacy signal.auto_entry compatibility
+        # projection after backtest execution no longer depends on RadarSignal.
         auto_entry=signal.auto_entry,
         no_trade_filter=signal.no_trade_filter,
         created_at=now,

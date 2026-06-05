@@ -158,9 +158,11 @@ def pending_entry_updated_event(
     message: str | None = None,
 ) -> dict[str, Any]:
     reason = message if message is not None else intent.failure_reason
+    pending_entry = intent.model_dump(mode="json")
     return create_realtime_event(
         "pending_entry.updated",
         {
+            "pending_entry": pending_entry,
             "user_id": str(intent.user_id),
             "signal_id": str(intent.signal_id),
             "pending_entry_id": str(intent.id),

@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from app.schemas.market import Features
-from app.schemas.signal import RadarSignal, SignalAutoEntrySnapshot, SignalInvalidationSnapshot
+from app.schemas.signal import RadarSignal, SignalInvalidationSnapshot
 from app.services.signal_lifecycle import SignalLifecycleWorker
 
 
@@ -48,15 +48,6 @@ class _FakePublisher:
         self.events.append(event)
 
 
-class _FakeAutoEntry:
-    def __init__(self) -> None:
-        self.signals: list[RadarSignal] = []
-
-    async def execute_if_ready(self, signal: RadarSignal):
-        self.signals.append(signal)
-        return signal
-
-
 class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
     async def test_ready_signal_becomes_actionable_on_confirmation_candle(self) -> None:
         signal = _signal(status="ready")
@@ -75,44 +66,15 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.signals[signal.id].entry_max, 101.8)
         self.assertEqual(publisher.events[0]["type"], "signal.updated")
 
-    async def test_auto_entry_does_not_run_after_confirmation_transition(self) -> None:
-        signal = _signal(
-            status="ready",
-            auto_entry=SignalAutoEntrySnapshot(
-                enabled=True,
-                status="pending",
-                mode="virtual",
-                user_id="demo_user",
-                request={"mode": "virtual", "user_id": "demo_user", "auto_enter_on_confirmation": True},
-            ),
-        )
-        store = _FakeSignalStore([signal])
-        auto_entry = _FakeAutoEntry()
-        worker = SignalLifecycleWorker(signals=store, publisher=_FakePublisher(), auto_entry=auto_entry)
-
-        await worker.process_closed_candle(
-            _features(close=101.8, open=100.8, low=100.4, high=102.0, previous_high=101.4, volume_spike=1.2)
-        )
-
-        self.assertEqual(auto_entry.signals, [])
-
     async def test_low_rr_warning_does_not_block_actionable_transition(self) -> None:
         signal = _signal(
             status="ready",
             selected_rr=0.32,
             min_rr_ratio=1.5,
             selected_rr_target="nearest",
-            auto_entry=SignalAutoEntrySnapshot(
-                enabled=True,
-                status="pending",
-                mode="virtual",
-                user_id="demo_user",
-                request={"mode": "virtual", "user_id": "demo_user", "auto_enter_on_confirmation": True},
-            ),
         )
         store = _FakeSignalStore([signal])
-        auto_entry = _FakeAutoEntry()
-        worker = SignalLifecycleWorker(signals=store, publisher=_FakePublisher(), auto_entry=auto_entry)
+        worker = SignalLifecycleWorker(signals=store, publisher=_FakePublisher())
 
         transitions = await worker.process_closed_candle(
             _features(close=101.8, open=100.8, low=100.4, high=102.0, previous_high=101.4, volume_spike=1.2)
@@ -120,7 +82,6 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(transitions), 1)
         self.assertEqual(store.signals[signal.id].status, "actionable")
-        self.assertEqual(auto_entry.signals, [])
 
     async def test_ready_signal_waits_without_micro_break(self) -> None:
         signal = _signal(status="ready")
@@ -162,8 +123,7 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
     async def test_wait_for_pullback_does_not_confirm_when_funding_turns_extreme(self) -> None:
         signal = _signal(status="wait_for_pullback")
         store = _FakeSignalStore([signal])
-        auto_entry = _FakeAutoEntry()
-        worker = SignalLifecycleWorker(signals=store, publisher=_FakePublisher(), auto_entry=auto_entry)
+        worker = SignalLifecycleWorker(signals=store, publisher=_FakePublisher())
 
         transitions = await worker.process_closed_candle(
             _features(
@@ -180,7 +140,6 @@ class SignalLifecycleWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(transitions), 1)
         self.assertEqual(transitions[0].new_status, "ready")
         self.assertIn("Funding became extreme", transitions[0].reason)
-        self.assertEqual(auto_entry.signals, [])
 
     async def test_actionable_signal_becomes_invalidated_on_logical_break(self) -> None:
         signal = _signal(
@@ -216,7 +175,6 @@ def _signal(
     *,
     status: str,
     invalidation: SignalInvalidationSnapshot | None = None,
-    auto_entry: SignalAutoEntrySnapshot | None = None,
     selected_rr: float | None = 2.0,
     min_rr_ratio: float | None = 1.5,
     selected_rr_target: str | None = "final",
@@ -244,7 +202,6 @@ def _signal(
         min_rr_ratio=min_rr_ratio,
         status_reason="Strategy setup exists; waiting for confirmation",
         invalidation=invalidation,
-        auto_entry=auto_entry,
         created_at=now,
         updated_at=now,
     )

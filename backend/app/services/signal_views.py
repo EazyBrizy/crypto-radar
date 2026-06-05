@@ -33,6 +33,7 @@ def annotate_signal_views(
 ) -> RadarSignal:
     return signal.model_copy(
         update={
+            "auto_entry": None,
             "card_view": build_signal_card_view(signal, action_state=action_state),
             "details_view": build_signal_details_view(signal, action_state=action_state),
         }

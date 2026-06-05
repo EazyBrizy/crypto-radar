@@ -25,7 +25,7 @@ Primary module:
 
 `app.services.virtual_trading`
 
-This package is the boundary for virtual trading. New code should import the service from there, not from `app.services.trade_service`. The old `trade_service` module is kept only as a compatibility facade while the API and tests finish moving to the new package.
+This package is the boundary for virtual trading. Import the service from `app.services.virtual_trading`; the old `app.services.trade_service` compatibility facade has been removed.
 
 The module owns:
 

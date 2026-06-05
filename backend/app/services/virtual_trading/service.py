@@ -372,7 +372,7 @@ class VirtualTradingService:
         request, risk_settings, execution_profile, _ = self._resolved_execution_profile(
             signal=signal,
             request=request,
-            risk_settings=risk_settings_for_gate,
+            risk_settings=risk_settings,
         )
         if existing is None or signal.status != "confirmed":
             ensure_signal_execution_eligible(
@@ -1005,6 +1005,12 @@ class VirtualTradingService:
             signal,
             user_id=request.user_id,
         )
+        if strategy_risk_settings_source == "strategy_config":
+            strategy_risk_settings = dict(strategy_risk_settings)
+            # Generic legacy strategy rr_guard_mode must not override the user's
+            # virtual_rr_guard_mode. Per-strategy user overrides still flow
+            # through RiskManagementSettings.strategy_rr_guard_modes.
+            strategy_risk_settings.pop("rr_guard_mode", None)
         execution_profile = execution_profile_resolver.resolve(
             user_risk_settings=risk_settings,
             strategy_execution_settings=strategy_risk_settings,

@@ -743,6 +743,7 @@ class PostgresVirtualTradeRepository:
         }
         auto_entry = snapshot.get("auto_entry")
         if isinstance(auto_entry, dict) and auto_entry.get("status") == "pending":
+            # TODO(migration-v2.2): remove legacy signal.auto_entry migration updater.
             snapshot["auto_entry"] = {
                 **auto_entry,
                 "enabled": False,

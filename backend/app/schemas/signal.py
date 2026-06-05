@@ -108,6 +108,8 @@ class SignalExitPlanSnapshot(BaseModel):
 
 
 class SignalAutoEntrySnapshot(BaseModel):
+    # TODO(migration-v2.2): remove this legacy compatibility snapshot after
+    # pending_entry_intents is fully backfilled and old clients stop reading it.
     enabled: bool = False
     status: Literal[
         "pending",
@@ -295,7 +297,13 @@ class StrategySignal(BaseModel):
     invalidation: Optional[SignalInvalidationSnapshot] = None
     exit_plan: Optional[SignalExitPlanSnapshot] = None
     trade_plan: Optional[TradePlan] = None
-    auto_entry: Optional[SignalAutoEntrySnapshot] = None
+    # TODO(migration-v2.2): remove legacy signal.auto_entry from public DTOs.
+    # Pending-entry state is canonical in PendingEntryIntentRead.
+    auto_entry: Optional[SignalAutoEntrySnapshot] = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated legacy signal.auto_entry; use PendingEntryIntentRead instead.",
+    )
     edge: Optional[SignalEdgeSnapshot] = None
     no_trade_filter: Optional[NoTradeFilterResult] = None
     decision: Optional[SignalDecisionSnapshot] = None
@@ -337,7 +345,13 @@ class RadarSignal(BaseModel):
     invalidation: Optional[SignalInvalidationSnapshot] = None
     exit_plan: Optional[SignalExitPlanSnapshot] = None
     trade_plan: Optional[TradePlan] = None
-    auto_entry: Optional[SignalAutoEntrySnapshot] = None
+    # TODO(migration-v2.2): remove legacy signal.auto_entry from public DTOs.
+    # Pending-entry state is canonical in PendingEntryIntentRead.
+    auto_entry: Optional[SignalAutoEntrySnapshot] = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated legacy signal.auto_entry; use PendingEntryIntentRead instead.",
+    )
     edge: Optional[SignalEdgeSnapshot] = None
     no_trade_filter: Optional[NoTradeFilterResult] = None
     decision: Optional[SignalDecisionSnapshot] = None

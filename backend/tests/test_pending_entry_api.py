@@ -155,7 +155,7 @@ class PendingEntryApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "cancelled")
         self.assertEqual(response.json()["failure_reason"], "Cancelled by user.")
-        self.assertEqual(service.cancel_calls, [(str(INTENT_ID), str(USER_ID))])
+        self.assertEqual(service.cancel_calls, [(str(INTENT_ID), "usr_demo")])
 
 
 class _FakePendingEntryService:
@@ -171,7 +171,7 @@ class _FakePendingEntryService:
         self.cancel_calls: list[tuple[str, str]] = []
         self.history: list[PendingEntryIntentRead] = []
 
-    def arm_signal_workflow(self, *, signal_id, request, auto_entry_arm=None) -> PendingEntryIntentRead:
+    def arm_signal_workflow(self, *, signal_id, request) -> PendingEntryIntentRead:
         self.arm_calls += 1
         self.arm_user_ids.append(request.user_id)
         if self.intent is None:
@@ -213,7 +213,7 @@ class _FakePendingEntryService:
         self.intent = None
         return cancelled
 
-    def reconfirm_intent(self, intent_id, *, request=None, auto_entry_arm=None) -> PendingEntryIntentRead:
+    def reconfirm_intent(self, intent_id, *, request=None) -> PendingEntryIntentRead:
         return self.intent
 
 

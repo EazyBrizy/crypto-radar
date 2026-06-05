@@ -380,7 +380,7 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     invalidation: enriched.invalidation ?? null,
     exit_plan: enriched.exit_plan ?? null,
     trade_plan: normalizeTradePlan(enriched.trade_plan),
-    auto_entry: enriched.auto_entry ?? null,
+    auto_entry: null,
     edge: normalizeSignalEdge(enriched.edge),
     no_trade_filter: normalizeNoTradeFilter(enriched.no_trade_filter),
     decision: normalizeDecisionSnapshot(enriched.decision),

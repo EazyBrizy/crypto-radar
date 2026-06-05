@@ -195,16 +195,12 @@ class PendingEntryServiceTest(unittest.TestCase):
             request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
             execution_profile=_execution_profile(),
         )
-        mirror_calls: list[dict[str, object]] = []
-
         changed = service.reconcile_signal_trade_plan(
             _signal(entry_min=99.0, entry_max=100.0),
-            auto_entry_updater=lambda signal_id, **kwargs: mirror_calls.append({"signal_id": signal_id, **kwargs}),
         )
 
         self.assertEqual(changed[0].status, "requires_reconfirmation")
         self.assertEqual(repository.active.status if repository.active else None, "requires_reconfirmation")
-        self.assertEqual(mirror_calls[0]["status"], "requires_reconfirmation")
 
     def test_reconcile_changed_stop_requires_reconfirmation(self) -> None:
         repository = _FakePendingEntryRepository()

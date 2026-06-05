@@ -260,7 +260,7 @@ function ActivePendingEntryCompact({
   if (!pendingEntry) return null;
   const view = pendingEntry.view;
   return (
-    <div className="auto-entry-block active-pending-compact">
+    <div className="pending-entry-block active-pending-compact">
       <div className="section-title">
         <FileCheck2 size={18} />
         <h3>Active Pending Entry</h3>
@@ -523,7 +523,7 @@ function PendingEntryBlock({
 }) {
   if (!pendingEntry) return null;
   return (
-    <div className="auto-entry-block">
+    <div className="pending-entry-block">
       <div className="section-title">
         <FileCheck2 size={18} />
         <h3>Pending Entry</h3>

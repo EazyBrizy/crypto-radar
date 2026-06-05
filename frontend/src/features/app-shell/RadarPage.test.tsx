@@ -78,6 +78,8 @@ describe("RadarPage", () => {
           scanner_enabled: true,
           scanner_running: true,
           scanner_stopping: false,
+          stage: "warming_up",
+          market_data_status: "waiting",
           processed_signals: 0,
           exchanges: ["bybit"],
           symbols: ["BTCUSDT"],
@@ -97,11 +99,20 @@ describe("RadarPage", () => {
           strategy_evaluations: 0,
           signals_found: 1,
           candles_seeded: 10,
+          warmup_total: 4,
+          warmup_completed: 2,
+          warmup_failed: 1,
+          warmup_started_at: Date.parse("2026-06-05T10:00:00.000Z"),
+          warmup_finished_at: null,
           last_tick_at: null,
+          last_tick_age_seconds: null,
           last_signal_at: null,
           last_exchange: null,
           last_symbol: null,
           last_price: null,
+          last_error: "timeout BTCUSDT 1m",
+          market_stream_connected: false,
+          ws_connected: false,
           candle_history: {}
         }}
         selectedSignal={null}
@@ -116,5 +127,10 @@ describe("RadarPage", () => {
     expect(screen.getByText("Pairs: 2")).toBeInTheDocument();
     expect(screen.getByText("Universe: explicit pairs + default")).toBeInTheDocument();
     expect(screen.getByText("Estimated evaluations: 12")).toBeInTheDocument();
+    expect(screen.getAllByText("Connecting").length).toBeGreaterThan(0);
+    expect(screen.getByText("Warmup: 2/4, failed 1")).toBeInTheDocument();
+    expect(screen.getByText("Last tick: no ticks yet")).toBeInTheDocument();
+    expect(screen.getByText("Last error: timeout BTCUSDT 1m")).toBeInTheDocument();
+    expect(screen.queryByText("Online")).not.toBeInTheDocument();
   });
 });

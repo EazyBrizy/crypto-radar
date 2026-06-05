@@ -962,7 +962,21 @@ export function applyTradeSnapshot(queryClient: QueryClient, trades: TradeJourna
 }
 
 function applyScannerRunning(queryClient: QueryClient, scannerRunning: boolean) {
-  const patch = { scanner_running: scannerRunning };
+  const patch: Partial<HealthStatus> = scannerRunning
+    ? {
+        scanner_running: true,
+        scanner_stopping: false,
+        stage: "starting",
+        market_data_status: "waiting"
+      }
+    : {
+        scanner_running: false,
+        scanner_stopping: false,
+        stage: "stopped",
+        market_data_status: "offline",
+        market_stream_connected: false,
+        ws_connected: false
+      };
   queryClient.setQueryData<HealthStatus>(serverStateKeys.health(), (current) =>
     current ? { ...current, ...patch } : current
   );

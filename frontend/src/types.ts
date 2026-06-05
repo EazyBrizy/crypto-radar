@@ -75,6 +75,8 @@ export type RRGuardMode = "off" | "soft" | "hard";
 export type RiskProtectionMode = "normal" | "reduced" | "virtual_only" | "blocked";
 export type ExchangeRuleStatus = "fresh" | "missing" | "stale" | "unknown";
 export type MarketDataStatus = "fresh" | "partial" | "missing" | "stale" | "unknown";
+export type ScannerStage = "idle" | "starting" | "warming_up" | "listening" | "stale" | "degraded" | "stopped" | "error";
+export type ScannerMarketDataStatus = "online" | "waiting" | "stale" | "offline" | "error";
 export type ViewTone = "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
 
 export interface OhlcvCandle {
@@ -1146,8 +1148,19 @@ export interface HealthStatus {
   scanner_enabled: boolean;
   scanner_running: boolean;
   scanner_stopping?: boolean;
+  stage: ScannerStage;
+  market_data_status: ScannerMarketDataStatus;
   processed_signals: number;
   ticks_processed?: number;
+  warmup_total?: number;
+  warmup_completed?: number;
+  warmup_failed?: number;
+  warmup_started_at?: number | null;
+  warmup_finished_at?: number | null;
+  last_tick_age_seconds?: number | null;
+  last_error?: string | null;
+  market_stream_connected?: boolean;
+  ws_connected?: boolean;
   features_built?: number;
   strategy_evaluations?: number;
   signals_found?: number;
@@ -1180,10 +1193,19 @@ export interface RadarStatus extends HealthStatus {
   strategy_evaluations: number;
   signals_found: number;
   candles_seeded: number;
+  warmup_total: number;
+  warmup_completed: number;
+  warmup_failed: number;
+  warmup_started_at: number | null;
+  warmup_finished_at: number | null;
   last_tick_at: number | null;
+  last_tick_age_seconds: number | null;
   last_signal_at: number | null;
   last_exchange: string | null;
   last_symbol: string | null;
   last_price: number | null;
+  last_error: string | null;
+  market_stream_connected: boolean;
+  ws_connected: boolean;
   candle_history: Record<string, number>;
 }

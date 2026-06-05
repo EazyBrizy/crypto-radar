@@ -52,13 +52,20 @@ class ScannerRunner:
 
     @property
     def scanner_status(self) -> dict[str, object]:
+        scanner_stats = dict(self._scanner.stats)
+        if not self.is_running and scanner_stats.get("stage") not in {"error", "idle"}:
+            scanner_stats["stage"] = "stopped"
         return {
             "scanner_running": self.is_running,
             "scanner_stopping": self.is_stopping,
             "processed_signals": self._processed_signals,
             "scanner_subscription_hash": self._scanner_subscription_hash,
             "strategy_config_hash": radar_config_service.strategy_config_hash(),
-            **self._scanner.stats,
+            **scanner_stats,
+            "market_data_status": _derive_market_data_status(
+                scanner_stats,
+                scanner_running=self.is_running,
+            ),
         }
 
     def start(self) -> None:
@@ -158,6 +165,7 @@ class ScannerRunner:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self._scanner.record_error(exc)
             logger.exception("Scanner runner failed: %s", exc)
 
     def _should_publish_update(self, signal_id: str) -> bool:
@@ -279,3 +287,32 @@ class SignalExpiryWorker:
             except Exception as exc:
                 logger.warning("Signal expiry maintenance failed: %s", exc)
             await asyncio.sleep(self._interval_seconds)
+
+
+def _derive_market_data_status(
+    scanner_stats: dict[str, object],
+    *,
+    scanner_running: bool,
+) -> str:
+    stage = str(scanner_stats.get("stage") or "")
+    if stage == "error":
+        return "error"
+    if not scanner_running:
+        return "offline"
+    if stage == "stale":
+        return "stale"
+    last_tick_age_seconds = _float_or_none(scanner_stats.get("last_tick_age_seconds"))
+    if last_tick_age_seconds is None:
+        return "waiting"
+    if last_tick_age_seconds > settings.scanner_market_data_stale_seconds:
+        return "stale"
+    return "online"
+
+
+def _float_or_none(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

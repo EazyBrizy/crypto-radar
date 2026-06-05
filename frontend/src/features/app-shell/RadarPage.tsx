@@ -67,6 +67,13 @@ export function RadarPage(props: RadarPageProps) {
   const scannerUniverse = props.radarStatus?.scanner_universe_source ?? props.health?.scanner_universe_source ?? "default";
   const estimatedEvaluations = props.radarStatus?.estimated_strategy_checks ?? props.health?.estimated_strategy_checks ?? 0;
   const scannerWarning = props.radarStatus?.scanner_universe_warning ?? props.health?.scanner_universe_warning ?? null;
+  const scannerRuntime = props.radarStatus ?? props.health;
+  const scannerMarketLabel = tKey(scannerMarketStatusLabelKey(scannerRuntime));
+  const warmupTotal = scannerRuntime?.warmup_total ?? 0;
+  const warmupCompleted = scannerRuntime?.warmup_completed ?? 0;
+  const warmupFailed = scannerRuntime?.warmup_failed ?? 0;
+  const lastTickAge = formatLastTickAge(scannerRuntime?.last_tick_age_seconds, tKey);
+  const lastError = scannerRuntime?.last_error ?? null;
   const latestSeries = Object.entries(props.radarStatus?.candle_history ?? {})
     .sort(([, left], [, right]) => right - left)
     .slice(0, 6);
@@ -86,7 +93,7 @@ export function RadarPage(props: RadarPageProps) {
         </div>
 
         <div className="metrics-grid">
-          <Metric label={tKey("radar.marketStatus")} value={props.health?.scanner_running ? tKey("radar.online") : tKey("radar.offline")} hint={tKey("radar.scanner")} />
+          <Metric label={tKey("radar.marketStatus")} value={scannerMarketLabel} hint={tKey("radar.scanner")} />
           <Metric label={tKey("radar.executionReady")} value={String(summary?.execution_ready_signals ?? 0)} hint={tKey("radar.riskGate")} />
           <Metric label={tKey("radar.highConfidence")} value={String(summary?.high_confidence_signals ?? 0)} hint={tKey("radar.score80")} />
           <Metric label={tKey("radar.positiveEdge")} value={String(summary?.positive_edge_signals ?? 0)} hint={tKey("radar.evGate")} />
@@ -102,10 +109,12 @@ export function RadarPage(props: RadarPageProps) {
             <strong>
               {props.radarStatus?.last_symbol
                 ? `${props.radarStatus.last_exchange ?? ""} ${props.radarStatus.last_symbol} ${props.radarStatus.last_price ?? ""}`
-                : tKey("radar.waitingMarketData")}
+                : scannerMarketLabel}
             </strong>
           </div>
           <div className="scanner-stats">
+            <span>{tKey("radar.warmupProgress", { completed: warmupCompleted, total: warmupTotal, failed: warmupFailed })}</span>
+            <span>{tKey("radar.lastTickAge", { age: lastTickAge })}</span>
             <span>{tKey("radar.signalsFound", { count: props.radarStatus?.signals_found ?? props.health?.signals_found ?? 0 })}</span>
             <span>{tKey("radar.seededCandles", { count: props.radarStatus?.candles_seeded ?? props.health?.candles_seeded ?? 0 })}</span>
             <span>{tKey("radar.pairs", { count: scannerPairCount })}</span>
@@ -113,6 +122,7 @@ export function RadarPage(props: RadarPageProps) {
             <span>{tKey("radar.estimatedEvaluations", { count: estimatedEvaluations })}</span>
             <span>{tKey("radar.timeframes", { timeframes: props.radarStatus?.timeframes.join(", ") ?? "1m, 5m, 15m, 1h, 4h, 1d" })}</span>
             {scannerWarning ? <span>{tKey("radar.warning", { warning: scannerWarning })}</span> : null}
+            {lastError ? <span className="error-pill" title={lastError}>{tKey("radar.lastError", { error: lastError })}</span> : null}
           </div>
           <div className="history-grid">
             {latestSeries.length ? latestSeries.map(([series, candles]) => (
@@ -416,6 +426,32 @@ function formatPendingEntryTtl(value: string | null, tKey: (key: I18nKey, params
   const diffMinutes = Math.ceil(diffMs / 60_000);
   if (diffMinutes < 60) return tKey("pendingEntry.minutesLeft", { count: diffMinutes });
   return tKey("pendingEntry.hoursLeft", { count: Math.ceil(diffMinutes / 60) });
+}
+
+type ScannerRuntimeStatus = Pick<HealthStatus | RadarStatus, "market_data_status" | "stage">;
+
+export function scannerMarketStatusLabelKey(status: ScannerRuntimeStatus | null | undefined): I18nKey {
+  if (!status) return "common.unknown";
+  if (status.market_data_status === "online") return "radar.online";
+  if (status.market_data_status === "error") return "radar.scannerError";
+  if (status.market_data_status === "stale") return "radar.dataStale";
+  if (status.market_data_status === "waiting") {
+    return status.stage === "starting" || status.stage === "warming_up"
+      ? "radar.scannerConnecting"
+      : "radar.waitingMarketData";
+  }
+  return "radar.offline";
+}
+
+function formatLastTickAge(
+  value: number | null | undefined,
+  tKey: (key: I18nKey, params?: Record<string, string | number | boolean | null | undefined>) => string
+): string {
+  if (value == null) return tKey("radar.noTicksYet");
+  if (value < 1) return tKey("radar.justNow");
+  if (value < 60) return `${Math.round(value)}s`;
+  if (value < 3600) return `${Math.round(value / 60)}m`;
+  return `${Math.round(value / 3600)}h`;
 }
 
 function radarDirectionFilterKey(value: "all" | "long" | "short"): I18nKey {

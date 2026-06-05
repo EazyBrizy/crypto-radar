@@ -72,6 +72,10 @@ describe("normalizeRadarStatus", () => {
       scanner_enabled: true,
       scanner_running: true,
       processed_signals: 0,
+      warmup_total: 6,
+      warmup_completed: 2,
+      warmup_failed: 1,
+      last_tick_age_seconds: null,
       scan_pairs: ["bybit:XRPUSDT", "bybit:BTCUSDT"],
       scanner_pairs_count: 2,
       scanner_universe_source: "explicit pairs",
@@ -81,6 +85,12 @@ describe("normalizeRadarStatus", () => {
     });
 
     expect(status.scan_pairs).toEqual(["bybit:XRPUSDT", "bybit:BTCUSDT"]);
+    expect(status.market_data_status).toBe("waiting");
+    expect(status.stage).toBe("starting");
+    expect(status.warmup_total).toBe(6);
+    expect(status.warmup_completed).toBe(2);
+    expect(status.warmup_failed).toBe(1);
+    expect(status.last_tick_age_seconds).toBeNull();
     expect(status.scanner_pairs_count).toBe(2);
     expect(status.scanner_universe_source).toBe("explicit pairs");
     expect(status.scanner_universe_warning).toContain("max_scanner_pairs=2");

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import time
 from collections import defaultdict, deque
@@ -6,6 +7,7 @@ from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
+from app.core.config import settings
 from app.domain.virtual_trade_status import is_terminal_virtual_trade_status
 from app.exchanges.bybit import BybitAdapter, fetch_bybit_klines
 from app.schemas.candle import OHLCVCandle
@@ -93,11 +95,19 @@ class ScannerRuntimeStats:
     strategy_evaluations: int = 0
     signals_found: int = 0
     candles_seeded: int = 0
+    stage: str = "idle"
+    warmup_total: int = 0
+    warmup_completed: int = 0
+    warmup_failed: int = 0
+    warmup_started_at: Optional[int] = None
+    warmup_finished_at: Optional[int] = None
     last_tick_at: Optional[int] = None
+    last_tick_monotonic_at: Optional[float] = None
     last_signal_at: Optional[int] = None
     last_exchange: Optional[str] = None
     last_symbol: Optional[str] = None
     last_price: Optional[float] = None
+    last_error: Optional[str] = None
     candle_history: dict[str, int] = field(default_factory=dict)
 
 
@@ -127,6 +137,9 @@ class MarketScanner:
         universe_warning: str | None = None,
         max_scanner_pairs: int | None = None,
         estimated_strategy_checks: int | None = None,
+        warmup_concurrency: int | None = None,
+        warmup_timeout_seconds: float | None = None,
+        market_data_stale_seconds: float | None = None,
     ) -> None:
         requested_symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
         requested_exchanges = [exchange.lower() for exchange in (exchanges or ["bybit"])]
@@ -163,6 +176,30 @@ class MarketScanner:
         self._feature_engine = FeatureEngine()
         self._strategy_engine = StrategyEngine()
         self._stats = ScannerRuntimeStats()
+        self._warmup_concurrency = max(
+            1,
+            int(
+                warmup_concurrency
+                if warmup_concurrency is not None
+                else settings.scanner_warmup_concurrency
+            ),
+        )
+        self._warmup_timeout_seconds = max(
+            0.1,
+            float(
+                warmup_timeout_seconds
+                if warmup_timeout_seconds is not None
+                else settings.scanner_warmup_timeout_seconds
+            ),
+        )
+        self._market_data_stale_seconds = max(
+            1.0,
+            float(
+                market_data_stale_seconds
+                if market_data_stale_seconds is not None
+                else settings.scanner_market_data_stale_seconds
+            ),
+        )
         self._last_heartbeat_monotonic = 0.0
         self._last_series_evaluation_monotonic: dict[str, float] = {}
         self._last_trade_update_event_monotonic: dict[str, float] = {}
@@ -171,6 +208,8 @@ class MarketScanner:
         )
         self._last_alpha_context_by_series: dict[tuple[str, str, str], AlphaMarketContext] = {}
         self._history_warmed_up = False
+        self._history_warmup_in_progress = False
+        self._warmup_task: asyncio.Task[None] | None = None
         self._estimated_strategy_checks = (
             estimated_strategy_checks
             if estimated_strategy_checks is not None
@@ -200,9 +239,12 @@ class MarketScanner:
 
         self._stats.ticks_processed += 1
         self._stats.last_tick_at = data.timestamp
+        self._stats.last_tick_monotonic_at = time.monotonic()
         self._stats.last_exchange = data.exchange
         self._stats.last_symbol = data.symbol
         self._stats.last_price = data.price
+        if self._stats.stage in {"starting", "warming_up", "stale", "degraded"}:
+            self._set_stage("listening")
 
         self._record_recent_trade(data)
         await self._persist_market_tick(data)
@@ -643,6 +685,9 @@ class MarketScanner:
 
     @property
     def stats(self) -> dict[str, object]:
+        last_tick_age_seconds = self._last_tick_age_seconds()
+        stage = self._runtime_stage(last_tick_age_seconds)
+        market_stream_connected = self.market_stream_connected
         return {
             "exchanges": self.exchanges,
             "symbols": self.symbols,
@@ -660,6 +705,16 @@ class MarketScanner:
             "strategy_evaluations": self._stats.strategy_evaluations,
             "signals_found": self._stats.signals_found,
             "candles_seeded": self._stats.candles_seeded,
+            "stage": stage,
+            "warmup_total": self._stats.warmup_total,
+            "warmup_completed": self._stats.warmup_completed,
+            "warmup_failed": self._stats.warmup_failed,
+            "warmup_started_at": self._stats.warmup_started_at,
+            "warmup_finished_at": self._stats.warmup_finished_at,
+            "last_tick_age_seconds": last_tick_age_seconds,
+            "last_error": self._stats.last_error,
+            "market_stream_connected": market_stream_connected,
+            "ws_connected": market_stream_connected,
             "last_tick_at": self._stats.last_tick_at,
             "last_signal_at": self._stats.last_signal_at,
             "last_exchange": self._stats.last_exchange,
@@ -675,6 +730,14 @@ class MarketScanner:
     @property
     def exchanges(self) -> list[str]:
         return list(self._exchanges)
+
+    @property
+    def market_stream_connected(self) -> bool:
+        return any(bool(getattr(adapter, "connected", False)) for adapter in self._adapters)
+
+    def record_error(self, exc: BaseException | str) -> None:
+        self._stats.last_error = str(exc)
+        self._set_stage("error")
 
     def _can_scan_pair(self, exchange: str, symbol: str) -> bool:
         return _symbol_key(exchange, symbol) in self._scan_pair_keys
@@ -752,72 +815,181 @@ class MarketScanner:
             await queue.put(tick)
 
     async def start(self) -> AsyncIterator[StrategySignal]:
-        await self._warm_up_history()
-        logger.info(
-            "Market scanner started for exchanges=%s symbols=%s",
-            ", ".join(self._exchanges),
-            ", ".join(self._symbols),
-        )
-        logger.info(
-            "Scanner activity: pairs=%s timeframes=%s strategy_checks=%s universe=%s",
-            len(self._scan_pairs),
-            len(self._candle_store.timeframes),
-            self._estimated_strategy_checks,
-            self._universe_source,
-        )
-        if self._universe_warning:
-            logger.warning("Scanner universe warning: %s", self._universe_warning)
-        async for tick in self.listen():
-            signals = await self.process_tick(tick)
-            for signal in signals:
-                yield signal
+        self._stats.last_error = None
+        self._set_stage("starting")
+        self._set_stage("warming_up")
+        self._warmup_task = asyncio.create_task(self._warm_up_history())
+        self._warmup_task.add_done_callback(self._handle_warmup_task_done)
+        try:
+            logger.info(
+                "Market scanner started for exchanges=%s symbols=%s",
+                ", ".join(self._exchanges),
+                ", ".join(self._symbols),
+            )
+            logger.info(
+                "Scanner activity: pairs=%s timeframes=%s strategy_checks=%s universe=%s",
+                len(self._scan_pairs),
+                len(self._candle_store.timeframes),
+                self._estimated_strategy_checks,
+                self._universe_source,
+            )
+            if self._universe_warning:
+                logger.warning("Scanner universe warning: %s", self._universe_warning)
+            async for tick in self.listen():
+                signals = await self.process_tick(tick)
+                for signal in signals:
+                    yield signal
+        except asyncio.CancelledError:
+            self._set_stage("stopped")
+            raise
+        except Exception as exc:
+            self.record_error(exc)
+            raise
+        finally:
+            await self._cancel_warmup_task()
+            if self._stats.stage not in {"error", "stopped"}:
+                self._set_stage("stopped")
 
     async def _warm_up_history(self) -> None:
-        if self._history_warmed_up:
+        if self._history_warmed_up or self._history_warmup_in_progress:
             return
-        self._history_warmed_up = True
+        self._history_warmup_in_progress = True
+        self._stats.warmup_started_at = _epoch_ms()
+        self._stats.warmup_finished_at = None
+        self._stats.warmup_total = 0
+        self._stats.warmup_completed = 0
+        self._stats.warmup_failed = 0
+        if self._stats.stage in {"idle", "starting"}:
+            self._set_stage("warming_up")
 
-        if "bybit" not in self._exchanges:
-            return
+        tasks: list[asyncio.Task[None]] = []
+        try:
+            if "bybit" not in self._exchanges:
+                self._stats.warmup_finished_at = _epoch_ms()
+                self._history_warmed_up = True
+                return
 
-        bybit_symbols = self._symbols_by_exchange.get("bybit", [])
-        logger.info(
-            "Warming up OHLCV history from Bybit for symbols=%s timeframes=%s",
-            ", ".join(bybit_symbols),
-            ", ".join(self._candle_store.timeframes),
-        )
-        seeded_total = 0
-        for symbol in bybit_symbols:
-            for timeframe in self._candle_store.timeframes:
-                try:
-                    candles = await asyncio.to_thread(
+            bybit_symbols = self._symbols_by_exchange.get("bybit", [])
+            warmup_items = [
+                (symbol, timeframe)
+                for symbol in bybit_symbols
+                for timeframe in self._candle_store.timeframes
+            ]
+            self._stats.warmup_total = len(warmup_items)
+            logger.info(
+                "Warming up OHLCV history from Bybit for symbols=%s timeframes=%s concurrency=%s timeout=%ss",
+                ", ".join(bybit_symbols),
+                ", ".join(self._candle_store.timeframes),
+                self._warmup_concurrency,
+                self._warmup_timeout_seconds,
+            )
+            semaphore = asyncio.Semaphore(self._warmup_concurrency)
+            tasks = [
+                asyncio.create_task(self._warm_up_history_item(symbol, timeframe, semaphore))
+                for symbol, timeframe in warmup_items
+            ]
+            for task in asyncio.as_completed(tasks):
+                await task
+            self._history_warmed_up = True
+            self._stats.warmup_finished_at = _epoch_ms()
+            logger.info(
+                "OHLCV warmup completed: seeded_candles=%s failed=%s",
+                self._stats.candles_seeded,
+                self._stats.warmup_failed,
+            )
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        finally:
+            self._history_warmup_in_progress = False
+
+    async def _warm_up_history_item(
+        self,
+        symbol: str,
+        timeframe: str,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        async with semaphore:
+            try:
+                candles = await asyncio.wait_for(
+                    asyncio.to_thread(
                         fetch_bybit_klines,
                         symbol,
                         timeframe,
                         HISTORY_WARMUP_LIMIT,
-                    )
-                    seeded = self._candle_store.seed_history(candles)
-                    seeded_total += seeded
-                    if candles:
-                        series_key = f"bybit:{candles[-1].symbol}:{timeframe}"
-                        self._stats.candle_history[series_key] = len(
-                            self._candle_store.list_candles(
-                                exchange="bybit",
-                                symbol=candles[-1].symbol,
-                                timeframe=timeframe,
-                                include_open=False,
-                                limit=HISTORY_WARMUP_LIMIT,
-                            )
+                    ),
+                    timeout=self._warmup_timeout_seconds,
+                )
+                seeded = self._candle_store.seed_history(candles)
+                self._stats.candles_seeded += seeded
+                if candles:
+                    series_key = f"bybit:{candles[-1].symbol}:{timeframe}"
+                    self._stats.candle_history[series_key] = len(
+                        self._candle_store.list_candles(
+                            exchange="bybit",
+                            symbol=candles[-1].symbol,
+                            timeframe=timeframe,
+                            include_open=False,
+                            limit=HISTORY_WARMUP_LIMIT,
                         )
-                except Exception as exc:
-                    logger.warning(
-                        "Bybit OHLCV warmup failed for %s %s: %s",
-                        symbol,
-                        timeframe,
-                        exc,
                     )
-        self._stats.candles_seeded = seeded_total
-        logger.info("OHLCV warmup completed: seeded_candles=%s", seeded_total)
+            except Exception as exc:
+                self._stats.warmup_failed += 1
+                self._stats.last_error = f"Bybit OHLCV warmup failed for {symbol} {timeframe}: {exc}"
+                logger.warning(
+                    "Bybit OHLCV warmup failed for %s %s: %s",
+                    symbol,
+                    timeframe,
+                    exc,
+                )
+            finally:
+                self._stats.warmup_completed += 1
+
+    async def _cancel_warmup_task(self) -> None:
+        task = self._warmup_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    def _handle_warmup_task_done(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as exc:
+            self._stats.last_error = f"OHLCV warmup failed: {exc}"
+            if self._stats.stage in {"listening", "stale"}:
+                self._set_stage("degraded")
+            else:
+                self._set_stage("error")
+            logger.exception("OHLCV warmup failed: %s", exc)
+        else:
+            if self._stats.stage == "warming_up":
+                self._set_stage("degraded" if self._stats.warmup_failed else "listening")
+
+    def _set_stage(self, stage: str) -> None:
+        self._stats.stage = stage
+
+    def _last_tick_age_seconds(self) -> float | None:
+        if self._stats.last_tick_monotonic_at is None:
+            return None
+        return max(0.0, time.monotonic() - self._stats.last_tick_monotonic_at)
+
+    def _runtime_stage(self, last_tick_age_seconds: float | None) -> str:
+        if self._stats.stage in {"idle", "starting", "warming_up", "stopped", "error"}:
+            return self._stats.stage
+        if (
+            last_tick_age_seconds is not None
+            and last_tick_age_seconds > self._market_data_stale_seconds
+        ):
+            return "stale"
+        if self._stats.warmup_finished_at is not None and self._stats.warmup_failed > 0:
+            return "degraded"
+        return self._stats.stage
 
 
 def _quality_input(snapshot: MarketQualityData) -> MarketQualityInput:
@@ -845,6 +1017,10 @@ def _features_with_derivative_context(
 
 def _symbol_key(exchange: str, symbol: str) -> tuple[str, str]:
     return (exchange.strip().lower(), symbol.strip().upper())
+
+
+def _epoch_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def _normalize_scan_pairs(pairs: Iterable[tuple[str, str]]) -> tuple[tuple[str, str], ...]:

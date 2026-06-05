@@ -19,6 +19,7 @@ import {
   useStopScannerMutation
 } from "@/hooks/use-radar-queries";
 import { useUiStore } from "@/stores/ui-store";
+import type { HealthStatus, RadarStatus } from "@/types";
 
 const navItems: Array<{ href: string; label: string; icon: ElementType }> = [
   { href: "/dashboard/radar", label: "Radar", icon: LayoutDashboard },
@@ -43,10 +44,11 @@ export function DashboardShell({ children }: { children: ReactNode }) {
   const config = configQuery.data ?? null;
   const scannerBusy = startScannerMutation.isPending || stopScannerMutation.isPending;
   const scannerStatusKnown = Boolean(health || radarStatus);
-  const scannerRunning = health?.scanner_running ?? radarStatus?.scanner_running ?? false;
-  const scannerStopping = health?.scanner_stopping ?? radarStatus?.scanner_stopping ?? false;
-  const scannerStatusClass = scannerStatusKnown ? (scannerRunning ? "live-dot" : "offline-dot") : "syncing-dot";
-  const scannerStatusText = scannerStatusKnown ? (scannerStopping ? "Scanner stopping" : scannerRunning ? "Scanner live" : "Scanner offline") : "Scanner status unknown";
+  const scannerRuntime = radarStatus ?? health;
+  const scannerRunning = scannerRuntime?.scanner_running ?? false;
+  const scannerStatusView = scannerTopbarStatus(scannerRuntime, scannerStatusKnown);
+  const scannerStatusClass = scannerStatusView.className;
+  const scannerStatusText = scannerStatusView.text;
   const scannerButtonMode = scannerStatusKnown ? (scannerRunning ? "stop" : "start") : "syncing";
   const ScannerButtonIcon = scannerStatusKnown ? (scannerRunning ? Square : Play) : RefreshCw;
   const scannerButtonText = scannerStatusKnown ? (scannerRunning ? "Stop scanner" : "Start scanner") : "Retry scanner status";
@@ -133,6 +135,41 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       </main>
     </div>
   );
+}
+
+type ScannerRuntimeStatus = Pick<
+  HealthStatus | RadarStatus,
+  "market_data_status" | "scanner_stopping" | "stage"
+>;
+
+export function scannerTopbarStatus(
+  status: ScannerRuntimeStatus | null,
+  statusKnown: boolean = Boolean(status)
+): { className: string; text: string } {
+  if (!statusKnown || !status) {
+    return { className: "syncing-dot", text: "Scanner status unknown" };
+  }
+  if (status.scanner_stopping) {
+    return { className: "syncing-dot", text: "Scanner stopping" };
+  }
+  if (status.market_data_status === "online") {
+    return { className: "live-dot", text: "Scanner Online" };
+  }
+  if (status.market_data_status === "error") {
+    return { className: "error-dot", text: "Scanner error" };
+  }
+  if (status.market_data_status === "stale") {
+    return { className: "stale-dot", text: "Scanner data stale" };
+  }
+  if (status.market_data_status === "waiting") {
+    return {
+      className: "syncing-dot",
+      text: status.stage === "starting" || status.stage === "warming_up"
+        ? "Scanner connecting"
+        : "Waiting for market data"
+    };
+  }
+  return { className: "offline-dot", text: "Scanner offline" };
 }
 
 function errorMessage(exc: unknown): string | null {

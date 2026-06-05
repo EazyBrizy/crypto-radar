@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     strategy_performance_min_sample_size: int = 30
     max_scanner_pairs: int = 200
     truncate_scanner_pairs_over_limit: bool = False
+    scanner_warmup_concurrency: int = 5
+    scanner_warmup_timeout_seconds: float = 10.0
+    scanner_market_data_stale_seconds: float = 30.0
 
 
 settings = Settings()

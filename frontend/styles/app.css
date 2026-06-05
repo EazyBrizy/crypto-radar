@@ -528,6 +528,18 @@ a {
   background: #1e293b !important;
 }
 
+.stale-dot {
+  border-color: #713f12 !important;
+  color: #fde68a !important;
+  background: #3a2506 !important;
+}
+
+.error-dot {
+  border-color: #7f1d1d !important;
+  color: #fecaca !important;
+  background: #450a0a !important;
+}
+
 .page { display: none; }
 .page.active { display: block; }
 
@@ -644,6 +656,13 @@ h3 { font-size: 15px; line-height: 1.3; }
   color: #cbd5e1;
   background: #111827;
   font-size: 12px;
+}
+
+.scanner-stats span.error-pill {
+  max-width: 100%;
+  height: auto;
+  min-height: 26px;
+  white-space: normal;
 }
 
 .pending-entries-panel {

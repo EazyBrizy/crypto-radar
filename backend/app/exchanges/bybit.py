@@ -1870,6 +1870,11 @@ class BybitAdapter:
         ]
         self._symbols = list(dict.fromkeys(normalized))
         self._reconnect_delay = reconnect_delay
+        self._connected = False
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
 
     async def get_symbols(self) -> list[str]:
         return list(self._symbols)
@@ -1894,6 +1899,7 @@ class BybitAdapter:
             "Bybit WebSocket connection established; subscribed to %s",
             ", ".join(subscribed),
         )
+        self._connected = True
         return ws
 
     def _build_market_data(self, trade: dict) -> Optional[MarketData]:
@@ -1992,6 +1998,7 @@ class BybitAdapter:
                 if ws is not None:
                     with contextlib.suppress(Exception):
                         await ws.close()
+                self._connected = False
 
             reconnect_attempt += 1
             reconnect_delay = min(

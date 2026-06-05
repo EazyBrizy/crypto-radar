@@ -90,11 +90,15 @@ def _scanner_status(
     enabled = runner is not None if scanner_enabled is None else scanner_enabled
     config_status = _scanner_config_status()
     if runner is not None:
+        runner_status = dict(runner.scanner_status)
         return {
             "status": "ok",
             "scanner_enabled": enabled,
             **config_status,
-            **runner.scanner_status,
+            **_scanner_runtime_defaults(
+                scanner_running=bool(runner_status.get("scanner_running")),
+            ),
+            **runner_status,
         }
 
     return {
@@ -105,6 +109,7 @@ def _scanner_status(
         "scanner_subscription_hash": config_status["scanner_subscription_hash"],
         "strategy_config_hash": radar_config_service.strategy_config_hash(),
         "processed_signals": 0,
+        **_scanner_runtime_defaults(scanner_running=False),
         "exchanges": [],
         "symbols": [],
         "scan_pairs": config_status["scan_pairs"],
@@ -121,7 +126,6 @@ def _scanner_status(
         "strategy_evaluations": 0,
         "signals_found": 0,
         "candles_seeded": 0,
-        "last_tick_at": None,
         "last_signal_at": None,
         "last_exchange": None,
         "last_symbol": None,
@@ -152,4 +156,21 @@ def _scanner_config_status() -> dict[str, object]:
         "scanner_universe_warning": universe.warning,
         "max_scanner_pairs": universe.max_pairs,
         "estimated_strategy_checks": universe.estimated_strategy_checks,
+    }
+
+
+def _scanner_runtime_defaults(*, scanner_running: bool) -> dict[str, object]:
+    return {
+        "stage": "starting" if scanner_running else "stopped",
+        "market_data_status": "waiting" if scanner_running else "offline",
+        "warmup_total": 0,
+        "warmup_completed": 0,
+        "warmup_failed": 0,
+        "warmup_started_at": None,
+        "warmup_finished_at": None,
+        "last_tick_at": None,
+        "last_tick_age_seconds": None,
+        "last_error": None,
+        "market_stream_connected": False,
+        "ws_connected": False,
     }

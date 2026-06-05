@@ -1865,6 +1865,35 @@ function normalizeMarketDataStatus(value: unknown): MarketDataStatus {
   return "unknown";
 }
 
+function normalizeScannerStage(value: unknown, scannerRunning: boolean): HealthStatus["stage"] {
+  if (
+    value === "idle" ||
+    value === "starting" ||
+    value === "warming_up" ||
+    value === "listening" ||
+    value === "stale" ||
+    value === "degraded" ||
+    value === "stopped" ||
+    value === "error"
+  ) {
+    return value;
+  }
+  return scannerRunning ? "starting" : "stopped";
+}
+
+function normalizeScannerMarketDataStatus(value: unknown, scannerRunning: boolean): HealthStatus["market_data_status"] {
+  if (
+    value === "online" ||
+    value === "waiting" ||
+    value === "stale" ||
+    value === "offline" ||
+    value === "error"
+  ) {
+    return value;
+  }
+  return scannerRunning ? "waiting" : "offline";
+}
+
 function normalizeTradeInstrumentType(value: unknown) {
   if (value === "spot" || value === "futures") return value;
   return "virtual";
@@ -1979,13 +2008,25 @@ function normalizeExchangeOrderPlacementMode(value: unknown): ExchangeConnection
 
 export function normalizeHealth(value: unknown): HealthStatus {
   const health = value as Partial<HealthStatus>;
+  const scannerRunning = Boolean(health.scanner_running);
   return {
     status: String(health.status ?? "unknown"),
     scanner_enabled: Boolean(health.scanner_enabled),
-    scanner_running: Boolean(health.scanner_running),
+    scanner_running: scannerRunning,
     scanner_stopping: Boolean(health.scanner_stopping),
+    stage: normalizeScannerStage(health.stage, scannerRunning),
+    market_data_status: normalizeScannerMarketDataStatus(health.market_data_status, scannerRunning),
     processed_signals: Number(health.processed_signals ?? 0),
     ticks_processed: Number(health.ticks_processed ?? 0),
+    warmup_total: Number(health.warmup_total ?? 0),
+    warmup_completed: Number(health.warmup_completed ?? 0),
+    warmup_failed: Number(health.warmup_failed ?? 0),
+    warmup_started_at: optionalNumber(health.warmup_started_at),
+    warmup_finished_at: optionalNumber(health.warmup_finished_at),
+    last_tick_age_seconds: optionalNumber(health.last_tick_age_seconds),
+    last_error: optionalString(health.last_error),
+    market_stream_connected: Boolean(health.market_stream_connected),
+    ws_connected: Boolean(health.ws_connected ?? health.market_stream_connected),
     features_built: Number(health.features_built ?? 0),
     strategy_evaluations: Number(health.strategy_evaluations ?? 0),
     signals_found: Number(health.signals_found ?? 0),
@@ -2023,11 +2064,20 @@ export function normalizeRadarStatus(value: unknown): RadarStatus {
     strategy_evaluations: Number(status.strategy_evaluations ?? 0),
     signals_found: Number(status.signals_found ?? 0),
     candles_seeded: Number(status.candles_seeded ?? 0),
+    warmup_total: Number(status.warmup_total ?? 0),
+    warmup_completed: Number(status.warmup_completed ?? 0),
+    warmup_failed: Number(status.warmup_failed ?? 0),
+    warmup_started_at: optionalNumber(status.warmup_started_at),
+    warmup_finished_at: optionalNumber(status.warmup_finished_at),
     last_tick_at: status.last_tick_at ?? null,
+    last_tick_age_seconds: optionalNumber(status.last_tick_age_seconds),
     last_signal_at: status.last_signal_at ?? null,
     last_exchange: status.last_exchange ?? null,
     last_symbol: status.last_symbol ?? null,
     last_price: status.last_price ?? null,
+    last_error: optionalString(status.last_error),
+    market_stream_connected: Boolean(status.market_stream_connected),
+    ws_connected: Boolean(status.ws_connected ?? status.market_stream_connected),
     candle_history: status.candle_history ?? {}
   };
 }

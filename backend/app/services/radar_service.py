@@ -5,10 +5,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from app.core.config import settings
 from app.domain.signal_status import is_execution_candidate_status
 from app.schemas.risk import RadarDisplayMode, RiskDecision, RiskPreviewRequest
 from app.schemas.signal_action import SignalActionBlocker, SignalActionMode, SignalActionState
-from app.schemas.signal import RadarResponse, RadarRRStatus, RadarSignal
+from app.schemas.signal import RadarResponse, RadarRRStatus, RadarSignal, RadarSummary
 from app.schemas.user import RiskManagementSettings
 from app.services.risk_management import (
     ExecutionProfileResolver,
@@ -104,7 +105,7 @@ class RadarService:
                 strategy_risk_settings=strategy_settings_by_signal.get(signal.id),
             )
             if resolution.mode == "all_market_opportunities":
-                if _gate_feed_kind(signal) == "blocked":
+                if not _should_show_in_all_market_feed(signal):
                     continue
                 annotated = _annotated_signal(
                     signal,
@@ -128,6 +129,11 @@ class RadarService:
                 continue
 
             if resolution.mode == "blocked":
+                if (
+                    _gate_feed_kind(signal) == "blocked"
+                    and not settings.radar_debug_blocked_feed_enabled
+                ):
+                    continue
                 decision: RiskDecision | None = None
                 if _gate_feed_kind(signal) != "blocked":
                     gate = signal.execution_gate
@@ -217,13 +223,17 @@ class RadarService:
                 )
             )
         visible_signals = _dedupe_execution_feed_signals(visible_signals)
+        summary = _build_display_summary(
+            source_signals=signals,
+            visible_signals=visible_signals,
+        )
         if include_action_state and len(visible_signals) > MAX_RADAR_ACTION_STATE_SIGNALS:
             logger.warning(
                 "Radar include_action_state limited to %s signals out of %s visible signals",
                 MAX_RADAR_ACTION_STATE_SIGNALS,
                 len(visible_signals),
             )
-        return RadarResponse(signals=visible_signals, summary=build_radar_summary(visible_signals))
+        return RadarResponse(signals=visible_signals, summary=summary)
 
     def _with_views(
         self,
@@ -474,6 +484,47 @@ def _rr_metadata_sources(signal: RadarSignal) -> list[Mapping[str, Any]]:
 
 def _gate_feed_kind(signal: RadarSignal) -> str | None:
     return signal.execution_gate.feed_kind if signal.execution_gate is not None else None
+
+
+def _should_show_in_all_market_feed(signal: RadarSignal) -> bool:
+    feed_kind = _gate_feed_kind(signal)
+    if settings.radar_all_feed_excludes_blocked and feed_kind == "blocked":
+        return False
+    if signal.score < settings.radar_all_feed_min_visible_score:
+        return False
+    return feed_kind in {"market_idea", "watchlist", "execution_signal"} or feed_kind is None
+
+
+def _build_display_summary(
+    *,
+    source_signals: list[RadarSignal],
+    visible_signals: list[RadarSignal],
+) -> RadarSummary:
+    visible_market_ideas = sum(
+        1 for signal in visible_signals
+        if _gate_feed_kind(signal) == "market_idea"
+    )
+    hidden_blocked_ideas = sum(
+        1 for signal in source_signals
+        if _gate_feed_kind(signal) == "blocked" and settings.radar_all_feed_excludes_blocked
+    )
+    hidden_low_score_ideas = sum(
+        1 for signal in source_signals
+        if _gate_feed_kind(signal) != "blocked"
+        and signal.score < settings.radar_all_feed_min_visible_score
+    )
+    diagnostic_blocked_ideas = sum(
+        1 for signal in source_signals
+        if _gate_feed_kind(signal) == "blocked"
+    )
+    return build_radar_summary(visible_signals).model_copy(
+        update={
+            "visible_market_ideas": visible_market_ideas,
+            "hidden_blocked_ideas": hidden_blocked_ideas,
+            "hidden_low_score_ideas": hidden_low_score_ideas,
+            "diagnostic_blocked_ideas": diagnostic_blocked_ideas,
+        }
+    )
 
 
 def _matches_feed_kind_mode(signal: RadarSignal, mode: str) -> bool:

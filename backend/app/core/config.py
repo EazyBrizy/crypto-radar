@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     signal_outcome_same_candle_resolution: str = "conservative_stop_first"
     strategy_performance_min_sample_size: int = 30
     scanner_open_candle_previews_enabled: bool = True
+    radar_all_feed_excludes_blocked: bool = True
+    radar_all_feed_min_visible_score: int = 50
+    radar_debug_blocked_feed_enabled: bool = True
     execution_closed_candle_only: bool = True
     execution_min_score: int = 70
     execution_dedup_window_seconds: int = 300

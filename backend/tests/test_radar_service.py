@@ -77,6 +77,92 @@ class RadarServiceTest(unittest.TestCase):
         self.assertTrue(all("all_market_opportunities" in (signal.display_reason or "") for signal in response.signals))
         self.assertEqual(risk_preview.calls, [])
 
+    def test_radar_service_all_feed_hides_blocked_low_score(self) -> None:
+        blocked_low = _signal(
+            status="ready",
+            score=23,
+            execution_gate=_execution_gate(
+                can_show=False,
+                feed_kind="blocked",
+                status="blocked",
+            ),
+        )
+        visible_market = _signal(
+            status="active",
+            score=64,
+            symbol="ETHUSDT",
+            execution_gate=_execution_gate(
+                can_show=False,
+                feed_kind="market_idea",
+                status="warning",
+            ),
+        )
+        low_market = _signal(
+            status="active",
+            score=49,
+            symbol="XRPUSDT",
+            execution_gate=_execution_gate(
+                can_show=False,
+                feed_kind="market_idea",
+                status="warning",
+            ),
+        )
+        service = _service(
+            [blocked_low, visible_market, low_market],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="all_market_opportunities")
+
+        self.assertEqual([signal.id for signal in response.signals], [visible_market.id])
+        self.assertEqual(response.summary.hidden_blocked_ideas, 1)
+        self.assertEqual(response.summary.hidden_low_score_ideas, 1)
+        self.assertEqual(response.summary.visible_market_ideas, 1)
+
+    def test_radar_service_blocked_mode_shows_blocked_diagnostics(self) -> None:
+        blocked_low = _signal(
+            status="ready",
+            score=23,
+            execution_gate=_execution_gate(
+                can_show=False,
+                feed_kind="blocked",
+                status="blocked",
+            ),
+        )
+        service = _service(
+            [blocked_low],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="blocked")
+
+        self.assertEqual([signal.id for signal in response.signals], [blocked_low.id])
+        self.assertEqual(response.summary.diagnostic_blocked_ideas, 1)
+
+    def test_radar_summary_counts_hidden_blocked(self) -> None:
+        blocked = _signal(
+            status="ready",
+            score=82,
+            execution_gate=_execution_gate(
+                can_show=False,
+                feed_kind="blocked",
+                status="blocked",
+            ),
+        )
+        service = _service(
+            [blocked],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="all_market_opportunities")
+
+        self.assertEqual(response.signals, [])
+        self.assertEqual(response.summary.hidden_blocked_ideas, 1)
+        self.assertEqual(response.summary.diagnostic_blocked_ideas, 1)
+
     def test_radar_list_does_not_call_action_state_by_default(self) -> None:
         signal = _signal(status="actionable", rr_status="passed")
         calls: list[str] = []

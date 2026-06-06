@@ -283,6 +283,10 @@ class RadarSummary(BaseModel):
     high_confidence_signals: int = 0
     positive_edge_signals: int = 0
     blocked_ideas: int = 0
+    visible_market_ideas: int = 0
+    hidden_blocked_ideas: int = 0
+    hidden_low_score_ideas: int = 0
+    diagnostic_blocked_ideas: int = 0
 
 
 SignalDirection = Literal["long", "short"]

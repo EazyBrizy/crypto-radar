@@ -174,6 +174,9 @@ export function RadarPage(props: RadarPageProps) {
             </button>
           ))}
         </div>
+        {props.radarDisplayMode === "blocked" ? (
+          <div className="warning-banner">{tKey("radar.blockedDiagnosticsWarning")}</div>
+        ) : null}
         <div className="filter-row">
           {(["all", "long", "short"] as const).map((item) => (
             <button

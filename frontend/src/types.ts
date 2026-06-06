@@ -529,6 +529,10 @@ export interface RadarSummary {
   high_confidence_signals: number;
   positive_edge_signals: number;
   blocked_ideas: number;
+  visible_market_ideas?: number;
+  hidden_blocked_ideas?: number;
+  hidden_low_score_ideas?: number;
+  diagnostic_blocked_ideas?: number;
 }
 
 export interface RadarSignal {

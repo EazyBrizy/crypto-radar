@@ -36,8 +36,17 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
   }
 
   const targets = viewTargets(view.targets);
+  const isBlockedDiagnostic = signal.execution_gate?.feed_kind === "blocked";
+  const isLowScore = signal.score < 70;
   const reason = executionBlockedReason(signal) ?? view.reason;
-  const badges = dedupeBadges([...view.badges, ...executionGateBadges(signal)]);
+  const statusLabel = isBlockedDiagnostic && isLowScore ? "Blocked idea" : view.status_label;
+  const statusTone = isBlockedDiagnostic ? "red" : view.status_tone;
+  const badges = dedupeBadges([
+    ...(isBlockedDiagnostic ? [{ code: "not_for_execution", label: "Not for execution", tone: "red" } as SignalBadgeView] : []),
+    ...(isLowScore ? [{ code: "low_score", label: "low score", tone: "yellow" } as SignalBadgeView] : []),
+    ...view.badges,
+    ...executionGateBadges(signal)
+  ]);
 
   return (
     <button className={`signal-card ${selected ? "selected" : ""}`} onClick={() => onSelect(signal)} type="button">
@@ -46,7 +55,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
           <div className="pair-row">
             <strong>{signal.symbol}</strong>
             <Badge>{signal.exchange}</Badge>
-            <Badge tone={view.status_tone}>{view.status_label}</Badge>
+            <Badge tone={statusTone}>{statusLabel}</Badge>
           </div>
           <span className="muted">{signal.strategy.replaceAll("_", " ")}</span>
         </div>
@@ -61,7 +70,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
           <span>{signal.score}</span>
         </div>
         <div className="signal-score-meta">
-          <strong>{Math.round(signal.confidence * 100)}% Confidence</strong>
+          <strong>Idea score {signal.score}</strong>
           <span className="muted">{view.risk_meta}</span>
           <span className="signal-ttl">
             <Clock3 size={13} />
@@ -76,18 +85,20 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
         ))}
       </div>
 
-      <div className="setup-grid">
-        <span>Entry<strong>{view.entry_label} | {view.entry_value}</strong></span>
-        <span>SL<strong>{formatPrice(view.stop_loss)}</strong></span>
-        <span>TP1<strong>{formatTargetPrice(targets[0])}</strong></span>
-        <span>TP2<strong>{formatTargetPrice(targets[1])}</strong></span>
-        <span>TP3<strong>{formatTargetPrice(targets[2])}</strong></span>
-        <span>Selected RR<strong>{formatRMultiple(view.selected_rr)}</strong></span>
-        <span>
-          {price ? "Price" : "TF"}
-          <strong>{price ? `${formatPrice(price.price)} | ${new Date(price.updatedAt).toLocaleTimeString()}` : signal.timeframe}</strong>
-        </span>
-      </div>
+      {isBlockedDiagnostic ? null : (
+        <div className="setup-grid">
+          <span>Entry<strong>{view.entry_label} | {view.entry_value}</strong></span>
+          <span>SL<strong>{formatPrice(view.stop_loss)}</strong></span>
+          <span>TP1<strong>{formatTargetPrice(targets[0])}</strong></span>
+          <span>TP2<strong>{formatTargetPrice(targets[1])}</strong></span>
+          <span>TP3<strong>{formatTargetPrice(targets[2])}</strong></span>
+          <span>Selected RR<strong>{formatRMultiple(view.selected_rr)}</strong></span>
+          <span>
+            {price ? "Price" : "TF"}
+            <strong>{price ? `${formatPrice(price.price)} | ${new Date(price.updatedAt).toLocaleTimeString()}` : signal.timeframe}</strong>
+          </span>
+        </div>
+      )}
 
       <div className="card-reason">
         <Activity size={15} />

@@ -116,6 +116,7 @@ export function SignalDetails({
   const activePendingEntry = viewModel.activePendingEntry;
   const terminalPendingEntry = viewModel.terminalPendingEntry;
   const backendDisabledReason = actionStateDisabledReason(actionState ?? null, tReason);
+  const pendingDisabledReason = pendingEntryDisabledReason(signal, actionState ?? null, tKey, tReason);
   const entryActionDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_enter_now !== true;
   const acceptPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || pendingEntryLoading || actionState?.can_arm_pending !== true;
   const cancelPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_cancel !== true;
@@ -181,6 +182,7 @@ export function SignalDetails({
         setRealConfirmationOpen={setRealConfirmationOpen}
         tradingActionsDisabled={tradingActionsDisabled}
         backendDisabledReason={backendDisabledReason}
+        pendingDisabledReason={acceptPendingDisabled ? pendingDisabledReason : null}
         canEnterNow={viewModel.canEnterNow}
       />
 
@@ -466,6 +468,7 @@ function ActionsBlock({
   setRealConfirmationOpen,
   tradingActionsDisabled,
   backendDisabledReason,
+  pendingDisabledReason,
   canEnterNow
 }: {
   acceptPendingDisabled: boolean;
@@ -484,6 +487,7 @@ function ActionsBlock({
   setRealConfirmationOpen: (open: boolean) => void;
   tradingActionsDisabled: boolean;
   backendDisabledReason: string | null;
+  pendingDisabledReason: string | null;
   canEnterNow: boolean | null;
 }) {
   const { tKey } = useI18n();
@@ -521,6 +525,8 @@ function ActionsBlock({
       </div>
       {tradingActionsDisabled ? (
         <p className="compact-action-note">{tKey("signalDetails.tradingDisabled")}</p>
+      ) : pendingDisabledReason ? (
+        <p className="compact-action-note">{pendingDisabledReason}</p>
       ) : backendDisabledReason ? (
         <p className="compact-action-note">{backendDisabledReason}</p>
       ) : null}
@@ -931,6 +937,21 @@ function actionStateDisabledReason(state: SignalActionState | null, tReason: TRe
   if (reasonCode) return tReason(reasonCode);
   const fallback = state.display_labels.disabled_reason ?? blocker?.display_label ?? blocker?.message ?? null;
   return fallback ? tReason(fallback) : null;
+}
+
+function pendingEntryDisabledReason(
+  signal: RadarSignal,
+  state: SignalActionState | null,
+  tKey: TKey,
+  tReason: TReason
+): string | null {
+  if (state?.can_arm_pending === true) return null;
+  const actionReason = actionStateDisabledReason(state, tReason);
+  const gateBlocker = signal.execution_gate?.reasons.find((reason) => reason.severity === "blocker")
+    ?? signal.execution_gate?.reasons[0]
+    ?? null;
+  const reason = actionReason ?? gateBlocker?.message ?? null;
+  return reason ? tKey("signalDetails.waitingEntryUnavailable", { reason }) : null;
 }
 
 function formatCurrencyAmount(value: number | null | undefined): string {

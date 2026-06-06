@@ -103,6 +103,36 @@ describe("SignalCard", () => {
     expect(screen.getByText("Trigger not confirmed")).toBeInTheDocument();
     expect(screen.getByText("Execution blocked: Trigger has not confirmed on a closed candle")).toBeInTheDocument();
   });
+
+  it("renders blocked low-score cards as diagnostics, not execution calls", () => {
+    render(<SignalCard signal={baseSignal({
+      score: 23,
+      execution_gate: {
+        status: "blocked",
+        feed_kind: "blocked",
+        can_notify: false,
+        can_enter_now: false,
+        can_arm_pending: false,
+        can_show_in_execution_feed: false,
+        reasons: [
+          {
+            code: "forming_candle",
+            severity: "blocker",
+            source: "candle",
+            message: "Waiting for candle close",
+            metadata: {}
+          }
+        ],
+        warnings: [],
+        metadata: {}
+      }
+    })} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("Blocked idea")).toBeInTheDocument();
+    expect(screen.getByText("Not for execution")).toBeInTheDocument();
+    expect(screen.getByText("low score")).toBeInTheDocument();
+    expect(screen.queryByText("TP1")).not.toBeInTheDocument();
+  });
 });
 
 function baseSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {

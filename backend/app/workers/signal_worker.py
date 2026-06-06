@@ -142,6 +142,14 @@ class ScannerRunner:
                     )
                     continue
                 if created:
+                    if not _should_publish_created_signal(radar_signal):
+                        logger.debug(
+                            "Radar signal created event suppressed by dedup: %s %s %s",
+                            radar_signal.id,
+                            radar_signal.symbol,
+                            radar_signal.direction,
+                        )
+                        continue
                     self._processed_signals += 1
                     await realtime_event_broker.publish(signal_created_event(radar_signal))
                     if _should_notify_signal(radar_signal, notified_execution_keys=notified_execution_keys):
@@ -334,6 +342,8 @@ def _should_notify_signal(
     *,
     notified_execution_keys: set[tuple[str, str, str]] | None = None,
 ) -> bool:
+    if _is_suppressed_duplicate_signal(signal):
+        return False
     gate = getattr(signal, "execution_gate", None)
     if gate is None:
         return _legacy_signal_is_notification_eligible(signal)
@@ -351,6 +361,19 @@ def _should_notify_signal(
         return False
     notified_execution_keys.add(key)
     return True
+
+
+def _should_publish_created_signal(signal: object) -> bool:
+    return not _is_suppressed_duplicate_signal(signal)
+
+
+def _is_suppressed_duplicate_signal(signal: object) -> bool:
+    gate = getattr(signal, "execution_gate", None)
+    metadata = getattr(gate, "metadata", None)
+    if not isinstance(metadata, dict):
+        return False
+    dedup = metadata.get("dedup")
+    return isinstance(dedup, dict) and dedup.get("action") == "suppress"
 
 
 def _legacy_signal_is_notification_eligible(signal: object) -> bool:

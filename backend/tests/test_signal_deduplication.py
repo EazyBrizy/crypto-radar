@@ -72,6 +72,29 @@ class SignalDeduplicationServiceTest(unittest.TestCase):
 
 
 class SignalServiceWriteSideDedupTest(unittest.TestCase):
+    def test_signal_service_dedup_applies_before_hot_store_write(self) -> None:
+        existing = _signal(signal_id="existing", score=95)
+        repository = _DedupRepository(seed=[existing], next_id="candidate")
+        analytics = _RecordingSignalAnalyticsWriter()
+        hot_store = _RecordingSignalHotStore()
+        service = SignalService(
+            repository=repository,
+            analytics_writer=analytics,
+            hot_store=hot_store,
+        )
+
+        radar_signal, created = service.upsert_strategy_signal(_strategy_signal(score=82))
+
+        self.assertTrue(created)
+        self.assertEqual(radar_signal.id, "candidate")
+        self.assertEqual(radar_signal.status, "rejected")
+        self.assertEqual([result.signal.status for result in hot_store.results], ["rejected"])
+        self.assertEqual([event["event_type"] for event in analytics.events], ["signal.invalidated"])
+        self.assertIsNotNone(radar_signal.execution_gate)
+        self.assertEqual(radar_signal.execution_gate.feed_kind if radar_signal.execution_gate else None, "blocked")
+        self.assertFalse(radar_signal.execution_gate.can_notify if radar_signal.execution_gate else True)
+        self.assertEqual(radar_signal.execution_gate.metadata.get("dedup", {}).get("action") if radar_signal.execution_gate else None, "suppress")
+
     def test_weaker_candidate_is_persisted_as_suppressed_and_returned_terminal(self) -> None:
         existing = _signal(signal_id="existing", score=95)
         repository = _DedupRepository(seed=[existing], next_id="candidate")
@@ -87,7 +110,8 @@ class SignalServiceWriteSideDedupTest(unittest.TestCase):
         self.assertEqual(radar_signal.id, "candidate")
         self.assertEqual(radar_signal.status, "rejected")
         self.assertEqual(radar_signal.status_reason, "dedup_suppressed_by_better_signal")
-        self.assertEqual(repository.dedup_metadata["candidate"]["action"], "dedup_suppressed")
+        self.assertEqual(repository.dedup_metadata["candidate"]["action"], "suppress")
+        self.assertEqual(repository.dedup_metadata["candidate"]["dedup_lifecycle"], "dedup_suppressed")
         self.assertEqual(repository.dedup_metadata["candidate"]["suppressed_by_signal_id"], "existing")
 
     def test_stronger_candidate_invalidates_replaced_open_signal(self) -> None:
@@ -105,7 +129,8 @@ class SignalServiceWriteSideDedupTest(unittest.TestCase):
         self.assertEqual(radar_signal.status, "actionable")
         self.assertEqual(repository.signals["existing"].status, "invalidated")
         self.assertEqual(repository.signals["existing"].status_reason, "dedup_replaced_by_better_signal")
-        self.assertEqual(repository.dedup_metadata["candidate"]["action"], "dedup_replace")
+        self.assertEqual(repository.dedup_metadata["candidate"]["action"], "replace")
+        self.assertEqual(repository.dedup_metadata["candidate"]["dedup_lifecycle"], "dedup_replace")
         self.assertEqual(repository.dedup_metadata["candidate"]["replaced_signal_ids"], ["existing"])
         self.assertEqual(repository.dedup_metadata["existing"]["action"], "dedup_replaced")
 
@@ -276,10 +301,12 @@ class _DedupRepository:
             return None
         if signal_updates and isinstance(signal_updates.get("dedup"), dict):
             self.dedup_metadata[signal_id] = signal_updates["dedup"]  # type: ignore[assignment]
+        execution_gate = signal_updates.get("execution_gate") if signal_updates else None
         updated = signal.model_copy(
             update={
                 "status": new_status,
                 "status_reason": reason,
+                "execution_gate": execution_gate or signal.execution_gate,
                 "updated_at": datetime(2026, 6, 6, tzinfo=timezone.utc),
             }
         )
@@ -298,6 +325,22 @@ def _write_result(signal: RadarSignal, *, created: bool, event_type: str) -> Sig
             "signal_key": signal.id,
         },
     )
+
+
+class _RecordingSignalAnalyticsWriter:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def write_event(self, event: dict[str, object]) -> None:
+        self.events.append(event)
+
+
+class _RecordingSignalHotStore:
+    def __init__(self) -> None:
+        self.results: list[SignalWriteResult] = []
+
+    def write_signal(self, result: SignalWriteResult) -> None:
+        self.results.append(result)
 
 
 if __name__ == "__main__":

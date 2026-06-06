@@ -17,7 +17,7 @@ from app.repositories.signal_repository import (
 )
 from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.risk import RadarDisplayMode, RiskDecision, RiskPreviewRequest
-from app.schemas.signal import RadarSignal, StrategySignal
+from app.schemas.signal import RadarSignal, SignalExecutionGateReason, SignalExecutionGateSnapshot, StrategySignal
 from app.schemas.trade import ManualConfirmRequest
 from app.services.risk_management import default_rr_guard_mode_for_context
 from app.services.signal_deduplication import DedupDecision, signal_deduplication_service
@@ -242,10 +242,8 @@ class SignalService:
             exchange=exchange,
             explanation=explanation,
         )
-        self._after_write(result)
         final_result = self._apply_write_side_dedup(result)
-        if final_result is not result:
-            self._after_write(final_result)
+        self._after_write(final_result)
         self._reconcile_pending_entry_trade_plan(final_result)
         return final_result.signal, result.created
 
@@ -422,11 +420,15 @@ class SignalService:
         decision = signal_deduplication_service.decide(signal, open_signals)
         metadata = _dedup_metadata(decision)
         if decision.action == "suppress":
+            updates = {
+                "dedup": metadata,
+                "execution_gate": _dedup_suppressed_execution_gate(signal, metadata),
+            }
             suppressed = self._transition_signal_for_dedup(
                 signal.id,
                 new_status="rejected",
                 reason="dedup_suppressed_by_better_signal",
-                dedup=metadata,
+                signal_updates=updates,
             )
             return suppressed or self._update_signal_dedup_metadata(signal.id, metadata) or result
 
@@ -436,10 +438,13 @@ class SignalService:
                     replaced_signal_id,
                     new_status="invalidated",
                     reason="dedup_replaced_by_better_signal",
-                    dedup={
-                        **metadata,
-                        "action": "dedup_replaced",
-                        "replaced_by_signal_id": signal.id,
+                    signal_updates={
+                        "dedup": {
+                            **metadata,
+                            "action": "dedup_replaced",
+                            "dedup_lifecycle": "dedup_replaced",
+                            "replaced_by_signal_id": signal.id,
+                        },
                     },
                 )
                 if replaced is not None:
@@ -453,7 +458,7 @@ class SignalService:
         *,
         new_status: str,
         reason: str,
-        dedup: dict[str, object],
+        signal_updates: dict[str, object],
     ) -> SignalWriteResult | None:
         transition = getattr(self._repository, "transition_signal", None)
         if not callable(transition):
@@ -463,7 +468,7 @@ class SignalService:
             new_status=new_status,
             event_type=SIGNAL_INVALIDATED_EVENT,
             reason=reason,
-            signal_updates={"dedup": dedup},
+            signal_updates=signal_updates,
         )
 
     def _update_signal_dedup_metadata(
@@ -489,19 +494,49 @@ class SignalService:
 
 def _dedup_metadata(decision: DedupDecision) -> dict[str, object]:
     metadata = dict(decision.metadata)
-    action = {
+    dedup_lifecycle = {
         "suppress": "dedup_suppressed",
         "replace": "dedup_replace",
     }.get(decision.action, decision.action)
     metadata.update(
         {
-            "action": action,
+            "action": decision.action,
+            "dedup_lifecycle": dedup_lifecycle,
             "reason": decision.reason,
             "suppressed_by_signal_id": decision.suppressed_by_signal_id,
             "replaced_signal_ids": list(decision.replaced_signal_ids),
         }
     )
     return metadata
+
+
+def _dedup_suppressed_execution_gate(
+    signal: RadarSignal,
+    dedup: dict[str, object],
+) -> SignalExecutionGateSnapshot:
+    return SignalExecutionGateSnapshot(
+        status="blocked",
+        feed_kind="blocked",
+        can_notify=False,
+        can_enter_now=False,
+        can_arm_pending=False,
+        can_show_in_execution_feed=False,
+        reasons=[
+            SignalExecutionGateReason(
+                code="dedup_suppressed_by_better_signal",
+                severity="blocker",
+                source="dedup",
+                message="Signal suppressed by a stronger duplicate for the same market direction.",
+                metadata=dedup,
+            )
+        ],
+        warnings=[],
+        metadata={
+            "dedup": dedup,
+            "status": signal.status,
+            "score": signal.score,
+        },
+    )
 
 
 def _normalize_signal_symbol(symbol: str) -> str:

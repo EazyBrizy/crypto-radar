@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot
-from app.workers.signal_worker import _should_notify_signal
+from app.workers.signal_worker import _should_notify_signal, _should_publish_created_signal
 
 
 class SignalWorkerNotificationGateTest(unittest.TestCase):
@@ -69,6 +69,26 @@ class SignalWorkerNotificationGateTest(unittest.TestCase):
 
         self.assertFalse(_should_notify_signal(_signal(status="invalidated", execution_gate=execution_gate)))
 
+    def test_signal_worker_no_created_event_for_suppressed_duplicate(self) -> None:
+        self.assertFalse(
+            _should_publish_created_signal(
+                _signal(status="rejected", execution_gate=_suppressed_execution_gate())
+            )
+        )
+
+    def test_signal_worker_no_notification_for_suppressed_duplicate(self) -> None:
+        stale_execution_gate = SignalExecutionGateSnapshot(
+            status="passed",
+            feed_kind="execution_signal",
+            can_notify=True,
+            can_enter_now=True,
+            can_arm_pending=True,
+            can_show_in_execution_feed=True,
+            metadata={"dedup": {"action": "suppress"}},
+        )
+
+        self.assertFalse(_should_notify_signal(_signal(execution_gate=stale_execution_gate)))
+
     def test_execution_ready_notifications_are_deduped_by_pair_and_direction(self) -> None:
         seen: set[tuple[str, str, str]] = set()
         execution_gate = SignalExecutionGateSnapshot(
@@ -124,6 +144,18 @@ def _signal(
         created_at=now,
         updated_at=now,
         execution_gate=execution_gate,
+    )
+
+
+def _suppressed_execution_gate() -> SignalExecutionGateSnapshot:
+    return SignalExecutionGateSnapshot(
+        status="blocked",
+        feed_kind="blocked",
+        can_notify=False,
+        can_enter_now=False,
+        can_arm_pending=False,
+        can_show_in_execution_feed=False,
+        metadata={"dedup": {"action": "suppress"}},
     )
 
 

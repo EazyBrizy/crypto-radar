@@ -10,6 +10,7 @@ from app.schemas.signal import (
     NoTradeFilterResult,
     SignalConfirmationSnapshot,
     SignalLayerCheck,
+    SignalTriggerSnapshot,
     StrategySetupSnapshot,
     StrategySignal,
 )
@@ -50,6 +51,7 @@ class SignalStatusResolver:
         candle_state: str,
         production_mode: bool,
         actionable_score: int,
+        trigger: SignalTriggerSnapshot | None = None,
     ) -> SignalStatusDecision:
         status, status_reason = self._base_status(
             signal=signal,
@@ -74,6 +76,7 @@ class SignalStatusResolver:
             setup=setup,
             trade_plan=trade_plan,
             candle_state=candle_state,
+            trigger=trigger,
         )
 
     def _base_status(
@@ -155,6 +158,7 @@ class SignalStatusResolver:
         setup: StrategySetupSnapshot,
         trade_plan: TradePlan,
         candle_state: str,
+        trigger: SignalTriggerSnapshot | None,
     ) -> SignalStatusDecision:
         allow_open = _bool_param(params, "allow_open_candle_actionable", False)
         lower_timeframe_trigger = _has_lower_timeframe_trigger(signal, trade_plan)
@@ -170,6 +174,7 @@ class SignalStatusResolver:
             and _is_actionable_status(status)
             and not allow_lower_timeframe
         )
+        blocked_by_trigger = _is_actionable_status(status) and not _trigger_passed(trigger)
         final_status = status
         final_reason = status_reason
         actionability_block_reason: str | None = None
@@ -202,7 +207,14 @@ class SignalStatusResolver:
         elif candle_state == "open" and allow_open and _is_actionable_status(status):
             explanation.append("forming candle preview is explicitly allowed to remain actionable by configuration.")
 
-        if blocked_by_lower_timeframe:
+        if blocked_by_trigger and not blocked_by_open:
+            final_status = "ready"
+            final_reason = _trigger_not_confirmed_reason(trigger)
+            actionability_block_reason = "trigger_not_confirmed"
+            actionability_block_message = final_reason
+            risks.append(final_reason)
+
+        if blocked_by_lower_timeframe and not blocked_by_trigger:
             final_status = "ready"
             final_reason = (
                 "lower_timeframe_trigger: actionable classification requires "
@@ -220,6 +232,8 @@ class SignalStatusResolver:
             lower_timeframe_trigger=lower_timeframe_trigger,
             allow_lower_timeframe=allow_lower_timeframe,
             blocked_by_lower_timeframe=blocked_by_lower_timeframe,
+            trigger=trigger,
+            blocked_by_trigger=blocked_by_trigger,
             final_status=final_status,
         )
         trade_plan = _trade_plan_with_actionability_source_metadata(
@@ -230,6 +244,8 @@ class SignalStatusResolver:
             lower_timeframe_trigger=lower_timeframe_trigger,
             allow_lower_timeframe=allow_lower_timeframe,
             blocked_by_lower_timeframe=blocked_by_lower_timeframe,
+            trigger=trigger,
+            blocked_by_trigger=blocked_by_trigger,
             final_status=final_status,
         )
         return SignalStatusDecision(
@@ -282,6 +298,8 @@ def _confirmation_with_actionability_source_checks(
     lower_timeframe_trigger: bool,
     allow_lower_timeframe: bool,
     blocked_by_lower_timeframe: bool,
+    trigger: SignalTriggerSnapshot | None,
+    blocked_by_trigger: bool,
     final_status: str,
 ) -> SignalConfirmationSnapshot:
     checks = [
@@ -328,9 +346,28 @@ def _confirmation_with_actionability_source_checks(
                 },
             )
         )
+    if trigger is not None or blocked_by_trigger:
+        checks.append(
+            SignalLayerCheck(
+                name="trigger_confirmation_gate",
+                status="warning" if blocked_by_trigger else "passed",
+                reason=_trigger_not_confirmed_reason(trigger) if blocked_by_trigger else "Signal trigger is confirmed",
+                metadata={
+                    "reason_code": "trigger_not_confirmed" if blocked_by_trigger else None,
+                    "trigger_passed": _trigger_passed(trigger),
+                    "trigger_type": trigger.trigger_type if trigger is not None else "none",
+                    "signal_actionable": _is_actionable_status(final_status),
+                },
+            )
+        )
     return confirmation.model_copy(
         update={
-            "passed": confirmation.passed and not blocked_by_open and not blocked_by_lower_timeframe,
+            "passed": (
+                confirmation.passed
+                and not blocked_by_open
+                and not blocked_by_lower_timeframe
+                and not blocked_by_trigger
+            ),
             "checks": checks,
         }
     )
@@ -345,6 +382,8 @@ def _trade_plan_with_actionability_source_metadata(
     lower_timeframe_trigger: bool,
     allow_lower_timeframe: bool,
     blocked_by_lower_timeframe: bool,
+    trigger: SignalTriggerSnapshot | None,
+    blocked_by_trigger: bool,
     final_status: str,
 ) -> TradePlan:
     signal_actionable = _is_actionable_status(final_status)
@@ -356,6 +395,8 @@ def _trade_plan_with_actionability_source_metadata(
         "lower_timeframe_trigger": lower_timeframe_trigger,
         "allow_lower_timeframe_trigger_actionable": allow_lower_timeframe,
         "actionable_from_lower_timeframe_trigger": lower_timeframe_trigger and allow_lower_timeframe and signal_actionable,
+        "trigger_passed": _trigger_passed(trigger),
+        "trigger_type": trigger.trigger_type if trigger is not None else "none",
     }
     if blocked_by_open:
         source_metadata.update(
@@ -375,6 +416,16 @@ def _trade_plan_with_actionability_source_metadata(
                 "execution_allowed_real": False,
                 "auto_entry_enabled": False,
                 "actionability_block_reason": "lower_timeframe_trigger",
+            }
+        )
+    elif blocked_by_trigger:
+        source_metadata.update(
+            {
+                "signal_actionable": False,
+                "execution_allowed_virtual": False,
+                "execution_allowed_real": False,
+                "auto_entry_enabled": False,
+                "actionability_block_reason": "trigger_not_confirmed",
             }
         )
     elif candle_state == "open" and allow_open and signal_actionable:
@@ -427,6 +478,16 @@ def _is_lower_timeframe(candidate: str, reference: str) -> bool:
 
 def _is_actionable_status(status: str) -> bool:
     return is_execution_candidate_status(status)
+
+
+def _trigger_passed(trigger: SignalTriggerSnapshot | None) -> bool:
+    return trigger is not None and trigger.passed is True
+
+
+def _trigger_not_confirmed_reason(trigger: SignalTriggerSnapshot | None) -> str:
+    if trigger is None:
+        return "trigger_not_confirmed: execution requires a confirmed trigger"
+    return f"trigger_not_confirmed: {trigger.reason or 'signal trigger is not confirmed'}"
 
 
 def _has_strong_regime_conflict(regime: MarketRegimeSnapshot) -> bool:

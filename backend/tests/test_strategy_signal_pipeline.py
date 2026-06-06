@@ -137,6 +137,8 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal.strategy if signal else None, "volatility_squeeze_breakout")
         self.assertIsNotNone(signal.trade_plan if signal else None)
+        self.assertIsNotNone(signal.trigger if signal else None)
+        self.assertTrue(signal.trigger.passed if signal and signal.trigger else False)
 
     def test_rr_assessment_service_matches_previous_rr_logic(self) -> None:
         features = _breakout_features()
@@ -433,7 +435,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(check.status, "warning")
         self.assertEqual(check.metadata.get("reason_code"), "forming_candle")
 
-    def test_pipeline_allows_open_candle_actionable_only_with_flag(self) -> None:
+    def test_pipeline_blocks_open_candle_execution_even_when_legacy_allow_flag_is_set(self) -> None:
         features = _breakout_features().model_copy(update={"candle_state": "open"})
         candidate = _quality_candidate(features).model_copy(update={"status": "actionable"})
 
@@ -451,20 +453,30 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(signal)
-        self.assertEqual(signal.status if signal else None, "actionable")
-        self.assertIsNone(signal.auto_entry if signal else None)
-        self.assertTrue(
+        self.assertEqual(signal.status if signal else None, "ready")
+        self.assertIn("trigger_not_confirmed", signal.status_reason if signal else "")
+        self.assertIsNotNone(signal.trigger if signal else None)
+        self.assertFalse(signal.trigger.passed if signal and signal.trigger else True)
+        self.assertFalse(signal.execution_gate.can_show_in_execution_feed if signal and signal.execution_gate else True)
+        self.assertFalse(
             signal.trade_plan.metadata.get("actionable_from_open_candle")
             if signal and signal.trade_plan
-            else False
+            else True
         )
-        check = next(
+        candle_check = next(
             item
             for item in (signal.confirmation.checks if signal and signal.confirmation else [])
             if item.name == "candle_state_gate"
         )
-        self.assertEqual(check.status, "passed")
-        self.assertTrue(check.metadata.get("actionable_from_open_candle"))
+        self.assertEqual(candle_check.status, "passed")
+        self.assertFalse(candle_check.metadata.get("actionable_from_open_candle"))
+        trigger_check = next(
+            item
+            for item in (signal.confirmation.checks if signal and signal.confirmation else [])
+            if item.name == "trigger_confirmation_gate"
+        )
+        self.assertEqual(trigger_check.status, "warning")
+        self.assertEqual(trigger_check.metadata.get("reason_code"), "trigger_not_confirmed")
 
     def test_pipeline_blocks_lower_timeframe_trigger_actionable_by_default(self) -> None:
         features = _breakout_features()

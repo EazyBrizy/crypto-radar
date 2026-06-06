@@ -864,6 +864,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         regime=snapshot.get("regime") if isinstance(snapshot.get("regime"), dict) else None,
         setup=snapshot.get("setup") if isinstance(snapshot.get("setup"), dict) else None,
         confirmation=snapshot.get("confirmation") if isinstance(snapshot.get("confirmation"), dict) else None,
+        trigger=snapshot.get("trigger") if isinstance(snapshot.get("trigger"), dict) else None,
         invalidation=snapshot.get("invalidation") if isinstance(snapshot.get("invalidation"), dict) else None,
         exit_plan=snapshot.get("exit_plan") if isinstance(snapshot.get("exit_plan"), dict) else None,
         trade_plan=trade_plan,
@@ -1021,6 +1022,7 @@ def _apply_signal_updates(
         snapshot["dedup"] = updates["dedup"]
     for key in (
         "confirmation",
+        "trigger",
         "first_target_rr",
         "final_target_rr",
         "selected_rr",
@@ -1033,7 +1035,7 @@ def _apply_signal_updates(
     ):
         if key in updates:
             snapshot_key = "decision_snapshot" if key == "decision" else key
-            if key in {"edge", "no_trade_filter", "decision", "execution_gate"}:
+            if key in {"trigger", "edge", "no_trade_filter", "decision", "execution_gate"}:
                 snapshot[snapshot_key] = _model_dump_optional(updates[key])
             else:
                 snapshot[snapshot_key] = updates[key]
@@ -1066,6 +1068,7 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "regime": _model_dump_optional(signal.regime),
         "setup": _model_dump_optional(signal.setup),
         "confirmation": _model_dump_optional(signal.confirmation),
+        "trigger": _model_dump_optional(signal.trigger),
         "invalidation": _model_dump_optional(signal.invalidation),
         "exit_plan": _model_dump_optional(signal.exit_plan),
         "trade_plan": _trade_plan_snapshot(signal),
@@ -1106,6 +1109,7 @@ def _snapshot_from_strategy_signal(
         "regime": _model_dump_optional(signal.regime),
         "setup": _model_dump_optional(signal.setup),
         "confirmation": _model_dump_optional(signal.confirmation),
+        "trigger": _model_dump_optional(signal.trigger),
         "invalidation": _model_dump_optional(signal.invalidation),
         "exit_plan": _model_dump_optional(signal.exit_plan),
         "trade_plan": _trade_plan_snapshot(signal),
@@ -1124,8 +1128,9 @@ def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str
         value = existing.get(key)
         if value is not None and key not in merged:
             merged[key] = value
-    if merged.get("edge") is None and existing.get("edge") is not None:
-        merged["edge"] = existing["edge"]
+    for key in ("edge", "trigger"):
+        if merged.get(key) is None and existing.get(key) is not None:
+            merged[key] = existing[key]
     return merged
 
 

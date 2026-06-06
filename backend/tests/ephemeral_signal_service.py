@@ -95,6 +95,7 @@ class EphemeralSignalRepository:
             regime=signal.regime,
             setup=signal.setup,
             confirmation=signal.confirmation,
+            trigger=signal.trigger,
             invalidation=signal.invalidation,
             exit_plan=signal.exit_plan,
             trade_plan=signal.trade_plan,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from app.domain.signal_status import is_execution_candidate_status
@@ -13,6 +14,7 @@ from app.schemas.signal import (
     SignalExitPlanSnapshot,
     SignalInvalidationSnapshot,
     SignalLayerCheck,
+    SignalTriggerSnapshot,
     StrategySetupSnapshot,
     StrategySignal,
 )
@@ -188,6 +190,7 @@ class StrategySignalPipeline:
             context.rr_guard_context,
         )
         confirmation = ConfirmationLayer().evaluate(signal, context, risk_reward)
+        trigger = TriggerLayer().evaluate(signal, context, confirmation)
         no_trade = NoTradeFilterService().evaluate(
             signal=signal,
             features=context.signal_features,
@@ -252,6 +255,7 @@ class StrategySignalPipeline:
             completeness=completeness,
             trade_plan=trade_plan,
             candle_state=candle_state,
+            trigger=trigger,
             production_mode=production_mode,
             actionable_score=ACTIONABLE_SCORE,
         )
@@ -323,6 +327,7 @@ class StrategySignalPipeline:
             "regime": regime,
             "setup": setup,
             "confirmation": confirmation,
+            "trigger": trigger,
             "no_trade_filter": no_trade,
             "invalidation": invalidation,
             "exit_plan": exit_plan,
@@ -779,6 +784,49 @@ class ConfirmationLayer:
         return SignalConfirmationSnapshot(
             passed=all(check.status != "failed" for check in checks),
             checks=checks,
+        )
+
+
+class TriggerLayer:
+    def evaluate(
+        self,
+        signal: StrategySignal,
+        context: StrategyEvaluationContext,
+        confirmation: SignalConfirmationSnapshot,
+    ) -> SignalTriggerSnapshot:
+        trigger_type = _trigger_type_for_strategy(signal)
+        closed_candle = signal.candle_state == "closed"
+        passed = confirmation.passed and closed_candle
+        reason = (
+            "Trigger confirmed on closed candle."
+            if passed
+            else "Trigger requires a closed candle."
+            if not closed_candle
+            else "Strategy confirmation has not passed."
+        )
+        check = SignalLayerCheck(
+            name="trigger_confirmation",
+            status="passed" if passed else "failed",
+            reason=reason,
+            metadata={
+                "trigger_type": trigger_type,
+                "confirmation_passed": confirmation.passed,
+                "candle_state": signal.candle_state,
+            },
+        )
+        return SignalTriggerSnapshot(
+            trigger_type=trigger_type,
+            passed=passed,
+            price=_entry_price(signal) or context.signal_features.close,
+            candle_state=signal.candle_state,
+            confirmed_at=_signal_timestamp_datetime(signal.timestamp) if passed else None,
+            reason=reason,
+            checks=[check],
+            metadata={
+                "strategy": signal.strategy,
+                "timeframe": signal.timeframe,
+                "source": "confirmation_layer",
+            },
         )
 
 
@@ -2830,3 +2878,18 @@ def _entry_price(signal: StrategySignal) -> float | None:
     if signal.entry_min is not None:
         return signal.entry_min
     return signal.entry_max
+
+
+def _trigger_type_for_strategy(signal: StrategySignal) -> str:
+    if signal.strategy == "trend_pullback_continuation":
+        return "reclaim"
+    if signal.strategy == "volatility_squeeze_breakout":
+        return "breakout_retest" if signal.status == "wait_for_pullback" else "closed_candle"
+    if signal.strategy == "liquidity_sweep_reversal":
+        return "liquidity_reclaim"
+    return "closed_candle"
+
+
+def _signal_timestamp_datetime(timestamp: int) -> datetime:
+    seconds = timestamp / 1000 if timestamp > 10_000_000_000 else timestamp
+    return datetime.fromtimestamp(seconds, tz=timezone.utc)

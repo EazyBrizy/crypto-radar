@@ -5,6 +5,7 @@ from app.schemas.decision import DecisionReason, SignalDecisionSnapshot
 from app.schemas.signal import (
     NoTradeFilterResult,
     SignalEdgeSnapshot,
+    SignalTriggerSnapshot,
     StrategySignal,
 )
 from app.schemas.trade_plan import build_trade_plan_from_legacy_fields
@@ -144,6 +145,16 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertFalse(gate.can_arm_pending)
         self.assertFalse(gate.can_show_in_execution_feed)
 
+    def test_unconfirmed_trigger_blocks_execution_signal(self) -> None:
+        signal = _signal(trigger=SignalTriggerSnapshot(passed=False, reason="Breakout trigger not confirmed"))
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.status, "blocked")
+        self.assertEqual(gate.feed_kind, "blocked")
+        self.assertFalse(gate.can_notify)
+        self.assertIn("trigger_not_confirmed", _reason_codes(gate))
+
 
 def _signal(**overrides) -> StrategySignal:
     trade_plan = build_trade_plan_from_legacy_fields(
@@ -188,6 +199,7 @@ def _signal(**overrides) -> StrategySignal:
         "selected_rr_target": "final",
         "min_rr_ratio": 1.5,
         "trade_plan": trade_plan,
+        "trigger": SignalTriggerSnapshot(passed=True, trigger_type="closed_candle"),
         "edge": _edge("positive", sample_size=80, expectancy=0.18),
         "no_trade_filter": NoTradeFilterResult(blocked=False),
         "decision": decision,

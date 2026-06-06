@@ -116,6 +116,25 @@ class SignalConfirmationSnapshot(BaseModel):
     checks: List[SignalLayerCheck] = Field(default_factory=list)
 
 
+class SignalTriggerSnapshot(BaseModel):
+    trigger_type: Literal[
+        "closed_candle",
+        "reclaim",
+        "breakdown",
+        "pullback_touch",
+        "liquidity_reclaim",
+        "breakout_retest",
+        "none",
+    ] = "none"
+    passed: bool = False
+    price: Optional[float] = None
+    candle_state: CandleState = "closed"
+    confirmed_at: Optional[datetime] = None
+    reason: Optional[str] = None
+    checks: List[SignalLayerCheck] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class SignalInvalidationSnapshot(BaseModel):
     price: Optional[float] = None
     hard_stop: Optional[float] = None
@@ -318,6 +337,7 @@ class StrategySignal(BaseModel):
     regime: Optional[MarketRegimeSnapshot] = None
     setup: Optional[StrategySetupSnapshot] = None
     confirmation: Optional[SignalConfirmationSnapshot] = None
+    trigger: Optional[SignalTriggerSnapshot] = None
     invalidation: Optional[SignalInvalidationSnapshot] = None
     exit_plan: Optional[SignalExitPlanSnapshot] = None
     trade_plan: Optional[TradePlan] = None
@@ -367,6 +387,7 @@ class RadarSignal(BaseModel):
     regime: Optional[MarketRegimeSnapshot] = None
     setup: Optional[StrategySetupSnapshot] = None
     confirmation: Optional[SignalConfirmationSnapshot] = None
+    trigger: Optional[SignalTriggerSnapshot] = None
     invalidation: Optional[SignalInvalidationSnapshot] = None
     exit_plan: Optional[SignalExitPlanSnapshot] = None
     trade_plan: Optional[TradePlan] = None

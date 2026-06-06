@@ -68,6 +68,37 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - Market scanner: `backend/app/services/market_scanner.py`, `backend/app/workers/signal_worker.py`
   - Ingests Bybit market data, warms candle history, builds features, runs strategies, persists market data, updates virtual positions, triggers pending entries, processes signal outcomes and invalidation.
 
+- Execution readiness: `backend/app/services/signal_execution_gate.py`, `backend/app/services/signal_deduplication.py`, `backend/app/services/execution_strategy_registry.py`, `backend/app/services/edge_calibration.py`
+  - `SignalExecutionGateSnapshot` is the canonical contract for whether a signal can notify, enter now, arm pending entry, and appear in the execution feed.
+  - Write-side deduplication compares open signals by exchange, normalized symbol, and direction before notification. Suppressed/replaced decisions are stored in signal metadata.
+  - Edge and strategy eligibility are attached before gate evaluation. Strict walk-forward eligibility is controlled by backend settings.
+
+- Outcomes and diagnostics: `backend/app/services/signal_outcome_service.py`, `backend/app/domain/pending_entry_reason.py`
+  - Pending-entry terminal outcomes preserve reason codes for no-entry, virtual rejection, temporary failure, and expiry-before-touch cases.
+  - Strategy performance metrics consume those reason codes so execution-rejected and no-entry rates stay separate.
+
+## Execution Pipeline
+
+The scanner execution path is:
+
+1. `MarketScanner` builds market data and features.
+2. `StrategyEngine` runs strategy modules and passes candidates through `StrategySignalPipeline`.
+3. The pipeline attaches trigger, trade-plan, decision, no-trade, and risk/reward snapshots.
+4. `edge_calibration_service` and `ExecutionStrategyEligibilityService` attach edge and eligibility metadata.
+5. `SignalExecutionGateService` classifies the signal as `execution_signal`, `watchlist`, `market_idea`, or `blocked`.
+6. `SignalDeduplicationService` decides keep, suppress, or replace for same market direction.
+7. `SignalService` persists the signal, Redis hot state, analytics events, and outbox events.
+8. `NotificationService` emits `signal.execution_ready` only for backend-approved execution signals.
+
+Important rules:
+
+- Closed-candle confirmation is required when `settings.execution_closed_candle_only` is enabled. Open/forming candles may appear only as preview/watchlist/blocked state with a `forming_candle` reason.
+- Execution candidates must have a passed trigger snapshot. Missing or failed triggers produce `trigger_not_confirmed`.
+- The execution gate owns all action booleans: `can_notify`, `can_enter_now`, `can_arm_pending`, and `can_show_in_execution_feed`.
+- Edge gates use backend thresholds for expectancy after costs, profit factor, entry-touch rate, and no-entry rate.
+- Strategy eligibility metadata is advisory unless `settings.execution_require_walk_forward_edge` is enabled, then it becomes a hard blocker.
+- Pending-entry trigger automation is virtual-only. Real pending execution must remain disabled unless a separately tested real execution path is added.
+
 ## Background Workers
 
 - Scanner runner: `backend/app/workers/signal_worker.py`

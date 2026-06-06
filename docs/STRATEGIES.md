@@ -1,0 +1,79 @@
+# STRATEGIES
+
+Codex guide for strategy and execution-readiness changes.
+
+## Strategy Modules
+
+`backend/app/strategies/engine.py` currently runs three strategy modules:
+
+- `trend_pullback_continuation`: continuation after trend pullback.
+- `volatility_squeeze_breakout`: breakout from compressed volatility.
+- `liquidity_sweep_reversal`: reversal after liquidity sweep.
+
+Strategy implementations live in:
+
+- `backend/app/strategies/trend_pullback.py`
+- `backend/app/strategies/breakout.py`
+- `backend/app/strategies/liquidity_sweep.py`
+
+Shared finalization lives in `backend/app/strategies/pipeline.py`.
+
+## Signal Finalization
+
+The strategy engine produces raw candidates, then `StrategySignalPipeline` finalizes each candidate with:
+
+- market/setup quality layers;
+- confirmation and explicit trigger snapshots;
+- no-trade filters;
+- entry, stop, targets, risk/reward, and invalidation metadata;
+- decision metadata used by execution and UI;
+- final status and execution gate classification.
+
+Trigger snapshots are required for execution candidates. A missing or failed trigger must block execution through `trigger_not_confirmed`; it should not be patched around in workers or UI.
+
+## Execution Gate
+
+`SignalExecutionGateService` is the only place that turns a finalized strategy signal into execution permissions. It owns:
+
+- feed kind: `execution_signal`, `watchlist`, `market_idea`, or `blocked`;
+- action booleans: notify, enter now, arm pending, show in execution feed;
+- blocker and warning reason codes;
+- execution score, closed-candle, trigger, risk/reward, edge, eligibility, and trade-plan checks.
+
+Open/forming candles are previews only when previews are enabled. They must not notify or enter while `settings.execution_closed_candle_only` is true.
+
+## Edge And Eligibility
+
+`edge_calibration_service.evaluate_signal_edge()` attaches `SignalEdgeSnapshot` before gate evaluation.
+
+`ExecutionStrategyEligibilityService` converts edge metrics into eligibility metadata. The metadata is advisory by default and becomes a hard blocker only when `settings.execution_require_walk_forward_edge` is enabled.
+
+The gate checks backend thresholds for:
+
+- sample size;
+- expectancy after costs;
+- profit factor;
+- entry-touch rate;
+- no-entry rate;
+- validation sample, expectancy, profit factor, and drawdown in strict mode.
+
+Use `scripts/calibrate_execution_gate.py` for train/validation calibration around existing strategy testing and backtest services.
+
+## Deduplication
+
+`SignalDeduplicationService` runs after persistence preparation and before notification. It compares open signals for the same exchange, normalized symbol, and direction.
+
+The rank favors execution-visible, closed-candle, stronger-status, higher-score, positive-edge, better-RR, higher-timeframe signals. Decisions are:
+
+- `keep`: candidate remains active;
+- `suppress`: candidate stays non-notifying and records the stronger signal id;
+- `replace`: weaker same-direction signals are terminally replaced.
+
+Dedup metadata belongs in backend signal snapshots and is display-only for the frontend.
+
+## Change Rules
+
+- Add backend tests before changing strategy status, trigger, gate, edge, eligibility, or dedup behavior.
+- Do not move execution-readiness calculations into route handlers or frontend components.
+- Keep strategy-specific logic in strategy modules or pipeline layers; keep cross-strategy execution policy in services.
+- Regenerate frontend API types when Pydantic strategy/signal response schemas change.

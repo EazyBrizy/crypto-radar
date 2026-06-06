@@ -12,6 +12,13 @@ scripts/      Local dev, smoke, seed, and strategy baseline scripts
 docs/         Compact Codex-facing project docs only
 ```
 
+Key docs:
+
+- `docs/BACKEND.md`: backend ownership, storage, APIs, execution pipeline.
+- `docs/FRONTEND.md`: frontend ownership, UI state, execution rendering contract.
+- `docs/STRATEGIES.md`: strategy modules, pipeline, trigger, edge, and eligibility rules.
+- `docs/WORKERS.md`: lifespan workers, scanner loop, sync workers, outcome jobs.
+
 ## Backend Map
 
 - API routes: `backend/app/api/v1/`
@@ -26,6 +33,9 @@ docs/         Compact Codex-facing project docs only
 - Repositories: `backend/app/repositories/`
 - Business services: `backend/app/services/`
 - Strategy engine and strategy modules: `backend/app/strategies/`
+- Execution gate and dedup: `backend/app/services/signal_execution_gate.py`, `backend/app/services/signal_deduplication.py`
+- Edge and strategy eligibility: `backend/app/services/edge_calibration.py`, `backend/app/services/execution_strategy_registry.py`
+- Pending-entry reason codes: `backend/app/domain/pending_entry_reason.py`
 - Exchange adapters: `backend/app/exchanges/`
 - Background workers: `backend/app/workers/`
 - Migrations: `backend/alembic/versions/`
@@ -41,6 +51,7 @@ docs/         Compact Codex-facing project docs only
 - Realtime gateway and router: `frontend/src/features/realtime/`, `frontend/src/realtime/`
 - Local UI state: `frontend/src/stores/`
 - Shared UI/components: `frontend/src/components/`
+- Signal status/display helpers: `frontend/src/domain/`
 - i18n: `frontend/src/i18n/`
 - Unit tests: colocated `*.test.ts` / `*.test.tsx`
 - E2E tests: `frontend/e2e/`

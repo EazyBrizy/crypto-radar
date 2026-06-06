@@ -46,6 +46,7 @@ from app.services.virtual_trading import VirtualTradingService
 USER_ID = UUID("7d7a4f33-a570-4334-b65f-3e5b4f0bb4a1")
 SIGNAL_ID = UUID("eafefb92-8435-4d35-912f-6281ff0c1f19")
 VIRTUAL_TRADE_ID = UUID("6a3aee25-8d76-4205-bab8-57e705de31b4")
+TEST_TRIGGER_NOW = datetime(2026, 6, 5, 12, 30, tzinfo=timezone.utc)
 
 
 class TradingE2EVirtualFlowTest(unittest.IsolatedAsyncioTestCase):
@@ -92,6 +93,8 @@ class TradingE2EVirtualFlowTest(unittest.IsolatedAsyncioTestCase):
         self.realtime_broker = _CapturingRealtimeBroker()
         self._broker_patch = patch("app.services.market_scanner.realtime_event_broker", self.realtime_broker)
         self._broker_patch.start()
+        self._trigger_now_patch = patch("app.services.pending_entry_trigger._utc_now", return_value=TEST_TRIGGER_NOW)
+        self._trigger_now_patch.start()
         self.scanner = MarketScanner(
             symbols=["BTCUSDT"],
             exchanges=["bybit"],
@@ -111,6 +114,7 @@ class TradingE2EVirtualFlowTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def tearDown(self) -> None:
+        self._trigger_now_patch.stop()
         self._broker_patch.stop()
         self.engine.dispose()
         _restore_column_types(self._type_patches)

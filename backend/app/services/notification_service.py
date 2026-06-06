@@ -131,12 +131,17 @@ class NotificationService:
         )
 
     async def create_signal_notification(self, signal: RadarSignal, user_id: str = "demo_user") -> NotificationResponse:
+        gate = signal.execution_gate.model_dump(mode="json") if signal.execution_gate is not None else None
+        edge = signal.edge.model_dump(mode="json") if signal.edge is not None else None
         return await self.create_notification(
             NotificationCreateRequest(
                 user_id=user_id,
-                type="signal.created",
-                title="New signal",
-                body=f"{signal.symbol} {signal.direction.upper()} score {round(signal.score)}",
+                type="signal.execution_ready",
+                title="Execution signal",
+                body=(
+                    f"{signal.symbol} {signal.direction.upper()} {signal.timeframe} "
+                    f"{signal.strategy} status {signal.status} score {round(signal.score)}"
+                ),
                 payload={
                     "signal_id": signal.id,
                     "symbol": signal.symbol,
@@ -144,6 +149,13 @@ class NotificationService:
                     "direction": signal.direction,
                     "score": signal.score,
                     "timeframe": signal.timeframe,
+                    "strategy": signal.strategy,
+                    "status": signal.status,
+                    "status_reason": signal.status_reason,
+                    "selected_rr": signal.selected_rr,
+                    "feed_kind": signal.execution_gate.feed_kind if signal.execution_gate is not None else None,
+                    "execution_gate": gate,
+                    "edge": edge,
                 },
                 channels=["websocket"],
             )

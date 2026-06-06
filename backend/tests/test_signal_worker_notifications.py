@@ -26,6 +26,20 @@ class SignalWorkerNotificationGateTest(unittest.TestCase):
             _should_notify_signal(
                 _signal(
                     execution_gate=SignalExecutionGateSnapshot(
+                        status="warning",
+                        feed_kind="watchlist",
+                        can_notify=True,
+                        can_enter_now=False,
+                        can_arm_pending=False,
+                        can_show_in_execution_feed=True,
+                    )
+                )
+            )
+        )
+        self.assertFalse(
+            _should_notify_signal(
+                _signal(
+                    execution_gate=SignalExecutionGateSnapshot(
                         status="blocked",
                         feed_kind="blocked",
                         can_notify=False,
@@ -36,6 +50,12 @@ class SignalWorkerNotificationGateTest(unittest.TestCase):
                 )
             )
         )
+
+    def test_legacy_notification_fallback_is_strict(self) -> None:
+        self.assertFalse(_should_notify_signal(_signal(execution_gate=None, score=23)))
+        self.assertFalse(_should_notify_signal(_signal(execution_gate=None, candle_state="open")))
+        self.assertFalse(_should_notify_signal(_signal(execution_gate=None, status="watchlist")))
+        self.assertTrue(_should_notify_signal(_signal(execution_gate=None)))
 
     def test_execution_ready_notifications_are_deduped_by_pair_and_direction(self) -> None:
         seen: set[tuple[str, str, str]] = set()
@@ -67,6 +87,9 @@ def _signal(
     *,
     symbol: str = "BTCUSDT",
     direction: str = "long",
+    score: int = 82,
+    status: str = "actionable",
+    candle_state: str = "closed",
     execution_gate: SignalExecutionGateSnapshot | None = None,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
@@ -77,10 +100,10 @@ def _signal(
         strategy="trend_pullback_continuation",
         direction=direction,
         confidence=0.82,
-        score=82,
-        status="actionable",
+        score=score,
+        status=status,
         timeframe="15m",
-        candle_state="closed",
+        candle_state=candle_state,
         entry_min=100.0,
         entry_max=101.0,
         stop_loss=98.0,

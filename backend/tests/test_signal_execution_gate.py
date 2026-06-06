@@ -73,6 +73,45 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertFalse(gate.can_show_in_execution_feed)
         self.assertIn("edge_negative", _reason_codes(gate))
 
+    def test_low_positive_expectancy_blocks_execution(self) -> None:
+        signal = _signal(edge=_edge("positive", sample_size=80, expectancy=0.01))
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.status, "blocked")
+        self.assertEqual(gate.feed_kind, "blocked")
+        self.assertFalse(gate.can_show_in_execution_feed)
+        self.assertIn("edge_expectancy_below_threshold", _reason_codes(gate))
+
+    def test_low_profit_factor_blocks_execution(self) -> None:
+        signal = _signal(edge=_edge("positive", sample_size=80, expectancy=0.18, profit_factor=1.01))
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.status, "blocked")
+        self.assertEqual(gate.feed_kind, "blocked")
+        self.assertFalse(gate.can_show_in_execution_feed)
+        self.assertIn("edge_profit_factor_below_threshold", _reason_codes(gate))
+
+    def test_high_no_entry_rate_blocks_execution(self) -> None:
+        signal = _signal(
+            edge=_edge(
+                "positive",
+                sample_size=80,
+                expectancy=0.18,
+                profit_factor=1.4,
+                metadata={"no_entry_rate": 0.75, "entry_touch_rate": 0.2},
+            )
+        )
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.status, "blocked")
+        self.assertEqual(gate.feed_kind, "blocked")
+        self.assertFalse(gate.can_show_in_execution_feed)
+        self.assertIn("edge_entry_touch_rate_below_threshold", _reason_codes(gate))
+        self.assertIn("edge_no_entry_rate_above_threshold", _reason_codes(gate))
+
     def test_insufficient_edge_sample_blocks_execution_by_expectancy_gate(self) -> None:
         signal = _signal(edge=_edge("insufficient_sample", sample_size=8, expectancy=0.2))
 
@@ -159,14 +198,23 @@ def _signal(**overrides) -> StrategySignal:
     return StrategySignal(**payload)
 
 
-def _edge(status: str, *, sample_size: int, expectancy: float) -> SignalEdgeSnapshot:
+def _edge(
+    status: str,
+    *,
+    sample_size: int,
+    expectancy: float,
+    profit_factor: float | None = 1.4,
+    metadata: dict[str, object] | None = None,
+) -> SignalEdgeSnapshot:
     return SignalEdgeSnapshot(
         status=status,
         sample_size=sample_size,
         min_sample_size=50,
         expectancy_after_costs_r=expectancy,
+        profit_factor=profit_factor,
         confidence_score=0.8,
         source="outcome",
+        metadata=metadata or {},
     )
 
 

@@ -6,6 +6,7 @@ import time
 from typing import Optional
 
 from app.core.config import settings
+from app.domain.signal_status import is_execution_candidate_status
 from app.services.market_scanner import MarketScanner
 from app.services.candle_service import candle_service
 from app.services.message_broker import realtime_event_broker
@@ -335,8 +336,8 @@ def _should_notify_signal(
 ) -> bool:
     gate = getattr(signal, "execution_gate", None)
     if gate is None:
-        return True
-    if not bool(gate.can_notify and gate.can_show_in_execution_feed):
+        return _legacy_signal_is_notification_eligible(signal)
+    if not bool(gate.can_notify and gate.can_show_in_execution_feed and gate.feed_kind == "execution_signal"):
         return False
     if notified_execution_keys is None:
         return True
@@ -347,6 +348,17 @@ def _should_notify_signal(
         return False
     notified_execution_keys.add(key)
     return True
+
+
+def _legacy_signal_is_notification_eligible(signal: object) -> bool:
+    status = getattr(signal, "status", None)
+    candle_state = getattr(signal, "candle_state", None)
+    score = _float_or_none(getattr(signal, "score", None))
+    if not isinstance(status, str) or not is_execution_candidate_status(status):
+        return False
+    if candle_state != "closed":
+        return False
+    return score is not None and score >= settings.execution_min_score
 
 
 def _execution_notification_key(signal: object) -> tuple[str, str, str] | None:

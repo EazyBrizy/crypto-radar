@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, TypeAlias
 
+from app.core.config import settings
 from app.domain.signal_status import is_execution_candidate_status, is_terminal_signal_status
 from app.schemas.decision import SignalDecisionSnapshot
 from app.schemas.signal import (
@@ -29,13 +30,14 @@ class SignalExecutionGateService:
         signal: SignalLike,
         *,
         strict_edge_mode: bool = False,
-        execution_score_threshold: int = EXECUTION_SCORE_THRESHOLD,
+        execution_score_threshold: int | None = None,
     ) -> SignalExecutionGateSnapshot:
         hard_blockers: list[SignalExecutionGateReason] = []
         reasons: list[SignalExecutionGateReason] = []
         warnings: list[SignalExecutionGateReason] = []
         status = str(signal.status).strip().lower()
         score = int(signal.score or 0)
+        score_threshold = int(execution_score_threshold or settings.execution_min_score)
         execution_candidate = is_execution_candidate_status(status)
 
         if status == "expired":
@@ -45,7 +47,7 @@ class SignalExecutionGateService:
                 _reason("terminal_signal", "blocker", "lifecycle", f"Signal is terminal: {status}.")
             )
 
-        if execution_candidate and signal.candle_state == "open":
+        if execution_candidate and settings.execution_closed_candle_only and signal.candle_state == "open":
             hard_blockers.append(
                 _reason(
                     "forming_candle",
@@ -76,13 +78,13 @@ class SignalExecutionGateService:
         if rr_reason is not None:
             hard_blockers.append(rr_reason)
 
-        edge_reason = _edge_reason(signal.edge, strict_edge_mode=strict_edge_mode)
-        if edge_reason is not None:
+        edge_reasons = _edge_reasons(signal.edge, strict_edge_mode=strict_edge_mode)
+        for edge_reason in edge_reasons:
             if edge_reason.severity == "blocker":
                 hard_blockers.append(edge_reason)
             else:
                 warnings.append(edge_reason)
-        elif signal.edge is None:
+        if settings.execution_edge_gate_enabled and signal.edge is None:
             hard_blockers.append(
                 _reason(
                     "edge_missing",
@@ -96,14 +98,14 @@ class SignalExecutionGateService:
         hard_blockers.extend(reason for reason in plan_reasons if reason.severity == "blocker")
         reasons.extend(reason for reason in plan_reasons if reason.severity != "blocker")
 
-        if score < execution_score_threshold:
+        if score < score_threshold:
             reasons.append(
                 _reason(
                     "score_below_execution_threshold",
                     "info",
                     "score",
-                    f"Score {score} is below execution threshold {execution_score_threshold}.",
-                    {"score": score, "execution_score_threshold": execution_score_threshold},
+                    f"Score {score} is below execution threshold {score_threshold}.",
+                    {"score": score, "execution_score_threshold": score_threshold},
                 )
             )
 
@@ -120,8 +122,8 @@ class SignalExecutionGateService:
 
         execution_ready = (
             execution_candidate
-            and score >= execution_score_threshold
-            and signal.candle_state == "closed"
+            and score >= score_threshold
+            and (signal.candle_state == "closed" or not settings.execution_closed_candle_only)
             and not hard_blockers
             and _edge_allows_execution(signal.edge)
             and _has_valid_execution_plan(signal)
@@ -131,7 +133,7 @@ class SignalExecutionGateService:
         feed_kind = (
             "execution_signal"
             if execution_ready
-            else _non_execution_feed_kind(status, score, hard_blockers, execution_score_threshold)
+            else _non_execution_feed_kind(status, score, hard_blockers, score_threshold)
         )
         gate_status = "blocked" if hard_blockers else "warning" if warnings or reasons else "passed"
         can_show = feed_kind == "execution_signal" and gate_status in {"passed", "warning"}
@@ -147,7 +149,7 @@ class SignalExecutionGateService:
             metadata={
                 "status": status,
                 "score": score,
-                "execution_score_threshold": execution_score_threshold,
+                "execution_score_threshold": score_threshold,
                 "execution_candidate_status": execution_candidate,
                 "strict_edge_mode": strict_edge_mode,
             },
@@ -244,42 +246,134 @@ def _rr_metadata_sources(signal: SignalLike) -> list[Mapping[str, Any]]:
     return sources
 
 
-def _edge_reason(
+def _edge_reasons(
     edge: SignalEdgeSnapshot | None,
     *,
     strict_edge_mode: bool,
-) -> SignalExecutionGateReason | None:
-    if edge is None:
-        return None
+) -> list[SignalExecutionGateReason]:
+    if edge is None or not settings.execution_edge_gate_enabled:
+        return []
+    if edge.status in {"unknown", "insufficient_sample"} and settings.execution_edge_learning_mode:
+        if edge.status == "insufficient_sample" and not settings.execution_edge_allow_insufficient_sample_in_learning_mode:
+            return [
+                _reason(
+                    "edge_insufficient_sample",
+                    "blocker",
+                    "edge",
+                    f"Edge sample size {edge.sample_size} is below required {edge.min_sample_size}.",
+                    edge.model_dump(mode="json"),
+                )
+            ]
+        return [
+            _reason(
+                f"edge_{edge.status}",
+                "warning",
+                "edge",
+                "Edge profile is in learning mode and cannot notify or execute.",
+                edge.model_dump(mode="json"),
+            )
+        ]
     if edge.status == "negative":
-        return _reason(
-            "edge_negative",
-            "blocker",
-            "edge",
-            "Historical expectancy after costs is negative.",
-            edge.model_dump(mode="json"),
-        )
+        return [
+            _reason(
+                "edge_negative",
+                "blocker",
+                "edge",
+                "Historical expectancy after costs is negative.",
+                edge.model_dump(mode="json"),
+            )
+        ]
     if edge.status == "insufficient_sample":
-        return _reason(
-            "edge_insufficient_sample",
-            "blocker",
-            "edge",
-            f"Edge sample size {edge.sample_size} is below required {edge.min_sample_size}.",
-            edge.model_dump(mode="json"),
-        )
+        return [
+            _reason(
+                "edge_insufficient_sample",
+                "blocker",
+                "edge",
+                f"Edge sample size {edge.sample_size} is below required {edge.min_sample_size}.",
+                edge.model_dump(mode="json"),
+            )
+        ]
     if edge.status == "unknown":
-        return _reason(
-            "edge_unknown",
-            "blocker",
-            "edge",
-            "No historical edge profile is available for this setup.",
-            edge.model_dump(mode="json"),
+        return [
+            _reason(
+                "edge_unknown",
+                "blocker",
+                "edge",
+                "No historical edge profile is available for this setup.",
+                edge.model_dump(mode="json"),
+            )
+        ]
+    reasons: list[SignalExecutionGateReason] = []
+    expectancy = edge.expectancy_after_costs_r
+    if expectancy is None or expectancy < settings.execution_edge_min_expectancy_after_costs_r:
+        reasons.append(
+            _reason(
+                "edge_expectancy_below_threshold",
+                "blocker",
+                "edge",
+                "Historical expectancy after costs is below the execution threshold.",
+                {
+                    **edge.model_dump(mode="json"),
+                    "min_expectancy_after_costs_r": settings.execution_edge_min_expectancy_after_costs_r,
+                },
+            )
         )
-    return None
+    if edge.profit_factor is not None and edge.profit_factor < settings.execution_edge_min_profit_factor:
+        reasons.append(
+            _reason(
+                "edge_profit_factor_below_threshold",
+                "blocker",
+                "edge",
+                "Historical profit factor is below the execution threshold.",
+                {
+                    **edge.model_dump(mode="json"),
+                    "min_profit_factor": settings.execution_edge_min_profit_factor,
+                },
+            )
+        )
+    entry_touch_rate = _float_metadata(edge.metadata, "entry_touch_rate")
+    if entry_touch_rate is not None and entry_touch_rate < settings.execution_edge_min_entry_touch_rate:
+        reasons.append(
+            _reason(
+                "edge_entry_touch_rate_below_threshold",
+                "blocker",
+                "edge",
+                "Historical entry touch rate is below the execution threshold.",
+                {
+                    **edge.model_dump(mode="json"),
+                    "min_entry_touch_rate": settings.execution_edge_min_entry_touch_rate,
+                },
+            )
+        )
+    no_entry_rate = _float_metadata(edge.metadata, "no_entry_rate")
+    if no_entry_rate is not None and no_entry_rate > settings.execution_edge_max_no_entry_rate:
+        reasons.append(
+            _reason(
+                "edge_no_entry_rate_above_threshold",
+                "blocker",
+                "edge",
+                "Historical no-entry rate is above the execution threshold.",
+                {
+                    **edge.model_dump(mode="json"),
+                    "max_no_entry_rate": settings.execution_edge_max_no_entry_rate,
+                },
+            )
+        )
+    return reasons
 
 
 def _edge_allows_execution(edge: SignalEdgeSnapshot | None) -> bool:
-    return edge is not None and edge.status == "positive"
+    return not settings.execution_edge_gate_enabled or (edge is not None and edge.status == "positive")
+
+
+def _float_metadata(metadata: Mapping[str, Any], key: str) -> float | None:
+    value = metadata.get(key)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _trade_plan_reasons(

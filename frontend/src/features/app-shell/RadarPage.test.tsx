@@ -44,9 +44,49 @@ describe("RadarPage", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "execution ready" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ready to execute" }));
 
     expect(onRadarDisplayModeChange).toHaveBeenCalledWith("execution_ready");
+  });
+
+  it("renders distinct feed-kind filters", () => {
+    render(
+      <RadarPage
+        busy={false}
+        filter="all"
+        radarDisplayMode="all_market_opportunities"
+        signalView="open"
+        statusFilter="all"
+        health={null}
+        loading={false}
+        onFilterChange={vi.fn()}
+        onAcceptPendingEntry={vi.fn()}
+        onCancelPendingEntry={vi.fn()}
+        onReconfirmPendingEntry={vi.fn()}
+        onRadarDisplayModeChange={vi.fn()}
+        onSignalViewChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        onConfirmRealTrade={vi.fn()}
+        onPaperTrade={vi.fn()}
+        onRefresh={vi.fn()}
+        onReject={vi.fn()}
+        onSelectLatestSignal={vi.fn()}
+        onSelectPendingEntrySignal={vi.fn()}
+        onSelectSignal={vi.fn()}
+        radarStatus={null}
+        selectedSignal={null}
+        selectedSignalId={null}
+        pendingEntries={[]}
+        pendingEntryHistory={[]}
+        signalIds={[]}
+        signals={[]}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "All ideas" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Watchlist" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ready to execute" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Blocked" })).toBeInTheDocument();
   });
 
   it("renders scanner universe activity metrics", () => {

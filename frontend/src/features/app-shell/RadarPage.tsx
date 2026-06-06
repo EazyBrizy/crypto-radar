@@ -159,8 +159,10 @@ export function RadarPage(props: RadarPageProps) {
         </div>
         <div className="filter-row">
           {([
-            { labelKey: "radar.allMarketOpportunities", value: "all_market_opportunities" },
-            { labelKey: "radar.executionReadyFilter", value: "execution_ready" }
+            { labelKey: "radar.allIdeasFilter", value: "all_market_opportunities" },
+            { labelKey: "radar.watchlistFilter", value: "watchlist" },
+            { labelKey: "radar.readyToExecuteFilter", value: "execution_ready" },
+            { labelKey: "radar.blockedFilter", value: "blocked" }
           ] as const).map((item) => (
             <button
               className={props.radarDisplayMode === item.value ? "filter-chip active" : "filter-chip"}

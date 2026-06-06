@@ -4,7 +4,9 @@ import { isOpenFeedSignal } from "@/utils";
 export function buildRadarSummaryFrontend(signals: RadarSignal[]): RadarSummary {
   return {
     total_signals: signals.length,
-    execution_ready_signals: signals.filter((signal) => signal.details_view?.can_enter_now === true).length,
+    execution_ready_signals: signals.filter((signal) => signal.execution_gate?.can_show_in_execution_feed === true || signal.details_view?.can_enter_now === true).length,
+    watchlist_signals: signals.filter((signal) => signal.execution_gate?.feed_kind === "watchlist").length,
+    market_ideas: signals.filter((signal) => signal.execution_gate?.feed_kind === "market_idea").length,
     high_confidence_signals: signals.filter((signal) => signal.score >= 80).length,
     positive_edge_signals: signals.filter((signal) => signal.edge?.status === "positive").length,
     blocked_ideas: signals.filter(isBlockedSignal).length
@@ -61,6 +63,7 @@ export function isSignalHistoryQueryKey(queryKey: unknown): boolean {
 }
 
 function isBlockedSignal(signal: RadarSignal): boolean {
+  if (signal.execution_gate?.feed_kind === "blocked") return true;
   if (signal.details_view) return signal.details_view.primary_status === "blocked";
   return signal.risk_gate_status === "failed"
     || signal.rr_status === "failed"

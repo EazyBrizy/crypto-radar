@@ -121,7 +121,10 @@ const RISK_AMOUNT_MODES: Array<{ value: RiskAmountMode; label: string }> = [
 
 const RADAR_DISPLAY_MODES: Array<{ value: RadarDisplayMode; label: string }> = [
   { value: "all_market_opportunities", label: "All market opportunities" },
-  { value: "execution_ready", label: "Execution-ready only" }
+  { value: "market_ideas", label: "Market ideas" },
+  { value: "watchlist", label: "Watchlist" },
+  { value: "execution_ready", label: "Execution-ready only" },
+  { value: "blocked", label: "Blocked ideas" }
 ];
 
 const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
@@ -1007,9 +1010,7 @@ export function SettingsPage({
     const riskPercent = Number(formData.get("risk:risk_percent"));
     const fixedRiskAmount = Number(formData.get("risk:fixed_risk_amount"));
     const leverage = Number(formData.get("risk:leverage"));
-    const radarDisplayMode = formData.get("risk:radar_display_mode") === "execution_ready"
-      ? "execution_ready"
-      : "all_market_opportunities";
+    const radarDisplayMode = normalizeRadarDisplayMode(formData.get("risk:radar_display_mode"));
     const riskSettings: NonNullable<StrategyConfigPatch["risk_settings"]> = {
       risk_mode: riskMode,
       fixed_risk_currency: String(formData.get("risk:fixed_risk_currency") ?? "USDT").trim().toUpperCase() || "USDT",
@@ -3362,6 +3363,12 @@ function defaultRrTarget(strategyCode: string): "final" | "nearest" {
 
 function normalizeRRGuardMode(value: FormDataEntryValue | unknown, fallback: RRGuardMode): RRGuardMode {
   return value === "off" || value === "soft" || value === "hard" ? value : fallback;
+}
+
+function normalizeRadarDisplayMode(value: FormDataEntryValue | unknown): RadarDisplayMode {
+  return RADAR_DISPLAY_MODES.some((mode) => mode.value === value)
+    ? value as RadarDisplayMode
+    : "all_market_opportunities";
 }
 
 function riskProtectionTone(mode: RiskProtectionMode): "green" | "red" | "yellow" | "blue" {

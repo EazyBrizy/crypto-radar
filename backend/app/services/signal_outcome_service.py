@@ -14,6 +14,7 @@ from app.core.database import SessionLocal
 from app.models.signal import SignalOutcome, TradingSignal
 from app.models.strategy import StrategyVersion
 from app.schemas.candle import OHLCVCandle
+from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.signal_outcome import SameCandleResolution
 from app.services.execution_ambiguity import (
     detect_stop_target_candle_touch,
@@ -214,6 +215,40 @@ class SignalOutcomeService:
         if metadata is not None:
             outcome.metadata_ = metadata
         return outcome
+
+    def record_pending_entry_terminal(self, intent: PendingEntryIntentRead) -> SignalOutcome | None:
+        if intent.status not in {"expired", "failed", "cancelled"}:
+            return None
+        with self._session_factory() as session:
+            outcome = session.scalars(
+                select(SignalOutcome).where(
+                    SignalOutcome.signal_id == intent.signal_id,
+                    SignalOutcome.outcome == "open",
+                )
+            ).one_or_none()
+            if outcome is None:
+                return None
+            now = intent.updated_at or datetime.now(timezone.utc)
+            metadata = dict(outcome.metadata_ or {})
+            metadata["pending_entry_outcome"] = {
+                "pending_entry_intent_id": str(intent.id),
+                "pending_entry_status": intent.status,
+                "failure_reason": intent.failure_reason,
+                "filled_trade_id": str(intent.filled_trade_id) if intent.filled_trade_id is not None else None,
+            }
+            status = "expired" if intent.status == "expired" else "invalidated"
+            result = "expired" if intent.status == "expired" else "invalidated"
+            closed = self.close_outcome(
+                outcome,
+                status=status,
+                result=result,
+                realized_r=Decimal("0"),
+                closed_at=now,
+                bars_to_outcome=int(metadata.get("bars_seen") or 0),
+                metadata=metadata,
+            )
+            session.commit()
+            return closed
 
     def _create_tracking_for_signal(self, session: Session, signal: TradingSignal) -> SignalOutcome | None:
         existing = session.scalars(

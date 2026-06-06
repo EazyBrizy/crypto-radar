@@ -3,11 +3,15 @@ import { describe, expect, it } from "vitest";
 import type { RadarSignal } from "@/types";
 import {
   canShowEnterButton,
+  isBlockedSignal,
   isExecutionCandidateStatus,
+  isExecutionFeedSignal,
   isExecutionReady,
   isMarketOpportunity,
   isTerminalSignalStatus,
-  isWaitingEntry
+  isWaitingEntry,
+  isWatchlistSignal,
+  signalFeedKind
 } from "./signal-status";
 
 const baseSignal: RadarSignal = {
@@ -121,6 +125,31 @@ describe("signal status domain helper", () => {
     expect(canShowEnterButton(signal)).toBe(false);
     expect(canShowEnterButton(withBackendEnter(signal, true))).toBe(true);
   });
+
+  it("uses execution gate feed kind as the UI source of truth", () => {
+    const executionSignal = withExecutionGate(baseSignal, "execution_signal", {
+      can_show_in_execution_feed: true,
+      can_enter_now: true,
+      can_arm_pending: true
+    });
+    const watchlistSignal = withExecutionGate(baseSignal, "watchlist", {
+      can_show_in_execution_feed: false,
+      can_enter_now: false,
+      can_arm_pending: true
+    });
+    const blockedSignal = withExecutionGate(baseSignal, "blocked", {
+      can_show_in_execution_feed: false,
+      can_enter_now: false,
+      can_arm_pending: false
+    });
+
+    expect(signalFeedKind(executionSignal)).toBe("execution_signal");
+    expect(isExecutionFeedSignal(executionSignal)).toBe(true);
+    expect(isWatchlistSignal(watchlistSignal)).toBe(true);
+    expect(isBlockedSignal(blockedSignal)).toBe(true);
+    expect(canShowEnterButton({ ...executionSignal, details_view: null })).toBe(true);
+    expect(canShowEnterButton({ ...blockedSignal, details_view: null })).toBe(false);
+  });
 });
 
 function withBackendEnter(signal: RadarSignal, canEnterNow: boolean): RadarSignal {
@@ -175,6 +204,33 @@ function withBackendEnter(signal: RadarSignal, canEnterNow: boolean): RadarSigna
       top_reasons: [],
       top_blockers: [],
       warnings: []
+    }
+  };
+}
+
+function withExecutionGate(
+  signal: RadarSignal,
+  feedKind: "market_idea" | "watchlist" | "execution_signal" | "blocked",
+  flags: {
+    can_show_in_execution_feed: boolean;
+    can_enter_now: boolean;
+    can_arm_pending: boolean;
+  }
+): RadarSignal {
+  return {
+    ...signal,
+    execution_gate: {
+      status: feedKind === "blocked" ? "blocked" : flags.can_show_in_execution_feed ? "passed" : "warning",
+      feed_kind: feedKind,
+      can_notify: flags.can_show_in_execution_feed,
+      can_enter_now: flags.can_enter_now,
+      can_arm_pending: flags.can_arm_pending,
+      can_show_in_execution_feed: flags.can_show_in_execution_feed,
+      reasons: feedKind === "blocked"
+        ? [{ code: "no_trade_hard_block", severity: "blocker", source: "no_trade", message: "No-trade hard block", metadata: {} }]
+        : [],
+      warnings: [],
+      metadata: {}
     }
   };
 }

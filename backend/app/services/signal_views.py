@@ -53,6 +53,14 @@ def build_signal_card_view(
         SignalBadgeView(code="opportunity", label=_opportunity_label(signal, action_state), tone=_opportunity_tone(signal, action_state)),
         SignalBadgeView(code="edge", label=_edge_label(signal), tone=_edge_tone(signal)),
     ]
+    if signal.execution_gate is not None:
+        badges.append(
+            SignalBadgeView(
+                code=f"feed_{signal.execution_gate.feed_kind}",
+                label=signal.execution_gate.feed_kind.replace("_", " "),
+                tone=_feed_kind_tone(signal.execution_gate.feed_kind),
+            )
+        )
     if signal.risk_gate_status is not None:
         badges.append(SignalBadgeView(code="risk_gate", label=f"RiskGate {signal.risk_gate_status}", tone=_risk_gate_tone(signal.risk_gate_status)))
     if action_state is not None and action_state.disabled_reason_code:
@@ -77,7 +85,7 @@ def build_signal_card_view(
         stop_loss=trade_plan.stop_loss,
         targets=trade_plan.targets[:3],
         selected_rr=trade_plan.selected_rr,
-        reason=_first_text(signal.display_reason, signal.status_reason, *(signal.explanation or []), fallback="Waiting for backend decision context."),
+        reason=_first_text(_execution_blocked_reason(signal), signal.display_reason, signal.status_reason, *(signal.explanation or []), fallback="Waiting for backend decision context."),
     )
 
 
@@ -89,7 +97,7 @@ def build_signal_details_view(
     trade_plan = build_trade_plan_view(signal)
     blockers, warnings = _details_blockers(signal, action_state)
     primary_status = _primary_status(signal, action_state, blockers)
-    can_enter_now = action_state.can_enter_now if action_state is not None else signal.can_enter
+    can_enter_now = action_state.can_enter_now if action_state is not None else _gate_can_enter(signal)
     return SignalDetailsView(
         title=f"{signal.symbol} {signal.direction.upper()} Signal",
         side=signal.direction,
@@ -198,6 +206,8 @@ def build_radar_summary(signals: list[RadarSignal]) -> RadarSummary:
     return RadarSummary(
         total_signals=len(signals),
         execution_ready_signals=sum(1 for signal in signals if _signal_can_enter(signal)),
+        watchlist_signals=sum(1 for signal in signals if _gate_feed_kind(signal) == "watchlist"),
+        market_ideas=sum(1 for signal in signals if _gate_feed_kind(signal) == "market_idea"),
         high_confidence_signals=sum(1 for signal in signals if signal.score >= 80),
         positive_edge_signals=sum(1 for signal in signals if signal.edge is not None and signal.edge.status == "positive"),
         blocked_ideas=sum(1 for signal in signals if _signal_blocked(signal)),
@@ -285,6 +295,29 @@ def _details_blockers(
             user_message=reason.message,
             debug_messages=[f"decision.{reason.scope}.{reason.source}.{reason.code}"],
         ))
+    if signal.execution_gate is not None:
+        blockers.extend(
+            SignalDetailsBlockerView(
+                code=reason.code,
+                severity=reason.severity,
+                category=_category_from_source(reason.source),
+                user_message=reason.message,
+                debug_messages=[f"execution_gate.{reason.source}.{reason.code}"],
+            )
+            for reason in signal.execution_gate.reasons
+            if reason.severity == "blocker"
+        )
+        warnings.extend(
+            SignalDetailsBlockerView(
+                code=reason.code,
+                severity=reason.severity,
+                category=_category_from_source(reason.source),
+                user_message=reason.message,
+                debug_messages=[f"execution_gate.{reason.source}.{reason.code}"],
+            )
+            for reason in [*signal.execution_gate.warnings, *signal.execution_gate.reasons]
+            if reason.severity != "blocker"
+        )
     return _dedupe_detail_blockers(blockers), _dedupe_detail_blockers(warnings)
 
 
@@ -307,6 +340,13 @@ def _primary_status(
         return "expired"
     if is_terminal_signal_status(signal.status):
         return "cancelled"
+    if signal.execution_gate is not None:
+        if signal.execution_gate.feed_kind == "blocked":
+            return "blocked"
+        if signal.execution_gate.feed_kind == "execution_signal" and signal.execution_gate.can_enter_now:
+            return "execution_ready"
+        if signal.execution_gate.feed_kind in {"watchlist", "market_idea"}:
+            return "watchlist"
     if action_state is not None:
         if action_state.can_reconfirm:
             return "requires_reconfirmation"
@@ -362,6 +402,15 @@ def _primary_action_label(
 
 
 def _status_label(signal: RadarSignal, action_state: SignalActionState | None) -> str:
+    if signal.execution_gate is not None:
+        if signal.execution_gate.feed_kind == "execution_signal" and signal.execution_gate.can_enter_now:
+            return "Execution-ready"
+        if signal.execution_gate.feed_kind == "blocked":
+            return "Execution blocked"
+        if signal.execution_gate.feed_kind == "market_idea":
+            return "Market idea"
+        if signal.execution_gate.feed_kind == "watchlist":
+            return "Watchlist"
     if action_state is not None and action_state.can_enter_now:
         return "Execution-ready"
     if action_state is None and signal.can_enter is True and is_execution_candidate_status(signal.status):
@@ -374,6 +423,8 @@ def _status_label(signal: RadarSignal, action_state: SignalActionState | None) -
 
 
 def _status_tone(signal: RadarSignal, action_state: SignalActionState | None) -> ViewTone:
+    if signal.execution_gate is not None:
+        return _feed_kind_tone(signal.execution_gate.feed_kind)
     if action_state is not None and action_state.can_enter_now:
         return "green"
     if action_state is None and signal.can_enter is True and is_execution_candidate_status(signal.status):
@@ -390,6 +441,14 @@ def _status_tone(signal: RadarSignal, action_state: SignalActionState | None) ->
 
 
 def _opportunity_label(signal: RadarSignal, action_state: SignalActionState | None) -> str:
+    if signal.execution_gate is not None:
+        if signal.execution_gate.feed_kind == "execution_signal":
+            return "Execution-ready"
+        if signal.execution_gate.feed_kind == "blocked":
+            return "Blocked"
+        if signal.execution_gate.feed_kind == "watchlist":
+            return "Watchlist"
+        return "Market idea"
     if action_state is not None and action_state.can_enter_now:
         return "Execution-ready"
     if action_state is None and signal.can_enter is True and is_execution_candidate_status(signal.status):
@@ -406,6 +465,8 @@ def _opportunity_label(signal: RadarSignal, action_state: SignalActionState | No
 
 
 def _opportunity_tone(signal: RadarSignal, action_state: SignalActionState | None) -> ViewTone:
+    if signal.execution_gate is not None:
+        return _feed_kind_tone(signal.execution_gate.feed_kind)
     if action_state is not None and action_state.can_enter_now:
         return "green"
     if action_state is None and signal.can_enter is True and is_execution_candidate_status(signal.status):
@@ -420,10 +481,20 @@ def _opportunity_tone(signal: RadarSignal, action_state: SignalActionState | Non
 
 
 def _signal_can_enter(signal: RadarSignal) -> bool:
+    if signal.execution_gate is not None:
+        return signal.execution_gate.can_enter_now
     return bool(signal.details_view and signal.details_view.can_enter_now)
 
 
+def _gate_can_enter(signal: RadarSignal) -> bool | None:
+    if signal.execution_gate is not None:
+        return signal.execution_gate.can_enter_now
+    return signal.can_enter
+
+
 def _signal_blocked(signal: RadarSignal) -> bool:
+    if signal.execution_gate is not None:
+        return signal.execution_gate.feed_kind == "blocked"
     if signal.details_view is not None:
         return signal.details_view.primary_status == "blocked"
     return signal.risk_gate_status == "failed" or signal.can_enter is False or _rr_state(signal) == "blocked"
@@ -434,6 +505,10 @@ def _execution_preview_available(
     trade_plan: SignalTradePlanView,
     action_state: SignalActionState | None,
 ) -> bool:
+    if signal.execution_gate is not None and not (
+        signal.execution_gate.can_enter_now or signal.execution_gate.can_arm_pending
+    ):
+        return False
     if is_terminal_signal_status(signal.status):
         return False
     if action_state is not None and action_state.can_cancel:
@@ -544,6 +619,32 @@ def _risk_gate_tone(status: str | None) -> ViewTone:
     if status == "warning":
         return "yellow"
     return "neutral"
+
+
+def _feed_kind_tone(feed_kind: str) -> ViewTone:
+    if feed_kind == "execution_signal":
+        return "green"
+    if feed_kind == "blocked":
+        return "red"
+    if feed_kind == "watchlist":
+        return "blue"
+    if feed_kind == "market_idea":
+        return "yellow"
+    return "neutral"
+
+
+def _gate_feed_kind(signal: RadarSignal) -> str | None:
+    return signal.execution_gate.feed_kind if signal.execution_gate is not None else None
+
+
+def _execution_blocked_reason(signal: RadarSignal) -> str | None:
+    gate = signal.execution_gate
+    if gate is None or gate.feed_kind != "blocked":
+        return None
+    blocker = next((reason for reason in gate.reasons if reason.severity == "blocker"), None)
+    if blocker is None:
+        return "Execution blocked"
+    return f"Execution blocked: {blocker.message}"
 
 
 def _disabled_label(action_state: SignalActionState | None) -> str | None:

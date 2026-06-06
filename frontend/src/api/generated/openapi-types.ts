@@ -4291,7 +4291,7 @@ export interface components {
             /** Fixed Risk Currency */
             fixed_risk_currency?: string | null;
             /** Radar Display Mode */
-            radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
+            radar_display_mode?: ("all_market_opportunities" | "market_ideas" | "watchlist" | "execution_ready" | "execution_signals" | "blocked") | null;
             /** Min Rr Ratio */
             min_rr_ratio?: number | null;
             /** Rr Guard Mode */
@@ -5443,7 +5443,7 @@ export interface components {
             /** Rr Target */
             rr_target?: ("nearest" | "final") | null;
             /** Radar Display Mode */
-            radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
+            radar_display_mode?: ("all_market_opportunities" | "market_ideas" | "watchlist" | "execution_ready" | "execution_signals" | "blocked") | null;
             /** Risk Per Trade Percent */
             risk_per_trade_percent?: number | string | null;
             /** Futures Risk Per Trade Percent */
@@ -5488,7 +5488,7 @@ export interface components {
             /** Rr Target */
             rr_target?: ("nearest" | "final") | null;
             /** Radar Display Mode */
-            radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
+            radar_display_mode?: ("all_market_opportunities" | "market_ideas" | "watchlist" | "execution_ready" | "execution_signals" | "blocked") | null;
             /** Risk Per Trade Percent */
             risk_per_trade_percent?: string | null;
             /** Futures Risk Per Trade Percent */
@@ -8862,7 +8862,7 @@ export interface operations {
         parameters: {
             query?: {
                 user_id?: string | null;
-                radar_display_mode?: ("all_market_opportunities" | "execution_ready") | null;
+                radar_display_mode?: ("all_market_opportunities" | "market_ideas" | "watchlist" | "execution_ready" | "execution_signals" | "blocked") | null;
                 exchange?: string | null;
                 symbol?: string | null;
                 timeframe?: string | null;

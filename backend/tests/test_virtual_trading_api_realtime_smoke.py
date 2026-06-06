@@ -320,6 +320,7 @@ class _InMemoryStrategySignalService:
             take_profit_1=signal.take_profit_1,
             risk_reward=signal.risk_reward,
             explanation=explanation or signal.explanation,
+            execution_gate=signal.execution_gate,
         )
         return self.signal, created
 

@@ -214,6 +214,26 @@ export const SignalCardViewSchema = z.object({
   reason: z.string()
 }).passthrough();
 
+export const SignalExecutionGateReasonSchema = z.object({
+  code: z.string(),
+  severity: z.enum(["blocker", "warning", "info"]),
+  source: z.string(),
+  message: z.string(),
+  metadata: z.record(z.string(), z.unknown()).default({})
+}).passthrough();
+
+export const SignalExecutionGateSnapshotSchema = z.object({
+  status: z.enum(["passed", "warning", "blocked"]),
+  feed_kind: z.enum(["market_idea", "watchlist", "execution_signal", "blocked"]),
+  can_notify: z.boolean(),
+  can_enter_now: z.boolean(),
+  can_arm_pending: z.boolean(),
+  can_show_in_execution_feed: z.boolean(),
+  reasons: z.array(SignalExecutionGateReasonSchema).default([]),
+  warnings: z.array(SignalExecutionGateReasonSchema).default([]),
+  metadata: z.record(z.string(), z.unknown()).default({})
+}).passthrough();
+
 export const SignalDetailsPrimaryStatusSchema = z.enum([
   "execution_ready",
   "waiting_entry",
@@ -357,6 +377,7 @@ export const RadarSignalSchema = z.object({
   edge: SignalEdgeSnapshotSchema.nullable().optional(),
   no_trade_filter: NoTradeFilterResultSchema.nullable().optional(),
   decision: SignalDecisionSnapshotSchema.nullable().optional(),
+  execution_gate: SignalExecutionGateSnapshotSchema.nullable().optional(),
   rr_status: RadarRiskRewardStatusSchema.nullable().optional(),
   risk_gate_status: RiskCheckStatusSchema.nullable().optional(),
   can_enter: z.boolean().nullable().optional(),

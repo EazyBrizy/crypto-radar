@@ -428,6 +428,29 @@ export interface SignalCardView {
   reason: string;
 }
 
+export type SignalFeedKind = "market_idea" | "watchlist" | "execution_signal" | "blocked";
+export type SignalExecutionGateStatus = "passed" | "warning" | "blocked";
+
+export interface SignalExecutionGateReason {
+  code: string;
+  severity: SignalActionSeverity;
+  source: string;
+  message: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface SignalExecutionGateSnapshot {
+  status: SignalExecutionGateStatus;
+  feed_kind: SignalFeedKind;
+  can_notify: boolean;
+  can_enter_now: boolean;
+  can_arm_pending: boolean;
+  can_show_in_execution_feed: boolean;
+  reasons: SignalExecutionGateReason[];
+  warnings: SignalExecutionGateReason[];
+  metadata: Record<string, unknown>;
+}
+
 export type SignalDetailsPrimaryStatus =
   | "execution_ready"
   | "waiting_entry"
@@ -490,6 +513,8 @@ export interface SignalDetailsView {
 export interface RadarSummary {
   total_signals: number;
   execution_ready_signals: number;
+  watchlist_signals?: number;
+  market_ideas?: number;
   high_confidence_signals: number;
   positive_edge_signals: number;
   blocked_ideas: number;
@@ -533,6 +558,7 @@ export interface RadarSignal {
   edge?: SignalEdgeSnapshot | null;
   no_trade_filter?: NoTradeFilterResult | null;
   decision?: SignalDecisionSnapshot | null;
+  execution_gate?: SignalExecutionGateSnapshot | null;
   rr_status?: RadarRiskRewardStatus | null;
   risk_gate_status?: RiskCheckStatus | null;
   can_enter?: boolean | null;

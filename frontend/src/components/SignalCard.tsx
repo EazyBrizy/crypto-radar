@@ -36,6 +36,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
   }
 
   const targets = viewTargets(view.targets);
+  const reason = executionBlockedReason(signal) ?? view.reason;
 
   return (
     <button className={`signal-card ${selected ? "selected" : ""}`} onClick={() => onSelect(signal)} type="button">
@@ -89,7 +90,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
 
       <div className="card-reason">
         <Activity size={15} />
-        <span>{view.reason}</span>
+        <span>{reason}</span>
       </div>
     </button>
   );
@@ -110,6 +111,13 @@ function formatTargetPrice(target: SignalTargetView | null): string {
 
 function formatRMultiple(value: number | null): string {
   return value == null ? "-" : `${value.toFixed(2)}R`;
+}
+
+function executionBlockedReason(signal: RadarSignal): string | null {
+  const gate = signal.execution_gate;
+  if (!gate || gate.feed_kind !== "blocked") return null;
+  const blocker = gate.reasons.find((reason) => reason.severity === "blocker") ?? gate.reasons[0];
+  return blocker ? `Execution blocked: ${blocker.message}` : "Execution blocked";
 }
 
 export const SignalCardById = memo(function SignalCardById({

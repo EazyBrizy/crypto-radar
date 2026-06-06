@@ -97,29 +97,35 @@ class RadarScannerStatusTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status["market_data_status"], "stale")
 
-    def test_runner_builds_truncated_universe_instead_of_blocked_empty_scanner(self) -> None:
+    def test_runner_builds_full_universe_when_truncation_is_disabled(self) -> None:
         config = FakeRadarConfigService()
 
         with patch("app.workers.signal_worker.radar_config_service", config):
             runner = ScannerRunner()
 
         status = runner.scanner_status
-        self.assertEqual(status["scanner_pairs_count"], 2)
-        self.assertEqual(status["scan_pairs"], ["bybit:BTCUSDT", "bybit:ETHUSDT"])
+        self.assertEqual(status["scanner_pairs_count"], 3)
+        self.assertEqual(
+            status["scan_pairs"],
+            ["bybit:BTCUSDT", "bybit:ETHUSDT", "bybit:HYPEUSDT"],
+        )
         self.assertEqual(status["scanner_universe_source"], "explicit pairs")
-        self.assertIn("truncated", status["scanner_universe_warning"])
-        self.assertTrue(config.truncate_requested)
+        self.assertIsNone(status["scanner_universe_warning"])
+        self.assertFalse(config.truncate_requested)
 
-    def test_status_summary_uses_truncated_universe_instead_of_blocked_empty_scanner(self) -> None:
+    def test_status_summary_uses_full_universe_when_truncation_is_disabled(self) -> None:
         config = FakeRadarConfigService()
 
         with patch("app.api.v1.radar.radar_config_service", config):
             status = _scanner_config_status()
 
-        self.assertEqual(status["scanner_pairs_count"], 2)
-        self.assertEqual(status["scan_pairs"], ["bybit:BTCUSDT", "bybit:ETHUSDT"])
-        self.assertIn("truncated", status["scanner_universe_warning"])
-        self.assertTrue(config.truncate_requested)
+        self.assertEqual(status["scanner_pairs_count"], 3)
+        self.assertEqual(
+            status["scan_pairs"],
+            ["bybit:BTCUSDT", "bybit:ETHUSDT", "bybit:HYPEUSDT"],
+        )
+        self.assertIsNone(status["scanner_universe_warning"])
+        self.assertFalse(config.truncate_requested)
 
     def _running_runner(self, stats: dict[str, object]) -> ScannerRunner:
         runner = ScannerRunner(scanner=FakeScanner(stats))  # type: ignore[arg-type]
@@ -137,7 +143,14 @@ class FakeRadarConfigService:
     def scanner_universe(self, *, truncate_over_limit: bool = False) -> ScannerUniverse:
         self.truncate_requested = truncate_over_limit
         if not truncate_over_limit:
-            raise AssertionError("runtime scanner should truncate over-limit universes")
+            return ScannerUniverse(
+                pairs=(("bybit", "BTCUSDT"), ("bybit", "ETHUSDT"), ("bybit", "HYPEUSDT")),
+                source="explicit pairs",
+                max_pairs=2,
+                truncated=False,
+                warning=None,
+                estimated_strategy_checks=6,
+            )
         return ScannerUniverse(
             pairs=(("bybit", "BTCUSDT"), ("bybit", "ETHUSDT")),
             source="explicit pairs",

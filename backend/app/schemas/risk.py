@@ -24,7 +24,14 @@ InstrumentType = Literal["spot", "futures"]
 TradeInstrumentType = InstrumentType
 LegacyTradeInstrumentType = Literal["spot", "futures", "virtual"]
 RiskAmountMode = Literal["percent", "fixed"]
-RadarDisplayMode = Literal["all_market_opportunities", "execution_ready"]
+RadarDisplayMode = Literal[
+    "all_market_opportunities",
+    "market_ideas",
+    "watchlist",
+    "execution_ready",
+    "execution_signals",
+    "blocked",
+]
 RRGuardMode = Literal["off", "soft", "hard"]
 RRTarget = Literal["nearest", "final"]
 RiskDecisionStage = Literal["preview", "pre_execution", "post_execution", "confirm"]

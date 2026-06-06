@@ -36,6 +36,7 @@ from app.services.target_resolver import TargetResolverService
 from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.services.trade_plan_completeness import trade_plan_completeness_service
 from app.services.signal_decision import signal_decision_service
+from app.services.signal_execution_gate import signal_execution_gate_service
 from app.strategies.common import ACTIONABLE_SCORE, WATCHLIST_SCORE, score_from_breakdown
 
 MAJOR_BASE_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP"}
@@ -361,6 +362,11 @@ class StrategySignalPipeline:
         if auto_entry is not None:
             updates["auto_entry"] = auto_entry
         updates["trade_plan"] = trade_plan
+        gate_input = signal.model_copy(update=updates)
+        updates["execution_gate"] = signal_execution_gate_service.evaluate(
+            gate_input,
+            strict_edge_mode=_bool_param(pipeline_settings, "strict_edge_mode", False),
+        )
 
         return signal.model_copy(update=updates)
 

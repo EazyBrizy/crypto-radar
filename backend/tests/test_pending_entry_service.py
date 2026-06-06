@@ -108,6 +108,27 @@ class PendingEntryServiceTest(unittest.TestCase):
         self.assertEqual(cancelled.status, "cancelled")
         self.assertIn("Pending entry realtime event publish failed", "\n".join(logs.output))
 
+    def test_terminal_pending_entry_is_recorded_as_signal_outcome(self) -> None:
+        repository = _FakePendingEntryRepository()
+        outcome_recorder = _FakePendingEntryOutcomeRecorder()
+        created = self._service(repository).arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        service = self._service(repository, pending_entry_outcomes=outcome_recorder)
+
+        expired = service.transition_status(
+            created.id,
+            status="expired",
+            failure_reason="Pending entry intent expired before entry touch.",
+        )
+
+        self.assertEqual(expired.status, "expired")
+        self.assertEqual(outcome_recorder.calls, [(created.id, "expired", "Pending entry intent expired before entry touch.")])
+
     def test_duplicate_arm_returns_existing_active_intent(self) -> None:
         repository = _FakePendingEntryRepository()
         service = self._service(repository)
@@ -407,6 +428,7 @@ class PendingEntryServiceTest(unittest.TestCase):
         *,
         signal_loader: Any | None = None,
         event_publisher: Any | None = None,
+        pending_entry_outcomes: Any | None = None,
     ) -> PendingEntryService:
         return PendingEntryService(
             repository=repository,
@@ -414,7 +436,16 @@ class PendingEntryServiceTest(unittest.TestCase):
             signal_loader=signal_loader or (lambda _signal_id: _signal()),
             risk_settings_provider=lambda _user_id: RiskManagementSettings(),
             event_publisher=event_publisher or _FakePendingEntryEventPublisher(),
+            pending_entry_outcomes=pending_entry_outcomes,
         )
+
+
+class _FakePendingEntryOutcomeRecorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[UUID, str, str | None]] = []
+
+    def record_pending_entry_terminal(self, intent: PendingEntryIntentRead) -> None:
+        self.calls.append((intent.id, intent.status, intent.failure_reason))
 
 
 class _FakePendingEntryRepository:

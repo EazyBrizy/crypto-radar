@@ -99,6 +99,7 @@ class EphemeralSignalRepository:
             exit_plan=signal.exit_plan,
             trade_plan=signal.trade_plan,
             edge=signal.edge,
+            execution_gate=signal.execution_gate,
             no_trade_filter=signal.no_trade_filter,
             decision=signal.decision,
             created_at=now,

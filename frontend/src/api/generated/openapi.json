@@ -2475,7 +2475,11 @@
                 {
                   "enum": [
                     "all_market_opportunities",
-                    "execution_ready"
+                    "market_ideas",
+                    "watchlist",
+                    "execution_ready",
+                    "execution_signals",
+                    "blocked"
                   ],
                   "type": "string"
                 },
@@ -13289,7 +13293,11 @@
                 "type": "string",
                 "enum": [
                   "all_market_opportunities",
-                  "execution_ready"
+                  "market_ideas",
+                  "watchlist",
+                  "execution_ready",
+                  "execution_signals",
+                  "blocked"
                 ]
               },
               {
@@ -16827,7 +16835,11 @@
                 "type": "string",
                 "enum": [
                   "all_market_opportunities",
-                  "execution_ready"
+                  "market_ideas",
+                  "watchlist",
+                  "execution_ready",
+                  "execution_signals",
+                  "blocked"
                 ]
               },
               {
@@ -17039,7 +17051,11 @@
                 "type": "string",
                 "enum": [
                   "all_market_opportunities",
-                  "execution_ready"
+                  "market_ideas",
+                  "watchlist",
+                  "execution_ready",
+                  "execution_signals",
+                  "blocked"
                 ]
               },
               {

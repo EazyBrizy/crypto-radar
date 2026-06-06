@@ -798,6 +798,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         edge=snapshot.get("edge") if isinstance(snapshot.get("edge"), dict) else None,
         no_trade_filter=snapshot.get("no_trade_filter") if isinstance(snapshot.get("no_trade_filter"), dict) else None,
         decision=snapshot.get("decision_snapshot") if isinstance(snapshot.get("decision_snapshot"), dict) else None,
+        execution_gate=snapshot.get("execution_gate") if isinstance(snapshot.get("execution_gate"), dict) else None,
         created_at=created_at,
         updated_at=updated_at,
         expires_at=_as_utc(record.expires_at) if record.expires_at else None,
@@ -953,10 +954,11 @@ def _apply_signal_updates(
         "edge",
         "no_trade_filter",
         "decision",
+        "execution_gate",
     ):
         if key in updates:
             snapshot_key = "decision_snapshot" if key == "decision" else key
-            if key in {"edge", "no_trade_filter", "decision"}:
+            if key in {"edge", "no_trade_filter", "decision", "execution_gate"}:
                 snapshot[snapshot_key] = _model_dump_optional(updates[key])
             else:
                 snapshot[snapshot_key] = updates[key]
@@ -995,6 +997,7 @@ def _snapshot_from_signal(signal: RadarSignal) -> dict[str, Any]:
         "edge": _model_dump_optional(signal.edge),
         "no_trade_filter": _model_dump_optional(signal.no_trade_filter),
         "decision_snapshot": _model_dump_optional(signal.decision),
+        "execution_gate": _model_dump_optional(signal.execution_gate),
         "lifecycle_trace": signal.lifecycle_trace.model_dump(mode="json", exclude_none=True),
         "decision": {
             "confirmed_trade_id": signal.confirmed_trade_id,
@@ -1034,6 +1037,7 @@ def _snapshot_from_strategy_signal(
         "edge": _model_dump_optional(signal.edge),
         "no_trade_filter": _model_dump_optional(signal.no_trade_filter),
         "decision_snapshot": _model_dump_optional(signal.decision),
+        "execution_gate": _model_dump_optional(signal.execution_gate),
     }
 
 
@@ -1041,7 +1045,7 @@ def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str
     if not existing:
         return incoming
     merged = dict(incoming)
-    for key in ("decision", "decision_snapshot", "lifecycle_events", "lifecycle_trace"):
+    for key in ("decision", "decision_snapshot", "execution_gate", "lifecycle_events", "lifecycle_trace"):
         value = existing.get(key)
         if value is not None and key not in merged:
             merged[key] = value

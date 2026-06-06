@@ -63,6 +63,7 @@ import type {
   RiskDecision,
   RadarRiskRewardStatus,
   SignalActionState,
+  SignalExecutionGateSnapshot,
   RiskPreviewResponse,
   RiskStateResponse,
   SignalStatus,
@@ -212,6 +213,8 @@ const pendingEntryIntentSchema = z.object({
 const radarSummarySchema = z.object({
   total_signals: z.number(),
   execution_ready_signals: z.number(),
+  watchlist_signals: z.number().optional(),
+  market_ideas: z.number().optional(),
   high_confidence_signals: z.number(),
   positive_edge_signals: z.number(),
   blocked_ideas: z.number()
@@ -260,6 +263,26 @@ const signalCardViewSchema = z.object({
   targets: z.array(signalTargetViewSchema),
   selected_rr: z.number().nullable(),
   reason: z.string()
+}).passthrough();
+
+const signalExecutionGateReasonSchema = z.object({
+  code: z.string(),
+  severity: z.enum(["blocker", "warning", "info"]),
+  source: z.string(),
+  message: z.string(),
+  metadata: z.record(z.string(), z.unknown()).default({})
+}).passthrough();
+
+const signalExecutionGateSchema = z.object({
+  status: z.enum(["passed", "warning", "blocked"]),
+  feed_kind: z.enum(["market_idea", "watchlist", "execution_signal", "blocked"]),
+  can_notify: z.boolean(),
+  can_enter_now: z.boolean(),
+  can_arm_pending: z.boolean(),
+  can_show_in_execution_feed: z.boolean(),
+  reasons: z.array(signalExecutionGateReasonSchema).default([]),
+  warnings: z.array(signalExecutionGateReasonSchema).default([]),
+  metadata: z.record(z.string(), z.unknown()).default({})
 }).passthrough();
 
 const signalDetailsPrimaryStatusSchema = z.enum([
@@ -387,6 +410,7 @@ export function normalizeSignal(signal: RadarSignalDto): RadarSignal {
     edge: normalizeSignalEdge(enriched.edge),
     no_trade_filter: normalizeNoTradeFilter(enriched.no_trade_filter),
     decision: normalizeDecisionSnapshot(enriched.decision),
+    execution_gate: normalizeSignalExecutionGate(enriched.execution_gate),
     rr_status: normalizeRadarRiskRewardStatus(enriched.rr_status),
     risk_gate_status: normalizeOptionalRiskCheckStatus(enriched.risk_gate_status),
     can_enter: optionalBoolean(enriched.can_enter),
@@ -675,6 +699,11 @@ function normalizeNoTradeFilter(value: unknown): NoTradeFilterResult | null {
     checks: normalizeLayerChecks(value.checks),
     metadata: normalizeMetadata(value.metadata)
   };
+}
+
+function normalizeSignalExecutionGate(value: unknown): SignalExecutionGateSnapshot | null {
+  if (value == null) return null;
+  return parseContract(signalExecutionGateSchema, value, "SignalExecutionGateSnapshot");
 }
 
 function normalizeDecisionSnapshot(value: unknown): SignalDecisionSnapshot | null {
@@ -1796,7 +1825,16 @@ function normalizeRiskAmountMode(value: unknown): RiskAmountMode {
 }
 
 function normalizeRadarDisplayMode(value: unknown): RadarDisplayMode {
-  return value === "execution_ready" ? "execution_ready" : "all_market_opportunities";
+  if (
+    value === "market_ideas" ||
+    value === "watchlist" ||
+    value === "execution_ready" ||
+    value === "execution_signals" ||
+    value === "blocked"
+  ) {
+    return value;
+  }
+  return "all_market_opportunities";
 }
 
 function normalizeRRGuardMode(value: unknown, fallback: RRGuardMode): RRGuardMode {

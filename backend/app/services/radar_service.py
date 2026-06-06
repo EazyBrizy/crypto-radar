@@ -104,6 +104,8 @@ class RadarService:
                 strategy_risk_settings=strategy_settings_by_signal.get(signal.id),
             )
             if resolution.mode == "all_market_opportunities":
+                if _gate_feed_kind(signal) == "blocked":
+                    continue
                 annotated = _annotated_signal(
                     signal,
                     rr_status=_rr_status(signal),
@@ -125,7 +127,69 @@ class RadarService:
                 )
                 continue
 
-            if not is_execution_candidate_status(signal.status):
+            if resolution.mode == "blocked":
+                decision: RiskDecision | None = None
+                if _gate_feed_kind(signal) != "blocked":
+                    gate = signal.execution_gate
+                    if gate is not None and not gate.can_show_in_execution_feed:
+                        continue
+                    if gate is None and not is_execution_candidate_status(signal.status):
+                        continue
+                    decision = self._evaluate_risk_gate(signal, user_id=user_id)
+                    if decision is None or decision.can_enter:
+                        continue
+                annotated = _annotated_signal(
+                    signal,
+                    rr_status=_rr_status(signal),
+                    risk_gate_status=decision.status if decision is not None else None,
+                    can_enter=False if decision is not None else signal.execution_gate.can_enter_now if signal.execution_gate is not None else None,
+                    display_reason=_blocked_display_reason(signal, resolution, decision),
+                )
+                with_action_state = _consume_action_state_budget(
+                    include_action_state=include_action_state,
+                    current_count=action_state_count,
+                )
+                if with_action_state:
+                    action_state_count += 1
+                visible_signals.append(
+                    self._with_views(
+                        annotated,
+                        user_id=user_id,
+                        mode="virtual",
+                        include_action_state=with_action_state,
+                    )
+                )
+                continue
+
+            if resolution.mode in {"watchlist", "market_ideas"}:
+                if not _matches_feed_kind_mode(signal, resolution.mode):
+                    continue
+                annotated = _annotated_signal(
+                    signal,
+                    rr_status=_rr_status(signal),
+                    can_enter=signal.execution_gate.can_enter_now if signal.execution_gate is not None else None,
+                    display_reason=_feed_kind_display_reason(signal, resolution),
+                )
+                with_action_state = _consume_action_state_budget(
+                    include_action_state=include_action_state,
+                    current_count=action_state_count,
+                )
+                if with_action_state:
+                    action_state_count += 1
+                visible_signals.append(
+                    self._with_views(
+                        annotated,
+                        user_id=user_id,
+                        mode="virtual",
+                        include_action_state=with_action_state,
+                    )
+                )
+                continue
+
+            gate = signal.execution_gate
+            if gate is not None and not gate.can_show_in_execution_feed:
+                continue
+            if gate is None and not is_execution_candidate_status(signal.status):
                 continue
 
             decision = self._evaluate_risk_gate(signal, user_id=user_id)
@@ -152,6 +216,7 @@ class RadarService:
                     include_action_state=with_action_state,
                 )
             )
+        visible_signals = _dedupe_execution_feed_signals(visible_signals)
         if include_action_state and len(visible_signals) > MAX_RADAR_ACTION_STATE_SIGNALS:
             logger.warning(
                 "Radar include_action_state limited to %s signals out of %s visible signals",
@@ -322,6 +387,45 @@ def _matches_filters(signal: RadarSignal, filters: RadarFilters) -> bool:
     return True
 
 
+def _dedupe_execution_feed_signals(signals: list[RadarSignal]) -> list[RadarSignal]:
+    best_by_key: dict[tuple[str, str, str], RadarSignal] = {}
+    for signal in signals:
+        key = _execution_dedupe_key(signal)
+        if key is None:
+            continue
+        current = best_by_key.get(key)
+        if current is None or signal.score > current.score:
+            best_by_key[key] = signal
+
+    emitted: set[tuple[str, str, str]] = set()
+    result: list[RadarSignal] = []
+    for signal in signals:
+        key = _execution_dedupe_key(signal)
+        if key is None:
+            result.append(signal)
+            continue
+        if key in emitted:
+            continue
+        result.append(best_by_key[key])
+        emitted.add(key)
+    return result
+
+
+def _execution_dedupe_key(signal: RadarSignal) -> tuple[str, str, str] | None:
+    if signal.can_enter is not True:
+        return None
+    gate = signal.execution_gate
+    if gate is not None and not gate.can_show_in_execution_feed:
+        return None
+    if gate is None and not is_execution_candidate_status(signal.status):
+        return None
+    return (
+        signal.exchange.strip().lower(),
+        _normalize_symbol(signal.symbol),
+        signal.direction.strip().lower(),
+    )
+
+
 def _annotated_signal(
     signal: RadarSignal,
     *,
@@ -368,6 +472,19 @@ def _rr_metadata_sources(signal: RadarSignal) -> list[Mapping[str, Any]]:
     return sources
 
 
+def _gate_feed_kind(signal: RadarSignal) -> str | None:
+    return signal.execution_gate.feed_kind if signal.execution_gate is not None else None
+
+
+def _matches_feed_kind_mode(signal: RadarSignal, mode: str) -> bool:
+    feed_kind = _gate_feed_kind(signal)
+    if feed_kind is None:
+        return False
+    if mode == "market_ideas":
+        return feed_kind == "market_idea"
+    return feed_kind == mode
+
+
 def _all_market_display_reason(
     signal: RadarSignal,
     resolution: _RadarDisplayResolution,
@@ -388,6 +505,48 @@ def _execution_ready_display_reason(resolution: _RadarDisplayResolution) -> str:
     if resolution.warnings:
         return f"{reason}; {'; '.join(resolution.warnings)}"
     return reason
+
+
+def _feed_kind_display_reason(
+    signal: RadarSignal,
+    resolution: _RadarDisplayResolution,
+) -> str:
+    feed_kind = _gate_feed_kind(signal) or "legacy"
+    reason = f"shown: {resolution.mode} matched execution_gate feed_kind {feed_kind}"
+    if resolution.warnings:
+        return f"{reason}; {'; '.join(resolution.warnings)}"
+    return reason
+
+
+def _blocked_display_reason(
+    signal: RadarSignal,
+    resolution: _RadarDisplayResolution,
+    decision: RiskDecision | None,
+) -> str:
+    if decision is not None:
+        reason = _risk_decision_reason(decision)
+        base = "shown: blocked matched RiskGate execution blocker"
+        if reason:
+            base = f"{base}: {reason}"
+    else:
+        gate_reason = None
+        if signal.execution_gate is not None:
+            gate_reason = next(
+                (item.message for item in signal.execution_gate.reasons if item.severity == "blocker"),
+                None,
+            )
+        base = f"shown: blocked matched execution_gate blocker{f': {gate_reason}' if gate_reason else ''}"
+    if resolution.warnings:
+        return f"{base}; {'; '.join(resolution.warnings)}"
+    return base
+
+
+def _risk_decision_reason(decision: RiskDecision) -> str | None:
+    for values in (decision.blockers, decision.technical_messages, decision.reason_codes):
+        for value in values:
+            if value:
+                return value
+    return decision.technical_message or decision.reason_code
 
 
 def _default_strategy_risk_settings_by_signal(

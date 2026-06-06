@@ -125,14 +125,11 @@ class RadarConfigService:
         )
         truncated = False
         warning: str | None = None
-        if len(normalized_pairs) > pair_limit:
+        if should_truncate and len(normalized_pairs) > pair_limit:
             warning = (
                 f"Scanner universe has {len(normalized_pairs)} pairs, "
                 f"max_scanner_pairs={pair_limit}."
             )
-            if not should_truncate:
-                logger.warning("%s Scanner start is blocked.", warning)
-                raise ScannerUniverseLimitError(f"{warning} Scanner start is blocked.")
             normalized_pairs = normalized_pairs[:pair_limit]
             truncated = True
             warning = f"{warning} Universe was truncated to {pair_limit} pairs."

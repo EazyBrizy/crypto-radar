@@ -118,12 +118,12 @@ describe("parseRealtimeMessage", () => {
     }));
 
     expect(parsed?.type).toBe("signal.created");
-    if (parsed?.type === "signal.created") {
+    if (parsed?.type === "signal.created" && "payload" in parsed) {
       expect(parsed.payload.signal.card_view?.status_label).toBe("Execution-ready");
       expect(parsed.payload.signal.details_view?.primary_status).toBe("execution_ready");
-      expect((parsed.payload.signal as Record<string, unknown>).backend_extra).toBe("signal-extra");
-      expect((parsed.payload.signal.card_view as Record<string, unknown> | null)?.backend_extra).toBe("card-extra");
-      expect((parsed.payload.signal.details_view as Record<string, unknown> | null)?.backend_extra).toBe("details-extra");
+      expect((parsed.payload.signal as unknown as Record<string, unknown>).backend_extra).toBe("signal-extra");
+      expect((parsed.payload.signal.card_view as unknown as Record<string, unknown> | null)?.backend_extra).toBe("card-extra");
+      expect((parsed.payload.signal.details_view as unknown as Record<string, unknown> | null)?.backend_extra).toBe("details-extra");
     }
   });
 

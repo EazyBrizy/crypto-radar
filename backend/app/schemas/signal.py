@@ -41,6 +41,8 @@ LayerCheckStatus = Literal["passed", "warning", "failed", "skipped"]
 RadarRRStatus = Literal["passed", "warning", "failed", "skipped", "unknown"]
 RadarRiskGateStatus = Literal["passed", "warning", "failed"]
 ViewTone = Literal["green", "red", "yellow", "blue", "purple", "neutral"]
+SignalFeedKind = Literal["market_idea", "watchlist", "execution_signal", "blocked"]
+SignalExecutionGateStatus = Literal["passed", "warning", "blocked"]
 
 
 class SignalLayerCheck(BaseModel):
@@ -48,6 +50,26 @@ class SignalLayerCheck(BaseModel):
     status: LayerCheckStatus = "passed"
     score: Optional[float] = None
     reason: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SignalExecutionGateReason(BaseModel):
+    code: str
+    severity: Literal["blocker", "warning", "info"]
+    source: str
+    message: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SignalExecutionGateSnapshot(BaseModel):
+    status: SignalExecutionGateStatus
+    feed_kind: SignalFeedKind
+    can_notify: bool = False
+    can_enter_now: bool = False
+    can_arm_pending: bool = False
+    can_show_in_execution_feed: bool = False
+    reasons: list[SignalExecutionGateReason] = Field(default_factory=list)
+    warnings: list[SignalExecutionGateReason] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -237,6 +259,8 @@ class SignalDetailsView(BaseModel):
 class RadarSummary(BaseModel):
     total_signals: int = 0
     execution_ready_signals: int = 0
+    watchlist_signals: int = 0
+    market_ideas: int = 0
     high_confidence_signals: int = 0
     positive_edge_signals: int = 0
     blocked_ideas: int = 0
@@ -307,6 +331,7 @@ class StrategySignal(BaseModel):
     edge: Optional[SignalEdgeSnapshot] = None
     no_trade_filter: Optional[NoTradeFilterResult] = None
     decision: Optional[SignalDecisionSnapshot] = None
+    execution_gate: Optional[SignalExecutionGateSnapshot] = None
 
 
 class RadarSignal(BaseModel):
@@ -355,6 +380,7 @@ class RadarSignal(BaseModel):
     edge: Optional[SignalEdgeSnapshot] = None
     no_trade_filter: Optional[NoTradeFilterResult] = None
     decision: Optional[SignalDecisionSnapshot] = None
+    execution_gate: Optional[SignalExecutionGateSnapshot] = None
     created_at: datetime
     updated_at: datetime
     expires_at: Optional[datetime] = None

@@ -123,6 +123,7 @@ class ScannerRunner:
 
     async def _run(self) -> None:
         try:
+            notified_execution_keys = _existing_execution_notification_keys(self._store)
             async for signal in self._scanner.start():
                 radar_signal, created = self._store.upsert_strategy_signal(
                     signal,
@@ -142,10 +143,11 @@ class ScannerRunner:
                 if created:
                     self._processed_signals += 1
                     await realtime_event_broker.publish(signal_created_event(radar_signal))
-                    try:
-                        await notification_service.create_signal_notification(radar_signal)
-                    except Exception as exc:
-                        logger.warning("Signal notification write failed: %s", exc)
+                    if _should_notify_signal(radar_signal, notified_execution_keys=notified_execution_keys):
+                        try:
+                            await notification_service.create_signal_notification(radar_signal)
+                        except Exception as exc:
+                            logger.warning("Signal notification write failed: %s", exc)
                     logger.info(
                         "Radar signal stored: %s %s %s",
                         radar_signal.id,
@@ -182,7 +184,7 @@ class ScannerRunner:
         timeframes = radar_config_service.selected_timeframes()
         candle_service.configure_timeframes(timeframes)
         try:
-            scanner_universe = radar_config_service.scanner_universe(truncate_over_limit=True)
+            scanner_universe = radar_config_service.scanner_universe()
         except ScannerUniverseLimitError as exc:
             logger.warning("Scanner universe blocked by pair guard: %s", exc)
             return MarketScanner(
@@ -207,7 +209,7 @@ class ScannerRunner:
     @staticmethod
     def _scanner_subscription_hash_for_current_config() -> str:
         try:
-            universe = radar_config_service.scanner_universe(truncate_over_limit=True)
+            universe = radar_config_service.scanner_universe()
             return radar_config_service.scanner_subscription_hash(universe)
         except ScannerUniverseLimitError as exc:
             digest = hashlib.sha256(str(exc).encode("utf-8")).hexdigest()[:16]
@@ -308,6 +310,56 @@ def _derive_market_data_status(
     if last_tick_age_seconds > settings.scanner_market_data_stale_seconds:
         return "stale"
     return "online"
+
+
+def _existing_execution_notification_keys(store: object) -> set[tuple[str, str, str]]:
+    list_open = getattr(store, "list_open_signals", None)
+    if not callable(list_open):
+        return set()
+    try:
+        signals = list_open()
+    except Exception as exc:
+        logger.warning("Signal notification dedupe preload failed: %s", exc)
+        return set()
+    return {
+        key
+        for key in (_execution_notification_key(signal) for signal in signals)
+        if key is not None
+    }
+
+
+def _should_notify_signal(
+    signal: object,
+    *,
+    notified_execution_keys: set[tuple[str, str, str]] | None = None,
+) -> bool:
+    gate = getattr(signal, "execution_gate", None)
+    if gate is None:
+        return True
+    if not bool(gate.can_notify and gate.can_show_in_execution_feed):
+        return False
+    if notified_execution_keys is None:
+        return True
+    key = _execution_notification_key(signal)
+    if key is None:
+        return True
+    if key in notified_execution_keys:
+        return False
+    notified_execution_keys.add(key)
+    return True
+
+
+def _execution_notification_key(signal: object) -> tuple[str, str, str] | None:
+    exchange = getattr(signal, "exchange", None)
+    symbol = getattr(signal, "symbol", None)
+    direction = getattr(signal, "direction", None)
+    if not isinstance(exchange, str) or not isinstance(symbol, str) or not isinstance(direction, str):
+        return None
+    return (exchange.strip().lower(), _normalize_signal_symbol(symbol), direction.strip().lower())
+
+
+def _normalize_signal_symbol(symbol: str) -> str:
+    return symbol.replace("/", "").replace(":PERP", "").upper()
 
 
 def _float_or_none(value: object) -> float | None:

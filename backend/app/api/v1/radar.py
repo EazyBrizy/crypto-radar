@@ -142,7 +142,7 @@ def _scanner_status(
 
 def _scanner_config_status() -> dict[str, object]:
     try:
-        universe = radar_config_service.scanner_universe(truncate_over_limit=True)
+        universe = radar_config_service.scanner_universe()
         subscription_hash = radar_config_service.scanner_subscription_hash(universe)
     except Exception as exc:
         return {

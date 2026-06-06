@@ -1,10 +1,10 @@
 import unittest
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.schemas.signal import RadarSignal, SignalConfirmationSnapshot, SignalLayerCheck
+from app.schemas.signal import RadarSignal, SignalConfirmationSnapshot, SignalExecutionGateSnapshot, SignalLayerCheck
 from app.schemas.signal_action import SignalActionState
 from app.schemas.user import RiskManagementSettings
 from app.services.radar_service import RadarFilters, RadarService
@@ -22,6 +22,11 @@ class FakeSignalProvider:
 class FakeRiskDecision:
     status: str
     can_enter: bool
+    blockers: list[str] = field(default_factory=list)
+    technical_messages: list[str] = field(default_factory=list)
+    reason_codes: list[str] = field(default_factory=list)
+    technical_message: str | None = None
+    reason_code: str | None = None
 
 
 class FakeRiskPreviewEvaluator:
@@ -121,7 +126,7 @@ class RadarServiceTest(unittest.TestCase):
 
     def test_execution_ready_returns_only_actionable_or_entry_touched_with_risk_gate_can_enter(self) -> None:
         actionable = _signal(status="actionable", rr_status="passed")
-        entry_touched = _signal(status="entry_touched", rr_status="passed")
+        entry_touched = _signal(status="entry_touched", rr_status="passed", direction="short")
         waiting_entry = _signal(status="ready", rr_status="passed")
         denied = _signal(status="actionable", rr_status="passed")
         risk_preview = FakeRiskPreviewEvaluator(
@@ -154,6 +159,106 @@ class RadarServiceTest(unittest.TestCase):
                 {"signal_id": denied.id, "user_id": "demo_user", "record_audit": False},
             ],
         )
+
+    def test_execution_ready_uses_execution_gate_as_source_of_truth(self) -> None:
+        gate_passed = _signal(
+            status="actionable",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_show=True),
+        )
+        status_ready_but_gate_blocked = _signal(
+            status="actionable",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_show=False, feed_kind="blocked", status="blocked"),
+        )
+        risk_preview = FakeRiskPreviewEvaluator(
+            {
+                gate_passed.id: FakeRiskDecision(status="passed", can_enter=True),
+                status_ready_but_gate_blocked.id: FakeRiskDecision(status="passed", can_enter=True),
+            }
+        )
+        service = _service(
+            [gate_passed, status_ready_but_gate_blocked],
+            risk_preview=risk_preview,
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="execution_ready")
+
+        self.assertEqual([signal.id for signal in response.signals], [gate_passed.id])
+        self.assertEqual(risk_preview.calls, [{"signal_id": gate_passed.id, "user_id": "demo_user", "record_audit": False}])
+
+    def test_execution_ready_dedupes_same_pair_and_direction_by_score(self) -> None:
+        lower_score = _signal(
+            status="actionable",
+            rr_status="passed",
+            score=78,
+            execution_gate=_execution_gate(can_show=True),
+        )
+        higher_score = _signal(
+            status="actionable",
+            rr_status="passed",
+            score=91,
+            strategy="liquidity_sweep_reversal",
+            execution_gate=_execution_gate(can_show=True),
+        )
+        short_signal = _signal(
+            status="actionable",
+            rr_status="passed",
+            direction="short",
+            score=79,
+            execution_gate=_execution_gate(can_show=True),
+        )
+        risk_preview = FakeRiskPreviewEvaluator(
+            {
+                lower_score.id: FakeRiskDecision(status="passed", can_enter=True),
+                higher_score.id: FakeRiskDecision(status="passed", can_enter=True),
+                short_signal.id: FakeRiskDecision(status="passed", can_enter=True),
+            }
+        )
+        service = _service(
+            [lower_score, higher_score, short_signal],
+            risk_preview=risk_preview,
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="execution_ready")
+
+        self.assertEqual([signal.id for signal in response.signals], [higher_score.id, short_signal.id])
+
+    def test_blocked_mode_includes_execution_signals_denied_by_risk_gate(self) -> None:
+        gate_passed = _signal(
+            status="actionable",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_show=True),
+        )
+        gate_blocked = _signal(
+            status="actionable",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_show=False, feed_kind="blocked", status="blocked"),
+        )
+        risk_preview = FakeRiskPreviewEvaluator(
+            {
+                gate_passed.id: FakeRiskDecision(
+                    status="failed",
+                    can_enter=False,
+                    blockers=["Daily risk limit reached"],
+                )
+            }
+        )
+        service = _service(
+            [gate_passed, gate_blocked],
+            risk_preview=risk_preview,
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="blocked")
+
+        self.assertEqual([signal.id for signal in response.signals], [gate_passed.id, gate_blocked.id])
+        self.assertEqual(response.signals[0].risk_gate_status, "failed")
+        self.assertFalse(response.signals[0].can_enter)
+        self.assertIn("Daily risk limit reached", response.signals[0].display_reason or "")
+        self.assertEqual(risk_preview.calls, [{"signal_id": gate_passed.id, "user_id": "demo_user", "record_audit": False}])
 
     def test_user_execution_ready_mode_is_resolved_when_request_mode_is_absent(self) -> None:
         actionable = _signal(status="actionable", rr_status="passed")
@@ -271,14 +376,18 @@ def _signal(
     symbol: str = "BTCUSDT",
     exchange: str = "bybit",
     timeframe: str = "15m",
+    direction: str = "long",
+    strategy: str = "trend_pullback_continuation",
+    score: int = 82,
+    execution_gate: SignalExecutionGateSnapshot | None = None,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
         id=str(uuid4()),
         symbol=symbol,
         exchange=exchange,
-        strategy="trend_pullback_continuation",
-        direction="long",
+        strategy=strategy,
+        direction=direction,
         confidence=0.82,
         risk_reward=2.5,
         selected_rr=2.5,
@@ -286,7 +395,7 @@ def _signal(
         min_rr_ratio=1.5,
         urgency="medium",
         status=status,
-        score=82,
+        score=score,
         timeframe=timeframe,
         entry_min=100.0,
         entry_max=100.0,
@@ -305,6 +414,23 @@ def _signal(
         ),
         created_at=now,
         updated_at=now,
+        execution_gate=execution_gate,
+    )
+
+
+def _execution_gate(
+    *,
+    can_show: bool,
+    feed_kind: str = "execution_signal",
+    status: str = "passed",
+) -> SignalExecutionGateSnapshot:
+    return SignalExecutionGateSnapshot(
+        status=status,
+        feed_kind=feed_kind,
+        can_notify=can_show,
+        can_enter_now=can_show,
+        can_arm_pending=can_show,
+        can_show_in_execution_feed=can_show,
     )
 
 

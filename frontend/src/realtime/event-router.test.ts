@@ -4,7 +4,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { queryKeys, serverStateKeys } from "@/features/server-state/query-keys";
 import { useNotificationStore } from "@/stores/notification-store";
 import { useSignalStore } from "@/stores/signal-store";
-import type { PendingEntryIntent, RadarResponse, RadarSignal, TradeJournalEntry } from "@/types";
+import type { PendingEntryIntent, RadarResponse, RadarSignal, TradeJournalEntry, TradeJournalResponse } from "@/types";
 import { createRealtimeEventRouter } from "./event-router";
 
 const baseSignal: RadarSignal = {

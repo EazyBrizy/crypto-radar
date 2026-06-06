@@ -75,6 +75,7 @@ class PendingEntryService:
         user_profile_provider: UserProfileProvider | None = None,
         risk_settings_provider: RiskSettingsProvider | None = None,
         event_publisher: PendingEntryUpdatePublisher | None = None,
+        pending_entry_outcomes: Any | None = None,
     ) -> None:
         self._repository = repository or PendingEntryIntentRepository()
         self._session_factory = session_factory or getattr(self._repository, "_session_factory", SessionLocal)
@@ -82,6 +83,7 @@ class PendingEntryService:
         self._user_profile_provider = user_profile_provider
         self._risk_settings_provider = risk_settings_provider or get_user_risk_management_settings
         self._event_publisher = event_publisher or pending_entry_update_publisher
+        self._pending_entry_outcomes = pending_entry_outcomes
 
     def create_intent(self, intent: PendingEntryIntentCreate) -> PendingEntryIntentRead:
         created = self._repository.create_intent(intent)
@@ -138,6 +140,7 @@ class PendingEntryService:
         )
         if updated is not None:
             self._publish_update(updated)
+            self._record_terminal_pending_entry_outcome(updated)
         return updated
 
     def lock_for_trigger(self, intent_id: str | UUID, *, session: Session) -> PendingEntryIntent | None:
@@ -541,6 +544,19 @@ class PendingEntryService:
             self._event_publisher.publish_update(intent, message=message)
         except Exception as exc:
             logger.warning("Pending entry realtime event publish failed: %s", exc)
+
+    def _record_terminal_pending_entry_outcome(self, intent: PendingEntryIntentRead) -> None:
+        if intent.status not in {"expired", "failed", "cancelled"}:
+            return
+        recorder = self._pending_entry_outcomes
+        if recorder is None:
+            from app.services.signal_outcome_service import signal_outcome_service
+
+            recorder = signal_outcome_service
+        try:
+            recorder.record_pending_entry_terminal(intent)
+        except Exception as exc:
+            logger.warning("Pending entry outcome recording failed: %s", exc)
 
     def _update_current_market_review(
         self,

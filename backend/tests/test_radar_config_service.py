@@ -3,7 +3,6 @@ from unittest.mock import patch
 
 from app.schemas.candle import RadarConfigUpdate
 from app.services.radar_config_service import RadarConfigService
-from app.services.radar_config_service import ScannerUniverseLimitError
 from app.services.strategy_config_service import StrategyRuntimeConfig
 
 
@@ -138,7 +137,7 @@ class RadarConfigServiceTest(unittest.TestCase):
         self.assertEqual(universe.source, "explicit pairs + scanner config")
         self.assertEqual(universe.estimated_strategy_checks, 4)
 
-    def test_scanner_universe_pair_guard_blocks_or_truncates(self) -> None:
+    def test_scanner_universe_pair_guard_loads_all_or_truncates(self) -> None:
         service = RadarConfigService()
         service.update_config(RadarConfigUpdate(symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"]))
         runtime_config = StrategyRuntimeConfig(
@@ -149,13 +148,19 @@ class RadarConfigServiceTest(unittest.TestCase):
             params={},
         )
 
-        with self.assertRaisesRegex(ScannerUniverseLimitError, "max_scanner_pairs=2"):
-            service.scanner_universe(
-                runtime_configs=[runtime_config],
-                watchlist_pairs=[],
-                max_pairs=2,
-                truncate_over_limit=False,
-            )
+        full_universe = service.scanner_universe(
+            runtime_configs=[runtime_config],
+            watchlist_pairs=[],
+            max_pairs=2,
+            truncate_over_limit=False,
+        )
+
+        self.assertFalse(full_universe.truncated)
+        self.assertEqual(
+            full_universe.pairs,
+            (("bybit", "BTCUSDT"), ("bybit", "ETHUSDT"), ("bybit", "SOLUSDT")),
+        )
+        self.assertIsNone(full_universe.warning)
 
         universe = service.scanner_universe(
             runtime_configs=[runtime_config],

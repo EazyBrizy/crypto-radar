@@ -192,8 +192,11 @@ class SignalActionService:
                 mode=mode,
             )
             can_arm_pending = is_waiting_entry_status(signal.status)
+            if signal.execution_gate is not None:
+                can_enter_now = can_enter_now and signal.execution_gate.can_enter_now
+                can_arm_pending = signal.execution_gate.can_arm_pending
             if not can_enter_now and not can_arm_pending:
-                blockers.extend(_signal_action_blockers(signal, mode=mode))
+                blockers.extend(_gate_action_blockers(signal) or _signal_action_blockers(signal, mode=mode))
 
         if mode == "real" and can_arm_pending:
             can_arm_pending = False
@@ -779,8 +782,11 @@ class SignalActionService:
                 mode=mode,
             )
             can_arm_pending = is_waiting_entry_status(signal.status)
+            if signal.execution_gate is not None:
+                can_enter_now = can_enter_now and signal.execution_gate.can_enter_now
+                can_arm_pending = signal.execution_gate.can_arm_pending
             if not can_enter_now and not can_arm_pending:
-                blockers.extend(_signal_action_blockers(signal, mode=mode))
+                blockers.extend(_gate_action_blockers(signal) or _signal_action_blockers(signal, mode=mode))
         if mode == "real" and can_arm_pending:
             can_arm_pending = False
             blockers.append(
@@ -1112,6 +1118,24 @@ def _signal_action_blockers(signal: RadarSignal, *, mode: SignalActionMode) -> l
             )
         )
     return blockers
+
+
+def _gate_action_blockers(signal: RadarSignal) -> list[SignalActionBlocker]:
+    gate = signal.execution_gate
+    if gate is None:
+        return []
+    reasons = [reason for reason in gate.reasons if reason.severity == "blocker"]
+    if not reasons and not (gate.can_enter_now or gate.can_arm_pending):
+        reasons = gate.reasons[:1]
+    return [
+        _blocker(
+            reason.code,
+            reason.message,
+            display_label=reason.message,
+            metadata=reason.metadata,
+        )
+        for reason in reasons
+    ]
 
 
 def _real_connection_action_blockers(connection: Any) -> list[str]:

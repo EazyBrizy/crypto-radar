@@ -1,4 +1,4 @@
-import type { RadarSignal, RiskCheckStatus, SignalStatus } from "@/types";
+import type { RadarSignal, RiskCheckStatus, SignalFeedKind, SignalStatus } from "@/types";
 
 export type SignalUiBadgeTone = "green" | "red" | "yellow" | "blue" | "purple" | "neutral";
 export type RadarStatusFilter = "all" | SignalStatus;
@@ -96,7 +96,33 @@ export function isExecutionReady(
 
 export function canShowEnterButton(signal: RadarSignal | null): boolean {
   if (!signal) return false;
+  if (signal.execution_gate) return signal.execution_gate.can_enter_now === true;
   return signal.details_view?.can_enter_now === true;
+}
+
+export function signalFeedKind(signal: RadarSignal): SignalFeedKind {
+  if (signal.execution_gate?.feed_kind) return signal.execution_gate.feed_kind;
+  if (signal.details_view?.primary_status === "blocked") return "blocked";
+  if (signal.details_view?.primary_status === "execution_ready") return "execution_signal";
+  if (signal.status === "watchlist" || signal.status === "ready" || signal.status === "wait_for_pullback") {
+    return "watchlist";
+  }
+  if (isExecutionCandidateStatus(signal.status) && signal.can_enter === true) return "execution_signal";
+  if (isTerminalSignalStatus(signal.status)) return "blocked";
+  return "market_idea";
+}
+
+export function isExecutionFeedSignal(signal: RadarSignal): boolean {
+  if (signal.execution_gate) return signal.execution_gate.can_show_in_execution_feed === true;
+  return signalFeedKind(signal) === "execution_signal";
+}
+
+export function isWatchlistSignal(signal: RadarSignal): boolean {
+  return signalFeedKind(signal) === "watchlist";
+}
+
+export function isBlockedSignal(signal: RadarSignal): boolean {
+  return signalFeedKind(signal) === "blocked";
 }
 
 export function isFormingCandleSignal(signal: RadarSignal): boolean {
@@ -109,6 +135,7 @@ export function isOpenCandleActionableAllowed(signal: RadarSignal): boolean {
 }
 
 export function canShowSignalEntryAction(signal: RadarSignal): boolean {
+  if (signal.execution_gate) return signal.execution_gate.can_enter_now === true;
   if (!canShowEnterButton(signal)) return false;
   return !isFormingCandleSignal(signal) || isOpenCandleActionableAllowed(signal);
 }

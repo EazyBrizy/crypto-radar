@@ -4,6 +4,8 @@ from typing import Any, List, Mapping
 from app.schemas.market import AlphaMarketContext, Features
 from app.schemas.risk import StrategyExecutionSettings
 from app.schemas.signal import StrategySignal
+from app.services.edge_calibration import edge_calibration_service
+from app.services.signal_execution_gate import signal_execution_gate_service
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
 from app.strategies.liquidity_sweep import LiquiditySweepReversalStrategy
@@ -113,6 +115,16 @@ class StrategyEngine:
             for candidate in candidates:
                 finalized = self._pipeline.finalize(candidate, context)
                 if finalized is not None:
+                    edge = await edge_calibration_service.evaluate_signal_edge(finalized)
+                    finalized = finalized.model_copy(update={"edge": edge})
+                    finalized = finalized.model_copy(
+                        update={
+                            "execution_gate": signal_execution_gate_service.evaluate(
+                                finalized,
+                                strict_edge_mode=_bool_param(pipeline_settings, "strict_edge_mode", False),
+                            )
+                        }
+                    )
                     signals.append(finalized)
             await asyncio.sleep(0)
         return sorted(signals, key=lambda signal: signal.score, reverse=True)
@@ -133,3 +145,12 @@ def _pipeline_settings_for_pipeline_only(
     pipeline_settings = dict(market_params)
     pipeline_settings.update(execution_settings.to_legacy_dict(exclude_unset=True))
     return pipeline_settings
+
+
+def _bool_param(values: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = values.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value) if value is not None else default

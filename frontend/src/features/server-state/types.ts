@@ -15,7 +15,13 @@ export type VirtualSlippageModel = "none" | "fixed_percent" | "spread_based" | "
 export type VirtualFeeModel = "manual" | "exchange_based";
 export type RRGuardMode = "off" | "soft" | "hard";
 export type RiskAmountMode = "percent" | "fixed";
-export type RadarDisplayMode = "all_market_opportunities" | "execution_ready";
+export type RadarDisplayMode =
+  | "all_market_opportunities"
+  | "market_ideas"
+  | "watchlist"
+  | "execution_ready"
+  | "execution_signals"
+  | "blocked";
 export type InstrumentType = "spot" | "futures";
 export type RRTarget = "nearest" | "final";
 

@@ -102,6 +102,14 @@ def ensure_signal_execution_eligible(
     mode: Literal["virtual", "real"],
     rr_guard_mode: str | None,
 ) -> None:
+    gate = getattr(signal, "execution_gate", None)
+    if gate is not None and not (gate.can_enter_now or gate.can_arm_pending):
+        reason = next(
+            (item.message for item in gate.reasons if item.severity == "blocker"),
+            None,
+        )
+        raise StrategyRiskRewardBlocked(reason or "Signal execution gate blocks this action.")
+
     no_trade_reason = signal_no_trade_block_reason(signal)
     if no_trade_reason:
         raise StrategyRiskRewardBlocked(no_trade_reason)

@@ -22,6 +22,32 @@ describe("SignalCard", () => {
     expect(screen.getByText("API contract error")).toBeInTheDocument();
     expect(screen.getByText("SignalCardView is missing")).toBeInTheDocument();
   });
+
+  it("shows the primary execution block reason for blocked ideas", () => {
+    render(<SignalCard signal={baseSignal({
+      execution_gate: {
+        status: "blocked",
+        feed_kind: "blocked",
+        can_notify: false,
+        can_enter_now: false,
+        can_arm_pending: false,
+        can_show_in_execution_feed: false,
+        reasons: [
+          {
+            code: "no_trade_hard_block",
+            severity: "blocker",
+            source: "no_trade",
+            message: "Funding event is too close",
+            metadata: {}
+          }
+        ],
+        warnings: [],
+        metadata: {}
+      }
+    })} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("Execution blocked: Funding event is too close")).toBeInTheDocument();
+  });
 });
 
 function baseSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {

@@ -57,9 +57,20 @@ export const RADAR_STATUS_FILTERS = [
   "ready",
   "actionable",
   "wait_for_pullback",
+  "rejected",
   "invalidated",
   "expired"
 ] as const satisfies readonly RadarStatusFilter[];
+
+const TERMINAL_STATUS_LABELS: Partial<Record<SignalStatus, string>> = {
+  rejected: "Отклонён",
+  invalidated: "Сломано рынком / потеряло актуальность"
+};
+
+const TERMINAL_STATUS_DETAIL_LABELS: Partial<Record<SignalStatus, string>> = {
+  rejected: "Отклонено фильтром",
+  invalidated: "Сломано рынком / потеряло актуальность"
+};
 
 const MARKET_OPPORTUNITY_STATUS_SET = new Set<SignalStatus>(MARKET_OPPORTUNITY_STATUSES);
 const WAITING_ENTRY_STATUS_SET = new Set<SignalStatus>(WAITING_ENTRY_STATUSES);
@@ -145,15 +156,25 @@ export function statusBadgeTone(
   previewOnly = false
 ): SignalUiBadgeTone {
   if (previewOnly) return "yellow";
+  if (isTerminalSignalStatus(signal.status)) return "red";
   if (signal.card_view?.status_tone) return signal.card_view.status_tone;
   if (isEntryTouched(signal.status)) return "purple";
   if (isWaitingEntry(signal.status)) return signal.status === "watchlist" ? "yellow" : "blue";
-  if (isTerminalSignalStatus(signal.status)) return "red";
   return "neutral";
+}
+
+export function terminalStatusLabel(status: SignalStatus): string | null {
+  return TERMINAL_STATUS_LABELS[status] ?? null;
+}
+
+export function terminalStatusDetailLabel(status: SignalStatus): string | null {
+  return TERMINAL_STATUS_DETAIL_LABELS[status] ?? null;
 }
 
 export function statusBadgeLabel(signal: RadarSignal, previewOnly = false): string {
   if (previewOnly) return "preview";
+  const terminalLabel = terminalStatusLabel(signal.status);
+  if (terminalLabel) return terminalLabel;
   if (signal.card_view?.status_label) return signal.card_view.status_label;
   if (isEntryTouched(signal.status)) return "Entry touched";
   if (isWaitingEntry(signal.status)) return "Waiting entry";

@@ -12,7 +12,9 @@ import {
   isTerminalSignalStatus,
   isWaitingEntry,
   isWatchlistSignal,
-  signalFeedKind
+  RADAR_STATUS_FILTERS,
+  signalFeedKind,
+  statusBadgeLabel
 } from "./signal-status";
 
 const baseSignal: RadarSignal = {
@@ -96,6 +98,14 @@ describe("signal status domain helper", () => {
     expect(isExecutionCandidateStatus("confirmed")).toBe(true);
     expect(isTerminalSignalStatus("invalidated")).toBe(true);
     expect(isTerminalSignalStatus("expired")).toBe(true);
+    expect(isTerminalSignalStatus("rejected")).toBe(true);
+  });
+
+  it("exposes rejected as a distinct terminal filter and badge label", () => {
+    const rejected = { ...baseSignal, status: "rejected" } satisfies RadarSignal;
+
+    expect(RADAR_STATUS_FILTERS).toContain("rejected");
+    expect(statusBadgeLabel(rejected)).toBe("Отклонён");
   });
 
   it("requires backend permission for actionable and entry-touched signals", () => {

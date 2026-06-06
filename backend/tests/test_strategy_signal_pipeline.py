@@ -235,6 +235,39 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(candle_check.status, "warning")
         self.assertFalse(decision.trade_plan.metadata.get("signal_actionable"))
 
+    def test_signal_status_resolver_no_trade_returns_rejected(self) -> None:
+        features = _breakout_features()
+        candidate = _quality_candidate(features)
+        assert candidate.trade_plan is not None
+        assessment = RiskRewardAssessmentService().assess(
+            candidate,
+            {"min_rr_ratio": 1.5, "rr_target": "final"},
+        )
+
+        decision = SignalStatusResolver().resolve(
+            signal=candidate,
+            params={},
+            quality=MarketQualitySnapshot(passed=True, tier="major", score=100),
+            regime=MarketRegimeSnapshot(alignment="aligned", strength="normal"),
+            confirmation=SignalConfirmationSnapshot(passed=True),
+            setup=StrategySetupSnapshot(name=candidate.strategy, stage="confirmed"),
+            risk_reward=assessment,
+            no_trade_filter=NoTradeFilterResult(
+                enabled=True,
+                blocked=True,
+                hard_block=True,
+                blockers=["Spread 84.0 bps is above entry limit 25.0 bps"],
+            ),
+            completeness=TradePlanCompletenessResult(complete=True),
+            trade_plan=candidate.trade_plan,
+            candle_state="closed",
+            production_mode=False,
+            actionable_score=70,
+        )
+
+        self.assertEqual(decision.status, "rejected")
+        self.assertIn("No-trade hard block", decision.status_reason)
+
     def test_auto_entry_service_disabled_on_no_trade_or_incomplete(self) -> None:
         features = _breakout_features()
         candidate = _quality_candidate(features)
@@ -1252,7 +1285,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(signal)
-        self.assertEqual(signal.status, "ready")
+        self.assertEqual(signal.status, "rejected")
         self.assertIn("No-trade hard block", signal.status_reason or "")
         self.assertTrue(signal.no_trade_filter.blocked if signal and signal.no_trade_filter else False)
         self.assertIn("high_spread", signal.no_trade_filter.metadata.get("blocker_codes") if signal and signal.no_trade_filter else [])

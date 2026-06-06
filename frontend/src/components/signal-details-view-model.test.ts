@@ -43,6 +43,21 @@ describe("buildSignalDetailsViewModel", () => {
     expect(viewModel.tradePlanSummary.entry_type).toBe("API contract error");
   });
 
+  it("labels rejected and invalidated signals as different terminal states", () => {
+    const rejected = buildSignalDetailsViewModel(
+      baseSignal({ status: "rejected", details_view: detailsView({ primary_status_label: "Invalidated" }) }),
+      null
+    );
+    const invalidated = buildSignalDetailsViewModel(
+      baseSignal({ status: "invalidated", details_view: detailsView({ primary_status_label: "Rejected" }) }),
+      null
+    );
+
+    expect(rejected.primaryStatusLabel).toBe("Отклонено фильтром");
+    expect(invalidated.primaryStatusLabel).toBe("Сломано рынком / потеряло актуальность");
+    expect(rejected.primaryStatusLabel).not.toBe(invalidated.primaryStatusLabel);
+  });
+
   it("classifies active and terminal pending entries without changing backend primary status", () => {
     const active = buildSignalDetailsViewModel(baseSignal({ details_view: detailsView({ primary_status: "waiting_entry" }) }), pendingIntent({ status: "pending" }));
     const terminal = buildSignalDetailsViewModel(baseSignal(), pendingIntent({ status: "cancelled" }));

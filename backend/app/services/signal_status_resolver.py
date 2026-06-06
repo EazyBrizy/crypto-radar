@@ -98,7 +98,7 @@ class SignalStatusResolver:
             return ("rejected", signal.status_reason or "Strategy rejected the setup")
 
         if no_trade_filter.blocked:
-            return ("ready", f"No-trade hard block: {'; '.join(no_trade_filter.blockers)}")
+            return ("rejected", f"No-trade hard block: {'; '.join(no_trade_filter.blockers)}")
 
         overextension_reason = _overextension_status_reason(confirmation)
         if overextension_reason is not None:

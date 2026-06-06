@@ -2,6 +2,7 @@ import { memo, type CSSProperties } from "react";
 import { Activity, ArrowDownRight, ArrowUpRight, Clock3 } from "lucide-react";
 
 import { Badge } from "./Badge";
+import { statusBadgeLabel, statusBadgeTone } from "@/domain/signal-status";
 import { useSignalPrice } from "@/stores/price-store";
 import { useSignalStore } from "@/stores/signal-store";
 import type { RadarSignal, SignalBadgeView, SignalTargetView } from "../types";
@@ -39,8 +40,8 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
   const isBlockedDiagnostic = signal.execution_gate?.feed_kind === "blocked";
   const isLowScore = signal.score < 70;
   const reason = executionBlockedReason(signal) ?? view.reason;
-  const statusLabel = isBlockedDiagnostic && isLowScore ? "Blocked idea" : view.status_label;
-  const statusTone = isBlockedDiagnostic ? "red" : view.status_tone;
+  const statusLabel = isBlockedDiagnostic && isLowScore ? "Blocked idea" : statusBadgeLabel(signal);
+  const statusTone = isBlockedDiagnostic ? "red" : statusBadgeTone(signal);
   const badges = dedupeBadges([
     ...(isBlockedDiagnostic ? [{ code: "not_for_execution", label: "Not for execution", tone: "red" } as SignalBadgeView] : []),
     ...(isLowScore ? [{ code: "low_score", label: "low score", tone: "yellow" } as SignalBadgeView] : []),

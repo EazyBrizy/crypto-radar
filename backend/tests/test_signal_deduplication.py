@@ -85,9 +85,9 @@ class SignalServiceWriteSideDedupTest(unittest.TestCase):
 
         self.assertTrue(created)
         self.assertEqual(radar_signal.id, "candidate")
-        self.assertEqual(radar_signal.status, "invalidated")
+        self.assertEqual(radar_signal.status, "rejected")
         self.assertEqual(radar_signal.status_reason, "dedup_suppressed_by_better_signal")
-        self.assertEqual(repository.dedup_metadata["candidate"]["action"], "suppress")
+        self.assertEqual(repository.dedup_metadata["candidate"]["action"], "dedup_suppressed")
         self.assertEqual(repository.dedup_metadata["candidate"]["suppressed_by_signal_id"], "existing")
 
     def test_stronger_candidate_invalidates_replaced_open_signal(self) -> None:
@@ -105,8 +105,9 @@ class SignalServiceWriteSideDedupTest(unittest.TestCase):
         self.assertEqual(radar_signal.status, "actionable")
         self.assertEqual(repository.signals["existing"].status, "invalidated")
         self.assertEqual(repository.signals["existing"].status_reason, "dedup_replaced_by_better_signal")
-        self.assertEqual(repository.dedup_metadata["candidate"]["action"], "replace")
+        self.assertEqual(repository.dedup_metadata["candidate"]["action"], "dedup_replace")
         self.assertEqual(repository.dedup_metadata["candidate"]["replaced_signal_ids"], ["existing"])
+        self.assertEqual(repository.dedup_metadata["existing"]["action"], "dedup_replaced")
 
 
 def _signal(

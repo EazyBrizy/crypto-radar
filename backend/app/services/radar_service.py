@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 from app.core.config import settings
-from app.domain.signal_status import is_execution_candidate_status
+from app.domain.signal_status import is_execution_candidate_status, is_terminal_signal_status
 from app.schemas.risk import RadarDisplayMode, RiskDecision, RiskPreviewRequest
 from app.schemas.signal_action import SignalActionBlocker, SignalActionMode, SignalActionState
 from app.schemas.signal import RadarResponse, RadarRRStatus, RadarSignal, RadarSummary
@@ -483,7 +483,11 @@ def _rr_metadata_sources(signal: RadarSignal) -> list[Mapping[str, Any]]:
 
 
 def _gate_feed_kind(signal: RadarSignal) -> str | None:
-    return signal.execution_gate.feed_kind if signal.execution_gate is not None else None
+    if signal.execution_gate is not None:
+        return signal.execution_gate.feed_kind
+    if is_terminal_signal_status(signal.status):
+        return "blocked"
+    return None
 
 
 def _should_show_in_all_market_feed(signal: RadarSignal) -> bool:
@@ -586,7 +590,9 @@ def _blocked_display_reason(
                 (item.message for item in signal.execution_gate.reasons if item.severity == "blocker"),
                 None,
             )
-        base = f"shown: blocked matched execution_gate blocker{f': {gate_reason}' if gate_reason else ''}"
+            base = f"shown: blocked matched execution_gate blocker{f': {gate_reason}' if gate_reason else ''}"
+        else:
+            base = f"shown: blocked matched terminal status {signal.status}"
     if resolution.warnings:
         return f"{base}; {'; '.join(resolution.warnings)}"
     return base

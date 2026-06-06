@@ -424,7 +424,7 @@ class SignalService:
         if decision.action == "suppress":
             suppressed = self._transition_signal_for_dedup(
                 signal.id,
-                new_status="invalidated",
+                new_status="rejected",
                 reason="dedup_suppressed_by_better_signal",
                 dedup=metadata,
             )
@@ -438,7 +438,7 @@ class SignalService:
                     reason="dedup_replaced_by_better_signal",
                     dedup={
                         **metadata,
-                        "action": "replaced",
+                        "action": "dedup_replaced",
                         "replaced_by_signal_id": signal.id,
                     },
                 )
@@ -489,9 +489,13 @@ class SignalService:
 
 def _dedup_metadata(decision: DedupDecision) -> dict[str, object]:
     metadata = dict(decision.metadata)
+    action = {
+        "suppress": "dedup_suppressed",
+        "replace": "dedup_replace",
+    }.get(decision.action, decision.action)
     metadata.update(
         {
-            "action": decision.action,
+            "action": action,
             "reason": decision.reason,
             "suppressed_by_signal_id": decision.suppressed_by_signal_id,
             "replaced_signal_ids": list(decision.replaced_signal_ids),

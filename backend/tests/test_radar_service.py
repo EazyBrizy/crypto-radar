@@ -346,6 +346,18 @@ class RadarServiceTest(unittest.TestCase):
         self.assertIn("Daily risk limit reached", response.signals[0].display_reason or "")
         self.assertEqual(risk_preview.calls, [{"signal_id": gate_passed.id, "user_id": "demo_user", "record_audit": False}])
 
+    def test_radar_blocked_mode_includes_rejected(self) -> None:
+        rejected = _signal(status="rejected", score=82)
+        service = _service(
+            [rejected],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="blocked")
+
+        self.assertEqual([signal.id for signal in response.signals], [rejected.id])
+
     def test_user_execution_ready_mode_is_resolved_when_request_mode_is_absent(self) -> None:
         actionable = _signal(status="actionable", rr_status="passed")
         waiting_entry = _signal(status="ready", rr_status="passed")

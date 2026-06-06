@@ -1,4 +1,5 @@
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
+import { terminalStatusDetailLabel } from "@/domain/signal-status";
 import type {
   PendingEntryIntent,
   RadarSignal,
@@ -105,6 +106,7 @@ export function buildSignalDetailsViewModel(
   const activePendingEntry = pendingEntry && isActivePendingEntryStatus(pendingEntry.status) ? pendingEntry : null;
   const terminalPendingEntry = pendingEntry && isTerminalPendingEntryStatus(pendingEntry.status) ? pendingEntry : null;
   const contractError = details ? null : "API contract error: SignalDetailsView is missing";
+  const terminalSignalLabel = terminalStatusDetailLabel(signal.status);
   const topBlockers = mergeActionBlockers(
     actionState,
     details?.top_blockers ?? [],
@@ -120,8 +122,8 @@ export function buildSignalDetailsViewModel(
     title: details?.title ?? signal.symbol,
     side: details?.side ?? signal.direction,
     primaryStatus: details?.primary_status ?? "unknown",
-    primaryStatusLabel: details?.primary_status_label ?? "unknown",
-    primaryStatusTone: details?.primary_status_tone ?? "neutral",
+    primaryStatusLabel: terminalSignalLabel ?? details?.primary_status_label ?? "unknown",
+    primaryStatusTone: terminalSignalLabel ? "red" : details?.primary_status_tone ?? "neutral",
     primaryActionLabel: actionState?.display_labels.primary_action ?? details?.primary_action_label ?? "Action state unavailable",
     recommendedActionText: actionStateDisabledReason(actionState) ?? details?.recommended_action_text ?? contractError ?? "Backend returned no recommendation.",
     canEnterNow: actionState?.can_enter_now ?? details?.can_enter_now ?? null,

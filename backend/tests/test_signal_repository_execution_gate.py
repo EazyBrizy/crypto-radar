@@ -2,7 +2,13 @@ import unittest
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.repositories.signal_repository import _record_to_radar_signal, _snapshot_from_signal, _snapshot_from_strategy_signal
+from app.repositories.signal_repository import (
+    _api_status_to_db,
+    _record_to_radar_signal,
+    _snapshot_from_signal,
+    _snapshot_from_strategy_signal,
+    _strategy_signal_status_to_db,
+)
 from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot, SignalTriggerSnapshot, StrategySignal
 
 
@@ -81,6 +87,18 @@ class SignalRepositoryExecutionGateSnapshotTest(unittest.TestCase):
         self.assertFalse(signal.trigger.passed if signal.trigger else True)
         self.assertEqual(signal.trigger.reason if signal.trigger else None, "Breakout trigger not confirmed")
 
+    def test_repository_persists_rejected_status(self) -> None:
+        self.assertEqual(_api_status_to_db("rejected"), "rejected")
+        self.assertEqual(_strategy_signal_status_to_db("rejected", 82), "rejected")
+
+    def test_rejected_status_survives_roundtrip(self) -> None:
+        record = _FakeRecord(features_snapshot={}, status="rejected")
+
+        signal = _record_to_radar_signal(record)
+
+        self.assertEqual(signal.status, "rejected")
+        self.assertIsNotNone(signal.rejected_at)
+
 
 def _gate() -> SignalExecutionGateSnapshot:
     return SignalExecutionGateSnapshot(
@@ -110,7 +128,7 @@ class _FakeStrategyVersion:
 
 
 class _FakeRecord:
-    def __init__(self, *, features_snapshot: dict) -> None:
+    def __init__(self, *, features_snapshot: dict, status: str = "actionable") -> None:
         now = datetime(2026, 6, 6, tzinfo=timezone.utc)
         self.id = uuid4()
         self.signal_key = str(self.id)
@@ -125,7 +143,7 @@ class _FakeRecord:
         self.stop_loss = None
         self.take_profit = []
         self.explanation = None
-        self.status = "actionable"
+        self.status = status
         self.features_snapshot = features_snapshot
         self.created_at = now
         self.detected_at = now

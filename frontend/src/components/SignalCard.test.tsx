@@ -133,6 +133,19 @@ describe("SignalCard", () => {
     expect(screen.getByText("low score")).toBeInTheDocument();
     expect(screen.queryByText("TP1")).not.toBeInTheDocument();
   });
+
+  it("labels rejected signals separately from invalidated backend labels", () => {
+    render(<SignalCard signal={baseSignal({
+      status: "rejected",
+      card_view: {
+        ...baseSignal().card_view!,
+        status_label: "Invalidated"
+      }
+    })} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("Отклонён")).toBeInTheDocument();
+    expect(screen.queryByText("Invalidated")).not.toBeInTheDocument();
+  });
 });
 
 function baseSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {

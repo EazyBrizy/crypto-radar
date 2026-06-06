@@ -52,7 +52,7 @@ class TradingSignalModelsTest(unittest.TestCase):
             if constraint.name == "ck_trading_signals_status"
         )
         status_sql = str(status_constraint.sqltext)
-        for status in ("watchlist", "ready", "actionable", "wait_for_pullback", "entry_touched"):
+        for status in ("watchlist", "ready", "actionable", "wait_for_pullback", "entry_touched", "rejected"):
             self.assertIn(status, status_sql)
 
     def test_event_table_is_partitioned_by_created_at(self) -> None:

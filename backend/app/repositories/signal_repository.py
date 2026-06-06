@@ -877,7 +877,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
         updated_at=updated_at,
         expires_at=_as_utc(record.expires_at) if record.expires_at else None,
         confirmed_at=updated_at if record.status == "confirmed" else None,
-        rejected_at=updated_at if record.status == "invalidated" else None,
+        rejected_at=updated_at if record.status == "rejected" else None,
         decision_mode=decision.get("decision_mode"),
         decision_note=decision.get("decision_note"),
         confirmed_trade_id=decision.get("confirmed_trade_id"),
@@ -1135,8 +1135,6 @@ def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str
 
 
 def _api_status_to_db(status: str) -> str:
-    if status == "rejected":
-        return "invalidated"
     return status
 
 
@@ -1144,7 +1142,7 @@ def _strategy_signal_status_to_db(status: str, score: int) -> str:
     if status in OPEN_SIGNAL_STATUSES:
         return status
     if status == "rejected":
-        return "invalidated"
+        return "rejected"
     return "actionable" if score >= 70 else "watchlist"
 
 

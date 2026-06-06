@@ -21,7 +21,7 @@ class TradingSignal(Base):
         CheckConstraint(
             "status IN ("
             "'new', 'active', 'watchlist', 'ready', 'actionable', 'wait_for_pullback', "
-            "'entry_touched', 'confirmed', 'expired', 'invalidated', 'closed'"
+            "'entry_touched', 'confirmed', 'rejected', 'expired', 'invalidated', 'closed'"
             ")",
             name="ck_trading_signals_status",
         ),

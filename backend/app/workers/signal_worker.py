@@ -337,6 +337,9 @@ def _should_notify_signal(
     gate = getattr(signal, "execution_gate", None)
     if gate is None:
         return _legacy_signal_is_notification_eligible(signal)
+    status = getattr(signal, "status", None)
+    if not isinstance(status, str) or not is_execution_candidate_status(status):
+        return False
     if not bool(gate.can_notify and gate.can_show_in_execution_feed and gate.feed_kind == "execution_signal"):
         return False
     if notified_execution_keys is None:

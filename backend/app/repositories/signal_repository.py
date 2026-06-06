@@ -65,6 +65,17 @@ class SignalRepository(Protocol):
     ) -> list[RadarSignal]:
         ...
 
+    def list_open_signals_for_market_direction(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        direction: str,
+        since: datetime,
+        limit: int = MAX_STORED_SIGNALS,
+    ) -> list[RadarSignal]:
+        ...
+
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         ...
 
@@ -111,6 +122,14 @@ class SignalRepository(Protocol):
         reason: str | None = None,
         lifecycle: dict[str, Any] | None = None,
         signal_updates: dict[str, Any] | None = None,
+    ) -> SignalWriteResult | None:
+        ...
+
+    def update_signal_dedup_metadata(
+        self,
+        signal_id: str,
+        *,
+        dedup: dict[str, Any],
     ) -> SignalWriteResult | None:
         ...
 
@@ -200,6 +219,34 @@ class PostgresSignalRepository:
                     MarketPair.symbol == _normalize_symbol(symbol),
                     TradingSignal.timeframe == timeframe,
                     TradingSignal.status.in_(OPEN_SIGNAL_STATUSES),
+                    _expires_after(now),
+                )
+                .order_by(TradingSignal.detected_at.desc())
+                .limit(limit)
+            ).all()
+            return [_record_to_radar_signal(record) for record in records]
+
+    def list_open_signals_for_market_direction(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        direction: str,
+        since: datetime,
+        limit: int = MAX_STORED_SIGNALS,
+    ) -> list[RadarSignal]:
+        with self._session_factory() as session:
+            now = datetime.now(timezone.utc)
+            records = session.scalars(
+                _signal_select()
+                .join(TradingSignal.exchange)
+                .join(TradingSignal.pair)
+                .where(
+                    MarketExchange.code == exchange.lower(),
+                    MarketPair.symbol == _normalize_symbol(symbol),
+                    TradingSignal.direction == direction.lower(),
+                    TradingSignal.status.in_(OPEN_SIGNAL_STATUSES),
+                    TradingSignal.detected_at >= _as_utc(since),
                     _expires_after(now),
                 )
                 .order_by(TradingSignal.detected_at.desc())
@@ -451,6 +498,32 @@ class PostgresSignalRepository:
                 record,
                 event_type,
                 old_status=old_status,
+                now=now,
+            )
+            session.commit()
+            return result
+
+    def update_signal_dedup_metadata(
+        self,
+        signal_id: str,
+        *,
+        dedup: dict[str, Any],
+    ) -> SignalWriteResult | None:
+        with self._session_factory() as session:
+            record = _get_signal_record(session, signal_id)
+            if record is None:
+                return None
+            now = datetime.now(timezone.utc)
+            snapshot = dict(record.features_snapshot or {})
+            snapshot["dedup"] = dedup
+            snapshot = _with_signal_lifecycle_trace(snapshot, record.id)
+            record.features_snapshot = snapshot
+            record.updated_at = now
+            result = _persist_signal_event(
+                session,
+                record,
+                SIGNAL_UPDATED_EVENT,
+                old_status=record.status,
                 now=now,
             )
             session.commit()
@@ -944,6 +1017,8 @@ def _apply_signal_updates(
         snapshot["trade_plan"] = _model_dump_optional(updates["trade_plan"])
     if "candle_state" in updates:
         snapshot["candle_state"] = updates["candle_state"]
+    if "dedup" in updates:
+        snapshot["dedup"] = updates["dedup"]
     for key in (
         "confirmation",
         "first_target_rr",

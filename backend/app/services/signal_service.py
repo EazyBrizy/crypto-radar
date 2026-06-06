@@ -1,15 +1,17 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from typing import Any, Protocol
 
 from app.core.clickhouse_client import get_clickhouse_client
+from app.core.config import settings
 from app.core.redis_client import get_redis_client
 from app.domain.signal_status import is_market_opportunity_status
 from app.repositories.signal_repository import (
     MAX_STORED_SIGNALS,
     PostgresSignalRepository,
+    SIGNAL_INVALIDATED_EVENT,
     SignalRepository,
     SignalWriteResult,
 )
@@ -18,6 +20,7 @@ from app.schemas.risk import RadarDisplayMode, RiskDecision, RiskPreviewRequest
 from app.schemas.signal import RadarSignal, StrategySignal
 from app.schemas.trade import ManualConfirmRequest
 from app.services.risk_management import default_rr_guard_mode_for_context
+from app.services.signal_deduplication import DedupDecision, signal_deduplication_service
 from app.services.signal_risk_reward import ensure_signal_execution_eligible
 
 logger = logging.getLogger(__name__)
@@ -172,6 +175,34 @@ class SignalService:
             if signal.exchange == exchange and signal.symbol == symbol and signal.timeframe == timeframe
         ][:limit]
 
+    def list_open_signals_for_market_direction(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        direction: str,
+        since: datetime,
+        limit: int = MAX_STORED_SIGNALS,
+    ) -> list[RadarSignal]:
+        list_for_direction = getattr(self._repository, "list_open_signals_for_market_direction", None)
+        if list_for_direction is not None:
+            return list_for_direction(
+                exchange=exchange,
+                symbol=symbol,
+                direction=direction,
+                since=since,
+                limit=limit,
+            )
+        normalized_symbol = _normalize_signal_symbol(symbol)
+        return [
+            signal
+            for signal in self.list_open_signals()
+            if signal.exchange.lower() == exchange.lower()
+            and _normalize_signal_symbol(signal.symbol) == normalized_symbol
+            and signal.direction.lower() == direction.lower()
+            and signal.created_at >= since
+        ][:limit]
+
     def get_signal(self, signal_id: str) -> RadarSignal | None:
         return self._repository.get_signal(signal_id)
 
@@ -212,8 +243,11 @@ class SignalService:
             explanation=explanation,
         )
         self._after_write(result)
-        self._reconcile_pending_entry_trade_plan(result)
-        return result.signal, result.created
+        final_result = self._apply_write_side_dedup(result)
+        if final_result is not result:
+            self._after_write(final_result)
+        self._reconcile_pending_entry_trade_plan(final_result)
+        return final_result.signal, result.created
 
     def confirm_signal(
         self,
@@ -369,6 +403,79 @@ class SignalService:
         except Exception as exc:
             logger.warning("Redis signal hot write failed: %s", exc)
 
+    def _apply_write_side_dedup(self, result: SignalWriteResult) -> SignalWriteResult:
+        signal = result.signal
+        since = datetime.now(timezone.utc) - timedelta(
+            seconds=max(0, int(settings.execution_dedup_window_seconds))
+        )
+        try:
+            open_signals = self.list_open_signals_for_market_direction(
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                direction=signal.direction,
+                since=since,
+            )
+        except Exception as exc:
+            logger.warning("Signal dedup lookup failed: %s", exc)
+            return result
+
+        decision = signal_deduplication_service.decide(signal, open_signals)
+        metadata = _dedup_metadata(decision)
+        if decision.action == "suppress":
+            suppressed = self._transition_signal_for_dedup(
+                signal.id,
+                new_status="invalidated",
+                reason="dedup_suppressed_by_better_signal",
+                dedup=metadata,
+            )
+            return suppressed or self._update_signal_dedup_metadata(signal.id, metadata) or result
+
+        if decision.action == "replace":
+            for replaced_signal_id in decision.replaced_signal_ids:
+                replaced = self._transition_signal_for_dedup(
+                    replaced_signal_id,
+                    new_status="invalidated",
+                    reason="dedup_replaced_by_better_signal",
+                    dedup={
+                        **metadata,
+                        "action": "replaced",
+                        "replaced_by_signal_id": signal.id,
+                    },
+                )
+                if replaced is not None:
+                    self._after_write(replaced)
+
+        return self._update_signal_dedup_metadata(signal.id, metadata) or result
+
+    def _transition_signal_for_dedup(
+        self,
+        signal_id: str,
+        *,
+        new_status: str,
+        reason: str,
+        dedup: dict[str, object],
+    ) -> SignalWriteResult | None:
+        transition = getattr(self._repository, "transition_signal", None)
+        if not callable(transition):
+            return None
+        return transition(
+            signal_id,
+            new_status=new_status,
+            event_type=SIGNAL_INVALIDATED_EVENT,
+            reason=reason,
+            signal_updates={"dedup": dedup},
+        )
+
+    def _update_signal_dedup_metadata(
+        self,
+        signal_id: str,
+        dedup: dict[str, object],
+    ) -> SignalWriteResult | None:
+        update = getattr(self._repository, "update_signal_dedup_metadata", None)
+        if not callable(update):
+            return None
+        return update(signal_id, dedup=dedup)
+
     def _reconcile_pending_entry_trade_plan(self, result: SignalWriteResult) -> None:
         try:
             from app.services.pending_entry import pending_entry_intent_service
@@ -378,6 +485,23 @@ class SignalService:
             )
         except Exception as exc:
             logger.warning("Pending entry trade-plan reconciliation failed: %s", exc)
+
+
+def _dedup_metadata(decision: DedupDecision) -> dict[str, object]:
+    metadata = dict(decision.metadata)
+    metadata.update(
+        {
+            "action": decision.action,
+            "reason": decision.reason,
+            "suppressed_by_signal_id": decision.suppressed_by_signal_id,
+            "replaced_signal_ids": list(decision.replaced_signal_ids),
+        }
+    )
+    return metadata
+
+
+def _normalize_signal_symbol(symbol: str) -> str:
+    return symbol.replace("/", "").replace(":PERP", "").upper()
 
 
 signal_service = SignalService()

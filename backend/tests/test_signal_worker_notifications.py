@@ -57,6 +57,18 @@ class SignalWorkerNotificationGateTest(unittest.TestCase):
         self.assertFalse(_should_notify_signal(_signal(execution_gate=None, status="watchlist")))
         self.assertTrue(_should_notify_signal(_signal(execution_gate=None)))
 
+    def test_terminal_signal_does_not_notify_even_with_stale_passed_gate(self) -> None:
+        execution_gate = SignalExecutionGateSnapshot(
+            status="passed",
+            feed_kind="execution_signal",
+            can_notify=True,
+            can_enter_now=True,
+            can_arm_pending=True,
+            can_show_in_execution_feed=True,
+        )
+
+        self.assertFalse(_should_notify_signal(_signal(status="invalidated", execution_gate=execution_gate)))
+
     def test_execution_ready_notifications_are_deduped_by_pair_and_direction(self) -> None:
         seen: set[tuple[str, str, str]] = set()
         execution_gate = SignalExecutionGateSnapshot(

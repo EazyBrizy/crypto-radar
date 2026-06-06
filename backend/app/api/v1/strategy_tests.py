@@ -8,6 +8,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignal,
     StrategyTestTrade,
 )
 from app.services.strategy_testing.service import StrategyTestingService
@@ -71,6 +72,19 @@ async def list_strategy_test_trades(
 ) -> list[StrategyTestTrade]:
     try:
         return service.list_trades(run_id, limit=limit, offset=offset)
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/signals", response_model=list[StrategyTestSignal])
+async def list_strategy_test_signals(
+    run_id: UUID,
+    limit: int = Query(default=500, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> list[StrategyTestSignal]:
+    try:
+        return service.list_signals(run_id, limit=limit, offset=offset)
     except ValueError as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

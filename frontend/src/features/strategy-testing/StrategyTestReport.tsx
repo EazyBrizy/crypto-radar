@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import { Badge } from "@/components/Badge";
 import { StrategyTestMetricGrid, formatMetricValue } from "./StrategyTestMetricGrid";
+import { StrategyTestSignalList } from "./StrategyTestSignalList";
 import { StrategyTestTradeList } from "./StrategyTestTradeList";
 import type {
   StrategyTestCandidateAdjustment,
@@ -24,6 +25,7 @@ interface StrategyTestReportProps {
 }
 
 const SECTION_TABLE_COLUMNS: Record<string, string[]> = {
+  conversion_funnel: ["stage", "count", "rate"],
   entry_quality: ["strategy", "timeframe", "entry_touch_rate", "median_bars_to_entry", "false_signal_rate", "avg_mfe_r", "sample_size"],
   exit_quality: ["strategy", "timeframe", "tp1_rate", "tp2_rate", "stop_rate", "time_stop_rate", "avg_mfe_r", "avg_mae_r", "sample_size"],
   pair_timeframe_breakdown: ["strategy", "symbol", "timeframe", "trades_count", "winrate", "expectancy_r", "expectancy_after_costs_r", "max_drawdown_r", "sample_size"],
@@ -82,6 +84,8 @@ export function StrategyTestReport({
               <MetricSection report={report} sectionCode="exit_quality" />
               <DistributionSection report={report} />
               <RejectionSection report={report} />
+              <ConversionFunnelSection report={report} />
+              <SignalListSection report={report} />
               <TradeListSection report={report} />
               <CandidateAdjustmentsSection adjustments={adjustments} />
             </div>
@@ -101,6 +105,7 @@ function ReportSummarySection({ report }: { report: StrategyTestReportData }) {
     <ReportSection name="Summary">
       <div className="strategy-test-summary-grid">
         {summaryItem("Scenarios", summary.scenario_count)}
+        {summaryItem("Signals", summary.signals_count ?? summary.total_signals)}
         {summaryItem("Mode", summary.mode)}
         {summaryItem("Start", summary.start_at)}
         {summaryItem("End", summary.end_at)}
@@ -149,6 +154,32 @@ function RejectionSection({ report }: { report: StrategyTestReportData }) {
       <StrategyTestMetricGrid metrics={section.metrics} />
       <SectionRowsTable columns={SECTION_TABLE_COLUMNS.rejection_analysis} rows={section.rows} />
       <SectionRowsTable columns={["warning", "count"]} emptyLabel="No warning counts" rows={warningCounts} />
+    </ReportSection>
+  );
+}
+
+function ConversionFunnelSection({ report }: { report: StrategyTestReportData }) {
+  const section = findSection(report, "conversion_funnel");
+  if (!section) return null;
+  return (
+    <ReportSection name={section.name}>
+      <div className="strategy-test-summary-grid">
+        {summaryItem("Signals", section.summary.signals_count)}
+        {summaryItem("Entry touched", section.summary.entry_touched_count)}
+        {summaryItem("Filled", section.summary.filled_count)}
+        {summaryItem("No entry", section.summary.no_entry_count)}
+      </div>
+      <SectionRowsTable columns={SECTION_TABLE_COLUMNS.conversion_funnel} rows={section.rows} />
+    </ReportSection>
+  );
+}
+
+function SignalListSection({ report }: { report: StrategyTestReportData }) {
+  const section = findSection(report, "signal_list");
+  if (!section) return null;
+  return (
+    <ReportSection name={section.name}>
+      <StrategyTestSignalList signals={section.rows} />
     </ReportSection>
   );
 }

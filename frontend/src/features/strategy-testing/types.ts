@@ -1,12 +1,23 @@
 export type StrategyTestMode = "discovery" | "research_virtual" | "production_like";
 export type StrategyTestRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type StrategyTestSameCandlePolicy = "stop_first" | "target_first" | "ignore_ambiguous";
+export type StrategyTestSignalSelectionPolicy =
+  | "first_actionable"
+  | "highest_score"
+  | "all_non_overlapping"
+  | "all_signals";
 
 export const STRATEGY_TEST_MODES: StrategyTestMode[] = ["discovery", "research_virtual", "production_like"];
 export const STRATEGY_TEST_SAME_CANDLE_POLICIES: StrategyTestSameCandlePolicy[] = [
   "stop_first",
   "target_first",
   "ignore_ambiguous"
+];
+export const STRATEGY_TEST_SIGNAL_SELECTION_POLICIES: StrategyTestSignalSelectionPolicy[] = [
+  "first_actionable",
+  "highest_score",
+  "all_non_overlapping",
+  "all_signals"
 ];
 
 export interface StrategyTestPair {
@@ -45,8 +56,12 @@ export interface StrategyTestRunSummary {
   scenario_count?: number;
   completed_scenarios?: number;
   failed_scenarios?: number;
+  signals_count?: number;
   trades_count?: number;
   signals_seen?: number;
+  entry_touch_count?: number;
+  filled_count?: number;
+  no_entry_count?: number;
   risk_rejections?: number;
   execution_rejections?: number;
   [key: string]: unknown;
@@ -111,6 +126,43 @@ export interface StrategyTestTrade {
   features_snapshot?: Record<string, unknown>;
   trade_plan?: Record<string, unknown>;
   tags?: string[];
+  created_at?: string;
+}
+
+export interface StrategyTestSignal {
+  run_id: string;
+  user_id?: string;
+  mode?: StrategyTestMode;
+  scenario_id?: string;
+  strategy_code: string;
+  strategy_version?: string;
+  exchange?: string;
+  symbol: string;
+  timeframe?: string;
+  direction?: string;
+  signal_id: string;
+  signal_time?: string;
+  signal_score?: number | null;
+  feed_kind?: string;
+  gate_status?: string;
+  status?: string;
+  trigger_passed?: boolean;
+  edge_status?: string;
+  selected_rr?: number | null;
+  entry_min?: DecimalJson | null;
+  entry_max?: DecimalJson | null;
+  stop_loss?: DecimalJson | null;
+  target_1?: DecimalJson | null;
+  outcome?: string;
+  outcome_reason?: string;
+  entry_touched?: boolean;
+  filled?: boolean;
+  risk_rejected?: boolean;
+  execution_rejected?: boolean;
+  no_entry?: boolean;
+  bars_to_entry?: number | null;
+  bars_to_outcome?: number | null;
+  metadata?: Record<string, unknown>;
   created_at?: string;
 }
 

@@ -14,6 +14,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestReportSection,
     StrategyTestRunDetailResponse,
     StrategyTestRunStatus,
+    StrategyTestSignal,
     StrategyTestTrade,
 )
 
@@ -25,12 +26,15 @@ MATRIX_METRIC_GROUPINGS: tuple[tuple[str, ...], ...] = (
     ("strategy", "regime"),
     ("strategy", "score_bucket"),
     ("strategy", "direction"),
+    ("strategy", "feed_kind"),
+    ("strategy", "edge_status"),
 )
 
 REPORT_EXTRA_GROUPINGS: tuple[tuple[str, ...], ...] = (
     ("strategy", "timeframe"),
     ("strategy", "score_bucket", "timeframe"),
     ("strategy", "regime", "direction"),
+    ("strategy", "feed_kind", "edge_status"),
 )
 
 SECTION_NAMES: tuple[tuple[str, str], ...] = (
@@ -43,11 +47,18 @@ SECTION_NAMES: tuple[tuple[str, str], ...] = (
     ("exit_quality", "Exit quality"),
     ("mfe_mae_distribution", "MFE/MAE distribution"),
     ("rejection_analysis", "Rejection analysis"),
+    ("conversion_funnel", "Conversion funnel"),
+    ("signal_list", "Signal list"),
     ("trade_list", "Trade list"),
     ("recommended_strategy_adjustments", "Recommended strategy adjustments"),
 )
 
 SUMMARY_METRIC_CODES = (
+    "signals_count",
+    "execution_candidates_count",
+    "entry_touch_rate",
+    "fill_rate",
+    "no_entry_rate",
     "trades_count",
     "winrate",
     "expectancy_r",
@@ -71,7 +82,10 @@ STRATEGY_COMPARISON_CODES = (
 )
 
 ENTRY_QUALITY_CODES = (
+    "signals_count",
     "entry_touch_rate",
+    "fill_rate",
+    "no_entry_rate",
     "median_bars_to_entry",
     "false_signal_rate",
     "avg_mfe_r",
@@ -87,6 +101,7 @@ EXIT_QUALITY_CODES = (
 )
 
 REJECTION_CODES = (
+    "blocked_rate",
     "risk_rejection_rate",
     "execution_rejection_rate",
 )
@@ -107,6 +122,9 @@ class ReportRunStore(Protocol):
 
 class ReportAnalyticsStore(Protocol):
     def list_trades(self, run_id: UUID) -> list[StrategyTestTrade]:
+        ...
+
+    def list_signals(self, run_id: UUID) -> list[StrategyTestSignal]:
         ...
 
 
@@ -136,8 +154,10 @@ class StrategyTestReportBuilder:
     def _build_report(self, run_detail: StrategyTestRunDetailResponse) -> StrategyTestReport:
         run = run_detail.run
         trades = self._analytics_store.list_trades(run.run_id)
+        signals = self._analytics_store.list_signals(run.run_id)
         metric_results = build_report_metric_results(
             trades,
+            signals=signals,
             registry=self._metric_registry,
         )
         metric_sections = metric_results_to_summary_sections(metric_results)
@@ -148,11 +168,12 @@ class StrategyTestReportBuilder:
             metrics=metric_results,
             mode=_run_mode(run.requested_matrix),
         )
-        warnings = _report_warnings(metric_results, trades)
-        rejections = _report_rejections(trades)
-        summary = _build_summary(run_detail, trades, metric_results)
+        warnings = _report_warnings(metric_results, trades, signals)
+        rejections = _report_rejections(trades, signals)
+        summary = _build_summary(run_detail, trades, signals, metric_results)
         sections = _build_sections(
             trades=trades,
+            signals=signals,
             metrics=metric_results,
             summary=summary,
             candidate_adjustments=candidate_adjustments,
@@ -182,6 +203,7 @@ class StrategyTestReportBuilder:
 def build_matrix_metric_results(
     trades: Sequence[StrategyTestTrade],
     *,
+    signals: Sequence[StrategyTestSignal] | None = None,
     metric_set: Sequence[str] | None = None,
     registry: MetricRegistry | None = None,
 ) -> list[MetricResult]:
@@ -192,6 +214,7 @@ def build_matrix_metric_results(
     for grouping in MATRIX_METRIC_GROUPINGS:
         computed = metric_registry.compute(
             trades,
+            signals=signals,
             metric_set=metric_set,
             group_by=list(grouping) if grouping else None,
         )
@@ -209,14 +232,15 @@ def build_matrix_metric_results(
 def build_report_metric_results(
     trades: Sequence[StrategyTestTrade],
     *,
+    signals: Sequence[StrategyTestSignal] | None = None,
     registry: MetricRegistry | None = None,
 ) -> list[MetricResult]:
     metric_registry = registry or build_base_metric_registry()
-    results = build_matrix_metric_results(trades, registry=metric_registry)
+    results = build_matrix_metric_results(trades, signals=signals, registry=metric_registry)
     seen = {(result.code, tuple(sorted(result.group.items()))) for result in results}
 
     for grouping in REPORT_EXTRA_GROUPINGS:
-        for result in metric_registry.compute(trades, group_by=list(grouping)):
+        for result in metric_registry.compute(trades, signals=signals, group_by=list(grouping)):
             if result.group == {"all": "all"}:
                 continue
             key = (result.code, tuple(sorted(result.group.items())))
@@ -308,6 +332,7 @@ def metric_result_to_dict(result: MetricResult) -> dict[str, Any]:
 def _build_summary(
     run_detail: StrategyTestRunDetailResponse,
     trades: Sequence[StrategyTestTrade],
+    signals: Sequence[StrategyTestSignal],
     metrics: Sequence[MetricResult],
 ) -> dict[str, Any]:
     run = run_detail.run
@@ -325,7 +350,13 @@ def _build_summary(
         "end_at": requested.get("end_at"),
         "started_at": run.started_at,
         "finished_at": run.finished_at,
+        "total_signals": len(signals),
         "total_trades": len(trades),
+        "signals_count": _metric_value(all_metrics, "signals_count"),
+        "execution_candidates_count": _metric_value(all_metrics, "execution_candidates_count"),
+        "entry_touch_rate": _metric_value(all_metrics, "entry_touch_rate"),
+        "fill_rate": _metric_value(all_metrics, "fill_rate"),
+        "no_entry_rate": _metric_value(all_metrics, "no_entry_rate"),
         "trades_count": _metric_value(all_metrics, "trades_count"),
         "winrate": _metric_value(all_metrics, "winrate"),
         "expectancy_r": _metric_value(all_metrics, "expectancy_r"),
@@ -335,14 +366,15 @@ def _build_summary(
         "max_drawdown_pct": _metric_value(all_metrics, "max_drawdown_pct"),
         "fees_total": _metric_value(all_metrics, "fees_total"),
         "slippage_total": _metric_value(all_metrics, "slippage_total"),
-        "risk_rejections": sum(1 for trade in trades if trade.risk_rejected),
-        "execution_rejections": sum(1 for trade in trades if trade.execution_rejected),
+        "risk_rejections": _risk_rejection_count(trades, signals),
+        "execution_rejections": _execution_rejection_count(trades, signals),
     }
 
 
 def _build_sections(
     *,
     trades: Sequence[StrategyTestTrade],
+    signals: Sequence[StrategyTestSignal],
     metrics: Sequence[MetricResult],
     summary: dict[str, Any],
     candidate_adjustments: Sequence[StrategyTestCandidateAdjustment],
@@ -398,13 +430,25 @@ def _build_sections(
             code="rejection_analysis",
             name="Rejection analysis",
             summary={
-                "risk_rejections": sum(1 for trade in trades if trade.risk_rejected),
-                "execution_rejections": sum(1 for trade in trades if trade.execution_rejected),
+                "risk_rejections": _risk_rejection_count(trades, signals),
+                "execution_rejections": _execution_rejection_count(trades, signals),
                 "warning_counts": _warning_count_rows(trades),
                 "rejections": list(rejections),
             },
             metrics=_metrics_for_group(metrics, {"all": "all"}, REJECTION_CODES),
             rows=_metric_rows(metrics, ("strategy",), REJECTION_CODES),
+        ),
+        "conversion_funnel": StrategyTestReportSection(
+            code="conversion_funnel",
+            name="Conversion funnel",
+            summary=_conversion_funnel_summary(signals, trades),
+            rows=_conversion_funnel_rows(signals, trades),
+        ),
+        "signal_list": StrategyTestReportSection(
+            code="signal_list",
+            name="Signal list",
+            rows=[_compact_signal_row(signal) for signal in signals],
+            metadata={"rows_returned": len(signals)},
         ),
         "trade_list": StrategyTestReportSection(
             code="trade_list",
@@ -789,6 +833,113 @@ def _compact_trade_row(trade: StrategyTestTrade) -> dict[str, Any]:
     }
 
 
+def _conversion_funnel_summary(
+    signals: Sequence[StrategyTestSignal],
+    trades: Sequence[StrategyTestTrade],
+) -> dict[str, Any]:
+    return {
+        "signals_count": len(signals),
+        "execution_candidates_count": sum(1 for signal in signals if _is_execution_candidate(signal)),
+        "entry_touched_count": sum(1 for signal in signals if signal.entry_touched),
+        "filled_count": sum(1 for signal in signals if signal.filled),
+        "tp_count": sum(1 for trade in trades if _is_positive_trade(trade)),
+        "sl_count": sum(1 for trade in trades if _is_stop_trade(trade)),
+        "other_outcome_count": sum(1 for trade in trades if not _is_positive_trade(trade) and not _is_stop_trade(trade)),
+        "no_entry_count": sum(1 for signal in signals if signal.no_entry),
+        "risk_rejected_count": sum(1 for signal in signals if signal.risk_rejected),
+        "execution_rejected_count": sum(1 for signal in signals if signal.execution_rejected),
+    }
+
+
+def _conversion_funnel_rows(
+    signals: Sequence[StrategyTestSignal],
+    trades: Sequence[StrategyTestTrade],
+) -> list[dict[str, Any]]:
+    summary = _conversion_funnel_summary(signals, trades)
+    total = summary["signals_count"]
+    rows: list[dict[str, Any]] = []
+    for stage, key in (
+        ("signals", "signals_count"),
+        ("execution_candidates", "execution_candidates_count"),
+        ("entry_touched", "entry_touched_count"),
+        ("filled", "filled_count"),
+        ("tp", "tp_count"),
+        ("sl", "sl_count"),
+        ("other", "other_outcome_count"),
+        ("no_entry", "no_entry_count"),
+        ("risk_rejected", "risk_rejected_count"),
+        ("execution_rejected", "execution_rejected_count"),
+    ):
+        count = int(summary[key])
+        rows.append({"stage": stage, "count": count, "rate": count / total if total else None})
+    return rows
+
+
+def _compact_signal_row(signal: StrategyTestSignal) -> dict[str, Any]:
+    return {
+        "run_id": str(signal.run_id),
+        "scenario_id": signal.scenario_id,
+        "signal_id": signal.signal_id,
+        "strategy_code": signal.strategy_code,
+        "exchange": signal.exchange,
+        "symbol": signal.symbol,
+        "timeframe": signal.timeframe,
+        "direction": signal.direction,
+        "signal_time": signal.signal_time,
+        "signal_score": signal.signal_score,
+        "feed_kind": signal.feed_kind,
+        "gate_status": signal.gate_status,
+        "status": signal.status,
+        "edge_status": signal.edge_status,
+        "selected_rr": signal.selected_rr,
+        "outcome": signal.outcome,
+        "outcome_reason": signal.outcome_reason,
+        "entry_touched": signal.entry_touched,
+        "filled": signal.filled,
+        "risk_rejected": signal.risk_rejected,
+        "execution_rejected": signal.execution_rejected,
+        "no_entry": signal.no_entry,
+        "bars_to_entry": signal.bars_to_entry,
+        "bars_to_outcome": signal.bars_to_outcome,
+        "metadata": dict(signal.metadata),
+    }
+
+
+def _is_execution_candidate(signal: StrategyTestSignal) -> bool:
+    feed_kind = str(signal.feed_kind or "").strip().lower()
+    if feed_kind in {"blocked", "blocked_signal"}:
+        return False
+    gate_status = str(signal.gate_status or "").strip().lower()
+    return feed_kind in {"execution_signal", "execution_candidate"} or gate_status == "passed"
+
+
+def _is_positive_trade(trade: StrategyTestTrade) -> bool:
+    return (trade.realized_r or 0) > 0 or str(trade.outcome).lower() == "win"
+
+
+def _is_stop_trade(trade: StrategyTestTrade) -> bool:
+    reason = str(trade.close_reason or "").strip().lower()
+    return reason in {"stop", "stop_loss", "breakeven_stop", "trailing_stop"} or str(trade.outcome).lower() == "loss"
+
+
+def _risk_rejection_count(
+    trades: Sequence[StrategyTestTrade],
+    signals: Sequence[StrategyTestSignal],
+) -> int:
+    if signals:
+        return sum(1 for signal in signals if signal.risk_rejected)
+    return sum(1 for trade in trades if trade.risk_rejected)
+
+
+def _execution_rejection_count(
+    trades: Sequence[StrategyTestTrade],
+    signals: Sequence[StrategyTestSignal],
+) -> int:
+    if signals:
+        return sum(1 for signal in signals if signal.execution_rejected)
+    return sum(1 for trade in trades if trade.execution_rejected)
+
+
 def _warning_count_rows(trades: Sequence[StrategyTestTrade]) -> list[dict[str, Any]]:
     counts = Counter(warning for trade in trades for warning in trade.warnings)
     return [
@@ -797,22 +948,29 @@ def _warning_count_rows(trades: Sequence[StrategyTestTrade]) -> list[dict[str, A
     ]
 
 
-def _report_warnings(metrics: Sequence[MetricResult], trades: Sequence[StrategyTestTrade]) -> list[str]:
+def _report_warnings(
+    metrics: Sequence[MetricResult],
+    trades: Sequence[StrategyTestTrade],
+    signals: Sequence[StrategyTestSignal],
+) -> list[str]:
     warnings: list[str] = []
     for result in metrics:
         if result.group == {"all": "all"}:
             warnings.extend(result.warnings)
     for trade in trades:
         warnings.extend(trade.warnings)
-    if not trades:
+    if not trades and not signals:
         warnings.append("insufficient_data")
     return _dedupe_strings(warnings)
 
 
-def _report_rejections(trades: Sequence[StrategyTestTrade]) -> list[str]:
+def _report_rejections(
+    trades: Sequence[StrategyTestTrade],
+    signals: Sequence[StrategyTestSignal],
+) -> list[str]:
     rejections: list[str] = []
-    risk_count = sum(1 for trade in trades if trade.risk_rejected)
-    execution_count = sum(1 for trade in trades if trade.execution_rejected)
+    risk_count = _risk_rejection_count(trades, signals)
+    execution_count = _execution_rejection_count(trades, signals)
     if risk_count:
         rejections.append(f"risk_rejections:{risk_count}")
     if execution_count:

@@ -6,11 +6,11 @@ from decimal import Decimal
 from statistics import median
 from typing import Callable, Sequence
 
-from app.services.strategy_testing.schemas import StrategyTestTrade
+from app.services.strategy_testing.schemas import StrategyTestSignal, StrategyTestTrade
 
 
 MetricValue = float | int | None
-MetricCompute = Callable[[Sequence[StrategyTestTrade]], MetricValue]
+MetricCompute = Callable[["StrategyTestMetricContext"], MetricValue]
 
 SUPPORTED_GROUPINGS = (
     "strategy",
@@ -19,12 +19,19 @@ SUPPORTED_GROUPINGS = (
     "regime",
     "score_bucket",
     "direction",
+    "feed_kind",
+    "edge_status",
 )
 
 BASE_METRIC_CODES = (
     "trades_count",
     "signals_count",
+    "execution_candidates_count",
+    "execution_gate_pass_rate",
+    "blocked_rate",
     "entry_touch_rate",
+    "fill_rate",
+    "no_entry_rate",
     "winrate",
     "avg_win_r",
     "avg_loss_r",
@@ -55,15 +62,36 @@ _GROUP_FIELD_MAP = {
     "strategy": "strategy_code",
     "symbol": "symbol",
     "timeframe": "timeframe",
-    "regime": "market_regime",
-    "score_bucket": "score_bucket",
     "direction": "direction",
+    "feed_kind": "feed_kind",
+    "edge_status": "edge_status",
+}
+
+_SIGNAL_SAMPLE_METRICS = {
+    "signals_count",
+    "execution_candidates_count",
+    "execution_gate_pass_rate",
+    "blocked_rate",
+    "entry_touch_rate",
+    "fill_rate",
+    "no_entry_rate",
+    "risk_rejection_rate",
+    "execution_rejection_rate",
+    "false_signal_rate",
+    "median_bars_to_entry",
+    "median_bars_to_outcome",
 }
 
 _STOP_REASONS = {"stop_loss", "breakeven_stop", "trailing_stop", "stop"}
 _TARGET_REASONS = {"target", "take_profit", "partial_take_profit"}
 _INVALIDATION_REASONS = {"invalidation", "invalidated"}
 _FUNDING_COST_KEYS = ("funding_total", "funding_cost", "funding_fee", "funding_paid")
+
+
+@dataclass(frozen=True)
+class StrategyTestMetricContext:
+    trades: list[StrategyTestTrade] = field(default_factory=list)
+    signals: list[StrategyTestSignal] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -117,23 +145,25 @@ class MetricRegistry:
     def compute(
         self,
         trades: Sequence[StrategyTestTrade],
+        signals: Sequence[StrategyTestSignal] | None = None,
         metric_set: Sequence[str] | None = None,
         group_by: Sequence[str] | None = None,
     ) -> list[MetricResult]:
         definitions = self._definitions_for(metric_set)
-        groups = _grouped_trades(trades, group_by)
+        groups = _grouped_contexts(trades, signals or [], group_by)
         results: list[MetricResult] = []
 
-        for group, group_trades in groups:
+        for group, context in groups:
             for definition in definitions:
-                value = _normalize_metric_value(definition.compute(group_trades))
-                warnings = _metric_warnings(definition, group_trades, value)
+                value = _normalize_metric_value(definition.compute(context))
+                sample_size = _sample_size(definition, context)
+                warnings = _metric_warnings(definition, context, value, sample_size)
                 results.append(
                     MetricResult(
                         code=definition.code,
                         label=definition.label,
                         value=value,
-                        sample_size=len(group_trades),
+                        sample_size=sample_size,
                         group=group,
                         warnings=warnings,
                     )
@@ -175,17 +205,57 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
         MetricDefinition(
             code="signals_count",
             label="Signals Count",
-            description="Number of evaluated signals. Not derivable from trade rows alone.",
+            description="Number of evaluated signal rows.",
             groupings=groupings,
-            compute=_metric_unavailable,
+            compute=_metric_signals_count,
+            min_sample_size=0,
+        ),
+        MetricDefinition(
+            code="execution_candidates_count",
+            label="Execution Candidates Count",
+            description="Number of signals admitted to the execution feed.",
+            groupings=groupings,
+            compute=_metric_execution_candidates_count,
+            min_sample_size=0,
+        ),
+        MetricDefinition(
+            code="execution_gate_pass_rate",
+            label="Execution Gate Pass Rate",
+            description="Share of evaluated signals with a passed execution gate.",
+            groupings=groupings,
+            compute=_metric_execution_gate_pass_rate,
+            min_sample_size=0,
+        ),
+        MetricDefinition(
+            code="blocked_rate",
+            label="Blocked Rate",
+            description="Share of evaluated signals blocked before execution.",
+            groupings=groupings,
+            compute=_metric_blocked_rate,
             min_sample_size=0,
         ),
         MetricDefinition(
             code="entry_touch_rate",
             label="Entry Touch Rate",
-            description="Share of signals whose entry was touched. Requires signal rows, not only trade rows.",
+            description="Share of signals whose entry was touched.",
             groupings=groupings,
-            compute=_metric_unavailable,
+            compute=_metric_entry_touch_rate,
+            min_sample_size=0,
+        ),
+        MetricDefinition(
+            code="fill_rate",
+            label="Fill Rate",
+            description="Share of evaluated signals filled by virtual execution.",
+            groupings=groupings,
+            compute=_metric_fill_rate,
+            min_sample_size=0,
+        ),
+        MetricDefinition(
+            code="no_entry_rate",
+            label="No Entry Rate",
+            description="Share of evaluated signals that never opened a virtual trade.",
+            groupings=groupings,
+            compute=_metric_no_entry_rate,
             min_sample_size=0,
         ),
         MetricDefinition(
@@ -219,10 +289,9 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
         MetricDefinition(
             code="expectancy_after_costs_r",
             label="Expectancy After Costs R",
-            description="Expectancy after costs in R. Requires cost-to-risk conversion metadata.",
+            description="Mean realized R after modeled fees/slippage/funding.",
             groupings=groupings,
-            compute=_metric_unavailable,
-            min_sample_size=0,
+            compute=_metric_expectancy_after_costs_r,
         ),
         MetricDefinition(
             code="profit_factor",
@@ -307,7 +376,7 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
         MetricDefinition(
             code="median_bars_to_outcome",
             label="Median Bars To Outcome",
-            description="Median bars from signal to final outcome when entry and holding bars are available.",
+            description="Median bars from signal to final outcome.",
             groupings=groupings,
             compute=_metric_median_bars_to_outcome,
         ),
@@ -345,7 +414,7 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
         MetricDefinition(
             code="risk_rejection_rate",
             label="Risk Rejection Rate",
-            description="Share of rows marked as risk rejected.",
+            description="Share of signal rows or legacy trade rows marked as risk rejected.",
             groupings=groupings,
             compute=_metric_risk_rejection_rate,
             min_sample_size=0,
@@ -353,7 +422,7 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
         MetricDefinition(
             code="execution_rejection_rate",
             label="Execution Rejection Rate",
-            description="Share of rows marked as execution rejected.",
+            description="Share of signal rows or legacy trade rows marked as execution rejected.",
             groupings=groupings,
             compute=_metric_execution_rejection_rate,
             min_sample_size=0,
@@ -361,33 +430,51 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
         MetricDefinition(
             code="false_signal_rate",
             label="False Signal Rate",
-            description="Share of false signals. Requires signal rows and false-signal labeling.",
+            description="Share of signal rows marked as false/no-entry signals.",
             groupings=groupings,
-            compute=_metric_unavailable,
+            compute=_metric_false_signal_rate,
             min_sample_size=0,
         ),
     )
 
 
-def _grouped_trades(
+def _grouped_contexts(
     trades: Sequence[StrategyTestTrade],
+    signals: Sequence[StrategyTestSignal],
     group_by: Sequence[str] | None,
-) -> list[tuple[dict[str, str], list[StrategyTestTrade]]]:
+) -> list[tuple[dict[str, str], StrategyTestMetricContext]]:
     normalized_group_by = _normalize_group_by(group_by)
-    groups: list[tuple[dict[str, str], list[StrategyTestTrade]]] = [({"all": "all"}, list(trades))]
+    aggregate = StrategyTestMetricContext(trades=list(trades), signals=list(signals))
+    groups: list[tuple[dict[str, str], StrategyTestMetricContext]] = [({"all": "all"}, aggregate)]
     if not normalized_group_by:
         return groups
 
-    grouped: dict[tuple[str, ...], list[StrategyTestTrade]] = {}
+    grouped_trades: dict[tuple[str, ...], list[StrategyTestTrade]] = {}
+    grouped_signals: dict[tuple[str, ...], list[StrategyTestSignal]] = {}
     group_values: dict[tuple[str, ...], dict[str, str]] = {}
+
     for trade in trades:
         group = {key: _group_value(trade, key) for key in normalized_group_by}
         group_key = tuple(group[key] for key in normalized_group_by)
-        grouped.setdefault(group_key, []).append(trade)
+        grouped_trades.setdefault(group_key, []).append(trade)
         group_values[group_key] = group
 
-    for group_key in sorted(grouped):
-        groups.append((group_values[group_key], grouped[group_key]))
+    for signal in signals:
+        group = {key: _group_value(signal, key) for key in normalized_group_by}
+        group_key = tuple(group[key] for key in normalized_group_by)
+        grouped_signals.setdefault(group_key, []).append(signal)
+        group_values[group_key] = group
+
+    for group_key in sorted(group_values):
+        groups.append(
+            (
+                group_values[group_key],
+                StrategyTestMetricContext(
+                    trades=grouped_trades.get(group_key, []),
+                    signals=grouped_signals.get(group_key, []),
+                ),
+            )
+        )
     return groups
 
 
@@ -407,42 +494,63 @@ def _normalize_group_by(group_by: Sequence[str] | None) -> list[str]:
     return normalized
 
 
-def _group_value(trade: StrategyTestTrade, group_key: str) -> str:
-    value = getattr(trade, _GROUP_FIELD_MAP[group_key], None)
+def _group_value(row: StrategyTestTrade | StrategyTestSignal, group_key: str) -> str:
+    if group_key == "regime":
+        if isinstance(row, StrategyTestSignal):
+            value = row.metadata.get("market_regime") or row.metadata.get("regime")
+        else:
+            value = row.market_regime
+    elif group_key == "score_bucket":
+        if isinstance(row, StrategyTestSignal):
+            value = row.metadata.get("score_bucket")
+        else:
+            value = row.score_bucket
+    else:
+        value = getattr(row, _GROUP_FIELD_MAP[group_key], None)
     text = str(value).strip() if value is not None else ""
     return text or "unknown"
 
 
+def _sample_size(definition: MetricDefinition, context: StrategyTestMetricContext) -> int:
+    if definition.code in _SIGNAL_SAMPLE_METRICS and context.signals:
+        return len(context.signals)
+    return len(context.trades)
+
+
 def _metric_warnings(
     definition: MetricDefinition,
-    trades: Sequence[StrategyTestTrade],
+    context: StrategyTestMetricContext,
     value: MetricValue,
+    sample_size: int,
 ) -> list[str]:
     warnings: list[str] = []
-    if len(trades) < definition.min_sample_size:
+    if sample_size < definition.min_sample_size:
         warnings.append("insufficient_sample")
 
     code = definition.code
-    if code == "signals_count" and value is None:
-        warnings.append("signals_count_not_available_from_trade_rows")
-    elif code == "entry_touch_rate" and value is None:
-        warnings.append("signals_count_not_available_from_trade_rows")
-    elif code == "expectancy_after_costs_r" and value is None:
-        warnings.append("costs_r_not_available")
+    if code in {
+        "signals_count",
+        "execution_candidates_count",
+        "execution_gate_pass_rate",
+        "blocked_rate",
+        "entry_touch_rate",
+        "fill_rate",
+        "no_entry_rate",
+        "false_signal_rate",
+    } and not context.signals:
+        warnings.append("signal_rows_not_available")
     elif code == "max_drawdown_pct" and value is None:
         warnings.append("equity_curve_not_available")
     elif code == "funding_total" and value is None:
         warnings.append("funding_not_modeled")
-    elif code == "false_signal_rate" and value is None:
-        warnings.append("false_signal_not_modeled")
-    elif code in {"winrate", "expectancy_r"} and value is None:
+    elif code in {"winrate", "expectancy_r", "expectancy_after_costs_r"} and value is None:
         warnings.append("no_realized_trades")
     elif code == "avg_win_r" and value is None:
         warnings.append("no_winning_trades")
     elif code == "avg_loss_r" and value is None:
         warnings.append("no_losing_trades")
     elif code == "profit_factor" and value is None:
-        if _realized_r_values(trades):
+        if _realized_r_values(context.trades):
             warnings.append("profit_factor_infinite_or_no_losses")
         else:
             warnings.append("no_realized_trades")
@@ -460,35 +568,79 @@ def _metric_warnings(
     return _dedupe_strings(warnings)
 
 
-def _metric_unavailable(_trades: Sequence[StrategyTestTrade]) -> None:
+def _metric_unavailable(_context: StrategyTestMetricContext) -> None:
     return None
 
 
-def _metric_trades_count(trades: Sequence[StrategyTestTrade]) -> int:
-    return len(_executed_trades(trades))
+def _metric_trades_count(context: StrategyTestMetricContext) -> int:
+    return len(_executed_trades(context.trades))
 
 
-def _metric_winrate(trades: Sequence[StrategyTestTrade]) -> float | None:
-    values = _realized_r_values(trades)
+def _metric_signals_count(context: StrategyTestMetricContext) -> int:
+    return len(context.signals)
+
+
+def _metric_execution_candidates_count(context: StrategyTestMetricContext) -> int:
+    return sum(1 for signal in context.signals if _is_execution_candidate(signal))
+
+
+def _metric_execution_gate_pass_rate(context: StrategyTestMetricContext) -> float | None:
+    if not context.signals:
+        return None
+    passed = sum(1 for signal in context.signals if _normalized_reason(signal.gate_status) == "passed")
+    return _rate(passed, len(context.signals))
+
+
+def _metric_blocked_rate(context: StrategyTestMetricContext) -> float | None:
+    if not context.signals:
+        return None
+    blocked = sum(1 for signal in context.signals if _is_blocked_signal(signal))
+    return _rate(blocked, len(context.signals))
+
+
+def _metric_entry_touch_rate(context: StrategyTestMetricContext) -> float | None:
+    if not context.signals:
+        return None
+    return _rate(sum(1 for signal in context.signals if signal.entry_touched), len(context.signals))
+
+
+def _metric_fill_rate(context: StrategyTestMetricContext) -> float | None:
+    if not context.signals:
+        return None
+    return _rate(sum(1 for signal in context.signals if signal.filled), len(context.signals))
+
+
+def _metric_no_entry_rate(context: StrategyTestMetricContext) -> float | None:
+    if not context.signals:
+        return None
+    return _rate(sum(1 for signal in context.signals if signal.no_entry), len(context.signals))
+
+
+def _metric_winrate(context: StrategyTestMetricContext) -> float | None:
+    values = _realized_r_values(context.trades)
     if not values:
         return None
     return _rate(sum(1 for value in values if value > 0), len(values))
 
 
-def _metric_avg_win_r(trades: Sequence[StrategyTestTrade]) -> float | None:
-    return _mean([value for value in _realized_r_values(trades) if value > 0])
+def _metric_avg_win_r(context: StrategyTestMetricContext) -> float | None:
+    return _mean([value for value in _realized_r_values(context.trades) if value > 0])
 
 
-def _metric_avg_loss_r(trades: Sequence[StrategyTestTrade]) -> float | None:
-    return _mean([value for value in _realized_r_values(trades) if value < 0])
+def _metric_avg_loss_r(context: StrategyTestMetricContext) -> float | None:
+    return _mean([value for value in _realized_r_values(context.trades) if value < 0])
 
 
-def _metric_expectancy_r(trades: Sequence[StrategyTestTrade]) -> float | None:
-    return _mean(_realized_r_values(trades))
+def _metric_expectancy_r(context: StrategyTestMetricContext) -> float | None:
+    return _mean(_realized_r_values(context.trades))
 
 
-def _metric_profit_factor(trades: Sequence[StrategyTestTrade]) -> float | None:
-    values = _realized_r_values(trades)
+def _metric_expectancy_after_costs_r(context: StrategyTestMetricContext) -> float | None:
+    return _mean(_realized_r_values(context.trades))
+
+
+def _metric_profit_factor(context: StrategyTestMetricContext) -> float | None:
+    values = _realized_r_values(context.trades)
     wins_total = sum(value for value in values if value > 0)
     losses_total = abs(sum(value for value in values if value < 0))
     if losses_total <= 0:
@@ -496,27 +648,27 @@ def _metric_profit_factor(trades: Sequence[StrategyTestTrade]) -> float | None:
     return wins_total / losses_total
 
 
-def _metric_max_drawdown_r(trades: Sequence[StrategyTestTrade]) -> float:
+def _metric_max_drawdown_r(context: StrategyTestMetricContext) -> float:
     cumulative = 0.0
     peak = 0.0
     max_drawdown = 0.0
-    for value in _ordered_realized_r_values(trades):
+    for value in _ordered_realized_r_values(context.trades):
         cumulative += value
         peak = max(peak, cumulative)
         max_drawdown = max(max_drawdown, peak - cumulative)
     return max_drawdown
 
 
-def _metric_tp1_rate(trades: Sequence[StrategyTestTrade]) -> float | None:
-    executed = _executed_trades(trades)
+def _metric_tp1_rate(context: StrategyTestMetricContext) -> float | None:
+    executed = _executed_trades(context.trades)
     if not executed or not _has_target_hit_metadata(executed):
         return None
     hits = sum(1 for trade in executed if _target_hit(trade, {"tp1", "target_1"}) or _target_reason(trade))
     return _rate(hits, len(executed))
 
 
-def _metric_tp2_rate(trades: Sequence[StrategyTestTrade]) -> float | None:
-    executed = _executed_trades(trades)
+def _metric_tp2_rate(context: StrategyTestMetricContext) -> float | None:
+    executed = _executed_trades(context.trades)
     if not executed or not _has_target_hit_metadata(executed):
         return None
     hits = sum(
@@ -527,73 +679,79 @@ def _metric_tp2_rate(trades: Sequence[StrategyTestTrade]) -> float | None:
     return _rate(hits, len(executed))
 
 
-def _metric_stop_rate(trades: Sequence[StrategyTestTrade]) -> float | None:
-    executed = _executed_trades(trades)
+def _metric_stop_rate(context: StrategyTestMetricContext) -> float | None:
+    executed = _executed_trades(context.trades)
     if not executed:
         return None
     hits = sum(1 for trade in executed if _normalized_reason(trade.close_reason) in _STOP_REASONS)
     return _rate(hits, len(executed))
 
 
-def _metric_invalidation_rate(trades: Sequence[StrategyTestTrade]) -> float:
-    if not trades:
+def _metric_invalidation_rate(context: StrategyTestMetricContext) -> float:
+    if not context.trades:
         return 0.0
     count = sum(
         1
-        for trade in trades
+        for trade in context.trades
         if _normalized_reason(trade.close_reason) in _INVALIDATION_REASONS
         or _normalized_reason(trade.outcome) in _INVALIDATION_REASONS
     )
-    return count / len(trades)
+    return count / len(context.trades)
 
 
-def _metric_time_stop_rate(trades: Sequence[StrategyTestTrade]) -> float | None:
-    executed = _executed_trades(trades)
+def _metric_time_stop_rate(context: StrategyTestMetricContext) -> float | None:
+    executed = _executed_trades(context.trades)
     if not executed:
         return None
     hits = sum(1 for trade in executed if _normalized_reason(trade.close_reason) == "time_stop")
     return _rate(hits, len(executed))
 
 
-def _metric_avg_mfe_r(trades: Sequence[StrategyTestTrade]) -> float | None:
-    return _mean([value for value in (_finite_float(trade.mfe_r) for trade in _executed_trades(trades)) if value is not None])
+def _metric_avg_mfe_r(context: StrategyTestMetricContext) -> float | None:
+    return _mean([value for value in (_finite_float(trade.mfe_r) for trade in _executed_trades(context.trades)) if value is not None])
 
 
-def _metric_avg_mae_r(trades: Sequence[StrategyTestTrade]) -> float | None:
-    return _mean([value for value in (_finite_float(trade.mae_r) for trade in _executed_trades(trades)) if value is not None])
+def _metric_avg_mae_r(context: StrategyTestMetricContext) -> float | None:
+    return _mean([value for value in (_finite_float(trade.mae_r) for trade in _executed_trades(context.trades)) if value is not None])
 
 
-def _metric_median_bars_to_entry(trades: Sequence[StrategyTestTrade]) -> float | None:
-    return _median([trade.bars_to_entry for trade in _executed_trades(trades) if trade.bars_to_entry is not None])
+def _metric_median_bars_to_entry(context: StrategyTestMetricContext) -> float | None:
+    signal_values = [signal.bars_to_entry for signal in context.signals if signal.bars_to_entry is not None]
+    if signal_values:
+        return _median(signal_values)
+    return _median([trade.bars_to_entry for trade in _executed_trades(context.trades) if trade.bars_to_entry is not None])
 
 
-def _metric_median_bars_to_outcome(trades: Sequence[StrategyTestTrade]) -> float | None:
+def _metric_median_bars_to_outcome(context: StrategyTestMetricContext) -> float | None:
+    signal_values = [signal.bars_to_outcome for signal in context.signals if signal.bars_to_outcome is not None]
+    if signal_values:
+        return _median(signal_values)
     values = [
         trade.bars_to_entry + trade.bars_in_trade
-        for trade in _executed_trades(trades)
+        for trade in _executed_trades(context.trades)
         if trade.bars_to_entry is not None and trade.bars_in_trade is not None
     ]
     return _median(values)
 
 
-def _metric_avg_bars_in_trade(trades: Sequence[StrategyTestTrade]) -> float | None:
-    return _mean([trade.bars_in_trade for trade in _executed_trades(trades) if trade.bars_in_trade is not None])
+def _metric_avg_bars_in_trade(context: StrategyTestMetricContext) -> float | None:
+    return _mean([trade.bars_in_trade for trade in _executed_trades(context.trades) if trade.bars_in_trade is not None])
 
 
-def _metric_fees_total(trades: Sequence[StrategyTestTrade]) -> float:
-    return _decimal_to_float(sum((trade.fees for trade in trades), Decimal("0")))
+def _metric_fees_total(context: StrategyTestMetricContext) -> float:
+    return _decimal_to_float(sum((trade.fees for trade in context.trades), Decimal("0")))
 
 
-def _metric_slippage_total(trades: Sequence[StrategyTestTrade]) -> float:
-    return _decimal_to_float(sum((trade.slippage for trade in trades), Decimal("0")))
+def _metric_slippage_total(context: StrategyTestMetricContext) -> float:
+    return _decimal_to_float(sum((trade.slippage for trade in context.trades), Decimal("0")))
 
 
-def _metric_funding_total(trades: Sequence[StrategyTestTrade]) -> float | None:
-    if not trades:
+def _metric_funding_total(context: StrategyTestMetricContext) -> float | None:
+    if not context.trades:
         return 0.0
 
     values: list[Decimal] = []
-    for trade in trades:
+    for trade in context.trades:
         value = _funding_cost_value(trade)
         if value is None:
             return None
@@ -601,16 +759,38 @@ def _metric_funding_total(trades: Sequence[StrategyTestTrade]) -> float | None:
     return _decimal_to_float(sum(values, Decimal("0")))
 
 
-def _metric_risk_rejection_rate(trades: Sequence[StrategyTestTrade]) -> float:
-    if not trades:
+def _metric_risk_rejection_rate(context: StrategyTestMetricContext) -> float:
+    if context.signals:
+        return sum(1 for signal in context.signals if signal.risk_rejected) / len(context.signals)
+    if not context.trades:
         return 0.0
-    return sum(1 for trade in trades if trade.risk_rejected) / len(trades)
+    return sum(1 for trade in context.trades if trade.risk_rejected) / len(context.trades)
 
 
-def _metric_execution_rejection_rate(trades: Sequence[StrategyTestTrade]) -> float:
-    if not trades:
+def _metric_execution_rejection_rate(context: StrategyTestMetricContext) -> float:
+    if context.signals:
+        return sum(1 for signal in context.signals if signal.execution_rejected) / len(context.signals)
+    if not context.trades:
         return 0.0
-    return sum(1 for trade in trades if trade.execution_rejected) / len(trades)
+    return sum(1 for trade in context.trades if trade.execution_rejected) / len(context.trades)
+
+
+def _metric_false_signal_rate(context: StrategyTestMetricContext) -> float | None:
+    if not context.signals:
+        return None
+    false_count = sum(1 for signal in context.signals if signal.no_entry or _normalized_reason(signal.outcome) == "false_signal")
+    return _rate(false_count, len(context.signals))
+
+
+def _is_execution_candidate(signal: StrategyTestSignal) -> bool:
+    feed_kind = _normalized_reason(signal.feed_kind)
+    if feed_kind in {"blocked", "blocked_signal"}:
+        return False
+    return feed_kind in {"execution_signal", "execution_candidate"} or _normalized_reason(signal.gate_status) == "passed"
+
+
+def _is_blocked_signal(signal: StrategyTestSignal) -> bool:
+    return _normalized_reason(signal.feed_kind) in {"blocked", "blocked_signal"} or _normalized_reason(signal.gate_status) == "blocked"
 
 
 def _executed_trades(trades: Sequence[StrategyTestTrade]) -> list[StrategyTestTrade]:

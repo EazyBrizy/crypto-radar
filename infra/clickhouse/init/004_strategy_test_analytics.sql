@@ -45,6 +45,47 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMM(entry_time)
 ORDER BY (run_id, strategy_code, exchange, symbol, timeframe, entry_time, trade_id);
 
+CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals
+(
+    run_id UUID,
+    user_id UUID,
+    mode LowCardinality(String),
+    scenario_id String,
+    strategy_code LowCardinality(String),
+    strategy_version String,
+    exchange LowCardinality(String),
+    symbol LowCardinality(String),
+    timeframe LowCardinality(String),
+    direction LowCardinality(String),
+    signal_id String,
+    signal_time DateTime64(3, 'UTC'),
+    signal_score Nullable(Float64),
+    feed_kind LowCardinality(String),
+    gate_status LowCardinality(String),
+    status LowCardinality(String),
+    trigger_passed UInt8,
+    edge_status LowCardinality(String),
+    selected_rr Nullable(Float64),
+    entry_min Nullable(Decimal(38, 18)),
+    entry_max Nullable(Decimal(38, 18)),
+    stop_loss Nullable(Decimal(38, 18)),
+    target_1 Nullable(Decimal(38, 18)),
+    outcome LowCardinality(String),
+    outcome_reason String,
+    entry_touched UInt8,
+    filled UInt8,
+    risk_rejected UInt8,
+    execution_rejected UInt8,
+    no_entry UInt8,
+    bars_to_entry Nullable(UInt64),
+    bars_to_outcome Nullable(UInt64),
+    metadata_json String,
+    created_at DateTime64(3, 'UTC')
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(signal_time)
+ORDER BY (run_id, strategy_code, exchange, symbol, timeframe, signal_time, signal_id);
+
 CREATE TABLE IF NOT EXISTS analytics.strategy_test_metrics
 (
     run_id UUID,

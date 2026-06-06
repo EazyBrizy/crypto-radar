@@ -7,9 +7,10 @@ from typing import Any
 from uuid import UUID
 import unittest
 
-from app.services.strategy_testing.schemas import StrategyTestMetricRow, StrategyTestTrade
+from app.services.strategy_testing.schemas import StrategyTestMetricRow, StrategyTestSignal, StrategyTestTrade
 from app.services.strategy_testing.stores import (
     STRATEGY_TEST_METRICS_DDL,
+    STRATEGY_TEST_SIGNALS_DDL,
     STRATEGY_TEST_TRADES_DDL,
     ClickHouseStrategyTestStore,
 )
@@ -55,13 +56,16 @@ class FakeClickHouseClient:
 
 
 class ClickHouseStrategyTestStoreTest(unittest.TestCase):
-    def test_ensure_schema_sends_both_ddls(self) -> None:
+    def test_ensure_schema_sends_all_strategy_test_ddls(self) -> None:
         client = FakeClickHouseClient()
         store = ClickHouseStrategyTestStore(lambda: client)
 
         store.ensure_schema()
 
-        self.assertEqual(client.commands, [STRATEGY_TEST_TRADES_DDL, STRATEGY_TEST_METRICS_DDL])
+        self.assertEqual(
+            client.commands,
+            [STRATEGY_TEST_TRADES_DDL, STRATEGY_TEST_SIGNALS_DDL, STRATEGY_TEST_METRICS_DDL],
+        )
         self.assertTrue(client.closed)
 
     def test_write_trades_inserts_expected_columns(self) -> None:
@@ -130,11 +134,44 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(metric.sample_size, 10)
         self.assertEqual(metric.metadata, {"source": "grouped"})
 
+    def test_strategy_test_clickhouse_store_write_and_read_signals(self) -> None:
+        write_client = FakeClickHouseClient()
+        write_store = ClickHouseStrategyTestStore(lambda: write_client)
+
+        write_store.write_signals([_signal()])
+
+        table, data, columns = write_client.inserts[0]
+        row = data[0]
+        self.assertEqual(table, "analytics.strategy_test_signals")
+        self.assertEqual(columns, ClickHouseStrategyTestStore._signal_columns)
+        self.assertEqual(row[columns.index("signal_id")], "signal-1")
+        self.assertEqual(row[columns.index("entry_touched")], 1)
+        self.assertEqual(row[columns.index("filled")], 0)
+        self.assertIn('"source":"test"', row[columns.index("metadata_json")])
+        self.assertTrue(write_client.closed)
+
+        read_client = FakeClickHouseClient(rows=[_signal_row()])
+        read_store = ClickHouseStrategyTestStore(lambda: read_client)
+
+        signals = read_store.list_signals(RUN_ID, limit=25, offset=5)
+
+        self.assertEqual(read_client.queries[0][1], {"run_id": RUN_ID, "limit": 25, "offset": 5})
+        signal = signals[0]
+        self.assertEqual(signal.signal_id, "signal-1")
+        self.assertEqual(signal.signal_time, ENTRY_AT)
+        self.assertEqual(signal.entry_min, Decimal("100.25"))
+        self.assertEqual(signal.target_1, Decimal("110.50"))
+        self.assertTrue(signal.entry_touched)
+        self.assertFalse(signal.filled)
+        self.assertTrue(signal.no_entry)
+        self.assertEqual(signal.metadata, {"source": "test", "note": "РїСЂРѕРІРµСЂРєР°"})
+
     def test_clickhouse_init_file_contains_strategy_test_tables(self) -> None:
         schema = DDL_FILE.read_text(encoding="utf-8")
 
         self.assertIn("CREATE DATABASE IF NOT EXISTS analytics", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS analytics.strategy_test_trades", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS analytics.strategy_test_metrics", schema)
         self.assertIn("ENGINE = MergeTree", schema)
         self.assertIn("ENGINE = ReplacingMergeTree(created_at)", schema)
@@ -204,6 +241,45 @@ def _metric() -> StrategyTestMetricRow:
     )
 
 
+def _signal() -> StrategyTestSignal:
+    return StrategyTestSignal(
+        run_id=RUN_ID,
+        user_id=USER_ID,
+        mode="research_virtual",
+        scenario_id="trend_pullback_continuation:bybit:BTCUSDT:1h",
+        strategy_code="trend_pullback_continuation",
+        strategy_version="v1",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        direction="long",
+        signal_id="signal-1",
+        signal_time=ENTRY_AT,
+        signal_score=82.5,
+        feed_kind="execution_signal",
+        gate_status="passed",
+        status="actionable",
+        trigger_passed=True,
+        edge_status="positive",
+        selected_rr=2.0,
+        entry_min=Decimal("100.25"),
+        entry_max=Decimal("101.25"),
+        stop_loss=Decimal("97.50"),
+        target_1=Decimal("110.50"),
+        outcome="no_entry",
+        outcome_reason="entry_not_touched",
+        entry_touched=True,
+        filled=False,
+        risk_rejected=False,
+        execution_rejected=False,
+        no_entry=True,
+        bars_to_entry=3,
+        bars_to_outcome=8,
+        metadata={"source": "test", "note": "РїСЂРѕРІРµСЂРєР°"},
+        created_at=CREATED_AT,
+    )
+
+
 def _trade_row() -> dict[str, Any]:
     return {
         "run_id": RUN_ID,
@@ -264,6 +340,45 @@ def _metric_row() -> dict[str, Any]:
         "sample_size": "10",
         "metadata_json": '{"source":"grouped"}',
         "created_at": CREATED_AT.replace(tzinfo=None),
+    }
+
+
+def _signal_row() -> dict[str, Any]:
+    return {
+        "run_id": RUN_ID,
+        "user_id": USER_ID,
+        "mode": "research_virtual",
+        "scenario_id": "trend_pullback_continuation:bybit:BTCUSDT:1h",
+        "strategy_code": "trend_pullback_continuation",
+        "strategy_version": "v1",
+        "exchange": "bybit",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "direction": "long",
+        "signal_id": "signal-1",
+        "signal_time": ENTRY_AT.replace(tzinfo=None),
+        "signal_score": "82.5",
+        "feed_kind": "execution_signal",
+        "gate_status": "passed",
+        "status": "actionable",
+        "trigger_passed": "1",
+        "edge_status": "positive",
+        "selected_rr": "2.0",
+        "entry_min": "100.25",
+        "entry_max": Decimal("101.25"),
+        "stop_loss": "97.50",
+        "target_1": Decimal("110.50"),
+        "outcome": "no_entry",
+        "outcome_reason": "entry_not_touched",
+        "entry_touched": "1",
+        "filled": 0,
+        "risk_rejected": 0,
+        "execution_rejected": "0",
+        "no_entry": "1",
+        "bars_to_entry": "3",
+        "bars_to_outcome": 8,
+        "metadata_json": '{"source":"test","note":"РїСЂРѕРІРµСЂРєР°"}',
+        "created_at": CREATED_AT,
     }
 
 

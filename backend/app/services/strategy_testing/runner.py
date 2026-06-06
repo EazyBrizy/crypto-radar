@@ -9,6 +9,7 @@ from uuid import NAMESPACE_DNS, UUID, uuid5
 from app.schemas.backtest import BacktestRunRequest
 from app.services.backtest_runner import (
     BacktestDetailedRunResult,
+    BacktestSignalEvent,
     BacktestSimulatedTrade,
     ProductionBacktestRunner,
 )
@@ -16,6 +17,7 @@ from app.services.strategy_testing.assumptions import build_strategy_test_assump
 from app.services.strategy_testing.schemas import (
     StrategyTestPair,
     StrategyTestRunRequest,
+    StrategyTestSignal,
     StrategyTestTrade,
 )
 
@@ -27,6 +29,7 @@ class StrategyTestScenarioResult:
     pair: StrategyTestPair
     timeframe: str
     summary: dict[str, Any]
+    signals: list[StrategyTestSignal] = field(default_factory=list)
     trades: list[StrategyTestTrade] = field(default_factory=list)
     assumptions: dict[str, Any] = field(default_factory=dict)
 
@@ -72,12 +75,24 @@ class StrategyTestScenarioRunner:
             )
             for trade in detailed.trades
         ]
+        scenario_id = _scenario_id(strategy=strategy, pair=pair, timeframe=timeframe)
+        signals = [
+            _strategy_test_signal_from_backtest_event(
+                run_id=run_id,
+                user_id=user_id,
+                request=request,
+                scenario_id=scenario_id,
+                event=event,
+            )
+            for event in detailed.signal_events
+        ]
         return StrategyTestScenarioResult(
             run_id=run_id,
             strategy=strategy,
             pair=pair,
             timeframe=timeframe,
             summary=_scenario_summary(detailed, strategy=strategy, pair=pair, timeframe=timeframe),
+            signals=signals,
             trades=trades,
             assumptions=detailed.assumptions,
         )
@@ -190,6 +205,52 @@ def _strategy_test_trade_from_backtest_trade(
     )
 
 
+def _strategy_test_signal_from_backtest_event(
+    *,
+    run_id: UUID,
+    user_id: UUID,
+    request: StrategyTestRunRequest,
+    scenario_id: str,
+    event: BacktestSignalEvent,
+) -> StrategyTestSignal:
+    return StrategyTestSignal(
+        run_id=run_id,
+        user_id=user_id,
+        mode=request.mode,
+        scenario_id=scenario_id,
+        strategy_code=event.strategy_code,
+        strategy_version=event.strategy_version,
+        exchange=event.exchange,
+        symbol=event.symbol,
+        timeframe=event.timeframe,
+        direction=event.direction,
+        signal_id=event.signal_id,
+        signal_time=_as_utc(event.signal_time),
+        signal_score=event.signal_score,
+        feed_kind=event.feed_kind,
+        gate_status=event.gate_status,
+        status=event.status,
+        trigger_passed=event.trigger_passed,
+        edge_status=event.edge_status,
+        selected_rr=event.selected_rr,
+        entry_min=event.entry_min,
+        entry_max=event.entry_max,
+        stop_loss=event.stop_loss,
+        target_1=event.target_1,
+        outcome=event.outcome,
+        outcome_reason=event.outcome_reason,
+        entry_touched=event.entry_touched,
+        filled=event.filled,
+        risk_rejected=event.risk_rejected,
+        execution_rejected=event.execution_rejected,
+        no_entry=event.no_entry,
+        bars_to_entry=event.bars_to_entry,
+        bars_to_outcome=event.bars_to_outcome,
+        metadata=dict(event.metadata),
+        created_at=datetime.now(timezone.utc),
+    )
+
+
 def _trade_tags(request_tags: list[str], trade_tags: list[str]) -> list[str]:
     tags: list[str] = []
     for tag in [*request_tags, *trade_tags, "backtest"]:
@@ -215,6 +276,10 @@ def _scenario_summary(
         "status": detailed.run_result.status,
         "trades_count": len(detailed.trades),
         "signals_seen": detailed.signals_seen,
+        "signals_count": len(detailed.signal_events),
+        "entry_touch_count": detailed.entry_touch_count,
+        "filled_count": detailed.filled_count,
+        "no_entry_count": detailed.no_entry_count,
         "risk_rejections": detailed.risk_rejections,
         "execution_rejections": detailed.execution_rejections,
         "pnl": str(result.pnl) if result is not None else str(Decimal("0")),
@@ -222,6 +287,10 @@ def _scenario_summary(
         "metrics": metrics,
         "assumptions": detailed.assumptions,
     }
+
+
+def _scenario_id(*, strategy: str, pair: StrategyTestPair, timeframe: str) -> str:
+    return f"{strategy}:{pair.exchange}:{pair.symbol}:{timeframe}"
 
 
 def _as_utc(value: datetime) -> datetime:

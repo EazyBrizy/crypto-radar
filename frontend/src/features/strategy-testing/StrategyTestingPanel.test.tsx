@@ -49,8 +49,9 @@ describe("StrategyTestingPanel", () => {
   it("renders the mode selector", () => {
     renderPanel();
 
-    expect(screen.getByRole("button", { name: "Research virtual" })).toHaveClass("active");
-    expect(screen.getByRole("button", { name: "Production-like" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Исторический virtual backtest" })).toHaveClass("active");
+    expect(screen.getByRole("button", { name: "Production-like backtest" })).toBeInTheDocument();
+    expect(screen.getByTitle("Historical backtest uses closed candles and does not affect live radar/trades.")).toBeInTheDocument();
   });
 
   it("disables Run when the matrix is missing", () => {
@@ -111,7 +112,48 @@ describe("StrategyTestingPanel", () => {
       timeframes: ["1m", "5m", "15m"]
     }));
   });
+
+  it("includes new advanced params", async () => {
+    const user = userEvent.setup();
+    mocks.runStrategyTest.mockResolvedValue({
+      created_at: "2026-06-02T00:00:00.000Z",
+      error: null,
+      finished_at: null,
+      requested_matrix: { scenario_count: 3 },
+      run_id: "11111111-1111-4111-8111-111111111111",
+      started_at: null,
+      status: "queued",
+      summary: {}
+    });
+
+    renderPanel();
+
+    await user.selectOptions(screen.getByLabelText("Signal selection"), "highest_score");
+    await replaceNumber(user, screen.getByLabelText("Max concurrent positions"), "4");
+    await replaceNumber(user, screen.getByLabelText("Max positions per symbol"), "2");
+    await replaceNumber(user, screen.getByLabelText("Cooldown bars after close"), "3");
+    await user.click(screen.getByLabelText("Allow opposite signal flip"));
+    await replaceNumber(user, screen.getByLabelText("Max bars in trade"), "12");
+    await user.click(screen.getByRole("button", { name: /Run strategy test/u }));
+
+    await waitFor(() => expect(mocks.runStrategyTest).toHaveBeenCalledTimes(1));
+    expect(mocks.runStrategyTest).toHaveBeenCalledWith(expect.objectContaining({
+      params: {
+        allow_opposite_signal_flip: true,
+        cooldown_bars_after_close: 3,
+        max_bars_in_trade: 12,
+        max_concurrent_positions: 4,
+        max_positions_per_symbol: 2,
+        signal_selection_policy: "highest_score"
+      }
+    }));
+  });
 });
+
+async function replaceNumber(user: ReturnType<typeof userEvent.setup>, input: HTMLElement, value: string) {
+  await user.clear(input);
+  await user.type(input, value);
+}
 
 function renderPanel({
   availablePairs = [marketPair()],

@@ -6,6 +6,7 @@ import type {
   StrategyTestRunRequest,
   StrategyTestRunResponse,
   StrategyTestRunStatus,
+  StrategyTestSignal,
   StrategyTestTrade
 } from "@/features/strategy-testing/types";
 
@@ -54,6 +55,9 @@ export const strategyTestsApi = {
   },
   async getTrades(runId: string): Promise<StrategyTestTrade[]> {
     return rawJson<StrategyTestTrade[]>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/trades`);
+  },
+  async getSignals(runId: string): Promise<StrategyTestSignal[]> {
+    return rawJson<StrategyTestSignal[]>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/signals`);
   },
   async listReports(params: StrategyTestReportListParams = {}): Promise<StrategyTestReport[]> {
     return rawJson<StrategyTestReport[]>(strategyTestReportsPath(params));

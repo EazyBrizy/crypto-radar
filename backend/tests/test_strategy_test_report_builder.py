@@ -17,6 +17,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunDetailResponse,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignal,
     StrategyTestTrade,
 )
 
@@ -35,6 +36,8 @@ REQUIRED_SECTION_NAMES = {
     "Exit quality",
     "MFE/MAE distribution",
     "Rejection analysis",
+    "Conversion funnel",
+    "Signal list",
     "Trade list",
     "Recommended strategy adjustments",
 }
@@ -95,6 +98,29 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertIn("insufficient_data", report.warnings)
         self.assertEqual(report.candidate_adjustments, [])
 
+    def test_strategy_test_report_conversion_funnel(self) -> None:
+        signals = [
+            _signal("signal-1", entry_touched=True, filled=True, outcome="win"),
+            _signal("signal-2", entry_touched=True, filled=False, no_entry=True, outcome="no_entry"),
+            _signal("signal-3", risk_rejected=True, outcome="rejected", outcome_reason="risk_gate"),
+        ]
+
+        report = _builder([_trade("trade-1")], signals=signals).build_report(RUN_ID)
+
+        funnel = _section(report, "Conversion funnel")
+        self.assertEqual(funnel.summary["signals_count"], 3)
+        self.assertEqual(funnel.summary["entry_touched_count"], 2)
+        self.assertEqual(funnel.summary["filled_count"], 1)
+        self.assertEqual(funnel.summary["no_entry_count"], 1)
+        self.assertEqual(funnel.summary["risk_rejected_count"], 1)
+        stages = {row["stage"]: row for row in funnel.rows}
+        self.assertEqual(stages["signals"]["count"], 3)
+        self.assertEqual(stages["filled"]["count"], 1)
+
+        signal_list = _section(report, "Signal list")
+        self.assertEqual(signal_list.metadata["rows_returned"], 3)
+        self.assertEqual(signal_list.rows[1]["outcome"], "no_entry")
+
     def test_report_uses_metric_registry(self) -> None:
         registry = _SpyMetricRegistry()
         report = _builder([_trade("trade-1"), _trade("trade-2", realized_r=-1.0)], registry=registry).build_report(RUN_ID)
@@ -122,11 +148,16 @@ class _SpyMetricRegistry:
     def compute(
         self,
         trades: Sequence[StrategyTestTrade],
+        signals: Sequence[StrategyTestSignal] | None = None,
         metric_set: Sequence[str] | None = None,
         group_by: Sequence[str] | None = None,
     ) -> list[MetricResult]:
-        self.compute_calls.append({"metric_set": list(metric_set or []), "group_by": list(group_by or [])})
-        return self._registry.compute(trades, metric_set=metric_set, group_by=group_by)
+        self.compute_calls.append({
+            "metric_set": list(metric_set or []),
+            "group_by": list(group_by or []),
+            "signals": len(signals or []),
+        })
+        return self._registry.compute(trades, signals=signals, metric_set=metric_set, group_by=group_by)
 
 
 class _RunStore:
@@ -149,12 +180,21 @@ class _RunStore:
 
 
 class _AnalyticsStore:
-    def __init__(self, trades: Sequence[StrategyTestTrade]) -> None:
+    def __init__(
+        self,
+        trades: Sequence[StrategyTestTrade],
+        signals: Sequence[StrategyTestSignal] | None = None,
+    ) -> None:
         self._trades = list(trades)
+        self._signals = list(signals or [])
 
     def list_trades(self, run_id: UUID) -> list[StrategyTestTrade]:
         _ = run_id
         return list(self._trades)
+
+    def list_signals(self, run_id: UUID) -> list[StrategyTestSignal]:
+        _ = run_id
+        return list(self._signals)
 
 
 class _MissingReportService:
@@ -165,6 +205,7 @@ class _MissingReportService:
 def _builder(
     trades: Sequence[StrategyTestTrade],
     *,
+    signals: Sequence[StrategyTestSignal] | None = None,
     registry: MetricRegistry | _SpyMetricRegistry | None = None,
 ) -> StrategyTestReportBuilder:
     detail = StrategyTestRunDetailResponse(
@@ -190,7 +231,7 @@ def _builder(
     )
     return StrategyTestReportBuilder(
         run_store=_RunStore(detail),
-        analytics_store=_AnalyticsStore(trades),
+        analytics_store=_AnalyticsStore(trades, signals),
         metric_registry=registry,  # type: ignore[arg-type]
     )
 
@@ -254,6 +295,57 @@ def _trade(
         trade_plan={},
         tags=["backtest"],
         created_at=entry_time + timedelta(hours=1),
+    )
+
+
+def _signal(
+    signal_id: str,
+    *,
+    entry_touched: bool = False,
+    filled: bool = False,
+    risk_rejected: bool = False,
+    execution_rejected: bool = False,
+    no_entry: bool = False,
+    outcome: str = "pending",
+    outcome_reason: str = "",
+) -> StrategyTestSignal:
+    offset = int(signal_id.rsplit("-", 1)[-1])
+    signal_time = NOW + timedelta(hours=offset)
+    return StrategyTestSignal(
+        run_id=RUN_ID,
+        user_id=USER_ID,
+        mode="research_virtual",
+        scenario_id="trend_pullback_continuation:bybit:BTCUSDT:1h",
+        strategy_code="trend_pullback_continuation",
+        strategy_version="v1",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        direction="long",
+        signal_id=signal_id,
+        signal_time=signal_time,
+        signal_score=80.0,
+        feed_kind="execution_signal",
+        gate_status="passed",
+        status="actionable",
+        trigger_passed=True,
+        edge_status="positive",
+        selected_rr=1.0,
+        entry_min=Decimal("100"),
+        entry_max=Decimal("101"),
+        stop_loss=Decimal("99"),
+        target_1=Decimal("102"),
+        outcome=outcome,
+        outcome_reason=outcome_reason,
+        entry_touched=entry_touched,
+        filled=filled,
+        risk_rejected=risk_rejected,
+        execution_rejected=execution_rejected,
+        no_entry=no_entry,
+        bars_to_entry=1 if entry_touched else None,
+        bars_to_outcome=3 if outcome != "pending" else None,
+        metadata={"source": "test"},
+        created_at=signal_time,
     )
 
 

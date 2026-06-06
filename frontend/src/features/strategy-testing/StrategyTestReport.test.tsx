@@ -25,6 +25,16 @@ describe("StrategyTestReport", () => {
     expect(screen.getByText("No candidate adjustments")).toBeInTheDocument();
     expect(screen.getByText("1 warnings")).toBeInTheDocument();
   });
+
+  it("renders conversion funnel", () => {
+    render(<StrategyTestReport report={report()} run={null} />);
+
+    expect(screen.getByText("Conversion funnel")).toBeInTheDocument();
+    expect(screen.getByText("entry_touched")).toBeInTheDocument();
+    expect(screen.getByText("Signal list")).toBeInTheDocument();
+    expect(screen.getByText("signal-2")).toBeInTheDocument();
+    expect(screen.getAllByText("no_entry").length).toBeGreaterThan(0);
+  });
 });
 
 function report(overrides: Partial<StrategyTestReportData> = {}): StrategyTestReportData {
@@ -68,6 +78,37 @@ function report(overrides: Partial<StrategyTestReportData> = {}): StrategyTestRe
         metrics: [],
         name: "Strategy comparison",
         rows: [{ expectancy_r: -0.2, sample_size: 12, strategy: "trend_pullback_continuation", winrate: 0.58 }],
+        summary: {},
+        warnings: []
+      },
+      {
+        code: "conversion_funnel",
+        metadata: {},
+        metrics: [],
+        name: "Conversion funnel",
+        rows: [
+          { count: 2, rate: 1, stage: "signals" },
+          { count: 1, rate: 0.5, stage: "entry_touched" },
+          { count: 1, rate: 0.5, stage: "filled" },
+          { count: 1, rate: 0.5, stage: "no_entry" }
+        ],
+        summary: {
+          entry_touched_count: 1,
+          filled_count: 1,
+          no_entry_count: 1,
+          signals_count: 2
+        },
+        warnings: []
+      },
+      {
+        code: "signal_list",
+        metadata: { rows_returned: 2 },
+        metrics: [],
+        name: "Signal list",
+        rows: [
+          { direction: "long", filled: true, outcome: "win", signal_id: "signal-1", strategy_code: "trend_pullback_continuation", symbol: "BTCUSDT" },
+          { direction: "long", no_entry: true, outcome: "no_entry", signal_id: "signal-2", strategy_code: "trend_pullback_continuation", symbol: "BTCUSDT" }
+        ],
         summary: {},
         warnings: []
       },

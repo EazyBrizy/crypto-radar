@@ -19,6 +19,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignal,
     StrategyTestTrade,
 )
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult
@@ -116,6 +117,28 @@ class StrategyTestingApiContractTest(unittest.TestCase):
 
         self.assertIn("/api/v1/backtests/run", route_paths)
         self.assertIn("/api/v1/backtests/results", route_paths)
+
+    def test_get_strategy_test_signals_route_returns_signal_rows(self) -> None:
+        run_store = _EphemeralStrategyTestRunStore()
+        detail = run_store.create_run(_request())
+        trade_store = _EphemeralStrategyTestTradeStore(signals=[_signal(detail.run.run_id)])
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=run_store,
+            trade_store=trade_store,
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            response = client.get(f"/api/v1/strategy-tests/runs/{detail.run.run_id}/signals")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data[0]["signal_id"], "signal-1")
+        self.assertEqual(data[0]["outcome"], "no_entry")
+        self.assertTrue(data[0]["no_entry"])
 
 
 def _now() -> datetime:
@@ -226,15 +249,27 @@ class _EphemeralStrategyTestRunStore:
 
 
 class _EphemeralStrategyTestTradeStore:
-    def __init__(self) -> None:
+    def __init__(self, signals: Sequence[StrategyTestSignal] | None = None) -> None:
         self.trades: list[StrategyTestTrade] = []
+        self.signals: list[StrategyTestSignal] = list(signals or [])
         self.metrics: list[StrategyTestMetricRow] = []
 
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         self.trades.extend(trades)
 
+    def write_signals(self, signals: Sequence[StrategyTestSignal]) -> None:
+        self.signals.extend(signals)
+
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         self.metrics.extend(rows)
+
+    def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
+        _ = run_id, limit, offset
+        return list(self.trades)
+
+    def list_signals(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestSignal]:
+        _ = run_id, limit, offset
+        return list(self.signals)
 
 
 class _NoopStrategyTestMatrixRunner:
@@ -252,6 +287,7 @@ class _NoopStrategyTestMatrixRunner:
             completed_scenarios=len(request.strategies) * len(request.pairs) * len(request.timeframes),
             failed_scenarios=0,
             scenario_summaries=[],
+            signals=[],
             trades=[],
         )
 
@@ -274,6 +310,46 @@ def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:
         "tags": request.tags,
         "scenario_count": len(request.strategies) * len(request.pairs) * len(request.timeframes),
     }
+
+
+def _signal(run_id: UUID) -> StrategyTestSignal:
+    now = _now()
+    return StrategyTestSignal(
+        run_id=run_id,
+        user_id=UUID("22222222-2222-4222-8222-222222222222"),
+        mode="research_virtual",
+        scenario_id="trend_pullback_continuation:bybit:BTCUSDT:1h",
+        strategy_code="trend_pullback_continuation",
+        strategy_version="v1",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        direction="long",
+        signal_id="signal-1",
+        signal_time=now,
+        signal_score=80.0,
+        feed_kind="execution_signal",
+        gate_status="passed",
+        status="actionable",
+        trigger_passed=True,
+        edge_status="positive",
+        selected_rr=1.0,
+        entry_min=Decimal("100"),
+        entry_max=Decimal("101"),
+        stop_loss=Decimal("99"),
+        target_1=Decimal("102"),
+        outcome="no_entry",
+        outcome_reason="entry_not_touched",
+        entry_touched=False,
+        filled=False,
+        risk_rejected=False,
+        execution_rejected=False,
+        no_entry=True,
+        bars_to_entry=None,
+        bars_to_outcome=3,
+        metadata={"source": "api-test"},
+        created_at=now,
+    )
 
 
 if __name__ == "__main__":

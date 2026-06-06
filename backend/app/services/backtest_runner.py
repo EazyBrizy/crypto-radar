@@ -62,6 +62,7 @@ _RESERVED_PARAM_KEYS = {
     "max_positions_per_symbol",
     "cooldown_bars_after_close",
     "allow_opposite_signal_flip",
+    "max_bars_in_trade",
 }
 
 _SIGNAL_SELECTION_POLICIES = {
@@ -145,6 +146,7 @@ class _BacktestState:
     open_positions: list[_SimulatedPosition] = field(default_factory=list)
     closed_positions: list[_SimulatedPosition] = field(default_factory=list)
     equity_curve: list[dict[str, Any]] = field(default_factory=list)
+    signal_events: list["BacktestSignalEvent"] = field(default_factory=list)
     signals_seen: int = 0
     risk_rejections: int = 0
     execution_rejections: int = 0
@@ -206,6 +208,39 @@ class BacktestSimulatedTrade:
     created_at: datetime
 
 
+@dataclass
+class BacktestSignalEvent:
+    signal_id: str
+    strategy_code: str
+    strategy_version: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    direction: str
+    signal_time: datetime
+    signal_score: float | None
+    feed_kind: str
+    gate_status: str
+    status: str
+    trigger_passed: bool
+    edge_status: str
+    selected_rr: float | None
+    entry_min: Decimal | None
+    entry_max: Decimal | None
+    stop_loss: Decimal | None
+    target_1: Decimal | None
+    outcome: str
+    outcome_reason: str
+    entry_touched: bool
+    filled: bool
+    risk_rejected: bool
+    execution_rejected: bool
+    no_entry: bool
+    bars_to_entry: int | None
+    bars_to_outcome: int | None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class BacktestDetailedRunResult:
     run_result: BacktestRunResult
@@ -214,6 +249,10 @@ class BacktestDetailedRunResult:
     risk_rejections: int
     execution_rejections: int
     assumptions: dict[str, Any]
+    signal_events: list[BacktestSignalEvent] = field(default_factory=list)
+    no_entry_count: int = 0
+    entry_touch_count: int = 0
+    filled_count: int = 0
 
 
 class BacktestExecutionSimulator:
@@ -371,10 +410,11 @@ class ProductionBacktestRunner:
             next_open_positions: list[_SimulatedPosition] = []
             for position in state.open_positions:
                 updated_position = self._execution_simulator.apply_candle(position, candle)
-                if updated_position.trade.status == "closed":
+                if updated_position.trade.status != "open":
                     closed_position = _replace_position(updated_position, exit_index=index)
                     state.cash_equity += _net_pnl(closed_position)
                     state.closed_positions.append(closed_position)
+                    _mark_signal_event_closed(state, closed_position)
                 else:
                     next_open_positions.append(updated_position)
             state.open_positions = next_open_positions
@@ -387,6 +427,17 @@ class ProductionBacktestRunner:
             if features is not None and len(state.open_positions) < constraints.max_concurrent_positions:
                 signals = await self._generate_signals(request, features)
                 state.signals_seen += len(signals)
+                signal_event_ids = [
+                    _append_signal_event(
+                        state,
+                        request=request,
+                        signal=signal,
+                        candle=candle,
+                        index=index,
+                        sequence=sequence,
+                    )
+                    for sequence, signal in enumerate(signals)
+                ]
                 selected_signals = _select_signals(
                     signals,
                     policy=constraints.signal_selection_policy,
@@ -397,7 +448,29 @@ class ProductionBacktestRunner:
                     cooldown_bars_after_close=constraints.cooldown_bars_after_close,
                     current_index=index,
                 )
+                selected_identity_ids = {id(signal) for signal in selected_signals}
+                for signal, signal_event_id in zip(signals, signal_event_ids):
+                    if id(signal) not in selected_identity_ids:
+                        _update_signal_event(
+                            state,
+                            signal_event_id,
+                            outcome="skipped_by_selection",
+                            outcome_reason=_selection_skip_reason(
+                                signal,
+                                constraints=constraints,
+                                open_positions=state.open_positions,
+                                recently_closed=state.closed_positions,
+                                current_index=index,
+                            ),
+                            no_entry=True,
+                        )
+                processed_signal_ids: set[str] = set()
+                event_id_by_identity = {
+                    id(signal): signal_event_id
+                    for signal, signal_event_id in zip(signals, signal_event_ids)
+                }
                 for signal in selected_signals:
+                    signal_event_id = event_id_by_identity[id(signal)]
                     if len(state.open_positions) >= constraints.max_concurrent_positions:
                         break
                     if not _can_open_position_for_signal(
@@ -411,7 +484,18 @@ class ProductionBacktestRunner:
                         current_index=index,
                     ):
                         state.risk_rejections += 1
+                        processed_signal_ids.add(signal_event_id)
+                        _update_signal_event(
+                            state,
+                            signal_event_id,
+                            outcome="risk_rejected",
+                            outcome_reason="position_constraints",
+                            risk_rejected=True,
+                            no_entry=True,
+                        )
                         continue
+                    risk_rejections_before = state.risk_rejections
+                    execution_rejections_before = state.execution_rejections
                     position = self._try_open_position(
                         request=request,
                         risk_settings=risk_settings,
@@ -421,9 +505,56 @@ class ProductionBacktestRunner:
                         index=index,
                         state=state,
                         mode=normalized_mode,
+                        signal_event_id=signal_event_id,
                     )
+                    processed_signal_ids.add(signal_event_id)
                     if position is not None:
                         state.open_positions.append(position)
+                        _update_signal_event(
+                            state,
+                            signal_event_id,
+                            outcome="filled",
+                            outcome_reason="virtual_entry_filled",
+                            entry_touched=True,
+                            filled=True,
+                            bars_to_entry=0,
+                        )
+                    elif state.risk_rejections > risk_rejections_before:
+                        _update_signal_event(
+                            state,
+                            signal_event_id,
+                            outcome="risk_rejected",
+                            outcome_reason="risk_gate",
+                            risk_rejected=True,
+                            no_entry=True,
+                        )
+                    elif state.execution_rejections > execution_rejections_before:
+                        _update_signal_event(
+                            state,
+                            signal_event_id,
+                            outcome="execution_rejected",
+                            outcome_reason="virtual_execution",
+                            execution_rejected=True,
+                            no_entry=True,
+                        )
+                    else:
+                        _update_signal_event(
+                            state,
+                            signal_event_id,
+                            outcome="no_entry",
+                            outcome_reason="entry_not_opened",
+                            no_entry=True,
+                        )
+                for signal in selected_signals:
+                    signal_event_id = event_id_by_identity[id(signal)]
+                    if signal_event_id not in processed_signal_ids:
+                        _update_signal_event(
+                            state,
+                            signal_event_id,
+                            outcome="no_entry",
+                            outcome_reason="capacity_full",
+                            no_entry=True,
+                        )
 
             state.equity_curve.append(_equity_point(candle, _current_equity(state), float(request.initial_capital)))
 
@@ -434,6 +565,7 @@ class ProductionBacktestRunner:
                 closed_position = _replace_position(closed_position, exit_index=len(candles) - 1)
                 state.cash_equity += _net_pnl(closed_position)
                 closed_at_end.append(closed_position)
+                _mark_signal_event_closed(state, closed_position)
             state.closed_positions.extend(closed_at_end)
             state.open_positions = []
             state.equity_curve.append(
@@ -473,6 +605,10 @@ class ProductionBacktestRunner:
             risk_rejections=state.risk_rejections,
             execution_rejections=state.execution_rejections,
             assumptions=assumptions,
+            signal_events=list(state.signal_events),
+            no_entry_count=sum(1 for event in state.signal_events if event.no_entry),
+            entry_touch_count=sum(1 for event in state.signal_events if event.entry_touched),
+            filled_count=sum(1 for event in state.signal_events if event.filled),
         )
 
     async def _generate_signals(
@@ -505,10 +641,11 @@ class ProductionBacktestRunner:
         index: int,
         state: _BacktestState,
         mode: str,
+        signal_event_id: str | None = None,
     ) -> _SimulatedPosition | None:
         if signal is None:
             return None
-        radar_signal = _radar_signal_from_strategy_signal(signal, candle)
+        radar_signal = _radar_signal_from_strategy_signal(signal, candle, signal_id=signal_event_id)
         entry_price = _entry_price(signal) or features.close
         request_fee_rate = float(request.fee_rate)
         request_slippage_bps = float(request.slippage_bps)
@@ -1093,6 +1230,214 @@ def _normalize_signal_selection_policy(value: Any, *, default: str) -> str:
     return default
 
 
+def _append_signal_event(
+    state: _BacktestState,
+    *,
+    request: BacktestRunRequest,
+    signal: StrategySignal,
+    candle: OHLCVCandle,
+    index: int,
+    sequence: int,
+) -> str:
+    signal_id = _backtest_signal_event_id(request=request, signal=signal, index=index, sequence=sequence)
+    signal_time = _datetime_from_ms(candle.close_time)
+    state.signal_events.append(
+        BacktestSignalEvent(
+            signal_id=signal_id,
+            strategy_code=_resolve_strategy_code(signal.strategy),
+            strategy_version=request.strategy_version or "v1",
+            exchange=signal.exchange,
+            symbol=signal.symbol,
+            timeframe=signal.timeframe,
+            direction=signal.direction.lower(),
+            signal_time=signal_time,
+            signal_score=float(signal.score) if signal.score is not None else None,
+            feed_kind=_signal_feed_kind(signal),
+            gate_status=_signal_gate_status(signal),
+            status=str(signal.status),
+            trigger_passed=_signal_trigger_passed(signal),
+            edge_status=_signal_edge_status(signal),
+            selected_rr=signal.selected_rr,
+            entry_min=_optional_decimal_from_float(signal.entry_min),
+            entry_max=_optional_decimal_from_float(signal.entry_max),
+            stop_loss=_optional_decimal_from_float(signal.stop_loss),
+            target_1=_optional_decimal_from_float(signal.take_profit_1),
+            outcome="generated",
+            outcome_reason="generated",
+            entry_touched=False,
+            filled=False,
+            risk_rejected=False,
+            execution_rejected=False,
+            no_entry=False,
+            bars_to_entry=None,
+            bars_to_outcome=None,
+            metadata={
+                "index": index,
+                "sequence": sequence,
+                "score_bucket": _score_bucket(signal.score),
+                "market_regime": _strategy_signal_regime_key(signal),
+                "risk_reward": signal.risk_reward,
+                "selected_rr_target": signal.selected_rr_target,
+                "status_reason": signal.status_reason,
+            },
+        )
+    )
+    return signal_id
+
+
+def _backtest_signal_event_id(
+    *,
+    request: BacktestRunRequest,
+    signal: StrategySignal,
+    index: int,
+    sequence: int,
+) -> str:
+    raw = ":".join(
+        [
+            request.user_id,
+            request.exchange,
+            request.symbol,
+            request.timeframe,
+            _resolve_strategy_code(signal.strategy),
+            str(signal.timestamp),
+            str(index),
+            str(sequence),
+            signal.direction,
+        ]
+    )
+    return f"bt_sig_{uuid5(NAMESPACE_DNS, raw).hex[:16]}"
+
+
+def _update_signal_event(
+    state: _BacktestState,
+    signal_id: str,
+    **updates: Any,
+) -> None:
+    event = _find_signal_event(state, signal_id)
+    if event is None:
+        return
+    for key, value in updates.items():
+        if hasattr(event, key):
+            setattr(event, key, value)
+
+
+def _mark_signal_event_closed(state: _BacktestState, position: _SimulatedPosition) -> None:
+    event = _find_signal_event(state, position.signal.id)
+    if event is None:
+        return
+    outcome = _position_outcome(position)
+    event.outcome = outcome
+    event.outcome_reason = position.trade.close_reason or outcome
+    event.filled = True
+    event.entry_touched = True
+    event.no_entry = False
+    event.bars_to_entry = event.bars_to_entry if event.bars_to_entry is not None else 0
+    if position.exit_index is not None:
+        start_index = _optional_int_from_metadata(event.metadata.get("index"))
+        event.bars_to_outcome = (
+            position.exit_index - start_index if start_index is not None else position.bars_in_trade
+        )
+
+
+def _find_signal_event(state: _BacktestState, signal_id: str) -> BacktestSignalEvent | None:
+    for event in state.signal_events:
+        if event.signal_id == signal_id:
+            return event
+    return None
+
+
+def _selection_skip_reason(
+    signal: StrategySignal,
+    *,
+    constraints: _PositionConstraints,
+    open_positions: Sequence[_SimulatedPosition],
+    recently_closed: Sequence[_SimulatedPosition],
+    current_index: int,
+) -> str:
+    if signal.status != "actionable":
+        return "not_actionable"
+    if _open_positions_for_symbol(signal, open_positions) >= constraints.max_positions_per_symbol:
+        return "max_positions_per_symbol"
+    if constraints.signal_selection_policy == "all_non_overlapping" and _has_same_direction_open_position(
+        signal,
+        open_positions,
+    ):
+        return "same_direction_open_position"
+    if not constraints.allow_opposite_signal_flip and _has_opposite_open_position(signal, open_positions):
+        return "opposite_open_position"
+    if _cooldown_blocks_signal(
+        signal,
+        recently_closed,
+        cooldown_bars_after_close=constraints.cooldown_bars_after_close,
+        current_index=current_index,
+    ):
+        return "cooldown_after_close"
+    return "selection_policy"
+
+
+def _signal_feed_kind(signal: StrategySignal) -> str:
+    gate = signal.execution_gate
+    feed_kind = getattr(gate, "feed_kind", None)
+    if feed_kind is not None:
+        return str(feed_kind)
+    return "execution_signal" if signal.status == "actionable" else "blocked"
+
+
+def _signal_gate_status(signal: StrategySignal) -> str:
+    gate = signal.execution_gate
+    status = getattr(gate, "status", None)
+    if status is not None:
+        return str(status)
+    return "passed" if signal.status == "actionable" else "blocked"
+
+
+def _signal_edge_status(signal: StrategySignal) -> str:
+    edge = signal.edge
+    status = getattr(edge, "status", None)
+    return str(status) if status is not None else "unknown"
+
+
+def _signal_trigger_passed(signal: StrategySignal) -> bool:
+    trigger = signal.trigger
+    if trigger is None:
+        return True
+    status = str(getattr(trigger, "status", "") or "").strip().lower()
+    return status in {"triggered", "passed", "confirmed", "active"}
+
+
+def _strategy_signal_regime_key(signal: StrategySignal) -> str:
+    regime = signal.regime
+    if regime is None:
+        return "unknown"
+    for key in ("label", "state", "trend"):
+        value = getattr(regime, key, None)
+        if value:
+            return str(value)
+    return "unknown"
+
+
+def _position_outcome(position: _SimulatedPosition) -> str:
+    realized = _realized_r(position)
+    if realized > 0:
+        return "win"
+    if realized < 0:
+        return "loss"
+    return "breakeven"
+
+
+def _optional_decimal_from_float(value: float | int | None) -> Decimal | None:
+    if value is None:
+        return None
+    return _decimal(float(value))
+
+
+def _optional_int_from_metadata(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _select_signals(
     signals: Sequence[StrategySignal],
     *,
@@ -1628,10 +1973,15 @@ def _round_metrics(value: Any) -> Any:
     return value
 
 
-def _radar_signal_from_strategy_signal(signal: StrategySignal, candle: OHLCVCandle) -> RadarSignal:
+def _radar_signal_from_strategy_signal(
+    signal: StrategySignal,
+    candle: OHLCVCandle,
+    *,
+    signal_id: str | None = None,
+) -> RadarSignal:
     now = _datetime_from_ms(candle.close_time)
     return RadarSignal(
-        id=f"bt_sig_{uuid4().hex[:12]}",
+        id=signal_id or f"bt_sig_{uuid4().hex[:12]}",
         symbol=signal.symbol,
         exchange=signal.exchange,
         strategy=signal.strategy,

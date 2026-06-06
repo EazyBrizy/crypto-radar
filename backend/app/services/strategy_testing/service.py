@@ -17,6 +17,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignal,
     StrategyTestTrade,
 )
 from app.services.strategy_testing.stores import (
@@ -30,10 +31,19 @@ class StrategyTestTradeStore(Protocol):
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         ...
 
+    def write_signals(self, signals: Sequence[StrategyTestSignal]) -> None:
+        ...
+
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         ...
 
     def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
+        ...
+
+    def list_signals(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestSignal]:
+        ...
+
+    def list_metrics(self, run_id: UUID) -> list[StrategyTestMetricRow]:
         ...
 
 
@@ -68,8 +78,10 @@ class StrategyTestingService:
                 return self._run_store.mark_failed(run_id, _failure_message(matrix_result)).run
             metric_results = matrix_result.metrics or build_matrix_metric_results(
                 matrix_result.trades,
+                signals=matrix_result.signals,
                 metric_set=request.metric_set,
             )
+            self._trade_store.write_signals(matrix_result.signals)
             self._trade_store.write_trades(matrix_result.trades)
             self._trade_store.write_metrics(
                 metric_results_to_rows(
@@ -101,6 +113,11 @@ class StrategyTestingService:
         if self._run_store.get_run(run_id) is None:
             raise ValueError(f"Strategy test run is not found: {run_id}")
         return self._trade_store.list_trades(run_id, limit=limit, offset=offset)
+
+    def list_signals(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestSignal]:
+        if self._run_store.get_run(run_id) is None:
+            raise ValueError(f"Strategy test run is not found: {run_id}")
+        return self._trade_store.list_signals(run_id, limit=limit, offset=offset)
 
     def build_report(self, run_id: UUID) -> StrategyTestReport:
         return self._report_builder().build_report(run_id)

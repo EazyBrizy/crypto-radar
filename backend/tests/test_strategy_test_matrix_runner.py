@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 import unittest
 
 from app.schemas.backtest import BacktestRunResult
-from app.services.backtest_runner import BacktestDetailedRunResult
+from app.services.backtest_runner import BacktestDetailedRunResult, BacktestSignalEvent
 from app.services.strategy_testing.assumptions import build_strategy_test_assumptions
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
 from app.services.strategy_testing.runner import StrategyTestScenarioResult, StrategyTestScenarioRunner
@@ -19,6 +19,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignal,
     StrategyTestTrade,
 )
 from app.services.strategy_testing.service import StrategyTestingService
@@ -128,6 +129,32 @@ class StrategyTestScenarioRunnerTest(unittest.TestCase):
         self.assertEqual(call.mode, "production_like")
         self.assertTrue(call.options["risk_gate_enabled"])
 
+    def test_strategy_testing_records_signal_rows(self) -> None:
+        backtest_runner = _FakeBacktestRunner(signal_events=[_backtest_signal_event()])
+        scenario_runner = StrategyTestScenarioRunner(backtest_runner)  # type: ignore[arg-type]
+        request = _matrix_request()
+        pair = StrategyTestPair(exchange="bybit", symbol="BTCUSDT")
+
+        result = scenario_runner.run_scenario(
+            run_id=RUN_ID,
+            user_id=USER_ID,
+            request=request,
+            strategy="trend_pullback_continuation",
+            pair=pair,
+            timeframe="1h",
+        )
+
+        self.assertEqual(len(result.signals), 1)
+        signal = result.signals[0]
+        self.assertEqual(signal.run_id, RUN_ID)
+        self.assertEqual(signal.user_id, USER_ID)
+        self.assertEqual(signal.mode, "research_virtual")
+        self.assertEqual(signal.scenario_id, "trend_pullback_continuation:bybit:BTCUSDT:1h")
+        self.assertEqual(signal.signal_id, "signal-1")
+        self.assertTrue(signal.no_entry)
+        self.assertEqual(result.summary["signals_count"], 1)
+        self.assertEqual(result.summary["no_entry_count"], 1)
+
 
 class StrategyTestingServiceMatrixTest(unittest.TestCase):
     def test_service_marks_run_queued_running_completed_and_writes_trades(self) -> None:
@@ -139,7 +166,15 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
                 scenario_count=1,
                 completed_scenarios=1,
                 failed_scenarios=0,
-                scenario_summaries=[{"signals_seen": 2, "risk_rejections": 0, "execution_rejections": 0}],
+                scenario_summaries=[
+                    {
+                        "signals_seen": 2,
+                        "signals_count": 1,
+                        "risk_rejections": 0,
+                        "execution_rejections": 0,
+                    }
+                ],
+                signals=[_signal()],
                 trades=[_trade()],
             )
         )
@@ -154,10 +189,13 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         self.assertEqual(response.status, "completed")
         self.assertEqual(run_store.transitions, ["queued", "running", "completed"])
         self.assertEqual(len(trade_store.trades), 1)
+        self.assertEqual(len(trade_store.signals), 1)
         self.assertGreater(len(trade_store.metrics), 0)
         self.assertIn("summary_metrics", response.summary)
         self.assertIn("trades_count", {metric["code"] for metric in response.summary["summary_metrics"]})
+        self.assertIn("signals_count", {metric["code"] for metric in response.summary["summary_metrics"]})
         self.assertEqual(response.summary["scenario_count"], 1)
+        self.assertEqual(response.summary["signals_count"], 1)
 
     def test_service_completes_partial_scenario_failure(self) -> None:
         service = StrategyTestingService(
@@ -209,8 +247,9 @@ class _BacktestCall:
 
 
 class _FakeBacktestRunner:
-    def __init__(self) -> None:
+    def __init__(self, signal_events: Sequence[BacktestSignalEvent] | None = None) -> None:
         self.calls: list[_BacktestCall] = []
+        self.signal_events = list(signal_events or [])
 
     def run_detailed(
         self,
@@ -223,9 +262,13 @@ class _FakeBacktestRunner:
         return BacktestDetailedRunResult(
             run_result=BacktestRunResult(status="completed", result=None),
             trades=[],
-            signals_seen=0,
+            signal_events=list(self.signal_events),
+            signals_seen=len(self.signal_events),
             risk_rejections=0,
             execution_rejections=0,
+            no_entry_count=sum(1 for event in self.signal_events if event.no_entry),
+            entry_touch_count=sum(1 for event in self.signal_events if event.entry_touched),
+            filled_count=sum(1 for event in self.signal_events if event.filled),
             assumptions=options or {},
         )
 
@@ -264,6 +307,7 @@ class _RecordingScenarioRunner:
                 "risk_rejections": 0,
                 "execution_rejections": 0,
             },
+            signals=[_signal(signal_id=f"signal-{index + 1}", strategy=strategy, pair=pair, timeframe=timeframe)],
             trades=[],
         )
 
@@ -286,13 +330,25 @@ class _StaticMatrixRunner:
 class _RecordingTradeStore:
     def __init__(self) -> None:
         self.trades: list[StrategyTestTrade] = []
+        self.signals: list[StrategyTestSignal] = []
         self.metrics: list[StrategyTestMetricRow] = []
 
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         self.trades.extend(trades)
 
+    def write_signals(self, signals: Sequence[StrategyTestSignal]) -> None:
+        self.signals.extend(signals)
+
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         self.metrics.extend(rows)
+
+    def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
+        _ = run_id, limit, offset
+        return list(self.trades)
+
+    def list_signals(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestSignal]:
+        _ = run_id, limit, offset
+        return list(self.signals)
 
 
 class _EphemeralRunStore:
@@ -433,6 +489,88 @@ def _trade() -> StrategyTestTrade:
         outcome="win",
         tags=["backtest"],
         created_at=now,
+    )
+
+
+def _signal(
+    *,
+    signal_id: str = "signal-1",
+    strategy: str = "trend_pullback_continuation",
+    pair: StrategyTestPair | None = None,
+    timeframe: str = "1h",
+) -> StrategyTestSignal:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    pair = pair or StrategyTestPair(exchange="bybit", symbol="BTCUSDT")
+    return StrategyTestSignal(
+        run_id=RUN_ID,
+        user_id=USER_ID,
+        mode="research_virtual",
+        scenario_id=f"{strategy}:{pair.exchange}:{pair.symbol}:{timeframe}",
+        strategy_code=strategy,
+        strategy_version="v1",
+        exchange=pair.exchange,
+        symbol=pair.symbol,
+        timeframe=timeframe,
+        direction="long",
+        signal_id=signal_id,
+        signal_time=now,
+        signal_score=80.0,
+        feed_kind="execution_signal",
+        gate_status="passed",
+        status="actionable",
+        trigger_passed=True,
+        edge_status="positive",
+        selected_rr=1.0,
+        entry_min=Decimal("100"),
+        entry_max=Decimal("101"),
+        stop_loss=Decimal("99"),
+        target_1=Decimal("102"),
+        outcome="no_entry",
+        outcome_reason="entry_not_touched",
+        entry_touched=False,
+        filled=False,
+        risk_rejected=False,
+        execution_rejected=False,
+        no_entry=True,
+        bars_to_entry=None,
+        bars_to_outcome=3,
+        metadata={"source": "matrix-test"},
+        created_at=now,
+    )
+
+
+def _backtest_signal_event() -> BacktestSignalEvent:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return BacktestSignalEvent(
+        signal_id="signal-1",
+        strategy_code="trend_pullback_continuation",
+        strategy_version="v1",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        direction="long",
+        signal_time=now,
+        signal_score=80.0,
+        feed_kind="execution_signal",
+        gate_status="passed",
+        status="actionable",
+        trigger_passed=True,
+        edge_status="positive",
+        selected_rr=1.0,
+        entry_min=Decimal("100"),
+        entry_max=Decimal("101"),
+        stop_loss=Decimal("99"),
+        target_1=Decimal("102"),
+        outcome="no_entry",
+        outcome_reason="entry_not_touched",
+        entry_touched=False,
+        filled=False,
+        risk_rejected=False,
+        execution_rejected=False,
+        no_entry=True,
+        bars_to_entry=None,
+        bars_to_outcome=3,
+        metadata={"source": "backtest-test"},
     )
 
 

@@ -17,7 +17,8 @@ import type {
   StrategyTestPair,
   StrategyTestRunRequest,
   StrategyTestRunStatus,
-  StrategyTestSameCandlePolicy
+  StrategyTestSameCandlePolicy,
+  StrategyTestSignalSelectionPolicy
 } from "./types";
 
 interface StrategyTestingPanelProps {
@@ -29,17 +30,25 @@ const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
 const DEFAULT_SELECTED_TIMEFRAMES = ["1m", "5m", "15m"];
 const DEFAULT_MODE: StrategyTestMode = "research_virtual";
 const DEFAULT_SAME_CANDLE_POLICY: StrategyTestSameCandlePolicy = "stop_first";
+const DEFAULT_SIGNAL_SELECTION_POLICY: StrategyTestSignalSelectionPolicy = "all_non_overlapping";
+const HISTORICAL_BACKTEST_TOOLTIP = "Historical backtest uses closed candles and does not affect live radar/trades.";
 
 const MODE_LABELS: Record<StrategyTestMode, string> = {
-  discovery: "Discovery",
-  research_virtual: "Research virtual",
-  production_like: "Production-like"
+  discovery: "Исследование идей",
+  research_virtual: "Исторический virtual backtest",
+  production_like: "Production-like backtest"
 };
 
 const POLICY_LABELS: Record<StrategyTestSameCandlePolicy, string> = {
   ignore_ambiguous: "Ignore ambiguous",
   stop_first: "Stop first",
   target_first: "Target first"
+};
+const SIGNAL_SELECTION_LABELS: Record<StrategyTestSignalSelectionPolicy, string> = {
+  all_non_overlapping: "All non-overlapping",
+  all_signals: "All signals",
+  first_actionable: "First actionable",
+  highest_score: "Highest score"
 };
 const ACTIVE_RUN_STATUSES = new Set<StrategyTestRunStatus>(["queued", "running"]);
 const STRATEGY_TEST_RUN_POLL_MS = 2_500;
@@ -64,6 +73,12 @@ export function StrategyTestingPanel({
   const [feeRate, setFeeRate] = useState("0.001");
   const [slippageBps, setSlippageBps] = useState("0");
   const [sameCandlePolicy, setSameCandlePolicy] = useState<StrategyTestSameCandlePolicy>(DEFAULT_SAME_CANDLE_POLICY);
+  const [signalSelectionPolicy, setSignalSelectionPolicy] = useState<StrategyTestSignalSelectionPolicy>(DEFAULT_SIGNAL_SELECTION_POLICY);
+  const [maxConcurrentPositions, setMaxConcurrentPositions] = useState("10");
+  const [maxPositionsPerSymbol, setMaxPositionsPerSymbol] = useState("1");
+  const [cooldownBarsAfterClose, setCooldownBarsAfterClose] = useState("0");
+  const [allowOppositeSignalFlip, setAllowOppositeSignalFlip] = useState(false);
+  const [maxBarsInTrade, setMaxBarsInTrade] = useState("48");
   const [formError, setFormError] = useState<string | null>(null);
   const [selectedReportRunId, setSelectedReportRunId] = useState<string | null>(null);
   const defaultStrategySelection = useMemo(() => defaultStrategyCodes(strategyOptions), [strategyOptions]);
@@ -80,6 +95,7 @@ export function StrategyTestingPanel({
   const validTimeframes = effectiveTimeframes.filter((timeframe) => timeframeOptions.includes(timeframe));
   const dateError = validateDateRange(startAt, endAt);
   const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps);
+  const advancedError = validateAdvancedInputs(maxConcurrentPositions, maxPositionsPerSymbol, cooldownBarsAfterClose, maxBarsInTrade);
   const scenarioEstimate = effectiveStrategyCodes.length * selectedPairs.length * validTimeframes.length;
   const runs = runsQuery.data ?? [];
   const selectedRun = runs.find((run) => run.run_id === selectedReportRunId) ?? null;
@@ -93,7 +109,7 @@ export function StrategyTestingPanel({
   const hasActiveRun =
     runs.some((run) => isActiveStrategyTestRun(run.status)) ||
     (mutationRunIsMissingFromList && isActiveStrategyTestRun(runMutation.data?.status));
-  const canRun = scenarioEstimate > 0 && !dateError && !numberError && !runMutation.isPending && !hasActiveRun;
+  const canRun = scenarioEstimate > 0 && !dateError && !numberError && !advancedError && !runMutation.isPending && !hasActiveRun;
   const reportQuery = useStrategyTestReport(selectedReportRunId, {
     enabled: Boolean(selectedReportRunId),
     refetchInterval: selectedRunIsActive ? STRATEGY_TEST_RUN_POLL_MS : false
@@ -107,6 +123,7 @@ export function StrategyTestingPanel({
       setFormError(
         dateError ??
         numberError ??
+        advancedError ??
         (hasActiveRun ? "A strategy test run is already in progress." : "Select at least one strategy, pair, and timeframe.")
       );
       return;
@@ -118,6 +135,14 @@ export function StrategyTestingPanel({
         feeRate,
         initialCapital,
         mode,
+        advancedParams: {
+          allowOppositeSignalFlip,
+          cooldownBarsAfterClose,
+          maxBarsInTrade,
+          maxConcurrentPositions,
+          maxPositionsPerSymbol,
+          signalSelectionPolicy
+        },
         sameCandlePolicy,
         selectedPairs,
         selectedStrategyCodes: effectiveStrategyCodes,
@@ -229,12 +254,51 @@ export function StrategyTestingPanel({
         </label>
       </div>
 
+      <div className="strategy-test-controls strategy-test-advanced-controls">
+        <label className="strategy-test-field">
+          <span>Signal selection</span>
+          <select
+            onChange={(event) => setSignalSelectionPolicy(event.target.value as StrategyTestSignalSelectionPolicy)}
+            value={signalSelectionPolicy}
+          >
+            {Object.entries(SIGNAL_SELECTION_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="strategy-test-field">
+          <span>Max concurrent positions</span>
+          <input inputMode="numeric" min="1" onChange={(event) => setMaxConcurrentPositions(event.target.value)} step="1" type="number" value={maxConcurrentPositions} />
+        </label>
+        <label className="strategy-test-field">
+          <span>Max positions per symbol</span>
+          <input inputMode="numeric" min="1" onChange={(event) => setMaxPositionsPerSymbol(event.target.value)} step="1" type="number" value={maxPositionsPerSymbol} />
+        </label>
+        <label className="strategy-test-field">
+          <span>Cooldown bars after close</span>
+          <input inputMode="numeric" min="0" onChange={(event) => setCooldownBarsAfterClose(event.target.value)} step="1" type="number" value={cooldownBarsAfterClose} />
+        </label>
+        <label className="strategy-test-field">
+          <span>Max bars in trade</span>
+          <input inputMode="numeric" min="1" onChange={(event) => setMaxBarsInTrade(event.target.value)} step="1" type="number" value={maxBarsInTrade} />
+        </label>
+        <label className="strategy-test-check-option compact">
+          <input
+            checked={allowOppositeSignalFlip}
+            onChange={(event) => setAllowOppositeSignalFlip(event.target.checked)}
+            type="checkbox"
+          />
+          <span><strong>Allow opposite signal flip</strong></span>
+        </label>
+      </div>
+
       <div className="strategy-test-mode-row" aria-label="Strategy test mode">
         {(Object.keys(MODE_LABELS) as StrategyTestMode[]).map((option) => (
           <button
             className={mode === option ? "active" : ""}
             key={option}
             onClick={() => setMode(option)}
+            title={option === "research_virtual" ? HISTORICAL_BACKTEST_TOOLTIP : undefined}
             type="button"
           >
             {MODE_LABELS[option]}
@@ -242,8 +306,8 @@ export function StrategyTestingPanel({
         ))}
       </div>
 
-      {dateError || numberError || formError || apiError ? (
-        <p className="form-error">{formError ?? dateError ?? numberError ?? apiError}</p>
+      {dateError || numberError || advancedError || formError || apiError ? (
+        <p className="form-error">{formError ?? dateError ?? numberError ?? advancedError ?? apiError}</p>
       ) : null}
 
       <div className="strategy-test-actions">
@@ -339,6 +403,19 @@ function validateNumericInputs(initialCapital: string, feeRate: string, slippage
   return null;
 }
 
+function validateAdvancedInputs(
+  maxConcurrentPositions: string,
+  maxPositionsPerSymbol: string,
+  cooldownBarsAfterClose: string,
+  maxBarsInTrade: string
+): string | null {
+  if (toPositiveInteger(maxConcurrentPositions) == null) return "Max concurrent positions must be greater than zero.";
+  if (toPositiveInteger(maxPositionsPerSymbol) == null) return "Max positions per symbol must be greater than zero.";
+  if (toNonNegativeInteger(cooldownBarsAfterClose) == null) return "Cooldown bars after close must be zero or greater.";
+  if (toPositiveInteger(maxBarsInTrade) == null) return "Max bars in trade must be greater than zero.";
+  return null;
+}
+
 function toPositiveNumber(value: string): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -347,6 +424,16 @@ function toPositiveNumber(value: string): number | null {
 function toNonNegativeNumber(value: string): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function toPositiveInteger(value: string): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function toNonNegativeInteger(value: string): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function defaultDateRange(): { startAt: string; endAt: string } {
@@ -370,6 +457,7 @@ function toDateTimeLocal(date: Date): string {
 }
 
 function buildRunRequest({
+  advancedParams,
   endAt,
   feeRate,
   initialCapital,
@@ -381,6 +469,14 @@ function buildRunRequest({
   slippageBps,
   startAt
 }: {
+  advancedParams: {
+    allowOppositeSignalFlip: boolean;
+    cooldownBarsAfterClose: string;
+    maxBarsInTrade: string;
+    maxConcurrentPositions: string;
+    maxPositionsPerSymbol: string;
+    signalSelectionPolicy: StrategyTestSignalSelectionPolicy;
+  };
   endAt: string;
   feeRate: string;
   initialCapital: string;
@@ -398,7 +494,14 @@ function buildRunRequest({
     initial_capital: Number(initialCapital),
     mode,
     pairs: selectedPairs.map(toStrategyTestPair),
-    params: {},
+    params: {
+      allow_opposite_signal_flip: advancedParams.allowOppositeSignalFlip,
+      cooldown_bars_after_close: Number(advancedParams.cooldownBarsAfterClose),
+      max_bars_in_trade: Number(advancedParams.maxBarsInTrade),
+      max_concurrent_positions: Number(advancedParams.maxConcurrentPositions),
+      max_positions_per_symbol: Number(advancedParams.maxPositionsPerSymbol),
+      signal_selection_policy: advancedParams.signalSelectionPolicy
+    },
     same_candle_policy: sameCandlePolicy,
     slippage_bps: Number(slippageBps),
     start_at: new Date(startAt).toISOString(),

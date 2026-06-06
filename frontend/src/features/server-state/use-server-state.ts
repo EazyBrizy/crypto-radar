@@ -7,6 +7,7 @@ import type {
   StrategyTestReport,
   StrategyTestRunRequest,
   StrategyTestRunResponse,
+  StrategyTestSignal,
   StrategyTestTrade
 } from "@/features/strategy-testing/types";
 import type {
@@ -284,6 +285,16 @@ export function useStrategyTestTrades(runId: string | null, options: PlannedQuer
   return useQuery<StrategyTestTrade[]>({
     queryKey: serverStateKeys.strategyTests.trades(runId ?? "none"),
     queryFn: () => api.strategyTests.getTrades(runId as string),
+    enabled: options.enabled ?? Boolean(runId),
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useStrategyTestSignals(runId: string | null, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestSignal[]>({
+    queryKey: serverStateKeys.strategyTests.signals(runId ?? "none"),
+    queryFn: () => api.strategyTests.getSignals(runId as string),
     enabled: options.enabled ?? Boolean(runId),
     refetchInterval: options.refetchInterval,
     staleTime: serverStatePolicy.defaultStaleTimeMs

@@ -144,6 +144,7 @@ def build_trade_plan_from_legacy_fields(
         invalidation=TradePlanInvalidation(
             price=stop_loss,
             hard_stop=stop_loss,
+            conditions=["stop_loss_break"],
             metadata={"source": source},
         ),
         risk_rules=TradePlanRiskRules(

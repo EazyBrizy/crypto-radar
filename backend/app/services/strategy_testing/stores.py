@@ -18,6 +18,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignal,
     StrategyTestTrade,
 )
 from app.services.user_identity import resolve_app_user
@@ -108,6 +109,49 @@ ORDER BY (
     direction,
     metric_code
 )
+"""
+
+STRATEGY_TEST_SIGNALS_DDL = """
+CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals
+(
+    run_id UUID,
+    user_id UUID,
+    mode LowCardinality(String),
+    scenario_id String,
+    strategy_code LowCardinality(String),
+    strategy_version String,
+    exchange LowCardinality(String),
+    symbol LowCardinality(String),
+    timeframe LowCardinality(String),
+    direction LowCardinality(String),
+    signal_id String,
+    signal_time DateTime64(3, 'UTC'),
+    signal_score Nullable(Float64),
+    feed_kind LowCardinality(String),
+    gate_status LowCardinality(String),
+    status LowCardinality(String),
+    trigger_passed UInt8,
+    edge_status LowCardinality(String),
+    selected_rr Nullable(Float64),
+    entry_min Nullable(Decimal(38, 18)),
+    entry_max Nullable(Decimal(38, 18)),
+    stop_loss Nullable(Decimal(38, 18)),
+    target_1 Nullable(Decimal(38, 18)),
+    outcome LowCardinality(String),
+    outcome_reason String,
+    entry_touched UInt8,
+    filled UInt8,
+    risk_rejected UInt8,
+    execution_rejected UInt8,
+    no_entry UInt8,
+    bars_to_entry Nullable(UInt64),
+    bars_to_outcome Nullable(UInt64),
+    metadata_json String,
+    created_at DateTime64(3, 'UTC')
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(signal_time)
+ORDER BY (run_id, strategy_code, exchange, symbol, timeframe, signal_time, signal_id)
 """
 
 
@@ -209,6 +253,42 @@ class ClickHouseStrategyTestStore:
         "metadata_json",
         "created_at",
     ]
+    _signal_columns = [
+        "run_id",
+        "user_id",
+        "mode",
+        "scenario_id",
+        "strategy_code",
+        "strategy_version",
+        "exchange",
+        "symbol",
+        "timeframe",
+        "direction",
+        "signal_id",
+        "signal_time",
+        "signal_score",
+        "feed_kind",
+        "gate_status",
+        "status",
+        "trigger_passed",
+        "edge_status",
+        "selected_rr",
+        "entry_min",
+        "entry_max",
+        "stop_loss",
+        "target_1",
+        "outcome",
+        "outcome_reason",
+        "entry_touched",
+        "filled",
+        "risk_rejected",
+        "execution_rejected",
+        "no_entry",
+        "bars_to_entry",
+        "bars_to_outcome",
+        "metadata_json",
+        "created_at",
+    ]
 
     def __init__(self, clickhouse_client_factory: Any = create_clickhouse_client) -> None:
         self._clickhouse_client_factory = clickhouse_client_factory
@@ -217,6 +297,7 @@ class ClickHouseStrategyTestStore:
         client = self._client()
         try:
             client.command(STRATEGY_TEST_TRADES_DDL)
+            client.command(STRATEGY_TEST_SIGNALS_DDL)
             client.command(STRATEGY_TEST_METRICS_DDL)
         finally:
             self._close_client(client)
@@ -231,6 +312,49 @@ class ClickHouseStrategyTestStore:
                 [_trade_to_clickhouse(trade) for trade in trades],
                 column_names=self._trade_columns,
             )
+        finally:
+            self._close_client(client)
+
+    def write_signals(self, signals: Sequence[StrategyTestSignal]) -> None:
+        if not signals:
+            return
+        client = self._client()
+        try:
+            client.insert(
+                "analytics.strategy_test_signals",
+                [_signal_to_clickhouse(signal) for signal in signals],
+                column_names=self._signal_columns,
+            )
+        finally:
+            self._close_client(client)
+
+    def list_signals(
+        self,
+        run_id: UUID,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[StrategyTestSignal]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+
+        query = f"""
+            SELECT
+                {_signal_select_columns_sql()}
+            FROM analytics.strategy_test_signals
+            WHERE run_id = {{run_id:UUID}}
+            ORDER BY signal_time ASC, signal_id ASC
+            LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
+        """
+        client = self._client()
+        try:
+            result = client.query(
+                query,
+                parameters={"run_id": run_id, "limit": limit, "offset": offset},
+            )
+            rows = result.named_results() if hasattr(result, "named_results") else []
+            return [_row_to_signal(row) for row in rows]
         finally:
             self._close_client(client)
 
@@ -578,6 +702,10 @@ def _trade_select_columns_sql() -> str:
     return ",\n                ".join(ClickHouseStrategyTestStore._trade_columns)
 
 
+def _signal_select_columns_sql() -> str:
+    return ",\n                ".join(ClickHouseStrategyTestStore._signal_columns)
+
+
 def _trade_to_clickhouse(trade: StrategyTestTrade) -> list[Any]:
     return [
         trade.run_id,
@@ -618,6 +746,45 @@ def _trade_to_clickhouse(trade: StrategyTestTrade) -> list[Any]:
         _json_dumps(trade.trade_plan),
         list(trade.tags),
         trade.created_at,
+    ]
+
+
+def _signal_to_clickhouse(signal: StrategyTestSignal) -> list[Any]:
+    return [
+        signal.run_id,
+        signal.user_id,
+        signal.mode,
+        signal.scenario_id,
+        signal.strategy_code,
+        signal.strategy_version,
+        signal.exchange,
+        signal.symbol,
+        signal.timeframe,
+        signal.direction,
+        signal.signal_id,
+        signal.signal_time,
+        signal.signal_score,
+        signal.feed_kind,
+        signal.gate_status,
+        signal.status,
+        int(signal.trigger_passed),
+        signal.edge_status,
+        signal.selected_rr,
+        signal.entry_min,
+        signal.entry_max,
+        signal.stop_loss,
+        signal.target_1,
+        signal.outcome,
+        signal.outcome_reason,
+        int(signal.entry_touched),
+        int(signal.filled),
+        int(signal.risk_rejected),
+        int(signal.execution_rejected),
+        int(signal.no_entry),
+        signal.bars_to_entry,
+        signal.bars_to_outcome,
+        _json_dumps(signal.metadata),
+        signal.created_at,
     ]
 
 
@@ -680,6 +847,45 @@ def _row_to_trade(row: dict[str, Any]) -> StrategyTestTrade:
         features_snapshot=_loads_json(row.get("features_snapshot_json"), {}),
         trade_plan=_loads_json(row.get("trade_plan_json"), {}),
         tags=_string_list(row.get("tags")),
+        created_at=_as_utc(row["created_at"]),
+    )
+
+
+def _row_to_signal(row: dict[str, Any]) -> StrategyTestSignal:
+    return StrategyTestSignal(
+        run_id=row["run_id"],
+        user_id=row["user_id"],
+        mode=row["mode"],
+        scenario_id=row["scenario_id"],
+        strategy_code=row["strategy_code"],
+        strategy_version=row["strategy_version"],
+        exchange=row["exchange"],
+        symbol=row["symbol"],
+        timeframe=row["timeframe"],
+        direction=row["direction"],
+        signal_id=row["signal_id"],
+        signal_time=_as_utc(row["signal_time"]),
+        signal_score=_optional_float(row.get("signal_score")),
+        feed_kind=row["feed_kind"],
+        gate_status=row["gate_status"],
+        status=row["status"],
+        trigger_passed=_bool(row.get("trigger_passed")),
+        edge_status=row["edge_status"],
+        selected_rr=_optional_float(row.get("selected_rr")),
+        entry_min=_optional_decimal(row.get("entry_min")),
+        entry_max=_optional_decimal(row.get("entry_max")),
+        stop_loss=_optional_decimal(row.get("stop_loss")),
+        target_1=_optional_decimal(row.get("target_1")),
+        outcome=row["outcome"],
+        outcome_reason=row["outcome_reason"],
+        entry_touched=_bool(row.get("entry_touched")),
+        filled=_bool(row.get("filled")),
+        risk_rejected=_bool(row.get("risk_rejected")),
+        execution_rejected=_bool(row.get("execution_rejected")),
+        no_entry=_bool(row.get("no_entry")),
+        bars_to_entry=_optional_int(row.get("bars_to_entry")),
+        bars_to_outcome=_optional_int(row.get("bars_to_outcome")),
+        metadata=_loads_json(row.get("metadata_json"), {}),
         created_at=_as_utc(row["created_at"]),
     )
 

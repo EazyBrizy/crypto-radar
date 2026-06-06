@@ -164,6 +164,51 @@ class StrategyTestTrade(BaseModel):
         return str(value)
 
 
+class StrategyTestSignal(BaseModel):
+    run_id: UUID
+    user_id: UUID
+    mode: StrategyTestMode
+    scenario_id: str
+    strategy_code: str
+    strategy_version: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    direction: str
+    signal_id: str
+    signal_time: datetime
+    signal_score: float | None = None
+    feed_kind: str
+    gate_status: str
+    status: str
+    trigger_passed: bool = False
+    edge_status: str
+    selected_rr: float | None = None
+    entry_min: Decimal | None = None
+    entry_max: Decimal | None = None
+    stop_loss: Decimal | None = None
+    target_1: Decimal | None = None
+    outcome: str
+    outcome_reason: str
+    entry_touched: bool = False
+    filled: bool = False
+    risk_rejected: bool = False
+    execution_rejected: bool = False
+    no_entry: bool = False
+    bars_to_entry: int | None = Field(default=None, ge=0)
+    bars_to_outcome: int | None = Field(default=None, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+    @field_validator("scenario_id", "strategy_code", "exchange", "symbol", "timeframe", "direction", "signal_id")
+    @classmethod
+    def normalize_non_empty_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("strategy test signal text fields must be non-empty")
+        return text
+
+
 class StrategyTestMetricRow(BaseModel):
     run_id: UUID
     user_id: UUID

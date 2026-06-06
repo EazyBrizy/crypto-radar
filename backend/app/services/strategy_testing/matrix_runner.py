@@ -10,7 +10,12 @@ from app.services.strategy_testing.report_builder import (
     metric_results_to_summary_sections,
 )
 from app.services.strategy_testing.runner import StrategyTestScenarioResult, StrategyTestScenarioRunner
-from app.services.strategy_testing.schemas import StrategyTestPair, StrategyTestRunRequest, StrategyTestTrade
+from app.services.strategy_testing.schemas import (
+    StrategyTestPair,
+    StrategyTestRunRequest,
+    StrategyTestSignal,
+    StrategyTestTrade,
+)
 
 
 class ScenarioRunner(Protocol):
@@ -35,6 +40,7 @@ class StrategyTestMatrixResult:
     failed_scenarios: int
     scenario_summaries: list[dict[str, Any]] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
+    signals: list[StrategyTestSignal] = field(default_factory=list)
     trades: list[StrategyTestTrade] = field(default_factory=list)
     metrics: list[MetricResult] = field(default_factory=list)
 
@@ -48,13 +54,20 @@ class StrategyTestMatrixResult:
         execution_rejections = sum(
             _int_from_summary(item, "execution_rejections") for item in self.scenario_summaries
         )
+        entry_touch_count = sum(_int_from_summary(item, "entry_touch_count") for item in self.scenario_summaries)
+        filled_count = sum(_int_from_summary(item, "filled_count") for item in self.scenario_summaries)
+        no_entry_count = sum(_int_from_summary(item, "no_entry_count") for item in self.scenario_summaries)
         metric_sections = metric_results_to_summary_sections(self.metrics if metrics is None else metrics)
         return {
             "scenario_count": self.scenario_count,
             "completed_scenarios": self.completed_scenarios,
             "failed_scenarios": self.failed_scenarios,
+            "signals_count": len(self.signals),
             "trades_count": len(self.trades),
             "signals_seen": signals_seen,
+            "entry_touch_count": entry_touch_count,
+            "filled_count": filled_count,
+            "no_entry_count": no_entry_count,
             "risk_rejections": risk_rejections,
             "execution_rejections": execution_rejections,
             "errors": list(self.errors),
@@ -79,6 +92,7 @@ class StrategyTestMatrixRunner:
         failed = 0
         scenario_summaries: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        signals: list[StrategyTestSignal] = []
         trades: list[StrategyTestTrade] = []
 
         for strategy in request.strategies:
@@ -108,6 +122,7 @@ class StrategyTestMatrixRunner:
 
                     completed += 1
                     scenario_summaries.append(result.summary)
+                    signals.extend(result.signals)
                     trades.extend(result.trades)
 
         return StrategyTestMatrixResult(
@@ -117,8 +132,9 @@ class StrategyTestMatrixRunner:
             failed_scenarios=failed,
             scenario_summaries=scenario_summaries,
             errors=errors,
+            signals=signals,
             trades=trades,
-            metrics=build_matrix_metric_results(trades, metric_set=request.metric_set),
+            metrics=build_matrix_metric_results(trades, signals=signals, metric_set=request.metric_set),
         )
 
 

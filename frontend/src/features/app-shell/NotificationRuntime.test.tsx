@@ -33,4 +33,32 @@ describe("NotificationRuntime", () => {
     expect(screen.queryByText("New signal")).not.toBeInTheDocument();
     expect(useNotificationStore.getState().notifications[0]?.read).toBe(true);
   });
+
+  it("labels legacy signal.created notifications as ideas", () => {
+    useNotificationStore.getState().push({
+      kind: "signal",
+      message: "BTCUSDT LONG score 62",
+      title: "New signal",
+      type: "signal.created"
+    });
+
+    render(<NotificationRuntime />);
+
+    expect(screen.getByText("New idea")).toBeInTheDocument();
+    expect(screen.queryByText("New signal")).not.toBeInTheDocument();
+  });
+
+  it("labels signal.execution_ready notifications as execution-ready", () => {
+    useNotificationStore.getState().push({
+      kind: "signal",
+      message: "ETHUSDT LONG score 84",
+      title: "New signal",
+      type: "signal.execution_ready"
+    });
+
+    render(<NotificationRuntime />);
+
+    expect(screen.getByText("Execution signal ready")).toBeInTheDocument();
+    expect(screen.queryByText("New signal")).not.toBeInTheDocument();
+  });
 });

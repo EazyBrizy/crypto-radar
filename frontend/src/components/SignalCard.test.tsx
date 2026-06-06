@@ -48,6 +48,61 @@ describe("SignalCard", () => {
 
     expect(screen.getByText("Execution blocked: Funding event is too close")).toBeInTheDocument();
   });
+
+  it("surfaces forming candle previews from backend execution gate reasons", () => {
+    render(<SignalCard signal={baseSignal({
+      candle_state: "open",
+      execution_gate: {
+        status: "blocked",
+        feed_kind: "watchlist",
+        can_notify: false,
+        can_enter_now: false,
+        can_arm_pending: false,
+        can_show_in_execution_feed: false,
+        reasons: [
+          {
+            code: "forming_candle",
+            severity: "blocker",
+            source: "candle",
+            message: "Waiting for candle close",
+            metadata: {}
+          }
+        ],
+        warnings: [],
+        metadata: {}
+      }
+    })} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("Forming candle preview")).toBeInTheDocument();
+    expect(screen.getByText("Execution blocked: Waiting for candle close")).toBeInTheDocument();
+  });
+
+  it("labels trigger blockers without inventing a frontend decision", () => {
+    render(<SignalCard signal={baseSignal({
+      execution_gate: {
+        status: "blocked",
+        feed_kind: "blocked",
+        can_notify: false,
+        can_enter_now: false,
+        can_arm_pending: false,
+        can_show_in_execution_feed: false,
+        reasons: [
+          {
+            code: "trigger_not_confirmed",
+            severity: "blocker",
+            source: "trigger",
+            message: "Trigger has not confirmed on a closed candle",
+            metadata: {}
+          }
+        ],
+        warnings: [],
+        metadata: {}
+      }
+    })} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("Trigger not confirmed")).toBeInTheDocument();
+    expect(screen.getByText("Execution blocked: Trigger has not confirmed on a closed candle")).toBeInTheDocument();
+  });
 });
 
 function baseSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {

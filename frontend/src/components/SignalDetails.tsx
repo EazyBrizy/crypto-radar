@@ -150,12 +150,15 @@ export function SignalDetails({
         topBlockers={viewModel.topBlockers.slice(0, 3)}
       />
 
+      <TriggerCompact signal={signal} />
+      <ExecutionEvidenceCompact signal={signal} />
       <ActivePendingEntryCompact
         pendingEntry={activePendingEntry}
         onReconfirmPendingEntry={onReconfirmPendingEntry}
         busy={busy || tradingActionsDisabled}
         canReconfirm={actionState?.can_reconfirm}
       />
+      <TerminalPendingEntryCompact pendingEntry={terminalPendingEntry} />
 
       <TradePlanCompact tradePlan={viewModel.tradePlanSummary} />
       <RiskCompact execution={executionPreview} error={executionPreviewError} loading={executionPreviewLoading} />
@@ -254,6 +257,90 @@ function DecisionCard({
           <p className="compact-empty">{tKey("signalDetails.noActiveBlockers")}</p>
         )}
       </div>
+    </div>
+  );
+}
+
+function TriggerCompact({ signal }: { signal: RadarSignal }) {
+  const { tKey, tReason } = useI18n();
+  const trigger = signal.trigger ?? null;
+  const triggerBlocker = signal.execution_gate?.reasons.find((reason) => reason.code === "trigger_not_confirmed") ?? null;
+  if (!trigger && !triggerBlocker) return null;
+  const passed = trigger?.passed ?? false;
+  const reason = trigger?.reason ?? triggerBlocker?.message ?? null;
+  return (
+    <div className="risk-reward-detail-block trigger-compact">
+      <div className="section-title">
+        <FileCheck2 size={18} />
+        <h3>{tKey("signalDetails.trigger")}</h3>
+        <Badge tone={passed ? "green" : "red"}>{passed ? "Confirmed" : "Not confirmed"}</Badge>
+      </div>
+      <div className="compact-metric-grid">
+        <MetricLine label="Type" value={formatOptionalText(trigger?.trigger_type)} />
+        <MetricLine label="Candle" value={formatOptionalText(trigger?.candle_state)} />
+        <MetricLine label="Price" value={formatPrice(trigger?.price ?? null)} />
+        <MetricLine label="Reason" value={triggerBlocker?.code ? tReason(triggerBlocker.code) : reason ?? "-"} />
+      </div>
+      {reason ? <p>{reason}</p> : null}
+    </div>
+  );
+}
+
+function ExecutionEvidenceCompact({ signal }: { signal: RadarSignal }) {
+  const { tKey } = useI18n();
+  const eligibility = strategyEligibility(signal);
+  const dedup = dedupSnapshot(signal);
+  if (!eligibility && !dedup) return null;
+  return (
+    <div className="risk-reward-detail-block execution-evidence-compact">
+      {eligibility ? (
+        <div className="execution-evidence-section">
+          <div className="section-title compact-section-title">
+            <ShieldAlert size={18} />
+            <h3>{tKey("signalDetails.strategyEligibility")}</h3>
+            <Badge tone={eligibility.eligible === true ? "green" : "red"}>
+              {eligibility.eligible === true ? "Eligible" : "Blocked"}
+            </Badge>
+          </div>
+          <p>{eligibility.reason}</p>
+        </div>
+      ) : null}
+      {dedup ? (
+        <div className="execution-evidence-section">
+          <div className="section-title compact-section-title">
+            <FileCheck2 size={18} />
+            <h3>{tKey("signalDetails.deduplication")}</h3>
+            <Badge tone={dedup.status === "active" ? "green" : "neutral"}>{dedup.status}</Badge>
+          </div>
+          <p>{dedup.reason}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TerminalPendingEntryCompact({ pendingEntry }: { pendingEntry: PendingEntryIntent | null }) {
+  const { t, tKey, tReason } = useI18n();
+  if (!pendingEntry) return null;
+  const reasonCode = pendingEntry.view?.reason_code ?? pendingEntry.reason_code ?? null;
+  const reason = reasonCode
+    ? tReason(reasonCode)
+    : tReason(pendingEntry.view?.reason ?? pendingEntry.failure_reason ?? null);
+  return (
+    <div className="pending-entry-block terminal-pending-compact">
+      <div className="section-title">
+        <FileCheck2 size={18} />
+        <h3>{tKey("signalDetails.latestPendingEntryOutcome")}</h3>
+        <Badge tone={pendingEntry.view?.status_tone ?? pendingEntryTone(pendingEntry.status)}>
+          {t(pendingEntry.view?.status_label ?? pendingEntry.status.replaceAll("_", " "))}
+        </Badge>
+      </div>
+      <div className="compact-metric-grid">
+        <MetricLine label="Status" value={t(pendingEntry.status.replaceAll("_", " "))} />
+        <MetricLine label="Reason code" value={reasonCode ?? "-"} />
+        <MetricLine label="Updated" value={formatPendingEntryTimestamp(pendingEntry.updated_at)} />
+      </div>
+      <p>{reason}</p>
     </div>
   );
 }
@@ -720,6 +807,40 @@ function RealTradeConfirmationModal({
       </div>
     </div>
   );
+}
+
+function strategyEligibility(signal: RadarSignal): { eligible: boolean | null; reason: string } | null {
+  const raw = recordValue(signal.edge?.metadata.strategy_eligibility)
+    ?? recordValue(signal.execution_gate?.metadata.strategy_eligibility);
+  if (!raw) return null;
+  return {
+    eligible: typeof raw.eligible === "boolean" ? raw.eligible : null,
+    reason: stringValue(raw.reason) ?? stringValue(raw.reason_code) ?? "-"
+  };
+}
+
+function dedupSnapshot(signal: RadarSignal): { status: string; reason: string } | null {
+  const raw = recordValue(signal.execution_gate?.metadata.dedup)
+    ?? recordValue(signal.edge?.metadata.dedup);
+  if (!raw) return null;
+  return {
+    status: stringValue(raw.status) ?? "dedup",
+    reason: stringValue(raw.reason) ?? stringValue(raw.reason_code) ?? "-"
+  };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function formatOptionalText(value: string | null | undefined): string {
+  return value && value.trim() ? value : "-";
 }
 
 function MetricLine({ label, value }: { label: string; value: string }) {

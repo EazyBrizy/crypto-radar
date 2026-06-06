@@ -9,7 +9,12 @@ import {
   useMarkAllNotificationsReadMutation,
   useNotificationsQuery
 } from "@/features/server-state/use-server-state";
-import { useNotificationStore, type BrowserNotificationPermission, type NotificationKind } from "@/stores/notification-store";
+import {
+  notificationDisplayCopy,
+  useNotificationStore,
+  type BrowserNotificationPermission,
+  type NotificationKind
+} from "@/stores/notification-store";
 import { useUiStore } from "@/stores/ui-store";
 
 export function NotificationCenter() {
@@ -119,8 +124,8 @@ export function NotificationCenter() {
             {notifications.length ? notifications.slice(0, 12).map((notification) => (
               <article className={notification.read ? "notification-item read" : "notification-item"} key={notification.id}>
                 <div>
-                  <strong>{notification.title}</strong>
-                  <p>{notification.message}</p>
+                  <strong>{notificationDisplayCopy(notification).title}</strong>
+                  <p>{notificationDisplayCopy(notification).message}</p>
                   <span>{formatNotificationTime(notification.createdAt)}</span>
                 </div>
                 <button

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RadarSignal } from "@/types";
 import {
   canShowEnterButton,
+  canShowSignalEntryAction,
   isBlockedSignal,
   isExecutionCandidateStatus,
   isExecutionFeedSignal,
@@ -149,6 +150,23 @@ describe("signal status domain helper", () => {
     expect(isBlockedSignal(blockedSignal)).toBe(true);
     expect(canShowEnterButton({ ...executionSignal, details_view: null })).toBe(true);
     expect(canShowEnterButton({ ...blockedSignal, details_view: null })).toBe(false);
+  });
+
+  it("lets execution gate override legacy can_enter and details action state", () => {
+    const blockedByGate = withExecutionGate(
+      withBackendEnter({ ...baseSignal, status: "actionable", can_enter: true }, true),
+      "blocked",
+      {
+        can_show_in_execution_feed: false,
+        can_enter_now: false,
+        can_arm_pending: false
+      }
+    );
+
+    expect(signalFeedKind(blockedByGate)).toBe("blocked");
+    expect(isExecutionFeedSignal(blockedByGate)).toBe(false);
+    expect(canShowEnterButton(blockedByGate)).toBe(false);
+    expect(canShowSignalEntryAction(blockedByGate)).toBe(false);
   });
 });
 

@@ -4,7 +4,7 @@ import { Activity, ArrowDownRight, ArrowUpRight, Clock3 } from "lucide-react";
 import { Badge } from "./Badge";
 import { useSignalPrice } from "@/stores/price-store";
 import { useSignalStore } from "@/stores/signal-store";
-import type { RadarSignal, SignalTargetView } from "../types";
+import type { RadarSignal, SignalBadgeView, SignalTargetView } from "../types";
 import { formatPrice, signalTtlLabel } from "../utils";
 
 interface SignalCardProps {
@@ -37,6 +37,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
 
   const targets = viewTargets(view.targets);
   const reason = executionBlockedReason(signal) ?? view.reason;
+  const badges = dedupeBadges([...view.badges, ...executionGateBadges(signal)]);
 
   return (
     <button className={`signal-card ${selected ? "selected" : ""}`} onClick={() => onSelect(signal)} type="button">
@@ -70,7 +71,7 @@ export const SignalCard = memo(function SignalCard({ signal, selected, onSelect 
       </div>
 
       <div className="signal-badge-row">
-        {view.badges.map((badge) => (
+        {badges.map((badge) => (
           <Badge key={`${badge.code}:${badge.label}`} tone={badge.tone}>{badge.label}</Badge>
         ))}
       </div>
@@ -115,9 +116,42 @@ function formatRMultiple(value: number | null): string {
 
 function executionBlockedReason(signal: RadarSignal): string | null {
   const gate = signal.execution_gate;
-  if (!gate || gate.feed_kind !== "blocked") return null;
+  if (!gate || gate.can_enter_now === true) return null;
   const blocker = gate.reasons.find((reason) => reason.severity === "blocker") ?? gate.reasons[0];
   return blocker ? `Execution blocked: ${blocker.message}` : "Execution blocked";
+}
+
+function executionGateBadges(signal: RadarSignal): SignalBadgeView[] {
+  const badges: SignalBadgeView[] = [];
+  const reasons = signal.execution_gate?.reasons ?? [];
+  const hasReason = (code: string) => reasons.some((reason) => reason.code === code);
+  if (signal.candle_state === "open" || hasReason("forming_candle")) {
+    badges.push({ code: "forming_candle_preview", label: "Forming candle preview", tone: "yellow" });
+  }
+  if (hasReason("trigger_not_confirmed")) {
+    badges.push({ code: "trigger_not_confirmed", label: "Trigger not confirmed", tone: "red" });
+  }
+  const dedup = recordValue(signal.execution_gate?.metadata.dedup);
+  if (dedup?.reason_code === "dedup_suppressed_by_better_signal") {
+    badges.push({ code: "dedup_suppressed", label: "Dedup suppressed", tone: "neutral" });
+  }
+  return badges;
+}
+
+function dedupeBadges(badges: SignalBadgeView[]): SignalBadgeView[] {
+  const seen = new Set<string>();
+  return badges.filter((badge) => {
+    const key = badge.code || badge.label;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 export const SignalCardById = memo(function SignalCardById({

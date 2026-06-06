@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
-import { useNotificationStore } from "@/stores/notification-store";
+import { notificationDisplayCopy, useNotificationStore } from "@/stores/notification-store";
 
 export const TOAST_AUTO_DISMISS_MS = 6_000;
 
@@ -37,10 +37,11 @@ export function NotificationRuntime() {
     if (!latest) return;
 
     seenIds.current.add(latest.id);
+    const display = notificationDisplayCopy(latest);
     if (soundEnabled) playNotificationSound();
     if (browserNotificationsEnabled && browserPermission === "granted") {
-      const browserNotification = new Notification(latest.title, {
-        body: latest.message,
+      const browserNotification = new Notification(display.title, {
+        body: display.message,
         tag: latest.id
       });
       browserNotification.onclick = () => markRead(latest.id);
@@ -83,8 +84,8 @@ export function NotificationRuntime() {
       {toasts.map((notification) => (
         <article className={`notification-toast ${notification.kind}`} key={notification.id}>
           <div>
-            <strong>{notification.title}</strong>
-            <p>{notification.message}</p>
+            <strong>{notificationDisplayCopy(notification).title}</strong>
+            <p>{notificationDisplayCopy(notification).message}</p>
           </div>
           <button className="icon-button" onClick={() => dismiss(notification.id)} type="button" title="Dismiss">
             ×

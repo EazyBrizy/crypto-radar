@@ -14,6 +14,11 @@ export interface RadarNotification {
   type?: string;
 }
 
+export interface RadarNotificationDisplay {
+  message: string;
+  title: string;
+}
+
 interface NotificationState {
   browserNotificationsEnabled: boolean;
   browserPermission: BrowserNotificationPermission;
@@ -78,3 +83,22 @@ export const useNotificationStore = create<NotificationState>((set) => ({
   setBrowserPermission: (browserPermission) => set({ browserPermission }),
   toggleSound: () => set((state) => ({ soundEnabled: !state.soundEnabled }))
 }));
+
+export function notificationDisplayCopy(notification: RadarNotification): RadarNotificationDisplay {
+  if (notification.type === "signal.execution_ready") {
+    return {
+      title: "Execution signal ready",
+      message: notification.message
+    };
+  }
+  if (notification.type === "signal.created") {
+    return {
+      title: "New idea",
+      message: notification.message
+    };
+  }
+  return {
+    title: notification.title,
+    message: notification.message
+  };
+}

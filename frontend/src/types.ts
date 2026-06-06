@@ -270,6 +270,17 @@ export interface SignalConfirmationSnapshot {
   checks: SignalLayerCheck[];
 }
 
+export interface SignalTriggerSnapshot {
+  trigger_type: string;
+  passed: boolean;
+  price: number | null;
+  candle_state: CandleState | null;
+  confirmed_at: string | null;
+  reason: string | null;
+  checks: SignalLayerCheck[];
+  metadata: Record<string, unknown>;
+}
+
 export interface SignalInvalidationSnapshot {
   price: number | null;
   hard_stop: number | null;
@@ -551,6 +562,7 @@ export interface RadarSignal {
   regime: MarketRegimeSnapshot | null;
   setup: StrategySetupSnapshot | null;
   confirmation: SignalConfirmationSnapshot | null;
+  trigger?: SignalTriggerSnapshot | null;
   invalidation: SignalInvalidationSnapshot | null;
   exit_plan: SignalExitPlanSnapshot | null;
   trade_plan?: TradePlan | null;

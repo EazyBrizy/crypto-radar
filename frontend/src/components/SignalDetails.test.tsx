@@ -111,6 +111,115 @@ describe("SignalDetails", () => {
     expect(onCancelPendingEntry).toHaveBeenCalledTimes(1);
   });
 
+  it("renders trigger, eligibility, and dedup diagnostics from backend snapshots", () => {
+    render(
+      <SignalDetails
+        actionState={actionState({ can_enter_now: false, can_arm_pending: false })}
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={baseSignal({
+          trigger: {
+            trigger_type: "closed_candle_confirmation",
+            passed: false,
+            price: 2_103,
+            candle_state: "closed",
+            confirmed_at: null,
+            reason: "Lower timeframe trigger is not confirmed.",
+            checks: [],
+            metadata: {}
+          },
+          edge: {
+            status: "positive",
+            sample_size: 80,
+            min_sample_size: 50,
+            winrate: 0.54,
+            avg_win_r: 1.4,
+            avg_loss_r: -0.8,
+            expectancy_r: 0.22,
+            expectancy_after_costs_r: 0.16,
+            profit_factor: 1.35,
+            confidence_score: 72,
+            source: "outcome",
+            score_bucket: "80-89",
+            metadata: {
+              strategy_eligibility: {
+                eligible: false,
+                reason_code: "strategy_eligibility_failed",
+                reason: "Validation profit factor is below threshold.",
+                source: "validation",
+                metrics: { validation_profit_factor: 0.9 }
+              }
+            }
+          },
+          execution_gate: {
+            status: "blocked",
+            feed_kind: "blocked",
+            can_notify: false,
+            can_enter_now: false,
+            can_arm_pending: false,
+            can_show_in_execution_feed: false,
+            reasons: [
+              {
+                code: "trigger_not_confirmed",
+                severity: "blocker",
+                source: "trigger",
+                message: "Trigger has not confirmed on a closed candle",
+                metadata: {}
+              }
+            ],
+            warnings: [],
+            metadata: {
+              dedup: {
+                status: "suppressed",
+                reason_code: "dedup_suppressed_by_better_signal",
+                reason: "Better same-direction signal already active."
+              }
+            }
+          }
+        })}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Trigger" })).toBeInTheDocument();
+    expect(screen.getByText("Not confirmed")).toBeInTheDocument();
+    expect(screen.getByText("Lower timeframe trigger is not confirmed.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Strategy eligibility" })).toBeInTheDocument();
+    expect(screen.getByText("Validation profit factor is below threshold.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Deduplication" })).toBeInTheDocument();
+    expect(screen.getByText("Better same-direction signal already active.")).toBeInTheDocument();
+  });
+
+  it("shows latest terminal pending-entry reason outside collapsed diagnostics", () => {
+    render(
+      <SignalDetails
+        actionState={actionState({ can_enter_now: false, can_arm_pending: false })}
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        pendingEntry={pendingIntent({
+          status: "expired",
+          failure_reason: "Pending entry intent expired before entry touch.",
+          reason_code: "pending_entry_expired_before_touch",
+          view: {
+            status_label: "Expired",
+            status_tone: "red",
+            reason_code: "pending_entry_expired_before_touch",
+            reason: "Pending entry intent expired before entry touch.",
+            entry_zone: "2100 - 2105",
+            current_price: 2_120
+          }
+        })}
+        signal={baseSignal()}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Latest pending-entry outcome" })).toBeInTheDocument();
+    expect(screen.getByText("Pending entry expired before entry touch")).toBeInTheDocument();
+  });
+
   it("uses real action-state for the real confirmation modal", () => {
     const onConfirmRealTrade = vi.fn();
     render(

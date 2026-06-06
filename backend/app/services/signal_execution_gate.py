@@ -47,7 +47,7 @@ class SignalExecutionGateService:
                 _reason("terminal_signal", "blocker", "lifecycle", f"Signal is terminal: {status}.")
             )
 
-        if execution_candidate and settings.execution_closed_candle_only and signal.candle_state == "open":
+        if settings.execution_closed_candle_only and signal.candle_state == "open":
             hard_blockers.append(
                 _reason(
                     "forming_candle",

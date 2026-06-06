@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from app.schemas.candle import OHLCVCandle
 from app.schemas.market import Features, MarketData
 from app.schemas.signal import StrategySignal
+from app.core.config import settings
 from app.services.derivative_market import DerivativeMarketSnapshot
 from app.services.feature_engine import FeatureEngine
 from app.services.candle_service import CandleService
@@ -254,7 +255,63 @@ class FeatureDerivativeEnrichmentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(signals[0].candle_state, "open")
         self.assertEqual(signals[0].status, "watchlist")
         self.assertIn("forming_candle", signals[0].status_reason or "")
+        self.assertIsNotNone(signals[0].execution_gate)
+        self.assertFalse(signals[0].execution_gate.can_notify if signals[0].execution_gate else True)
+        self.assertFalse(signals[0].execution_gate.can_show_in_execution_feed if signals[0].execution_gate else True)
+        self.assertIn(
+            "forming_candle",
+            {reason.code for reason in signals[0].execution_gate.reasons} if signals[0].execution_gate else set(),
+        )
         self.assertFalse(signals[0].auto_entry.enabled if signals[0].auto_entry else True)
+
+    async def test_market_scanner_skips_open_candle_signals_when_previews_disabled(self) -> None:
+        candle_store = CandleService(timeframes=["1m"])
+        start = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp() * 1000)
+        candle_store.seed_history(
+            [
+                _candle(
+                    start + index * 60_000,
+                    high=101.0,
+                    low=99.0,
+                    close=100.0,
+                    volume=100.0,
+                )
+                for index in range(70)
+            ]
+        )
+        scanner = MarketScanner(
+            symbols=["BTCUSDT"],
+            exchanges=["bybit"],
+            candle_store=candle_store,
+            market_persistence=None,
+            market_quality=None,
+            support_resistance=None,
+            signal_lifecycle=None,
+            signal_outcomes=None,
+            trade_invalidation=None,
+            strategy_configs=None,
+            virtual_trading=None,
+            derivative_market=None,
+            alpha_market_context=None,
+        )
+        scanner._strategy_engine = _PreviewStrategyEngine()  # noqa: SLF001
+        previous = settings.scanner_open_candle_previews_enabled
+        settings.scanner_open_candle_previews_enabled = False
+        try:
+            signals = await scanner.process_tick(
+                MarketData(
+                    exchange="bybit",
+                    symbol="BTCUSDT",
+                    timestamp=start + 70 * 60_000,
+                    price=100.5,
+                    volume=5.0,
+                )
+            )
+        finally:
+            settings.scanner_open_candle_previews_enabled = previous
+
+        self.assertEqual(signals, [])
+        self.assertEqual(scanner.stats["features_built"], 0)
 
     async def test_market_scanner_keeps_generating_signals_when_virtual_lifecycle_fails(self) -> None:
         candle_store = CandleService(timeframes=["1m"])

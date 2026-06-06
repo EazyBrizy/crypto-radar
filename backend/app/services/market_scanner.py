@@ -263,6 +263,8 @@ class MarketScanner:
                 await self._process_closed_candle_lifecycle(candle)
             if not self._should_evaluate_series(series_key, candle):
                 continue
+            if _is_open_candle(candle) and not settings.scanner_open_candle_previews_enabled:
+                continue
 
             candle_series = self._candle_store.list_candles(
                 exchange=candle.exchange,
@@ -1017,6 +1019,10 @@ def _features_with_derivative_context(
 
 def _symbol_key(exchange: str, symbol: str) -> tuple[str, str]:
     return (exchange.strip().lower(), symbol.strip().upper())
+
+
+def _is_open_candle(candle: OHLCVCandle) -> bool:
+    return not candle.is_closed
 
 
 def _epoch_ms() -> int:

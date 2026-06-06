@@ -355,10 +355,14 @@ function PendingEntryQueueItem({
   selected: boolean;
 }) {
   const { t, tKey, tReason } = useI18n();
-  const reasonCode = intent.view?.reason_code ?? intent.reason_code ?? null;
-  const reason = reasonCode
-    ? tReason(reasonCode)
-    : tReason(intent.view?.reason ?? intent.failure_reason ?? tKey("pendingEntry.noReasonFromBackend"));
+  const reasonCode = intent.view?.reason_code ?? intent.reason_code ?? pendingEntryFallbackReasonCode(intent.status);
+  const reason = intent.view?.reason
+    ? tReason(intent.view.reason)
+    : intent.failure_reason
+      ? tReason(intent.failure_reason)
+      : reasonCode
+        ? tReason(reasonCode)
+        : t(intent.status.replaceAll("_", " "));
   const currentPrice = intent.view?.current_price == null ? formatPrice(intent.current_price) : formatPrice(intent.view.current_price);
 
   return (
@@ -420,6 +424,14 @@ function pendingEntryTone(status: PendingEntryIntent["status"]): "green" | "red"
   if (status === "triggered" || status === "filling" || status === "filled") return "green";
   if (status === "failed" || status === "cancelled" || status === "expired") return "red";
   return "neutral";
+}
+
+function pendingEntryFallbackReasonCode(status: PendingEntryIntent["status"]): string | null {
+  if (status === "expired") return "pending_entry_expired_before_touch";
+  if (status === "cancelled") return "cancelled";
+  if (status === "failed") return "execution_failed";
+  if (status === "requires_reconfirmation") return "trade_plan_reconfirmation_required";
+  return null;
 }
 
 function formatPendingEntryTtl(value: string | null, tKey: (key: I18nKey, params?: Record<string, string | number | boolean | null | undefined>) => string): string {

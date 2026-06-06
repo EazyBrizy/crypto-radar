@@ -116,6 +116,7 @@ export function SignalDetails({
   const activePendingEntry = viewModel.activePendingEntry;
   const terminalPendingEntry = viewModel.terminalPendingEntry;
   const backendDisabledReason = actionStateDisabledReason(actionState ?? null, tReason);
+  const entryDisabledReason = enterNowDisabledReason(signal, actionState ?? null, tKey, tReason);
   const pendingDisabledReason = pendingEntryDisabledReason(signal, actionState ?? null, tKey, tReason);
   const entryActionDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_enter_now !== true;
   const acceptPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || pendingEntryLoading || actionState?.can_arm_pending !== true;
@@ -182,6 +183,7 @@ export function SignalDetails({
         setRealConfirmationOpen={setRealConfirmationOpen}
         tradingActionsDisabled={tradingActionsDisabled}
         backendDisabledReason={backendDisabledReason}
+        entryDisabledReason={entryActionDisabled ? entryDisabledReason : null}
         pendingDisabledReason={acceptPendingDisabled ? pendingDisabledReason : null}
         canEnterNow={viewModel.canEnterNow}
       />
@@ -468,6 +470,7 @@ function ActionsBlock({
   setRealConfirmationOpen,
   tradingActionsDisabled,
   backendDisabledReason,
+  entryDisabledReason,
   pendingDisabledReason,
   canEnterNow
 }: {
@@ -487,6 +490,7 @@ function ActionsBlock({
   setRealConfirmationOpen: (open: boolean) => void;
   tradingActionsDisabled: boolean;
   backendDisabledReason: string | null;
+  entryDisabledReason: string | null;
   pendingDisabledReason: string | null;
   canEnterNow: boolean | null;
 }) {
@@ -525,11 +529,15 @@ function ActionsBlock({
       </div>
       {tradingActionsDisabled ? (
         <p className="compact-action-note">{tKey("signalDetails.tradingDisabled")}</p>
-      ) : pendingDisabledReason ? (
-        <p className="compact-action-note">{pendingDisabledReason}</p>
-      ) : backendDisabledReason ? (
-        <p className="compact-action-note">{backendDisabledReason}</p>
-      ) : null}
+      ) : (
+        <>
+          {entryDisabledReason ? <p className="compact-action-note">{entryDisabledReason}</p> : null}
+          {pendingDisabledReason ? <p className="compact-action-note">{pendingDisabledReason}</p> : null}
+          {!entryDisabledReason && !pendingDisabledReason && backendDisabledReason ? (
+            <p className="compact-action-note">{backendDisabledReason}</p>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -939,6 +947,17 @@ function actionStateDisabledReason(state: SignalActionState | null, tReason: TRe
   return fallback ? tReason(fallback) : null;
 }
 
+function enterNowDisabledReason(
+  signal: RadarSignal,
+  state: SignalActionState | null,
+  tKey: TKey,
+  tReason: TReason
+): string | null {
+  if (state?.can_enter_now === true) return null;
+  const reason = actionStateReason(signal, state, tReason);
+  return reason ? tKey("signalDetails.actionUnavailable", { reason }) : null;
+}
+
 function pendingEntryDisabledReason(
   signal: RadarSignal,
   state: SignalActionState | null,
@@ -946,12 +965,16 @@ function pendingEntryDisabledReason(
   tReason: TReason
 ): string | null {
   if (state?.can_arm_pending === true) return null;
+  const reason = actionStateReason(signal, state, tReason);
+  return reason ? tKey("signalDetails.actionUnavailable", { reason }) : null;
+}
+
+function actionStateReason(signal: RadarSignal, state: SignalActionState | null, tReason: TReason): string | null {
   const actionReason = actionStateDisabledReason(state, tReason);
   const gateBlocker = signal.execution_gate?.reasons.find((reason) => reason.severity === "blocker")
     ?? signal.execution_gate?.reasons[0]
     ?? null;
-  const reason = actionReason ?? gateBlocker?.message ?? null;
-  return reason ? tKey("signalDetails.waitingEntryUnavailable", { reason }) : null;
+  return actionReason ?? gateBlocker?.message ?? null;
 }
 
 function formatCurrencyAmount(value: number | null | undefined): string {

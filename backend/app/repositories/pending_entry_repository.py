@@ -18,6 +18,7 @@ from app.domain.pending_entry_reason import (
     PENDING_ENTRY_GATE_SNAPSHOT_KEY,
     PENDING_ENTRY_LAST_REASON_KEY,
     PENDING_ENTRY_TERMINAL_REASON_KEY,
+    pending_entry_fallback_reason_code,
     pending_entry_reason_code_from_snapshot,
 )
 from app.models.pending_entry import PendingEntryIntent
@@ -406,7 +407,10 @@ def _get_active_for_user_signal_mode(
 def _to_read(record: PendingEntryIntent) -> PendingEntryIntentRead:
     read = PendingEntryIntentRead.model_validate(record)
     terminal = record.status in TERMINAL_PENDING_ENTRY_INTENT_STATUSES
-    reason_code = pending_entry_reason_code_from_snapshot(record.request_snapshot, terminal=terminal)
+    reason_code = (
+        pending_entry_reason_code_from_snapshot(record.request_snapshot, terminal=terminal)
+        or pending_entry_fallback_reason_code(record.status)
+    )
     view = _pending_entry_view(record, reason_code) if reason_code is not None or record.failure_reason else None
     return read.model_copy(update={"reason_code": reason_code, "view": view})
 
@@ -433,11 +437,22 @@ def _pending_entry_view(record: PendingEntryIntent, reason_code: str | None) -> 
         status_label=_status_label(record.status),
         status_tone=_status_tone(record.status),
         reason_code=reason_code,
-        reason=record.failure_reason or _status_label(record.status),
+        reason=record.failure_reason or _reason_label(reason_code) or _status_label(record.status),
         technical_message=record.failure_reason,
         entry_zone=f"{record.entry_min}-{record.entry_max}",
         current_price=_request_snapshot_current_price(record.request_snapshot),
     )
+
+
+def _reason_label(reason_code: str | None) -> str | None:
+    if reason_code is None:
+        return None
+    return {
+        "pending_entry_expired_before_touch": "Pending entry expired before entry touch.",
+        "cancelled": "Pending entry was cancelled.",
+        "execution_failed": "Virtual execution failed.",
+        "trade_plan_reconfirmation_required": "Trade plan requires reconfirmation.",
+    }.get(reason_code)
 
 
 def _request_snapshot_current_price(snapshot: Any) -> Decimal | None:

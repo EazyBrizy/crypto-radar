@@ -47,6 +47,7 @@ from app.services.risk_fee_rate import risk_fee_rate_service
 from app.services.risk_management import get_user_risk_management_settings
 from app.services.risk_market_data import risk_market_data_service
 from app.services.signal_service import signal_service
+from app.services.signal_action_reason import enter_now_disabled_reason, pending_entry_disabled_reason
 from app.services.signal_views import annotate_signal_views
 from app.services.virtual_trading import virtual_trading_service
 from app.services.virtual_execution_profile import (
@@ -207,6 +208,11 @@ class SignalActionService:
                     display_label="Real pending is not implemented",
                 )
             )
+
+        if not can_enter_now:
+            blockers.append(_blocker_from_reason(enter_now_disabled_reason(signal)))
+        if not can_arm_pending:
+            blockers.append(_blocker_from_reason(pending_entry_disabled_reason(signal)))
 
         primary_action = _primary_action(
             can_enter_now=can_enter_now,
@@ -796,6 +802,10 @@ class SignalActionService:
                     display_label="Real pending is not implemented",
                 )
             )
+        if not can_enter_now:
+            blockers.append(_blocker_from_reason(enter_now_disabled_reason(signal)))
+        if not can_arm_pending:
+            blockers.append(_blocker_from_reason(pending_entry_disabled_reason(signal)))
         primary_action = _primary_action(
             can_enter_now=can_enter_now,
             can_arm_pending=can_arm_pending,
@@ -1330,6 +1340,15 @@ def _warning(
         message=message,
         display_label=display_label,
         metadata=metadata or {},
+    )
+
+
+def _blocker_from_reason(reason: dict[str, str]) -> SignalActionBlocker:
+    return _blocker(
+        reason["code"],
+        reason["message"],
+        display_label=reason["message"],
+        metadata={"source": reason["source"]},
     )
 
 

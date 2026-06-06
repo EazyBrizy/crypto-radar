@@ -7,7 +7,7 @@ from uuid import UUID
 from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.exchange_connection import ExchangeConnectionResponse
 from app.schemas.risk import ResolvedExecutionProfile
-from app.schemas.signal import RadarSignal
+from app.schemas.signal import RadarSignal, SignalExecutionGateReason, SignalExecutionGateSnapshot
 from app.schemas.trade import VirtualAccount
 from app.schemas.user import RiskManagementSettings
 from app.services.signal_actions import REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE, SignalActionService
@@ -94,6 +94,64 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertEqual(state.primary_action, None)
         self.assertEqual(state.disabled_reason_code, REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE)
         self.assertEqual(state.blockers[0].code, REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE)
+
+    def test_signal_action_state_always_has_disabled_reason(self) -> None:
+        state = _service().state_for_signal(
+            _signal(
+                status="ready",
+                execution_gate=_execution_gate(
+                    can_enter_now=False,
+                    can_arm_pending=True,
+                    reasons=[
+                        _gate_reason(
+                            "trigger_not_confirmed",
+                            "Trigger is waiting for a closed-candle confirmation.",
+                            source="trigger",
+                        )
+                    ],
+                ),
+            ),
+            mode="virtual",
+            user_id=USER_ID,
+        )
+
+        self.assertFalse(state.can_enter_now)
+        self.assertTrue(state.can_arm_pending)
+        self.assertEqual(state.disabled_reason_code, "trigger_not_confirmed")
+        self.assertEqual(state.blockers[0].code, "trigger_not_confirmed")
+        self.assertEqual(
+            state.display_labels["disabled_reason"],
+            "Trigger is waiting for a closed-candle confirmation.",
+        )
+
+    def test_signal_action_reason_prioritizes_execution_gate_blocker(self) -> None:
+        from app.services.signal_action_reason import main_execution_blocker
+
+        reason = main_execution_blocker(
+            _signal(
+                status="ready",
+                execution_gate=_execution_gate(
+                    reasons=[
+                        _gate_reason(
+                            "edge_unknown",
+                            "Edge is still being calibrated.",
+                            severity="warning",
+                            source="edge",
+                        ),
+                        _gate_reason(
+                            "forming_candle",
+                            "Candle is still forming.",
+                            source="data",
+                        ),
+                    ],
+                ),
+            )
+        )
+
+        self.assertEqual(reason["code"], "forming_candle")
+        self.assertEqual(reason["message"], "Candle is still forming.")
+        self.assertEqual(reason["source"], "data")
+        self.assertEqual(reason["severity"], "blocker")
 
 
 def _service(
@@ -215,7 +273,11 @@ def _exchange_connection() -> ExchangeConnectionResponse:
     )
 
 
-def _signal(*, status: str) -> RadarSignal:
+def _signal(
+    *,
+    status: str,
+    execution_gate: SignalExecutionGateSnapshot | None = None,
+) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
         id=str(SIGNAL_UUID),
@@ -230,8 +292,44 @@ def _signal(*, status: str) -> RadarSignal:
         entry_max=101.0,
         stop_loss=95.0,
         take_profit_1=110.0,
+        execution_gate=execution_gate,
         created_at=now,
         updated_at=now,
+    )
+
+
+def _execution_gate(
+    *,
+    can_enter_now: bool = False,
+    can_arm_pending: bool = False,
+    reasons: list[SignalExecutionGateReason] | None = None,
+) -> SignalExecutionGateSnapshot:
+    return SignalExecutionGateSnapshot(
+        status="blocked",
+        feed_kind="blocked",
+        can_notify=False,
+        can_enter_now=can_enter_now,
+        can_arm_pending=can_arm_pending,
+        can_show_in_execution_feed=False,
+        reasons=reasons or [],
+        warnings=[],
+        metadata={},
+    )
+
+
+def _gate_reason(
+    code: str,
+    message: str,
+    *,
+    severity: str = "blocker",
+    source: str = "execution_gate",
+) -> SignalExecutionGateReason:
+    return SignalExecutionGateReason(
+        code=code,
+        severity=severity,
+        source=source,
+        message=message,
+        metadata={},
     )
 
 

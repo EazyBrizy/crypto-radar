@@ -263,6 +263,51 @@ describe("RadarPage", () => {
     expect(screen.getByText("pending_entry_expired_before_touch")).toBeInTheDocument();
     expect(screen.getByText("Pending entry expired before entry touch")).toBeInTheDocument();
   });
+
+  it("derives pending-entry queue reason text instead of rendering backend-missing placeholder", () => {
+    render(
+      <RadarPage
+        busy={false}
+        filter="all"
+        radarDisplayMode="all_market_opportunities"
+        signalView="open"
+        statusFilter="all"
+        health={null}
+        loading={false}
+        onFilterChange={vi.fn()}
+        onAcceptPendingEntry={vi.fn()}
+        onCancelPendingEntry={vi.fn()}
+        onReconfirmPendingEntry={vi.fn()}
+        onRadarDisplayModeChange={vi.fn()}
+        onSignalViewChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        onConfirmRealTrade={vi.fn()}
+        onPaperTrade={vi.fn()}
+        onRefresh={vi.fn()}
+        onReject={vi.fn()}
+        onSelectLatestSignal={vi.fn()}
+        onSelectPendingEntrySignal={vi.fn()}
+        onSelectSignal={vi.fn()}
+        radarStatus={null}
+        selectedSignal={null}
+        selectedSignalId={null}
+        pendingEntries={[]}
+        pendingEntryHistory={[
+          pendingIntent({
+            status: "expired",
+            reason_code: null,
+            failure_reason: null,
+            view: null
+          })
+        ]}
+        signalIds={[]}
+        signals={[]}
+      />
+    );
+
+    expect(screen.getByText("Pending entry expired before entry touch")).toBeInTheDocument();
+    expect(screen.queryByText("Причина от backend отсутствует")).not.toBeInTheDocument();
+  });
 });
 
 function pendingIntent(overrides: Partial<PendingEntryIntent> = {}): PendingEntryIntent {

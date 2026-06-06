@@ -387,6 +387,19 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(current.status if current else None, "pending")
         self.assertEqual(current.reason_code if current else None, "temporary_execution_failure")
 
+    def test_pending_entry_view_derives_missing_reason_code(self) -> None:
+        created = self.repository.create_intent(
+            _intent_create(
+                status="expired",
+                request_snapshot={},
+                idempotency_key="pending-entry:test:expired-without-reason",
+            )
+        )
+
+        self.assertEqual(created.reason_code, "pending_entry_expired_before_touch")
+        self.assertIsNotNone(created.view)
+        self.assertEqual(created.view.reason_code if created.view else None, "pending_entry_expired_before_touch")
+
     def test_double_tick_can_fill_only_once(self) -> None:
         self.repository.create_intent(_intent_create(side="long"))
 

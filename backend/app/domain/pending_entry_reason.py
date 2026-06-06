@@ -12,6 +12,8 @@ VIRTUAL_EXECUTION_REJECTED = "virtual_execution_rejected"
 TEMPORARY_EXECUTION_FAILURE = "temporary_execution_failure"
 REAL_PENDING_EXECUTION_NOT_ENABLED = "real_pending_execution_not_enabled"
 PENDING_ENTRY_EXECUTION_INVALID = "pending_entry_execution_invalid"
+EXECUTION_FAILED = "execution_failed"
+CANCELLED = "cancelled"
 
 PENDING_ENTRY_LAST_REASON_KEY = "pending_entry_last_reason_code"
 PENDING_ENTRY_TERMINAL_REASON_KEY = "pending_entry_terminal_reason_code"
@@ -30,6 +32,18 @@ def pending_entry_reason_code_from_snapshot(snapshot: Any, *, terminal: bool = F
         value = snapshot.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    return None
+
+
+def pending_entry_fallback_reason_code(status: str) -> str | None:
+    if status == "expired":
+        return PENDING_ENTRY_EXPIRED_BEFORE_TOUCH
+    if status == "cancelled":
+        return CANCELLED
+    if status == "failed":
+        return EXECUTION_FAILED
+    if status == "requires_reconfirmation":
+        return TRADE_PLAN_RECONFIRMATION_REQUIRED
     return None
 
 

@@ -44,6 +44,39 @@ describe("SignalDetails", () => {
     expect(screen.getByRole("button", { name: /Virtual wait entry/u })).toBeDisabled();
   });
 
+  it("shows disabled captions for virtual wait and virtual entry buttons", () => {
+    render(
+      <SignalDetails
+        actionState={actionState({
+          can_enter_now: false,
+          can_arm_pending: false,
+          disabled_reason_code: "trigger_not_confirmed",
+          blockers: [
+            {
+              code: "trigger_not_confirmed",
+              severity: "blocker",
+              message: "Trigger is waiting for a closed-candle confirmation.",
+              display_label: "Trigger is waiting for a closed-candle confirmation.",
+              metadata: {}
+            }
+          ],
+          display_labels: {
+            disabled_reason: "Trigger is waiting for a closed-candle confirmation."
+          }
+        })}
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={baseSignal()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /Virtual entry locked/u })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Virtual wait entry/u })).toBeDisabled();
+    expect(screen.getAllByText("Unavailable: Trigger not confirmed")).toHaveLength(2);
+  });
+
   it("keeps virtual entry as a minimal intent when backend allows enter-now", () => {
     const onPaperTrade = vi.fn();
     render(

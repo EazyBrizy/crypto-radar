@@ -43,12 +43,19 @@ CREATE TABLE IF NOT EXISTS analytics.strategy_performance_daily
     signals_count UInt64,
     wins_count UInt64,
     losses_count UInt64,
+    pending_armed_count UInt64,
+    filled_count UInt64,
+    no_entry_count UInt64,
+    execution_rejected_count UInt64,
     avg_rr Float64,
     avg_pnl_pct Float64,
     max_drawdown_pct Float64,
     sample_size UInt64,
     trades_count UInt64,
     entry_touch_rate Float64,
+    fill_rate Float64,
+    no_entry_rate Float64,
+    execution_rejected_rate Float64,
     winrate Float64,
     tp1_rate Float64,
     tp2_rate Float64,
@@ -88,7 +95,14 @@ STRATEGY_PERFORMANCE_DAILY_ALTERS = [
     "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS direction LowCardinality(String) DEFAULT 'long'",
     "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS sample_size UInt64 DEFAULT 0",
     "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS trades_count UInt64 DEFAULT 0",
+    "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS pending_armed_count UInt64 DEFAULT 0",
+    "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS filled_count UInt64 DEFAULT 0",
+    "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS no_entry_count UInt64 DEFAULT 0",
+    "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS execution_rejected_count UInt64 DEFAULT 0",
     "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS entry_touch_rate Float64 DEFAULT 0",
+    "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS fill_rate Float64 DEFAULT 0",
+    "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS no_entry_rate Float64 DEFAULT 0",
+    "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS execution_rejected_rate Float64 DEFAULT 0",
     "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS winrate Float64 DEFAULT 0",
     "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS tp1_rate Float64 DEFAULT 0",
     "ALTER TABLE analytics.strategy_performance_daily ADD COLUMN IF NOT EXISTS tp2_rate Float64 DEFAULT 0",
@@ -166,6 +180,13 @@ class StrategyPerformanceSummary:
     avg_mae_r: float
     fees_bps: float
     slippage_bps: float
+    pending_armed_count: int = 0
+    filled_count: int = 0
+    no_entry_count: int = 0
+    execution_rejected_count: int = 0
+    fill_rate: float = 0.0
+    no_entry_rate: float = 0.0
+    execution_rejected_rate: float = 0.0
 
     @staticmethod
     def empty() -> "StrategyPerformanceSummary":
@@ -192,6 +213,13 @@ class StrategyPerformanceSummary:
             avg_mae_r=0.0,
             fees_bps=0.0,
             slippage_bps=0.0,
+            pending_armed_count=0,
+            filled_count=0,
+            no_entry_count=0,
+            execution_rejected_count=0,
+            fill_rate=0.0,
+            no_entry_rate=0.0,
+            execution_rejected_rate=0.0,
         )
 
 
@@ -246,12 +274,19 @@ class ClickHouseStrategyPerformanceStore:
         "signals_count",
         "wins_count",
         "losses_count",
+        "pending_armed_count",
+        "filled_count",
+        "no_entry_count",
+        "execution_rejected_count",
         "avg_rr",
         "avg_pnl_pct",
         "max_drawdown_pct",
         "sample_size",
         "trades_count",
         "entry_touch_rate",
+        "fill_rate",
+        "no_entry_rate",
+        "execution_rejected_rate",
         "winrate",
         "tp1_rate",
         "tp2_rate",
@@ -306,7 +341,14 @@ class ClickHouseStrategyPerformanceStore:
                 sum(signals_count) AS signals_count,
                 sum(wins_count) AS wins_count,
                 sum(losses_count) AS losses_count,
+                sum(pending_armed_count) AS pending_armed_count,
+                sum(filled_count) AS filled_count,
+                sum(no_entry_count) AS no_entry_count,
+                sum(execution_rejected_count) AS execution_rejected_count,
                 if(sum(signals_count) > 0, sum(entry_touch_rate * signals_count) / sum(signals_count), 0) AS entry_touch_rate,
+                if(sum(signals_count) > 0, sum(fill_rate * signals_count) / sum(signals_count), 0) AS fill_rate,
+                if(sum(signals_count) > 0, sum(no_entry_rate * signals_count) / sum(signals_count), 0) AS no_entry_rate,
+                if(sum(signals_count) > 0, sum(execution_rejected_rate * signals_count) / sum(signals_count), 0) AS execution_rejected_rate,
                 if(sum(sample_size) > 0, sum(winrate * sample_size) / sum(sample_size), 0) AS winrate,
                 if(sum(trades_count) > 0, sum(tp1_rate * trades_count) / sum(trades_count), 0) AS tp1_rate,
                 if(sum(trades_count) > 0, sum(tp2_rate * trades_count) / sum(trades_count), 0) AS tp2_rate,
@@ -529,6 +571,12 @@ def _daily_performance_row(group: Sequence[StrategyPerformanceOutcome]) -> Strat
     wins = [value for value in trade_rs if value > 0]
     losses = [value for value in trade_rs if value < 0]
     sample_size = len(trades)
+    execution_rejected_count = sum(
+        1
+        for outcome in group
+        if outcome.status == "execution_rejected" or outcome.outcome == "execution_rejected"
+    )
+    no_entry_count = max(signals_count - sample_size - execution_rejected_count, 0)
     gross_loss = abs(sum(losses))
     profit_factor = sum(wins) / gross_loss if gross_loss > 0 else None
 
@@ -547,7 +595,14 @@ def _daily_performance_row(group: Sequence[StrategyPerformanceOutcome]) -> Strat
         signals_count=signals_count,
         wins_count=len(wins),
         losses_count=len(losses),
+        pending_armed_count=signals_count,
+        filled_count=sample_size,
+        no_entry_count=no_entry_count,
+        execution_rejected_count=execution_rejected_count,
         entry_touch_rate=_rate(sample_size, signals_count),
+        fill_rate=_rate(sample_size, signals_count),
+        no_entry_rate=_rate(no_entry_count, signals_count),
+        execution_rejected_rate=_rate(execution_rejected_count, signals_count),
         winrate=_rate(len(wins), sample_size),
         tp1_rate=_rate(sum(1 for outcome in trades if outcome.status in TARGET_STATUSES), sample_size),
         tp2_rate=_rate(sum(1 for outcome in trades if outcome.status in {"tp2", "tp3"}), sample_size),
@@ -590,12 +645,19 @@ def _daily_row_to_clickhouse(row: StrategyPerformanceDaily) -> list[Any]:
         row.signals_count,
         row.wins_count,
         row.losses_count,
+        row.pending_armed_count,
+        row.filled_count,
+        row.no_entry_count,
+        row.execution_rejected_count,
         row.expectancy_r,
         0.0,
         row.max_drawdown_r,
         row.sample_size,
         row.trades_count,
         row.entry_touch_rate,
+        row.fill_rate,
+        row.no_entry_rate,
+        row.execution_rejected_rate,
         row.winrate,
         row.tp1_rate,
         row.tp2_rate,
@@ -646,7 +708,14 @@ def _summary_from_row(row: dict[str, Any]) -> StrategyPerformanceSummary | None:
         signals_count=int(row.get("signals_count") or 0),
         wins_count=int(row.get("wins_count") or 0),
         losses_count=int(row.get("losses_count") or 0),
+        pending_armed_count=int(row.get("pending_armed_count") or 0),
+        filled_count=int(row.get("filled_count") or 0),
+        no_entry_count=int(row.get("no_entry_count") or 0),
+        execution_rejected_count=int(row.get("execution_rejected_count") or 0),
         entry_touch_rate=_float(row.get("entry_touch_rate")),
+        fill_rate=_float(row.get("fill_rate")),
+        no_entry_rate=_float(row.get("no_entry_rate")),
+        execution_rejected_rate=_float(row.get("execution_rejected_rate")),
         winrate=_float(row.get("winrate")),
         tp1_rate=_float(row.get("tp1_rate")),
         tp2_rate=_float(row.get("tp2_rate")),
@@ -692,7 +761,14 @@ def _edge_profile(
         signals_count=summary.signals_count,
         wins_count=summary.wins_count,
         losses_count=summary.losses_count,
+        pending_armed_count=summary.pending_armed_count,
+        filled_count=summary.filled_count,
+        no_entry_count=summary.no_entry_count,
+        execution_rejected_count=summary.execution_rejected_count,
         entry_touch_rate=summary.entry_touch_rate,
+        fill_rate=summary.fill_rate,
+        no_entry_rate=summary.no_entry_rate,
+        execution_rejected_rate=summary.execution_rejected_rate,
         winrate=summary.winrate,
         tp1_rate=summary.tp1_rate,
         tp2_rate=summary.tp2_rate,

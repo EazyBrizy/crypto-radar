@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
+from app.core.config import settings
 from app.schemas.decision import DecisionReason, SignalDecisionSnapshot
 from app.schemas.signal import (
     NoTradeFilterResult,
@@ -154,6 +155,33 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertEqual(gate.feed_kind, "blocked")
         self.assertFalse(gate.can_notify)
         self.assertIn("trigger_not_confirmed", _reason_codes(gate))
+
+    def test_strict_walk_forward_eligibility_blocks_execution_signal(self) -> None:
+        previous = settings.execution_require_walk_forward_edge
+        settings.execution_require_walk_forward_edge = True
+        try:
+            signal = _signal(
+                edge=_edge(
+                    "positive",
+                    sample_size=80,
+                    expectancy=0.18,
+                    metadata={
+                        "strategy_eligibility": {
+                            "eligible": False,
+                            "reason_code": "strategy_eligibility_failed",
+                            "reason": "Validation expectancy is below threshold.",
+                        }
+                    },
+                )
+            )
+
+            gate = SignalExecutionGateService().evaluate(signal)
+        finally:
+            settings.execution_require_walk_forward_edge = previous
+
+        self.assertEqual(gate.status, "blocked")
+        self.assertEqual(gate.feed_kind, "blocked")
+        self.assertIn("strategy_eligibility_failed", _reason_codes(gate))
 
 
 def _signal(**overrides) -> StrategySignal:

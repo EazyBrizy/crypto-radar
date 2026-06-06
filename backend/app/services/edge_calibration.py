@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 from app.schemas.signal import RadarSignal, SignalEdgeSnapshot, StrategySignal
 from app.schemas.strategy_performance import StrategyEdgeProfile
+from app.services.execution_strategy_registry import ExecutionStrategyEligibilityService
 from app.schemas.user import RiskManagementSettings
 from app.services.strategy_performance_service import strategy_performance_service
 
@@ -90,6 +91,19 @@ class EdgeCalibrationService:
             min_sample_size=self._min_sample_size,
             expectancy_after_costs_r=expectancy_after_costs_r,
         )
+        metrics_metadata = _profile_metrics_metadata(profile)
+        eligibility = ExecutionStrategyEligibilityService().evaluate(
+            SignalEdgeSnapshot(
+                status=status,
+                sample_size=profile.sample_size,
+                min_sample_size=self._min_sample_size,
+                expectancy_after_costs_r=expectancy_after_costs_r,
+                profit_factor=profile.profit_factor,
+                confidence_score=0.0,
+                source="outcome",
+                metadata=metrics_metadata,
+            )
+        )
 
         return SignalEdgeSnapshot(
             status=status,
@@ -114,6 +128,8 @@ class EdgeCalibrationService:
                 "heuristic_score": score,
                 "expected_value_r": expectancy_after_costs_r,
                 "market_regime": market_regime,
+                **metrics_metadata,
+                "strategy_eligibility": eligibility.to_metadata(),
                 **costs_metadata,
             },
         )
@@ -202,6 +218,19 @@ def _confidence_score(
     }.get(confidence, 0.0)
     sample_factor = 1.0 if min_sample_size <= 0 else min(1.0, sample_size / min_sample_size)
     return round(max(0.0, min(1.0, weight * sample_factor)), 4)
+
+
+def _profile_metrics_metadata(profile: StrategyEdgeProfile) -> dict[str, Any]:
+    return {
+        "entry_touch_rate": profile.entry_touch_rate,
+        "fill_rate": profile.fill_rate,
+        "no_entry_rate": profile.no_entry_rate,
+        "execution_rejected_rate": profile.execution_rejected_rate,
+        "pending_armed_count": profile.pending_armed_count,
+        "filled_count": profile.filled_count,
+        "no_entry_count": profile.no_entry_count,
+        "execution_rejected_count": profile.execution_rejected_count,
+    }
 
 
 def _market_regime(signal: RadarSignal | StrategySignal) -> str | None:

@@ -88,6 +88,12 @@ class SignalExecutionGateService:
                 hard_blockers.append(edge_reason)
             else:
                 warnings.append(edge_reason)
+        eligibility_reason = _strategy_eligibility_reason(signal.edge)
+        if eligibility_reason is not None:
+            if eligibility_reason.severity == "blocker":
+                hard_blockers.append(eligibility_reason)
+            else:
+                warnings.append(eligibility_reason)
         if settings.execution_edge_gate_enabled and signal.edge is None:
             hard_blockers.append(
                 _reason(
@@ -392,6 +398,44 @@ def _edge_reasons(
 
 def _edge_allows_execution(edge: SignalEdgeSnapshot | None) -> bool:
     return not settings.execution_edge_gate_enabled or (edge is not None and edge.status == "positive")
+
+
+def _strategy_eligibility_reason(edge: SignalEdgeSnapshot | None) -> SignalExecutionGateReason | None:
+    strict = settings.execution_require_walk_forward_edge
+    if edge is None:
+        return (
+            _reason(
+                "strategy_eligibility_missing",
+                "blocker",
+                "strategy_eligibility",
+                "No strategy eligibility profile is attached.",
+            )
+            if strict
+            else None
+        )
+    eligibility = edge.metadata.get("strategy_eligibility")
+    if not isinstance(eligibility, Mapping):
+        if not strict:
+            return None
+        return _reason(
+            "strategy_eligibility_missing",
+            "blocker",
+            "strategy_eligibility",
+            "No strategy eligibility profile is attached.",
+            edge.model_dump(mode="json"),
+        )
+    if eligibility.get("eligible") is True:
+        return None
+    code = str(eligibility.get("reason_code") or "strategy_eligibility_failed")
+    if code not in {"strategy_eligibility_missing", "strategy_eligibility_failed"}:
+        code = "strategy_eligibility_failed"
+    return _reason(
+        code,
+        "blocker" if strict else "warning",
+        "strategy_eligibility",
+        str(eligibility.get("reason") or "Strategy eligibility failed."),
+        dict(eligibility),
+    )
 
 
 def _float_metadata(metadata: Mapping[str, Any], key: str) -> float | None:

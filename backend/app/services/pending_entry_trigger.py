@@ -9,6 +9,21 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.domain.pending_entry_reason import (
+    ENTRY_ZONE_NOT_TOUCHED,
+    PENDING_ENTRY_EXECUTION_INVALID,
+    PENDING_ENTRY_EXPIRED_BEFORE_TOUCH,
+    PENDING_ENTRY_GATE_SNAPSHOT_KEY,
+    PENDING_ENTRY_LAST_REASON_KEY,
+    PENDING_ENTRY_SIGNAL_MISSING,
+    PENDING_ENTRY_TERMINAL_REASON_KEY,
+    REAL_PENDING_EXECUTION_NOT_ENABLED,
+    RISK_GATE_REJECTED,
+    SIGNAL_TERMINAL,
+    TEMPORARY_EXECUTION_FAILURE,
+    TRADE_PLAN_RECONFIRMATION_REQUIRED,
+    VIRTUAL_EXECUTION_REJECTED,
+)
 from app.core.database import SessionLocal
 from app.domain.signal_status import is_terminal_signal_status
 from app.models.pending_entry import PendingEntryIntent
@@ -57,6 +72,8 @@ class PendingEntryProvider(Protocol):
         status: str,
         failure_reason: str | None = None,
         filled_trade_id: str | UUID | None = None,
+        reason_code: str | None = None,
+        gate_snapshot: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> PendingEntryIntentRead | None:
         ...
@@ -91,6 +108,10 @@ class PendingEntryTriggerResult:
     virtual_trade_id: str | None = None
     risk_decision_id: str | None = None
     reason: str | None = None
+    reason_code: str | None = None
+    gate_snapshot: dict[str, Any] | None = None
+    current_price: Decimal | None = None
+    entry_zone_distance_bps: Decimal | None = None
     warnings: tuple[str, ...] = ()
     lifecycle_trace: LifecycleTrace = field(default_factory=LifecycleTrace)
 
@@ -137,37 +158,65 @@ class PendingEntryTriggerService:
             if record is None or record.status != "pending":
                 return None
             now = _utc_now()
+            current_price = _current_price_for_intent(record, market_tick)
+            entry_zone_distance_bps = _entry_zone_distance_bps(
+                record.side,
+                record.entry_min,
+                record.entry_max,
+                current_price,
+            )
             signal = self._signals.get_signal(str(record.signal_id))
             if signal is None:
                 _transition_locked(
                     record,
                     status="failed",
                     failure_reason="Pending entry signal is missing.",
+                    reason_code=PENDING_ENTRY_SIGNAL_MISSING,
                     now=now,
                 )
                 session.commit()
                 self._publish_locked_update(record)
-                return _result(record, touched=False, reason=record.failure_reason)
+                return _result(
+                    record,
+                    touched=False,
+                    reason=record.failure_reason,
+                    current_price=current_price,
+                    entry_zone_distance_bps=entry_zone_distance_bps,
+                )
             if record.expires_at is not None and _as_utc(record.expires_at) <= now:
                 _transition_locked(
                     record,
                     status="expired",
                     failure_reason="Pending entry intent expired before entry touch.",
+                    reason_code=PENDING_ENTRY_EXPIRED_BEFORE_TOUCH,
                     now=now,
                 )
                 session.commit()
                 self._publish_locked_update(record)
-                return _result(record, touched=False, reason=record.failure_reason)
+                return _result(
+                    record,
+                    touched=False,
+                    reason=record.failure_reason,
+                    current_price=current_price,
+                    entry_zone_distance_bps=entry_zone_distance_bps,
+                )
             if is_terminal_signal_status(signal.status):
                 _transition_locked(
                     record,
                     status="cancelled",
                     failure_reason=f"Signal is terminal at trigger time: {signal.status}.",
+                    reason_code=SIGNAL_TERMINAL,
                     now=now,
                 )
                 session.commit()
                 self._publish_locked_update(record)
-                return _result(record, touched=False, reason=record.failure_reason)
+                return _result(
+                    record,
+                    touched=False,
+                    reason=record.failure_reason,
+                    current_price=current_price,
+                    entry_zone_distance_bps=entry_zone_distance_bps,
+                )
             material = _material_change_evaluation(record, signal)
             if material.material:
                 _mark_requires_reconfirmation_locked(
@@ -180,7 +229,13 @@ class PendingEntryTriggerService:
                 )
                 session.commit()
                 self._publish_locked_update(record)
-                return _result(record, touched=False, reason=record.failure_reason)
+                return _result(
+                    record,
+                    touched=False,
+                    reason=record.failure_reason,
+                    current_price=current_price,
+                    entry_zone_distance_bps=entry_zone_distance_bps,
+                )
             if (
                 material.current_hash is not None
                 and material.current_hash != record.accepted_trade_plan_hash
@@ -208,6 +263,15 @@ class PendingEntryTriggerService:
                     signal_id=str(record.signal_id),
                     price=touch.price,
                     price_source=touch.price_source,
+                    reason="Entry zone was not touched.",
+                    reason_code=ENTRY_ZONE_NOT_TOUCHED,
+                    current_price=touch.price,
+                    entry_zone_distance_bps=_entry_zone_distance_bps(
+                        record.side,
+                        record.entry_min,
+                        record.entry_max,
+                        touch.price,
+                    ),
                     warnings=touch.warnings,
                     lifecycle_trace=LifecycleTrace(
                         signal_id=str(record.signal_id),
@@ -257,31 +321,63 @@ class PendingEntryTriggerService:
                 intent,
                 "Tick-driven pending real execution is not enabled in this virtual trigger service.",
                 touch,
+                reason_code=REAL_PENDING_EXECUTION_NOT_ENABLED,
             )
 
         try:
             request = _trigger_confirm_request(intent, market_tick, touch)
         except ValueError as exc:
-            return self._finish_structural_failure(intent, str(exc), touch)
+            return self._finish_structural_failure(
+                intent,
+                str(exc),
+                touch,
+                reason_code=PENDING_ENTRY_EXECUTION_INVALID,
+            )
 
         try:
             execution_signal = _execution_signal_from_accepted_snapshot(signal, intent)
         except ValueError as exc:
-            return self._finish_structural_failure(intent, str(exc), touch)
+            return self._finish_structural_failure(
+                intent,
+                str(exc),
+                touch,
+                reason_code=PENDING_ENTRY_EXECUTION_INVALID,
+            )
         try:
             _, trade = self._virtual_trading.confirm_signal(execution_signal, request)
         except StrategyRiskRewardBlocked as exc:
-            return self._finish_structural_failure(intent, exc.reason, touch)
+            return self._finish_structural_failure(
+                intent,
+                exc.reason,
+                touch,
+                reason_code=RISK_GATE_REJECTED,
+            )
         except VirtualExecutionRejected as exc:
             reason = str(exc)
             if _is_temporary_virtual_execution_rejection(exc):
-                return self._finish_temporary_failure(intent, reason, touch)
-            return self._finish_structural_failure(intent, reason, touch)
+                return self._finish_temporary_failure(
+                    intent,
+                    reason,
+                    touch,
+                    gate_snapshot=_virtual_rejection_gate_snapshot(exc),
+                )
+            return self._finish_structural_failure(
+                intent,
+                reason,
+                touch,
+                reason_code=VIRTUAL_EXECUTION_REJECTED,
+                gate_snapshot=_virtual_rejection_gate_snapshot(exc),
+            )
         except ValueError as exc:
             reason = str(exc) or exc.__class__.__name__
             if _is_temporary_riskgate_failure(reason):
                 return self._finish_temporary_failure(intent, reason, touch)
-            return self._finish_structural_failure(intent, reason, touch)
+            return self._finish_structural_failure(
+                intent,
+                reason,
+                touch,
+                reason_code=RISK_GATE_REJECTED,
+            )
 
         filled = self._transition_status(
             intent.id,
@@ -299,6 +395,13 @@ class PendingEntryTriggerService:
             price_source=touch.price_source,
             virtual_trade_id=trade.id,
             risk_decision_id=_trade_risk_decision_id(trade),
+            current_price=touch.price,
+            entry_zone_distance_bps=_entry_zone_distance_bps(
+                intent.side,
+                intent.entry_min,
+                intent.entry_max,
+                touch.price,
+            ),
             warnings=touch.warnings,
             lifecycle_trace=_trade_lifecycle_trace(intent, trade),
         )
@@ -308,11 +411,14 @@ class PendingEntryTriggerService:
         intent: PendingEntryIntentRead,
         reason: str,
         touch: EntryTouchResult,
+        gate_snapshot: dict[str, Any] | None = None,
     ) -> PendingEntryTriggerResult:
         updated = self._transition_status(
             intent.id,
             status="pending",
             failure_reason=reason,
+            reason_code=TEMPORARY_EXECUTION_FAILURE,
+            gate_snapshot=gate_snapshot,
             now=_utc_now(),
         )
         return PendingEntryTriggerResult(
@@ -323,6 +429,15 @@ class PendingEntryTriggerService:
             price=touch.price,
             price_source=touch.price_source,
             reason=reason,
+            reason_code=TEMPORARY_EXECUTION_FAILURE,
+            gate_snapshot=gate_snapshot,
+            current_price=touch.price,
+            entry_zone_distance_bps=_entry_zone_distance_bps(
+                intent.side,
+                intent.entry_min,
+                intent.entry_max,
+                touch.price,
+            ),
             warnings=touch.warnings,
             lifecycle_trace=_intent_lifecycle_trace(intent),
         )
@@ -332,11 +447,16 @@ class PendingEntryTriggerService:
         intent: PendingEntryIntentRead,
         reason: str,
         touch: EntryTouchResult,
+        *,
+        reason_code: str,
+        gate_snapshot: dict[str, Any] | None = None,
     ) -> PendingEntryTriggerResult:
         updated = self._transition_status(
             intent.id,
             status="failed",
             failure_reason=reason,
+            reason_code=reason_code,
+            gate_snapshot=gate_snapshot,
             now=_utc_now(),
         )
         return PendingEntryTriggerResult(
@@ -347,6 +467,15 @@ class PendingEntryTriggerService:
             price=touch.price,
             price_source=touch.price_source,
             reason=reason,
+            reason_code=reason_code,
+            gate_snapshot=gate_snapshot,
+            current_price=touch.price,
+            entry_zone_distance_bps=_entry_zone_distance_bps(
+                intent.side,
+                intent.entry_min,
+                intent.entry_max,
+                touch.price,
+            ),
             warnings=touch.warnings,
             lifecycle_trace=_intent_lifecycle_trace(intent),
         )
@@ -358,6 +487,8 @@ class PendingEntryTriggerService:
         status: str,
         failure_reason: str | None = None,
         filled_trade_id: str | UUID | None = None,
+        reason_code: str | None = None,
+        gate_snapshot: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> PendingEntryIntentRead | None:
         updated = self._pending_entries.transition_status(
@@ -365,6 +496,8 @@ class PendingEntryTriggerService:
             status=status,
             failure_reason=failure_reason,
             filled_trade_id=filled_trade_id,
+            reason_code=reason_code,
+            gate_snapshot=gate_snapshot,
             now=now,
         )
         if updated is not None and not _provider_publishes_pending_entry_events(self._pending_entries):
@@ -654,11 +787,20 @@ def _transition_locked(
     *,
     status: str,
     failure_reason: str | None,
+    reason_code: str | None = None,
+    gate_snapshot: dict[str, Any] | None = None,
     now: datetime,
 ) -> None:
     record.status = status
     record.updated_at = now
     record.failure_reason = failure_reason
+    if reason_code is not None or gate_snapshot is not None:
+        record.request_snapshot = _request_snapshot_with_reason_code(
+            record.request_snapshot,
+            status=status,
+            reason_code=reason_code,
+            gate_snapshot=gate_snapshot,
+        )
     if status == "triggered" and record.triggered_at is None:
         record.triggered_at = now
     if status == "filled":
@@ -697,6 +839,7 @@ def _mark_requires_reconfirmation_locked(
         record,
         status="requires_reconfirmation",
         failure_reason=TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
+        reason_code=TRADE_PLAN_RECONFIRMATION_REQUIRED,
         now=now,
     )
     snapshot = dict(record.request_snapshot or {})
@@ -755,6 +898,23 @@ def _record_market_review_locked(
         now=now,
     )
     record.updated_at = now
+
+
+def _request_snapshot_with_reason_code(
+    request_snapshot: Any,
+    *,
+    status: str,
+    reason_code: str | None,
+    gate_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot = dict(request_snapshot or {}) if isinstance(request_snapshot, dict) else {}
+    if reason_code is not None:
+        snapshot[PENDING_ENTRY_LAST_REASON_KEY] = reason_code
+        if status in {"failed", "cancelled", "expired"}:
+            snapshot[PENDING_ENTRY_TERMINAL_REASON_KEY] = reason_code
+    if gate_snapshot is not None:
+        snapshot[PENDING_ENTRY_GATE_SNAPSHOT_KEY] = gate_snapshot
+    return snapshot
 
 
 def _request_snapshot_with_market_review(
@@ -820,7 +980,12 @@ def _result(
     *,
     touched: bool,
     reason: str | None,
+    current_price: Decimal | None = None,
+    entry_zone_distance_bps: Decimal | None = None,
 ) -> PendingEntryTriggerResult:
+    snapshot = record.request_snapshot if isinstance(record.request_snapshot, dict) else {}
+    reason_code = snapshot.get(PENDING_ENTRY_TERMINAL_REASON_KEY) or snapshot.get(PENDING_ENTRY_LAST_REASON_KEY)
+    gate_snapshot = snapshot.get(PENDING_ENTRY_GATE_SNAPSHOT_KEY)
     trace = LifecycleTrace(
         signal_id=str(record.signal_id),
         pending_entry_intent_id=str(record.id),
@@ -833,6 +998,10 @@ def _result(
         signal_id=str(record.signal_id),
         virtual_trade_id=str(record.filled_trade_id) if record.filled_trade_id is not None else None,
         reason=reason,
+        reason_code=str(reason_code) if reason_code is not None else None,
+        gate_snapshot=gate_snapshot if isinstance(gate_snapshot, dict) else None,
+        current_price=current_price,
+        entry_zone_distance_bps=entry_zone_distance_bps,
         lifecycle_trace=trace,
     )
 
@@ -850,6 +1019,30 @@ def _touch_result(
         price_source=source,
         warnings=tuple(warnings),
     )
+
+
+def _current_price_for_intent(record: PendingEntryIntent, market_tick: Any) -> Decimal | None:
+    preferred = "ask" if record.side == "long" else "bid"
+    return _market_decimal(market_tick, preferred, "last", "price", "close", "candle_close")
+
+
+def _entry_zone_distance_bps(
+    side: str,
+    entry_min: Decimal | float | str,
+    entry_max: Decimal | float | str,
+    current_price: Decimal | None,
+) -> Decimal | None:
+    if current_price is None:
+        return None
+    lower = _decimal(entry_min, "entry_min")
+    upper = _decimal(entry_max, "entry_max")
+    if upper < lower:
+        lower, upper = upper, lower
+    price = _decimal(current_price, "current_price")
+    if lower <= price <= upper:
+        return Decimal("0")
+    boundary = lower if price < lower else upper
+    return ((abs(price - boundary) / boundary) * Decimal("10000")).quantize(Decimal("0.0001"))
 
 
 def _market_decimal(market_tick: Any, *names: str) -> Decimal | None:
@@ -924,6 +1117,22 @@ def _is_temporary_virtual_execution_rejection(exc: VirtualExecutionRejected) -> 
     ]
     normalized = " ".join(str(value).lower() for value in values if value)
     return "market_data_stale" in normalized or "market_data_missing" in normalized or _is_temporary_riskgate_failure(normalized)
+
+
+def _virtual_rejection_gate_snapshot(exc: VirtualExecutionRejected) -> dict[str, Any]:
+    report = exc.report
+    snapshot: dict[str, Any] = {
+        "status": report.status,
+        "rejected_reason": report.rejected_reason,
+        "reason_code": report.reason_code,
+        "reason_codes": list(report.reason_codes or []),
+        "blockers": list(report.blockers or []),
+    }
+    if report.quality_gate is not None:
+        snapshot["quality_gate"] = report.quality_gate.model_dump(mode="json", exclude_none=True)
+    if report.fill_result is not None:
+        snapshot["fill_result"] = report.fill_result.model_dump(mode="json", exclude_none=True)
+    return {key: value for key, value in snapshot.items() if value not in (None, [], {})}
 
 
 def _intent_lifecycle_trace(intent: PendingEntryIntentRead) -> LifecycleTrace:

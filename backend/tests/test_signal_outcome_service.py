@@ -1,9 +1,15 @@
 import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import JSON, create_engine, text
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
 from app.models.signal import SignalOutcome, TradingSignal
+from app.schemas.pending_entry import PendingEntryIntentRead
 from app.services.signal_outcome_service import SignalOutcomeService, _tracking_plan_from_signal
 from app.schemas.candle import OHLCVCandle
 
@@ -161,6 +167,83 @@ class SignalOutcomeServiceTest(unittest.TestCase):
             [Decimal("1.0"), Decimal("2.0")],
         )
 
+    def test_pending_entry_expired_before_touch_closes_as_no_entry_expired(self) -> None:
+        outcome = _outcome(direction="long", metadata={"bars_seen": 3})
+        engine, SessionFactory, patches = _sqlite_outcome_store(outcome)
+        try:
+            service = SignalOutcomeService(SessionFactory, tracking_min_score=0)
+
+            closed = service.record_pending_entry_terminal(
+                _pending_intent(
+                    signal_id=outcome.signal_id,
+                    status="expired",
+                    reason_code="pending_entry_expired_before_touch",
+                    failure_reason="Pending entry intent expired before entry touch.",
+                )
+            )
+
+            self.assertIsNotNone(closed)
+            self.assertEqual(closed.status if closed else None, "expired")
+            self.assertEqual(closed.outcome if closed else None, "expired")
+            pending_metadata = (closed.metadata_ if closed else {})["pending_entry_outcome"]
+            self.assertEqual(pending_metadata["reason_code"], "pending_entry_expired_before_touch")
+            self.assertEqual(pending_metadata["terminal_kind"], "expired_before_touch")
+            self.assertTrue(pending_metadata["no_entry"])
+        finally:
+            engine.dispose()
+            _restore_column_types(patches)
+
+    def test_pending_entry_virtual_rejected_records_execution_rejected_metadata(self) -> None:
+        outcome = _outcome(direction="long", metadata={"bars_seen": 2})
+        engine, SessionFactory, patches = _sqlite_outcome_store(outcome)
+        try:
+            service = SignalOutcomeService(SessionFactory, tracking_min_score=0)
+
+            closed = service.record_pending_entry_terminal(
+                _pending_intent(
+                    signal_id=outcome.signal_id,
+                    status="failed",
+                    reason_code="virtual_execution_rejected",
+                    failure_reason="Liquidity too thin for requested size.",
+                )
+            )
+
+            self.assertIsNotNone(closed)
+            self.assertEqual(closed.status if closed else None, "invalidated")
+            self.assertEqual(closed.outcome if closed else None, "invalidated")
+            pending_metadata = (closed.metadata_ if closed else {})["pending_entry_outcome"]
+            self.assertEqual(pending_metadata["reason_code"], "virtual_execution_rejected")
+            self.assertEqual(pending_metadata["terminal_kind"], "execution_rejected")
+            self.assertTrue(pending_metadata["execution_rejected"])
+            self.assertFalse(pending_metadata["no_entry"])
+        finally:
+            engine.dispose()
+            _restore_column_types(patches)
+
+    def test_pending_entry_temporary_failure_does_not_close_outcome(self) -> None:
+        outcome = _outcome(direction="long", metadata={"bars_seen": 2})
+        engine, SessionFactory, patches = _sqlite_outcome_store(outcome)
+        try:
+            service = SignalOutcomeService(SessionFactory, tracking_min_score=0)
+
+            closed = service.record_pending_entry_terminal(
+                _pending_intent(
+                    signal_id=outcome.signal_id,
+                    status="failed",
+                    reason_code="temporary_execution_failure",
+                    failure_reason="Bybit market data is stale.",
+                )
+            )
+
+            self.assertIsNone(closed)
+            with SessionFactory() as session:
+                current = session.get(SignalOutcome, outcome.id)
+                self.assertEqual(current.status if current else None, "tracking")
+                self.assertEqual(current.outcome if current else None, "open")
+        finally:
+            engine.dispose()
+            _restore_column_types(patches)
+
 
 def _outcome(
     *,
@@ -201,6 +284,111 @@ def _outcome(
         updated_at=now,
         metadata_={"selected_rr_target": selected_rr_target, **(metadata or {})},
     )
+
+
+def _pending_intent(
+    *,
+    signal_id: Any,
+    status: str,
+    reason_code: str,
+    failure_reason: str,
+) -> PendingEntryIntentRead:
+    now = datetime.now(timezone.utc)
+    return PendingEntryIntentRead(
+        id=uuid4(),
+        user_id=uuid4(),
+        signal_id=signal_id,
+        mode="virtual",
+        status=status,
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="long",
+        entry_min=Decimal("99.5"),
+        entry_max=Decimal("100.5"),
+        entry_price_policy="accepted_entry_zone",
+        stop_loss=Decimal("98"),
+        targets_snapshot=[{"label": "TP1", "price": "102"}],
+        accepted_trade_plan_snapshot={},
+        accepted_trade_plan_hash="sha256:test",
+        accepted_signal_status="active",
+        execution_profile_snapshot={},
+        request_snapshot={
+            "pending_entry_last_reason_code": reason_code,
+            "pending_entry_terminal_reason_code": reason_code,
+        },
+        idempotency_key=f"pending-entry:{uuid4()}",
+        created_at=now,
+        updated_at=now,
+        failure_reason=failure_reason,
+        reason_code=reason_code,
+    )
+
+
+def _sqlite_outcome_store(outcome: SignalOutcome) -> tuple[Any, Any, list[tuple[Any, Any]]]:
+    patches = _patch_column_types()
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    _create_signal_outcome_table(engine)
+    SessionFactory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    with SessionFactory() as session:
+        session.add(outcome)
+        session.commit()
+    return engine, SessionFactory, patches
+
+
+def _patch_column_types() -> list[tuple[Any, Any]]:
+    patches: list[tuple[Any, Any]] = []
+    for column_name in ("targets", "metadata"):
+        column = SignalOutcome.__table__.c[column_name]
+        patches.append((column, column.type))
+        column.type = JSON()
+    return patches
+
+
+def _restore_column_types(patches: list[tuple[Any, Any]]) -> None:
+    for column, original_type in patches:
+        column.type = original_type
+
+
+def _create_signal_outcome_table(engine: Any) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE signal_outcomes (
+                    id UUID PRIMARY KEY,
+                    signal_id UUID NOT NULL UNIQUE,
+                    exchange TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    signal_score NUMERIC NOT NULL,
+                    entry_price NUMERIC NOT NULL,
+                    entry_min NUMERIC NOT NULL,
+                    entry_max NUMERIC NOT NULL,
+                    stop_loss NUMERIC NOT NULL,
+                    targets JSON NOT NULL,
+                    status TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    selected_rr NUMERIC,
+                    realized_r NUMERIC NOT NULL,
+                    mfe_r NUMERIC NOT NULL,
+                    mae_r NUMERIC NOT NULL,
+                    bars_to_entry INTEGER,
+                    bars_to_outcome INTEGER,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    closed_at DATETIME,
+                    metadata JSON NOT NULL
+                )
+                """
+            )
+        )
 
 
 def _candle(

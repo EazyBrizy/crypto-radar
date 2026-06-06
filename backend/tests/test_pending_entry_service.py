@@ -124,10 +124,22 @@ class PendingEntryServiceTest(unittest.TestCase):
             created.id,
             status="expired",
             failure_reason="Pending entry intent expired before entry touch.",
+            reason_code="pending_entry_expired_before_touch",
         )
 
         self.assertEqual(expired.status, "expired")
-        self.assertEqual(outcome_recorder.calls, [(created.id, "expired", "Pending entry intent expired before entry touch.")])
+        self.assertEqual(expired.reason_code, "pending_entry_expired_before_touch")
+        self.assertEqual(
+            outcome_recorder.calls,
+            [
+                (
+                    created.id,
+                    "expired",
+                    "Pending entry intent expired before entry touch.",
+                    "pending_entry_expired_before_touch",
+                )
+            ],
+        )
 
     def test_duplicate_arm_returns_existing_active_intent(self) -> None:
         repository = _FakePendingEntryRepository()
@@ -442,10 +454,10 @@ class PendingEntryServiceTest(unittest.TestCase):
 
 class _FakePendingEntryOutcomeRecorder:
     def __init__(self) -> None:
-        self.calls: list[tuple[UUID, str, str | None]] = []
+        self.calls: list[tuple[UUID, str, str | None, str | None]] = []
 
     def record_pending_entry_terminal(self, intent: PendingEntryIntentRead) -> None:
-        self.calls.append((intent.id, intent.status, intent.failure_reason))
+        self.calls.append((intent.id, intent.status, intent.failure_reason, intent.reason_code))
 
 
 class _FakePendingEntryRepository:
@@ -553,17 +565,28 @@ class _FakePendingEntryRepository:
         status: str,
         failure_reason: str | None = None,
         filled_trade_id: UUID | None = None,
+        reason_code: str | None = None,
+        gate_snapshot: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> PendingEntryIntentRead | None:
         existing = self.get_by_id(intent_id)
         if existing is None:
             return None
         self.transitions.append((intent_id, status, failure_reason))
+        request_snapshot = dict(existing.request_snapshot or {})
+        if reason_code is not None:
+            request_snapshot["pending_entry_last_reason_code"] = reason_code
+            if status in {"failed", "cancelled", "expired"}:
+                request_snapshot["pending_entry_terminal_reason_code"] = reason_code
+        if gate_snapshot is not None:
+            request_snapshot["pending_entry_gate_snapshot"] = gate_snapshot
         updated = existing.model_copy(
             update={
                 "status": status,
                 "failure_reason": failure_reason,
                 "filled_trade_id": filled_trade_id,
+                "request_snapshot": request_snapshot,
+                "reason_code": reason_code,
                 "updated_at": now or datetime.now(timezone.utc),
             }
         )

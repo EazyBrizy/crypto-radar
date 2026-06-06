@@ -18,7 +18,7 @@ from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.pending_entry import PendingEntryIntentCreate
 from app.schemas.risk import ResolvedExecutionProfile
 from app.schemas.signal import RadarSignal
-from app.schemas.trade import ManualConfirmRequest, VirtualTrade
+from app.schemas.trade import ExecutionQualityGate, ManualConfirmRequest, VirtualExecutionReport, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.pending_entry import (
     TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
@@ -26,6 +26,7 @@ from app.services.pending_entry import (
     accepted_trade_plan_hash,
 )
 from app.services.pending_entry_trigger import PendingEntryTriggerService, entry_zone_touch
+from app.services.virtual_trading import VirtualExecutionRejected
 
 USER_ID = UUID("7d7a4f33-a570-4334-b65f-3e5b4f0bb4a1")
 SIGNAL_ID = UUID("eafefb92-8435-4d35-912f-6281ff0c1f19")
@@ -131,9 +132,29 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
 
         self.assertEqual(results[0].status, "pending")
         self.assertFalse(results[0].touched)
+        self.assertEqual(results[0].reason_code, "entry_zone_not_touched")
+        self.assertEqual(results[0].current_price, Decimal("102.0"))
+        self.assertGreater(results[0].entry_zone_distance_bps or Decimal("0"), Decimal("0"))
         self.assertEqual(current.status if current else None, "pending")
         self.assertEqual(self.virtual.calls, [])
         self.assertEqual(self.events.statuses(), [])
+
+    def test_expired_before_touch_records_reason_code_in_result_and_view(self) -> None:
+        created = self.repository.create_intent(
+            _intent_create(
+                side="long",
+                expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 102.0})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results[0].status, "expired")
+        self.assertEqual(results[0].reason_code, "pending_entry_expired_before_touch")
+        self.assertEqual(results[0].current_price, Decimal("102.0"))
+        self.assertEqual(current.reason_code if current else None, "pending_entry_expired_before_touch")
+        self.assertEqual(current.view.reason_code if current and current.view else None, "pending_entry_expired_before_touch")
 
     def test_signal_invalidated_cancels_intent(self) -> None:
         created = self.repository.create_intent(_intent_create(side="long"))
@@ -143,7 +164,9 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         current = self.repository.get_by_id(created.id)
 
         self.assertEqual(results[0].status, "cancelled")
+        self.assertEqual(results[0].reason_code, "signal_terminal")
         self.assertEqual(current.status if current else None, "cancelled")
+        self.assertEqual(current.reason_code if current else None, "signal_terminal")
         self.assertEqual(self.virtual.calls, [])
 
     def test_trade_plan_hash_changed_requires_reconfirmation(self) -> None:
@@ -319,7 +342,9 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         current = self.repository.get_by_id(created.id)
 
         self.assertEqual(results[0].status, "pending")
+        self.assertEqual(results[0].reason_code, "temporary_execution_failure")
         self.assertEqual(current.status if current else None, "pending")
+        self.assertEqual(current.reason_code if current else None, "temporary_execution_failure")
         self.assertIn("market data is stale", current.failure_reason if current else "")
         self.assertEqual(len(self.virtual.calls), 1)
 
@@ -331,9 +356,36 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         current = self.repository.get_by_id(created.id)
 
         self.assertEqual(results[0].status, "failed")
+        self.assertEqual(results[0].reason_code, "riskgate_rejected")
         self.assertEqual(current.status if current else None, "failed")
+        self.assertEqual(current.reason_code if current else None, "riskgate_rejected")
         self.assertIn("Spread too wide", current.failure_reason if current else "")
         self.assertEqual(len(self.virtual.calls), 1)
+
+    def test_virtual_execution_rejected_fails_with_reason_code(self) -> None:
+        created = self.repository.create_intent(_intent_create(side="long"))
+        self.virtual.failure = _virtual_rejection("Liquidity too thin for requested size.")
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results[0].status, "failed")
+        self.assertEqual(results[0].reason_code, "virtual_execution_rejected")
+        self.assertEqual(current.status if current else None, "failed")
+        self.assertEqual(current.reason_code if current else None, "virtual_execution_rejected")
+        self.assertEqual(current.view.reason_code if current and current.view else None, "virtual_execution_rejected")
+
+    def test_temporary_virtual_execution_rejection_keeps_pending_with_reason_code(self) -> None:
+        created = self.repository.create_intent(_intent_create(side="long"))
+        self.virtual.failure = _virtual_rejection("Bybit market data is stale.", reason_code="market_data_stale")
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(created.id)
+
+        self.assertEqual(results[0].status, "pending")
+        self.assertEqual(results[0].reason_code, "temporary_execution_failure")
+        self.assertEqual(current.status if current else None, "pending")
+        self.assertEqual(current.reason_code if current else None, "temporary_execution_failure")
 
     def test_double_tick_can_fill_only_once(self) -> None:
         self.repository.create_intent(_intent_create(side="long"))
@@ -542,6 +594,22 @@ def _virtual_trade(signal: RadarSignal, request: ManualConfirmRequest) -> Virtua
             pending_entry_intent_id=pending_entry_intent_id,
             virtual_trade_id=str(TRADE_ID),
         ),
+    )
+
+
+def _virtual_rejection(reason: str, *, reason_code: str = "virtual_execution_rejected") -> VirtualExecutionRejected:
+    return VirtualExecutionRejected(
+        VirtualExecutionReport(
+            status="rejected_virtual_execution",
+            rejected_reason=reason,
+            reason_code=reason_code,
+            reason_codes=[reason_code],
+            quality_gate=ExecutionQualityGate(
+                status="blocked",
+                message=reason,
+                blockers=[reason_code],
+            ),
+        )
     )
 
 

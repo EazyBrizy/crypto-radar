@@ -129,6 +129,8 @@ class PendingEntryService:
         status: PendingEntryIntentStatus,
         failure_reason: str | None = None,
         filled_trade_id: str | UUID | None = None,
+        reason_code: str | None = None,
+        gate_snapshot: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> PendingEntryIntentRead | None:
         updated = self._repository.transition_status(
@@ -136,6 +138,8 @@ class PendingEntryService:
             status=status,
             failure_reason=failure_reason,
             filled_trade_id=filled_trade_id,
+            reason_code=reason_code,
+            gate_snapshot=gate_snapshot,
             now=now,
         )
         if updated is not None:

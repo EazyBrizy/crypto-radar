@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -14,8 +14,19 @@ from app.domain.pending_entry_intent import (
     ACTIVE_PENDING_ENTRY_INTENT_STATUSES,
     TERMINAL_PENDING_ENTRY_INTENT_STATUSES,
 )
+from app.domain.pending_entry_reason import (
+    PENDING_ENTRY_GATE_SNAPSHOT_KEY,
+    PENDING_ENTRY_LAST_REASON_KEY,
+    PENDING_ENTRY_TERMINAL_REASON_KEY,
+    pending_entry_reason_code_from_snapshot,
+)
 from app.models.pending_entry import PendingEntryIntent
-from app.schemas.pending_entry import PendingEntryIntentCreate, PendingEntryIntentRead, PendingEntryIntentStatus
+from app.schemas.pending_entry import (
+    PendingEntryIntentCreate,
+    PendingEntryIntentRead,
+    PendingEntryIntentStatus,
+    PendingEntryView,
+)
 
 
 class PendingEntryIntentRepository:
@@ -249,6 +260,8 @@ class PendingEntryIntentRepository:
         status: PendingEntryIntentStatus,
         failure_reason: str | None = None,
         filled_trade_id: str | UUID | None = None,
+        reason_code: str | None = None,
+        gate_snapshot: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> PendingEntryIntentRead | None:
         parsed_id = _parse_uuid(intent_id)
@@ -265,6 +278,13 @@ class PendingEntryIntentRepository:
             record.status = status
             record.updated_at = changed_at
             record.failure_reason = failure_reason
+            if reason_code is not None or gate_snapshot is not None:
+                record.request_snapshot = _request_snapshot_with_reason_code(
+                    record.request_snapshot,
+                    status=status,
+                    reason_code=reason_code,
+                    gate_snapshot=gate_snapshot,
+                )
             if status == "triggered" and record.triggered_at is None:
                 record.triggered_at = changed_at
             if status == "filled":
@@ -384,7 +404,82 @@ def _get_active_for_user_signal_mode(
 
 
 def _to_read(record: PendingEntryIntent) -> PendingEntryIntentRead:
-    return PendingEntryIntentRead.model_validate(record)
+    read = PendingEntryIntentRead.model_validate(record)
+    terminal = record.status in TERMINAL_PENDING_ENTRY_INTENT_STATUSES
+    reason_code = pending_entry_reason_code_from_snapshot(record.request_snapshot, terminal=terminal)
+    view = _pending_entry_view(record, reason_code) if reason_code is not None or record.failure_reason else None
+    return read.model_copy(update={"reason_code": reason_code, "view": view})
+
+
+def _request_snapshot_with_reason_code(
+    request_snapshot: Any,
+    *,
+    status: str,
+    reason_code: str | None,
+    gate_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    snapshot = dict(request_snapshot or {}) if isinstance(request_snapshot, dict) else {}
+    if reason_code is not None:
+        snapshot[PENDING_ENTRY_LAST_REASON_KEY] = reason_code
+        if status in TERMINAL_PENDING_ENTRY_INTENT_STATUSES:
+            snapshot[PENDING_ENTRY_TERMINAL_REASON_KEY] = reason_code
+    if gate_snapshot is not None:
+        snapshot[PENDING_ENTRY_GATE_SNAPSHOT_KEY] = gate_snapshot
+    return snapshot
+
+
+def _pending_entry_view(record: PendingEntryIntent, reason_code: str | None) -> PendingEntryView:
+    return PendingEntryView(
+        status_label=_status_label(record.status),
+        status_tone=_status_tone(record.status),
+        reason_code=reason_code,
+        reason=record.failure_reason or _status_label(record.status),
+        technical_message=record.failure_reason,
+        entry_zone=f"{record.entry_min}-{record.entry_max}",
+        current_price=_request_snapshot_current_price(record.request_snapshot),
+    )
+
+
+def _request_snapshot_current_price(snapshot: Any) -> Decimal | None:
+    if not isinstance(snapshot, dict):
+        return None
+    value = snapshot.get("pending_entry_current_price")
+    if value is None:
+        gate_snapshot = snapshot.get(PENDING_ENTRY_GATE_SNAPSHOT_KEY)
+        if isinstance(gate_snapshot, dict):
+            value = gate_snapshot.get("reference_price")
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _status_label(status: str) -> str:
+    labels = {
+        "pending": "Waiting for entry",
+        "triggered": "Entry touched",
+        "filling": "Filling",
+        "filled": "Filled",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "expired": "Expired",
+        "requires_reconfirmation": "Needs reconfirmation",
+    }
+    return labels.get(status, status.replace("_", " ").title())
+
+
+def _status_tone(status: str) -> str:
+    if status == "filled":
+        return "green"
+    if status in {"failed", "cancelled", "expired"}:
+        return "red"
+    if status == "requires_reconfirmation":
+        return "yellow"
+    if status in {"triggered", "filling"}:
+        return "blue"
+    return "neutral"
 
 
 def _normalize_symbol(symbol: str) -> str:

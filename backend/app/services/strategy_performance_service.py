@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, joinedload, sessionmaker
 from app.core.clickhouse_client import create_clickhouse_client
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.domain.pending_entry_reason import VIRTUAL_EXECUTION_REJECTED
 from app.models.signal import SignalOutcome, TradingSignal
 from app.schemas.strategy_performance import (
     EdgeProfileConfidence,
@@ -144,6 +145,7 @@ class StrategyPerformanceOutcome:
     fees_bps: float = 0.0
     slippage_bps: float = 0.0
     closed_at: datetime | None = None
+    pending_entry_reason_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -574,7 +576,7 @@ def _daily_performance_row(group: Sequence[StrategyPerformanceOutcome]) -> Strat
     execution_rejected_count = sum(
         1
         for outcome in group
-        if outcome.status == "execution_rejected" or outcome.outcome == "execution_rejected"
+        if _is_execution_rejected_outcome(outcome)
     )
     no_entry_count = max(signals_count - sample_size - execution_rejected_count, 0)
     gross_loss = abs(sum(losses))
@@ -812,7 +814,24 @@ def _outcome_to_input(outcome: SignalOutcome) -> StrategyPerformanceOutcome:
         fees_bps=_metadata_float(metadata, "fees_bps", "fee_bps", "fee_rate_bps"),
         slippage_bps=_metadata_float(metadata, "slippage_bps", "entry_slippage_bps"),
         closed_at=_as_utc(closed_at),
+        pending_entry_reason_code=_pending_entry_reason_code_from_metadata(metadata),
     )
+
+
+def _is_execution_rejected_outcome(outcome: StrategyPerformanceOutcome) -> bool:
+    return (
+        outcome.status == "execution_rejected"
+        or outcome.outcome == "execution_rejected"
+        or outcome.pending_entry_reason_code == VIRTUAL_EXECUTION_REJECTED
+    )
+
+
+def _pending_entry_reason_code_from_metadata(metadata: dict[str, Any]) -> str | None:
+    pending_entry = metadata.get("pending_entry_outcome")
+    if not isinstance(pending_entry, dict):
+        return None
+    reason_code = pending_entry.get("reason_code")
+    return reason_code if isinstance(reason_code, str) and reason_code else None
 
 
 def _strategy_version(signal: TradingSignal | None, metadata: dict[str, Any]) -> str:

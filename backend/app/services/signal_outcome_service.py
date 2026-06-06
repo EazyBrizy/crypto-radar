@@ -11,6 +11,13 @@ from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.domain.pending_entry_reason import (
+    PENDING_ENTRY_EXPIRED_BEFORE_TOUCH,
+    TEMPORARY_EXECUTION_FAILURE,
+    VIRTUAL_EXECUTION_REJECTED,
+    pending_entry_reason_code_from_snapshot,
+    pending_entry_terminal_kind,
+)
 from app.models.signal import SignalOutcome, TradingSignal
 from app.models.strategy import StrategyVersion
 from app.schemas.candle import OHLCVCandle
@@ -219,6 +226,9 @@ class SignalOutcomeService:
     def record_pending_entry_terminal(self, intent: PendingEntryIntentRead) -> SignalOutcome | None:
         if intent.status not in {"expired", "failed", "cancelled"}:
             return None
+        reason_code = _pending_entry_reason_code(intent)
+        if reason_code == TEMPORARY_EXECUTION_FAILURE:
+            return None
         with self._session_factory() as session:
             outcome = session.scalars(
                 select(SignalOutcome).where(
@@ -230,9 +240,16 @@ class SignalOutcomeService:
                 return None
             now = intent.updated_at or datetime.now(timezone.utc)
             metadata = dict(outcome.metadata_ or {})
+            terminal_kind = pending_entry_terminal_kind(intent.status, reason_code)
+            execution_rejected = reason_code == VIRTUAL_EXECUTION_REJECTED
+            no_entry = terminal_kind in {"expired_before_touch", "cancelled_before_touch"} and not execution_rejected
             metadata["pending_entry_outcome"] = {
                 "pending_entry_intent_id": str(intent.id),
                 "pending_entry_status": intent.status,
+                "reason_code": reason_code,
+                "terminal_kind": terminal_kind,
+                "no_entry": no_entry,
+                "execution_rejected": execution_rejected,
                 "failure_reason": intent.failure_reason,
                 "filled_trade_id": str(intent.filled_trade_id) if intent.filled_trade_id is not None else None,
             }
@@ -509,6 +526,21 @@ def _entry_zone_touched(outcome: SignalOutcome, candle: OHLCVCandle) -> bool:
 
 def _entry_is_touched(outcome: SignalOutcome, metadata: dict[str, Any]) -> bool:
     return outcome.bars_to_entry is not None or bool(metadata.get("entry_touched_at"))
+
+
+def _pending_entry_reason_code(intent: PendingEntryIntentRead) -> str | None:
+    if intent.reason_code:
+        return intent.reason_code
+    terminal = intent.status in {"expired", "failed", "cancelled"}
+    reason_code = pending_entry_reason_code_from_snapshot(intent.request_snapshot, terminal=terminal)
+    if reason_code is not None:
+        return reason_code
+    failure_reason = (intent.failure_reason or "").lower()
+    if intent.status == "expired" and "expired before entry touch" in failure_reason:
+        return PENDING_ENTRY_EXPIRED_BEFORE_TOUCH
+    if "virtual execution rejected" in failure_reason:
+        return VIRTUAL_EXECUTION_REJECTED
+    return None
 
 
 def _stop_hit(outcome: SignalOutcome, candle: OHLCVCandle) -> bool:

@@ -66,6 +66,36 @@ class StrategyPerformanceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(row.stop_rate, 0.5)
         self.assertAlmostEqual(row.invalidation_rate, 1 / 3)
 
+    def test_virtual_execution_rejections_are_not_counted_as_no_entry(self) -> None:
+        rows = build_daily_performance(
+            day=DAY,
+            outcomes=[
+                _outcome(status="tp1", outcome="win", realized_r=1.0, bars_to_entry=1),
+                _outcome(
+                    status="invalidated",
+                    outcome="invalidated",
+                    realized_r=0.0,
+                    bars_to_entry=None,
+                    pending_entry_reason_code="virtual_execution_rejected",
+                ),
+                _outcome(
+                    status="expired",
+                    outcome="expired",
+                    realized_r=0.0,
+                    bars_to_entry=None,
+                    pending_entry_reason_code="pending_entry_expired_before_touch",
+                ),
+            ],
+        )
+
+        row = rows[0]
+        self.assertEqual(row.signals_count, 3)
+        self.assertEqual(row.filled_count, 1)
+        self.assertEqual(row.execution_rejected_count, 1)
+        self.assertEqual(row.no_entry_count, 1)
+        self.assertAlmostEqual(row.execution_rejected_rate, 1 / 3)
+        self.assertAlmostEqual(row.no_entry_rate, 1 / 3)
+
     def test_expectancy_and_profit_factor_calculation(self) -> None:
         row = build_daily_performance(
             day=DAY,
@@ -196,6 +226,7 @@ def _outcome(
     realized_r: float = 1.0,
     bars_to_entry: int | None = 1,
     bars_to_outcome: int | None = 3,
+    pending_entry_reason_code: str | None = None,
 ) -> StrategyPerformanceOutcome:
     return StrategyPerformanceOutcome(
         date=DAY,
@@ -217,6 +248,7 @@ def _outcome(
         fees_bps=2.0,
         slippage_bps=3.0,
         closed_at=datetime(2026, 1, 2, 12, tzinfo=timezone.utc),
+        pending_entry_reason_code=pending_entry_reason_code,
     )
 
 

@@ -93,6 +93,8 @@ class Settings(BaseSettings):
     scanner_warmup_concurrency: int = 2
     scanner_warmup_timeout_seconds: float = 8.0
     scanner_market_data_stale_seconds: float = 30.0
+    strategy_forward_test_worker_enabled: bool = False
+    strategy_forward_test_worker_interval_seconds: float = 2.5
 
 
 settings = Settings()

@@ -71,6 +71,27 @@ class StrategyTestingApiContractTest(unittest.TestCase):
 
         self.assertEqual(request.tags, ["research", "backtest"])
 
+    def test_run_request_accepts_forward_virtual_type_and_tags(self) -> None:
+        historical = _request()
+        forward = _request(test_type="forward_virtual", tags=[])
+
+        self.assertEqual(historical.test_type, "historical_backtest")
+        self.assertEqual(forward.test_type, "forward_virtual")
+        self.assertEqual(forward.tags, ["forward_test"])
+
+    def test_run_response_accepts_stopping_and_cancelled_statuses(self) -> None:
+        run_id = uuid4()
+
+        stopping = StrategyTestRunResponse(
+            run_id=run_id,
+            status="stopping",
+            requested_matrix={"test_type": "forward_virtual"},
+        )
+        cancelled = stopping.model_copy(update={"status": "cancelled"})
+
+        self.assertEqual(stopping.status, "stopping")
+        self.assertEqual(cancelled.status, "cancelled")
+
     def test_post_runs_accepts_matrix_request(self) -> None:
         store = _EphemeralStrategyTestRunStore()
         app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
@@ -112,6 +133,26 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(list_response.json()[0]["status"], "completed")
         self.assertEqual(list_response.json()[0]["summary"]["scenario_count"], 12)
 
+    def test_post_forward_run_is_worker_owned_and_not_background_executed(self) -> None:
+        service = _WorkerOwnedForwardService()
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+
+        try:
+            response = client.post(
+                "/api/v1/strategy-tests/runs",
+                json=_payload(test_type="forward_virtual", tags=[]),
+            )
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(service.execute_called)
+        data = response.json()
+        self.assertEqual(data["status"], "queued")
+        self.assertEqual(data["requested_matrix"]["test_type"], "forward_virtual")
+        self.assertEqual(data["requested_matrix"]["tags"], ["forward_test"])
+
     def test_existing_backtests_route_remains_registered(self) -> None:
         route_paths = {route.path for route in api_router.routes}
 
@@ -140,12 +181,51 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(data[0]["outcome"], "no_entry")
         self.assertTrue(data[0]["no_entry"])
 
+    def test_get_strategy_test_status_route_returns_live_summary(self) -> None:
+        service = _WorkerOwnedForwardService(
+            summary={
+                "signals_seen": 3,
+                "execution_candidates": 1,
+                "open_positions": 1,
+                "current_equity": 1004.5,
+            }
+        )
+        run = service.enqueue_run(_request(test_type="forward_virtual"))
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+
+        try:
+            response = client.get(f"/api/v1/strategy-tests/runs/{run.run_id}/status")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["run_id"], str(run.run_id))
+        self.assertEqual(data["summary"]["signals_seen"], 3)
+        self.assertEqual(data["summary"]["current_equity"], 1004.5)
+
+    def test_cancel_strategy_test_route_marks_forward_run_cancelled(self) -> None:
+        service = _WorkerOwnedForwardService()
+        run = service.enqueue_run(_request(test_type="forward_virtual"))
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+
+        try:
+            response = client.post(f"/api/v1/strategy-tests/runs/{run.run_id}/cancel")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "cancelled")
+        self.assertTrue(service.cancel_called)
+
 
 def _now() -> datetime:
     return datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def _request(tags: list[str] | None = None) -> StrategyTestRunRequest:
+def _request(**overrides: Any) -> StrategyTestRunRequest:
     now = _now()
     request_kwargs = {
         "strategies": [
@@ -162,14 +242,13 @@ def _request(tags: list[str] | None = None) -> StrategyTestRunRequest:
         "end_at": now + timedelta(days=30),
         "initial_capital": Decimal("1000"),
     }
-    if tags is not None:
-        request_kwargs["tags"] = tags
+    request_kwargs.update(overrides)
     return StrategyTestRunRequest(**request_kwargs)
 
 
-def _payload() -> dict[str, object]:
+def _payload(**overrides: object) -> dict[str, object]:
     now = _now()
-    return {
+    payload: dict[str, object] = {
         "strategies": [
             "trend_pullback_continuation",
             "volatility_squeeze_breakout",
@@ -188,6 +267,8 @@ def _payload() -> dict[str, object]:
         "slippage_bps": "0",
         "params": {"risk": "standard"},
     }
+    payload.update(overrides)
+    return payload
 
 
 class _EphemeralStrategyTestRunStore:
@@ -295,6 +376,7 @@ class _NoopStrategyTestMatrixRunner:
 def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:
     return {
         "user_id": request.user_id,
+        "test_type": getattr(request, "test_type", "historical_backtest"),
         "mode": request.mode,
         "strategies": request.strategies,
         "pairs": [pair.model_dump() for pair in request.pairs],
@@ -310,6 +392,44 @@ def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:
         "tags": request.tags,
         "scenario_count": len(request.strategies) * len(request.pairs) * len(request.timeframes),
     }
+
+
+class _WorkerOwnedForwardService:
+    def __init__(self, summary: dict[str, Any] | None = None) -> None:
+        self.execute_called = False
+        self.cancel_called = False
+        self._runs: dict[UUID, StrategyTestRunResponse] = {}
+        self._summary = summary or {}
+
+    def enqueue_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        run = StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="queued",
+            requested_matrix=_requested_matrix(request),
+            summary=dict(self._summary),
+        )
+        self._runs[run.run_id] = run
+        return run
+
+    def execute_run(self, run_id: UUID, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        _ = request
+        self.execute_called = True
+        updated = self._runs[run_id].model_copy(update={"status": "running"})
+        self._runs[run_id] = updated
+        return updated
+
+    def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
+        run = self._runs.get(run_id)
+        return StrategyTestRunDetailResponse(run=run) if run is not None else None
+
+    def get_status(self, run_id: UUID) -> StrategyTestRunResponse:
+        return self._runs[run_id]
+
+    def cancel_run(self, run_id: UUID) -> StrategyTestRunResponse:
+        self.cancel_called = True
+        run = self._runs[run_id].model_copy(update={"status": "cancelled"})
+        self._runs[run_id] = run
+        return run
 
 
 def _signal(run_id: UUID) -> StrategyTestSignal:

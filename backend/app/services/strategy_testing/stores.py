@@ -183,6 +183,25 @@ class StrategyTestRunStore(Protocol):
     def mark_failed(self, run_id: UUID, error: str) -> StrategyTestRunDetailResponse:
         ...
 
+    def cancel_run(self, run_id: UUID) -> StrategyTestRunDetailResponse:
+        ...
+
+    def update_runtime_state(
+        self,
+        run_id: UUID,
+        *,
+        summary: dict[str, Any],
+        runtime_state: dict[str, Any],
+    ) -> StrategyTestRunDetailResponse:
+        ...
+
+    def list_forward_runs(
+        self,
+        statuses: Sequence[StrategyTestRunStatus],
+        limit: int,
+    ) -> list[StrategyTestRunDetailResponse]:
+        ...
+
 
 class ClickHouseStrategyTestClient(Protocol):
     def command(self, command: str) -> Any:
@@ -558,6 +577,7 @@ class PostgresStrategyTestRunStore:
                 id=uuid4(),
                 user_id=user.id,
                 requested_user_id=request.user_id,
+                test_type=request.test_type,
                 status="queued",
                 mode=request.mode,
                 requested_strategies=list(request.strategies),
@@ -566,6 +586,8 @@ class PostgresStrategyTestRunStore:
                 start_at=request.start_at,
                 end_at=request.end_at,
                 params=_stored_params(request),
+                summary={},
+                runtime_state={},
                 metric_set=list(request.metric_set),
                 tags=list(request.tags),
                 created_at=now,
@@ -623,8 +645,10 @@ class PostgresStrategyTestRunStore:
             run.status = "completed"
             run.finished_at = datetime.now(timezone.utc)
             run.error = None
+            if summary is not None:
+                run.summary = dict(summary)
             session.flush()
-            detail = _run_to_detail(run, summary=summary)
+            detail = _run_to_detail(run)
             session.commit()
             return detail
 
@@ -638,6 +662,49 @@ class PostgresStrategyTestRunStore:
             detail = _run_to_detail(run)
             session.commit()
             return detail
+
+    def cancel_run(self, run_id: UUID) -> StrategyTestRunDetailResponse:
+        with self._session_factory() as session:
+            run = _get_run_or_raise(session, run_id)
+            run.status = "cancelled"
+            run.finished_at = datetime.now(timezone.utc)
+            session.flush()
+            detail = _run_to_detail(run)
+            session.commit()
+            return detail
+
+    def update_runtime_state(
+        self,
+        run_id: UUID,
+        *,
+        summary: dict[str, Any],
+        runtime_state: dict[str, Any],
+    ) -> StrategyTestRunDetailResponse:
+        with self._session_factory() as session:
+            run = _get_run_or_raise(session, run_id)
+            heartbeat = datetime.now(timezone.utc)
+            run.summary = {**dict(summary), "last_heartbeat_at": heartbeat.isoformat()}
+            run.runtime_state = dict(runtime_state)
+            run.last_heartbeat_at = heartbeat
+            session.flush()
+            detail = _run_to_detail(run)
+            session.commit()
+            return detail
+
+    def list_forward_runs(
+        self,
+        statuses: Sequence[StrategyTestRunStatus],
+        limit: int,
+    ) -> list[StrategyTestRunDetailResponse]:
+        with self._session_factory() as session:
+            statement = (
+                select(StrategyTestRun)
+                .where(StrategyTestRun.test_type == "forward_virtual")
+                .where(StrategyTestRun.status.in_(list(statuses)))
+                .order_by(StrategyTestRun.created_at.asc())
+                .limit(limit)
+            )
+            return [_run_to_detail(run) for run in session.scalars(statement).all()]
 
 
 def _get_run_or_raise(session: Session, run_id: UUID) -> StrategyTestRun:
@@ -660,20 +727,19 @@ def _stored_params(request: StrategyTestRunRequest) -> dict[str, Any]:
 
 def _run_to_detail(
     run: StrategyTestRun,
-    *,
-    summary: dict[str, Any] | None = None,
 ) -> StrategyTestRunDetailResponse:
     return StrategyTestRunDetailResponse(
         run=StrategyTestRunResponse(
             run_id=run.id,
             status=cast(StrategyTestRunStatus, run.status),
             requested_matrix=_requested_matrix(run),
-            summary=summary or {},
+            summary=dict(run.summary or {}),
             created_at=run.created_at,
             started_at=run.started_at,
             finished_at=run.finished_at,
             error=run.error,
         ),
+        runtime_state=dict(run.runtime_state or {}),
     )
 
 
@@ -682,6 +748,7 @@ def _requested_matrix(run: StrategyTestRun) -> dict[str, Any]:
     request_params = params.get(REQUEST_PARAMS_KEY, params)
     return {
         "user_id": run.requested_user_id,
+        "test_type": run.test_type,
         "mode": run.mode,
         "strategies": list(run.requested_strategies),
         "pairs": list(run.requested_pairs),

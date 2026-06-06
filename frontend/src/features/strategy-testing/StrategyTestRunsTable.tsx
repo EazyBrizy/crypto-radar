@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, Square } from "lucide-react";
 
 import { Badge } from "@/components/Badge";
 import { DataTable } from "@/components/data-table/DataTable";
@@ -10,6 +10,7 @@ import type { StrategyTestRunResponse, StrategyTestRunStatus } from "./types";
 
 interface StrategyTestRunsTableProps {
   emptyLabel?: string;
+  onCancelRun?: (runId: string) => void;
   onOpenReport?: (run: StrategyTestRunResponse) => void;
   runs: StrategyTestRunResponse[];
   selectedRunId?: string | null;
@@ -17,6 +18,7 @@ interface StrategyTestRunsTableProps {
 
 export function StrategyTestRunsTable({
   emptyLabel = "No strategy test runs",
+  onCancelRun,
   onOpenReport,
   runs,
   selectedRunId
@@ -41,6 +43,11 @@ export function StrategyTestRunsTable({
         cell: ({ row }) => <Badge tone={statusTone(row.original.status)}>{row.original.status}</Badge>
       },
       {
+        id: "test_type",
+        header: "Type",
+        cell: ({ row }) => testType(row.original)
+      },
+      {
         id: "scenario_count",
         header: "Scenarios",
         cell: ({ row }) => String(scenarioCount(row.original))
@@ -57,25 +64,44 @@ export function StrategyTestRunsTable({
       },
       {
         id: "report",
-        header: "Report",
+        header: "Actions",
         enableSorting: false,
-        cell: ({ row }) => (
-          <button
-            aria-label={`Open report for run ${row.original.run_id}`}
-            className="icon-button compact table-action-button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenReport?.(row.original);
-            }}
-            title="Open report"
-            type="button"
-          >
-            <BarChart3 size={16} />
-          </button>
-        )
+        cell: ({ row }) => {
+          const run = row.original;
+          return (
+            <div className="table-action-group">
+              {isRunningForwardRun(run) && onCancelRun ? (
+                <button
+                  aria-label={`Cancel forward run ${run.run_id}`}
+                  className="icon-button compact table-action-button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCancelRun(run.run_id);
+                  }}
+                  title="Cancel forward run"
+                  type="button"
+                >
+                  <Square size={16} />
+                </button>
+              ) : null}
+              <button
+                aria-label={`Open report for run ${run.run_id}`}
+                className="icon-button compact table-action-button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpenReport?.(run);
+                }}
+                title="Open report"
+                type="button"
+              >
+                <BarChart3 size={16} />
+              </button>
+            </div>
+          );
+        }
       }
     ],
-    [onOpenReport]
+    [onCancelRun, onOpenReport]
   );
 
   return (
@@ -116,14 +142,34 @@ function matrixLabel(run: StrategyTestRunResponse): string {
   return `${strategies} strategies / ${pairs} pairs / ${timeframes} timeframes`;
 }
 
-function summaryLabel(run: StrategyTestRunResponse): string {
+function testType(run: StrategyTestRunResponse): string {
+  return run.requested_matrix.test_type ?? "historical_backtest";
+}
+
+function summaryLabel(run: StrategyTestRunResponse): ReactNode {
   if (run.error) return run.error;
+  if (testType(run) === "forward_virtual") {
+    const signals = numericSummary(run, "signals_seen") ?? 0;
+    const open = numericSummary(run, "open_positions") ?? 0;
+    const pnl = numericSummary(run, "realized_pnl");
+    return (
+      <div className="strategy-test-run-counters">
+        <span>{signals} signals</span>
+        <span>{open} open</span>
+        <span>PnL {pnl ?? 0}</span>
+      </div>
+    );
+  }
   const completed = numericSummary(run, "completed_scenarios");
   const failed = numericSummary(run, "failed_scenarios");
   const trades = numericSummary(run, "trades_count");
   if (completed != null || failed != null) return `${completed ?? 0} done / ${failed ?? 0} failed`;
   if (trades != null) return `${trades} trades`;
   return "-";
+}
+
+function isRunningForwardRun(run: StrategyTestRunResponse): boolean {
+  return testType(run) === "forward_virtual" && ["queued", "running", "stopping"].includes(run.status);
 }
 
 function numericSummary(run: StrategyTestRunResponse, key: keyof StrategyTestRunResponse["summary"]): number | null {

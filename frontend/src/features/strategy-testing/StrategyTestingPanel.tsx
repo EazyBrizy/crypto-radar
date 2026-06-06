@@ -6,6 +6,7 @@ import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Badge } from "@/components/Badge";
 import type { MarketPairOption, StrategyConfig } from "@/features/server-state/types";
 import {
+  useCancelStrategyTestRun,
   useRunStrategyTest,
   useStrategyTestReport,
   useStrategyTestRuns
@@ -18,6 +19,7 @@ import type {
   StrategyTestRunRequest,
   StrategyTestRunStatus,
   StrategyTestSameCandlePolicy,
+  StrategyTestType,
   StrategyTestSignalSelectionPolicy
 } from "./types";
 
@@ -29,6 +31,7 @@ interface StrategyTestingPanelProps {
 const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
 const DEFAULT_SELECTED_TIMEFRAMES = ["1m", "5m", "15m"];
 const DEFAULT_MODE: StrategyTestMode = "research_virtual";
+const DEFAULT_TEST_TYPE: StrategyTestType = "historical_backtest";
 const DEFAULT_SAME_CANDLE_POLICY: StrategyTestSameCandlePolicy = "stop_first";
 const DEFAULT_SIGNAL_SELECTION_POLICY: StrategyTestSignalSelectionPolicy = "all_non_overlapping";
 const HISTORICAL_BACKTEST_TOOLTIP = "Historical backtest uses closed candles and does not affect live radar/trades.";
@@ -50,7 +53,7 @@ const SIGNAL_SELECTION_LABELS: Record<StrategyTestSignalSelectionPolicy, string>
   first_actionable: "First actionable",
   highest_score: "Highest score"
 };
-const ACTIVE_RUN_STATUSES = new Set<StrategyTestRunStatus>(["queued", "running"]);
+const ACTIVE_RUN_STATUSES = new Set<StrategyTestRunStatus>(["queued", "running", "stopping"]);
 const STRATEGY_TEST_RUN_POLL_MS = 2_500;
 
 export function StrategyTestingPanel({
@@ -63,6 +66,8 @@ export function StrategyTestingPanel({
   const timeframeOptions = useMemo(() => availableTimeframes(strategyOptions), [strategyOptions]);
   const runsQuery = useStrategyTestRuns({ limit: 25 }, { refetchInterval: STRATEGY_TEST_RUN_POLL_MS });
   const runMutation = useRunStrategyTest();
+  const cancelMutation = useCancelStrategyTestRun();
+  const [testType, setTestType] = useState<StrategyTestType>(DEFAULT_TEST_TYPE);
   const [selectedStrategyCodes, setSelectedStrategyCodes] = useState<string[] | null>(null);
   const [selectedPairIds, setSelectedPairIds] = useState<string[] | null>(null);
   const [selectedTimeframes, setSelectedTimeframes] = useState<string[] | null>(null);
@@ -148,7 +153,8 @@ export function StrategyTestingPanel({
         selectedStrategyCodes: effectiveStrategyCodes,
         selectedTimeframes: validTimeframes,
         slippageBps,
-        startAt
+        startAt,
+        testType
       }));
       setSelectedReportRunId(response.run_id);
     } catch (error) {
@@ -158,11 +164,40 @@ export function StrategyTestingPanel({
 
   return (
     <form className="strategy-testing-panel" onSubmit={handleRun}>
+      <div className="strategy-test-tabs" role="tablist" aria-label="Strategy test type">
+        <button
+          aria-selected={testType === "historical_backtest"}
+          onClick={() => {
+            setTestType("historical_backtest");
+            setMode(DEFAULT_MODE);
+          }}
+          role="tab"
+          type="button"
+        >
+          Backtest
+        </button>
+        <button
+          aria-selected={testType === "forward_virtual"}
+          onClick={() => {
+            setTestType("forward_virtual");
+            setMode("research_virtual");
+            const nextRange = defaultForwardDateRange();
+            setStartAt(nextRange.startAt);
+            setEndAt(nextRange.endAt);
+          }}
+          role="tab"
+          type="button"
+        >
+          Forward test
+        </button>
+      </div>
+
       <div className="strategy-test-status-strip">
         <Badge tone="blue">{scenarioEstimate} scenarios</Badge>
         <Badge tone="purple">{runs.length} recent runs</Badge>
         {runsQuery.isLoading ? <Badge tone="yellow">Loading runs</Badge> : null}
         {hasActiveRun ? <Badge tone="yellow">Run in progress</Badge> : null}
+        {testType === "forward_virtual" ? <Badge tone="purple">Isolated virtual account</Badge> : null}
       </div>
 
       <div className="strategy-test-grid">
@@ -313,11 +348,12 @@ export function StrategyTestingPanel({
       <div className="strategy-test-actions">
         <button className="primary-action" disabled={!canRun} type="submit">
           {runMutation.isPending ? <RefreshCw size={16} /> : <Play size={16} />}
-          Run strategy test
+          {testType === "forward_virtual" ? "Start forward test" : "Run strategy test"}
         </button>
       </div>
 
       <StrategyTestRunsTable
+        onCancelRun={(runId) => void cancelMutation.mutateAsync(runId)}
         onOpenReport={(run) => setSelectedReportRunId(run.run_id)}
         runs={runs}
         selectedRunId={selectedReportRunId}
@@ -447,6 +483,17 @@ function defaultDateRange(): { startAt: string; endAt: string } {
   };
 }
 
+function defaultForwardDateRange(): { startAt: string; endAt: string } {
+  const start = new Date();
+  start.setSeconds(0, 0);
+  const end = new Date(start);
+  end.setHours(end.getHours() + 4);
+  return {
+    endAt: toDateTimeLocal(end),
+    startAt: toDateTimeLocal(start)
+  };
+}
+
 function toDateTimeLocal(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -467,7 +514,8 @@ function buildRunRequest({
   selectedStrategyCodes,
   selectedTimeframes,
   slippageBps,
-  startAt
+  startAt,
+  testType
 }: {
   advancedParams: {
     allowOppositeSignalFlip: boolean;
@@ -487,6 +535,7 @@ function buildRunRequest({
   selectedTimeframes: string[];
   slippageBps: string;
   startAt: string;
+  testType: StrategyTestType;
 }): StrategyTestRunRequest {
   return {
     end_at: new Date(endAt).toISOString(),
@@ -506,7 +555,8 @@ function buildRunRequest({
     slippage_bps: Number(slippageBps),
     start_at: new Date(startAt).toISOString(),
     strategies: selectedStrategyCodes,
-    tags: ["backtest"],
+    tags: testType === "forward_virtual" ? ["forward_test"] : ["backtest"],
+    test_type: testType,
     timeframes: selectedTimeframes
   };
 }

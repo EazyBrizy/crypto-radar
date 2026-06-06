@@ -13,6 +13,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/use-radar-queries", () => ({
+  useCancelStrategyTestRun: () => ({
+    error: null,
+    isPending: false,
+    mutateAsync: vi.fn()
+  }),
   useRunStrategyTest: () => ({
     error: null,
     isPending: false,
@@ -52,6 +57,13 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("button", { name: "Исторический virtual backtest" })).toHaveClass("active");
     expect(screen.getByRole("button", { name: "Production-like backtest" })).toBeInTheDocument();
     expect(screen.getByTitle("Historical backtest uses closed candles and does not affect live radar/trades.")).toBeInTheDocument();
+  });
+
+  it("renders Backtest and Forward test tabs", () => {
+    renderPanel();
+
+    expect(screen.getByRole("tab", { name: "Backtest" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Forward test" })).toBeInTheDocument();
   });
 
   it("disables Run when the matrix is missing", () => {
@@ -110,6 +122,32 @@ describe("StrategyTestingPanel", () => {
       strategies: ["trend_pullback_continuation"],
       tags: ["backtest"],
       timeframes: ["1m", "5m", "15m"]
+    }));
+  });
+
+  it("starts forward test request with forward_virtual test type", async () => {
+    const user = userEvent.setup();
+    mocks.runStrategyTest.mockResolvedValue({
+      created_at: "2026-06-02T00:00:00.000Z",
+      error: null,
+      finished_at: null,
+      requested_matrix: { scenario_count: 3, test_type: "forward_virtual" },
+      run_id: "11111111-1111-4111-8111-111111111111",
+      started_at: null,
+      status: "queued",
+      summary: {}
+    });
+
+    renderPanel();
+
+    await user.click(screen.getByRole("tab", { name: "Forward test" }));
+    await user.click(screen.getByRole("button", { name: /Start forward test/u }));
+
+    await waitFor(() => expect(mocks.runStrategyTest).toHaveBeenCalledTimes(1));
+    expect(mocks.runStrategyTest).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "research_virtual",
+      tags: ["forward_test"],
+      test_type: "forward_virtual"
     }));
   });
 

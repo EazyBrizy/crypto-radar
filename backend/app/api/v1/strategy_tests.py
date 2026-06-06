@@ -35,7 +35,8 @@ async def create_strategy_test_run(
         run = service.enqueue_run(request)
     except (LookupError, ValueError) as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    background_tasks.add_task(service.execute_run, run.run_id, request)
+    if request.test_type == "historical_backtest":
+        background_tasks.add_task(service.execute_run, run.run_id, request)
     return run
 
 
@@ -61,6 +62,28 @@ async def get_strategy_test_run(
     if run is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Strategy test run not found")
     return run
+
+
+@router.get("/runs/{run_id}/status", response_model=StrategyTestRunResponse)
+async def get_strategy_test_run_status(
+    run_id: UUID,
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> StrategyTestRunResponse:
+    try:
+        return service.get_status(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/cancel", response_model=StrategyTestRunResponse)
+async def cancel_strategy_test_run(
+    run_id: UUID,
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> StrategyTestRunResponse:
+    try:
+        return service.cancel_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/trades", response_model=list[StrategyTestTrade])

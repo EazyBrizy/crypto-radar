@@ -1,5 +1,6 @@
 export type StrategyTestMode = "discovery" | "research_virtual" | "production_like";
-export type StrategyTestRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type StrategyTestType = "historical_backtest" | "forward_virtual";
+export type StrategyTestRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopping";
 export type StrategyTestSameCandlePolicy = "stop_first" | "target_first" | "ignore_ambiguous";
 export type StrategyTestSignalSelectionPolicy =
   | "first_actionable"
@@ -27,6 +28,7 @@ export interface StrategyTestPair {
 
 export interface StrategyTestRunRequest {
   user_id?: string;
+  test_type?: StrategyTestType;
   strategies: string[];
   pairs: StrategyTestPair[];
   timeframes: string[];
@@ -43,6 +45,7 @@ export interface StrategyTestRunRequest {
 }
 
 export interface StrategyTestRequestedMatrix {
+  test_type?: StrategyTestType;
   strategies?: string[];
   pairs?: StrategyTestPair[];
   timeframes?: string[];
@@ -64,6 +67,19 @@ export interface StrategyTestRunSummary {
   no_entry_count?: number;
   risk_rejections?: number;
   execution_rejections?: number;
+  execution_candidates?: number;
+  blocked_signals?: number;
+  pending_entries?: number;
+  entry_touched?: number;
+  filled_trades?: number;
+  open_positions?: number;
+  closed_trades?: number;
+  no_entry?: number;
+  current_equity?: number;
+  realized_pnl?: number;
+  unrealized_pnl?: number;
+  last_tick_at?: string | null;
+  last_signal_at?: string | null;
   [key: string]: unknown;
 }
 

@@ -24,6 +24,12 @@ MIGRATION_PATH = (
     / "versions"
     / "202606010003_create_strategy_test_runs.py"
 )
+FORWARD_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "alembic"
+    / "versions"
+    / "202606060004_add_forward_strategy_test_runtime.py"
+)
 
 
 class StrategyTestingRunModelTest(unittest.TestCase):
@@ -45,6 +51,22 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("ix_strategy_test_runs_status_created", index_names)
         self.assertIn("ix_strategy_test_runs_mode", index_names)
 
+    def test_model_has_forward_runtime_columns_and_statuses(self) -> None:
+        table = StrategyTestRun.__table__
+        column_names = set(table.c.keys())
+        status_constraints = {
+            constraint.name: str(constraint.sqltext)
+            for constraint in table.constraints
+            if constraint.name == "ck_strategy_test_runs_status"
+        }
+
+        self.assertIn("test_type", column_names)
+        self.assertIn("summary", column_names)
+        self.assertIn("runtime_state", column_names)
+        self.assertIn("last_heartbeat_at", column_names)
+        self.assertIn("stopping", status_constraints["ck_strategy_test_runs_status"])
+        self.assertIn("cancelled", status_constraints["ck_strategy_test_runs_status"])
+
     def test_migration_contains_table_constraints_and_indexes(self) -> None:
         migration = MIGRATION_PATH.read_text(encoding="utf-8")
 
@@ -60,6 +82,17 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("ix_strategy_test_runs_status_created", migration)
         self.assertIn("ix_strategy_test_runs_mode", migration)
         self.assertIn("op.drop_table(\"strategy_test_runs\")", migration)
+
+    def test_forward_runtime_migration_exists(self) -> None:
+        self.assertTrue(FORWARD_MIGRATION_PATH.exists())
+        migration = FORWARD_MIGRATION_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('revision = "202606060004"', migration)
+        self.assertIn("test_type", migration)
+        self.assertIn("runtime_state", migration)
+        self.assertIn("last_heartbeat_at", migration)
+        self.assertIn("stopping", migration)
+        self.assertIn("cancelled", migration)
 
 
 class PostgresStrategyTestRunStoreTest(unittest.TestCase):
@@ -180,6 +213,38 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
             self.assertEqual(run.error, "historical data unavailable")
             self.assertIsNotNone(run.finished_at)
 
+    def test_update_runtime_state_persists_summary_and_heartbeat(self) -> None:
+        created = self.store.create_run(_request())
+
+        updated = self.store.update_runtime_state(
+            created.run.run_id,
+            summary={"signals_seen": 2, "open_positions": 1},
+            runtime_state={"seen_candle_keys": ["bybit:BTCUSDT:1m:1"]},
+        )
+        fetched = self.store.get_run(created.run.run_id)
+
+        self.assertEqual(updated.run.summary["signals_seen"], 2)
+        self.assertIsNotNone(updated.run.summary["last_heartbeat_at"])
+        self.assertIsNotNone(fetched)
+        assert fetched is not None
+        self.assertEqual(fetched.run.summary["open_positions"], 1)
+        with self.SessionFactory() as session:
+            run = session.get(StrategyTestRun, created.run.run_id)
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.summary["signals_seen"], 2)
+            self.assertEqual(run.runtime_state["seen_candle_keys"], ["bybit:BTCUSDT:1m:1"])
+            self.assertIsNotNone(run.last_heartbeat_at)
+
+    def test_cancel_run_persists_cancelled_status(self) -> None:
+        created = self.store.create_run(_request())
+        self.store.mark_running(created.run.run_id)
+
+        cancelled = self.store.cancel_run(created.run.run_id)
+
+        self.assertEqual(cancelled.run.status, "cancelled")
+        self.assertIsNotNone(cancelled.run.finished_at)
+
     def test_demo_user_resolves_to_seeded_demo_username(self) -> None:
         created = self.store.create_run(_request(user_id="demo_user"))
 
@@ -216,6 +281,8 @@ def _patch_sqlite_column_types() -> list[tuple[Any, Any]]:
         "requested_pairs",
         "requested_timeframes",
         "params",
+        "summary",
+        "runtime_state",
         "metric_set",
         "tags",
     ):
@@ -273,6 +340,7 @@ def _create_sqlite_tables(engine: Any) -> None:
                     id UUID PRIMARY KEY,
                     user_id UUID NOT NULL,
                     requested_user_id TEXT NOT NULL,
+                    test_type TEXT NOT NULL DEFAULT 'historical_backtest',
                     status TEXT NOT NULL,
                     mode TEXT NOT NULL,
                     requested_strategies JSON NOT NULL,
@@ -281,12 +349,15 @@ def _create_sqlite_tables(engine: Any) -> None:
                     start_at DATETIME NOT NULL,
                     end_at DATETIME NOT NULL,
                     params JSON NOT NULL,
+                    summary JSON NOT NULL DEFAULT '{}',
+                    runtime_state JSON NOT NULL DEFAULT '{}',
                     metric_set JSON NOT NULL,
                     tags JSON NOT NULL,
                     error TEXT,
                     created_at DATETIME NOT NULL,
                     started_at DATETIME,
                     finished_at DATETIME,
+                    last_heartbeat_at DATETIME,
                     FOREIGN KEY(user_id) REFERENCES app_users(id)
                 )
                 """

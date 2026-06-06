@@ -42,7 +42,8 @@ export function StrategyTestReport({
   report,
   run
 }: StrategyTestReportProps) {
-  const summaryMetrics = report?.summary_metrics ?? summaryMetricsFromRun(run);
+  const liveForward = !report && isForwardRun(run);
+  const summaryMetrics = liveForward ? [] : report?.summary_metrics ?? summaryMetricsFromRun(run);
   const adjustments = report?.candidate_adjustments ?? [];
 
   return (
@@ -71,7 +72,9 @@ export function StrategyTestReport({
             {report ? <Badge tone="purple">{report.sections.length} sections</Badge> : null}
           </div>
 
-          <StrategyTestMetricGrid emptyLabel="No summary metrics" limit={9} metrics={summaryMetrics} />
+          {liveForward ? null : (
+            <StrategyTestMetricGrid emptyLabel="No summary metrics" limit={9} metrics={summaryMetrics} />
+          )}
 
           {report ? (
             <div className="strategy-test-report-sections">
@@ -89,12 +92,35 @@ export function StrategyTestReport({
               <TradeListSection report={report} />
               <CandidateAdjustmentsSection adjustments={adjustments} />
             </div>
+          ) : liveForward ? (
+            <LiveForwardDashboard run={run} />
           ) : (
             <div className="empty-state compact-empty">No report selected</div>
           )}
         </>
       ) : null}
     </section>
+  );
+}
+
+function LiveForwardDashboard({ run }: { run: StrategyTestRunResponse | null }) {
+  const summary = run?.summary ?? {};
+  return (
+    <ReportSection name="Live forward test">
+      <div className="strategy-test-summary-grid">
+        {liveSummaryItem("Signals found", summary.signals_seen)}
+        {liveSummaryItem("Execution candidates", summary.execution_candidates)}
+        {liveSummaryItem("Blocked", summary.blocked_signals)}
+        {liveSummaryItem("Pending", summary.pending_entries)}
+        {liveSummaryItem("Filled", summary.filled_trades)}
+        {liveSummaryItem("Open positions", summary.open_positions)}
+        {liveSummaryItem("Closed trades", summary.closed_trades)}
+        {liveSummaryItem("Current equity", summary.current_equity)}
+        {liveSummaryItem("Realized PnL", summary.realized_pnl)}
+        {liveSummaryItem("Unrealized PnL", summary.unrealized_pnl)}
+        {liveSummaryItem("Last tick", summary.last_tick_at)}
+      </div>
+    </ReportSection>
   );
 }
 
@@ -275,6 +301,15 @@ function summaryItem(label: string, value: unknown) {
   );
 }
 
+function liveSummaryItem(label: string, value: unknown) {
+  return (
+    <div className="strategy-test-summary-item" key={label}>
+      <span>{label}</span>
+      <strong>{value == null || value === "" ? "-" : String(value)}</strong>
+    </div>
+  );
+}
+
 function summaryMetricsFromRun(run: StrategyTestRunResponse | null): StrategyTestMetric[] {
   if (!run) return [];
   return Object.entries(run.summary)
@@ -327,6 +362,10 @@ function confidenceTone(confidence: StrategyTestCandidateAdjustment["confidence"
 
 function metricNumber(value: unknown): number {
   return typeof value === "number" ? value : 0;
+}
+
+function isForwardRun(run: StrategyTestRunResponse | null): boolean {
+  return run?.requested_matrix.test_type === "forward_virtual" && ["queued", "running", "stopping"].includes(run.status);
 }
 
 function columnLabel(column: string): string {

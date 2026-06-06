@@ -27,6 +27,7 @@ export const strategyTestsApi = {
     return rawJson<StrategyTestRunResponse>("/api/v1/strategy-tests/runs", {
       body: JSON.stringify({
         user_id: userId,
+        test_type: request.test_type ?? "historical_backtest",
         strategies: request.strategies,
         pairs: request.pairs,
         timeframes: request.timeframes,
@@ -52,6 +53,12 @@ export const strategyTestsApi = {
   async getRun(runId: string): Promise<StrategyTestRunResponse> {
     const detail = await rawJson<StrategyTestRunDetailResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}`);
     return detail.run;
+  },
+  async getStatus(runId: string): Promise<StrategyTestRunResponse> {
+    return rawJson<StrategyTestRunResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/status`);
+  },
+  async cancelRun(runId: string): Promise<StrategyTestRunResponse> {
+    return rawJson<StrategyTestRunResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
   },
   async getTrades(runId: string): Promise<StrategyTestTrade[]> {
     return rawJson<StrategyTestTrade[]>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/trades`);
@@ -84,5 +91,5 @@ function strategyTestReportsPath(params: StrategyTestReportListParams): string {
 }
 
 async function rawJson<T>(path: string, init?: RequestInit): Promise<T> {
-  return requestJson<T>(path, init);
+  return init === undefined ? requestJson<T>(path) : requestJson<T>(path, init);
 }

@@ -23,6 +23,7 @@ from app.workers.exchange_instrument_worker import ExchangeInstrumentRuleSyncRun
 from app.workers.orderbook_snapshot_worker import OrderbookSnapshotWorker
 from app.workers.real_position_sync_worker import BybitRealPositionSyncClient, RealPositionSyncWorker
 from app.workers.signal_worker import ScannerRunner, SignalExpiryWorker
+from app.workers.strategy_forward_test_worker import StrategyForwardTestWorker
 
 load_dotenv()
 
@@ -54,6 +55,10 @@ def _real_position_sync_enabled() -> bool:
     return settings.real_position_sync_enabled
 
 
+def _strategy_forward_test_worker_enabled() -> bool:
+    return settings.strategy_forward_test_worker_enabled
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     runner = ScannerRunner()
@@ -61,6 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     derivative_snapshot_runner = DerivativeSnapshotSyncRunner()
     orderbook_snapshot_worker = OrderbookSnapshotWorker()
     signal_expiry_worker = SignalExpiryWorker()
+    strategy_forward_test_worker = StrategyForwardTestWorker()
     real_position_sync_worker = RealPositionSyncWorker(
         client=BybitRealPositionSyncClient(),
         interval_seconds=settings.real_position_sync_interval_seconds,
@@ -70,17 +76,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     derivative_snapshot_sync_enabled = _derivative_snapshot_sync_enabled()
     orderbook_snapshot_sync_enabled = _orderbook_snapshot_sync_enabled()
     real_position_sync_enabled = _real_position_sync_enabled()
+    strategy_forward_test_worker_enabled = _strategy_forward_test_worker_enabled()
     app.state.scanner_runner = runner
     app.state.exchange_instrument_rule_sync_runner = instrument_rule_runner
     app.state.derivative_snapshot_sync_runner = derivative_snapshot_runner
     app.state.orderbook_snapshot_worker = orderbook_snapshot_worker
     app.state.signal_expiry_worker = signal_expiry_worker
+    app.state.strategy_forward_test_worker = strategy_forward_test_worker
     app.state.real_position_sync_worker = real_position_sync_worker
     app.state.scanner_autostart_enabled = scanner_autostart_enabled
     app.state.exchange_instrument_rule_sync_enabled = instrument_rule_sync_enabled
     app.state.derivative_snapshot_sync_enabled = derivative_snapshot_sync_enabled
     app.state.orderbook_snapshot_sync_enabled = orderbook_snapshot_sync_enabled
     app.state.real_position_sync_enabled = real_position_sync_enabled
+    app.state.strategy_forward_test_worker_enabled = strategy_forward_test_worker_enabled
 
     await asyncio.to_thread(warn_if_migrations_outdated)
 
@@ -103,6 +112,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     signal_expiry_worker.start()
 
+    if strategy_forward_test_worker_enabled:
+        strategy_forward_test_worker.start()
+    else:
+        logging.info("Strategy forward test worker disabled by settings")
+
     if real_position_sync_enabled:
         real_position_sync_worker.start()
     else:
@@ -117,6 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await signal_expiry_worker.stop()
+        await strategy_forward_test_worker.stop()
         await orderbook_snapshot_worker.stop()
         await real_position_sync_worker.stop()
         await derivative_snapshot_runner.stop()

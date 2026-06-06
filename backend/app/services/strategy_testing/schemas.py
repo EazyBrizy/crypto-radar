@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
-StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+StrategyTestType = Literal["historical_backtest", "forward_virtual"]
+StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "stopping"]
 StrategyTestSameCandlePolicy = Literal[
     "conservative_stop_first",
     "target_first",
@@ -48,6 +49,7 @@ class StrategyTestPair(BaseModel):
 
 class StrategyTestRunRequest(BaseModel):
     user_id: str = "demo_user"
+    test_type: StrategyTestType = "historical_backtest"
     strategies: list[str]
     pairs: list[StrategyTestPair]
     timeframes: list[str]
@@ -75,10 +77,7 @@ class StrategyTestRunRequest(BaseModel):
     @field_validator("tags")
     @classmethod
     def normalize_tags(cls, value: list[str]) -> list[str]:
-        tags = _normalize_unique_strings(value, field_name="tags", allow_empty_list=True)
-        if "backtest" not in tags:
-            tags.append("backtest")
-        return tags
+        return _normalize_unique_strings(value, field_name="tags", allow_empty_list=True)
 
     @field_validator("metric_set")
     @classmethod
@@ -92,6 +91,12 @@ class StrategyTestRunRequest(BaseModel):
         self.pairs = _dedupe_pairs(self.pairs)
         if self.end_at <= self.start_at:
             raise ValueError("start_at must be before end_at")
+        required_tag = "forward_test" if self.test_type == "forward_virtual" else "backtest"
+        forbidden_tag = "backtest" if self.test_type == "forward_virtual" else "forward_test"
+        tags = [tag for tag in self.tags if tag != forbidden_tag]
+        if required_tag not in tags:
+            tags.append(required_tag)
+        self.tags = tags
         return self
 
 
@@ -111,6 +116,7 @@ class StrategyTestRunDetailResponse(BaseModel):
     trades_count: int = 0
     warnings: list[str] = Field(default_factory=list)
     rejections: list[str] = Field(default_factory=list)
+    runtime_state: dict[str, Any] = Field(default_factory=dict)
 
 
 class StrategyTestRunListResponse(BaseModel):

@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { StrategyTestReport } from "./StrategyTestReport";
-import type { StrategyTestReport as StrategyTestReportData } from "./types";
+import type { StrategyTestReport as StrategyTestReportData, StrategyTestRunResponse } from "./types";
 
 describe("StrategyTestReport", () => {
   it("renders Strategy Test Report", () => {
@@ -34,6 +34,17 @@ describe("StrategyTestReport", () => {
     expect(screen.getByText("Signal list")).toBeInTheDocument();
     expect(screen.getByText("signal-2")).toBeInTheDocument();
     expect(screen.getAllByText("no_entry").length).toBeGreaterThan(0);
+  });
+
+  it("renders live forward dashboard for running forward tests", () => {
+    render(<StrategyTestReport report={null} run={forwardRun()} />);
+
+    expect(screen.getByText("Live forward test")).toBeInTheDocument();
+    expect(screen.getByText("Signals found")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("Open positions")).toBeInTheDocument();
+    expect(screen.getByText("Current equity")).toBeInTheDocument();
+    expect(screen.getByText("1012.5")).toBeInTheDocument();
   });
 });
 
@@ -129,4 +140,33 @@ function report(overrides: Partial<StrategyTestReportData> = {}): StrategyTestRe
     warnings: []
   };
   return { ...base, ...overrides };
+}
+
+function forwardRun(): StrategyTestRunResponse {
+  return {
+    created_at: "2026-06-06T10:00:00.000Z",
+    error: null,
+    finished_at: null,
+    requested_matrix: {
+      pairs: [{ exchange: "bybit", symbol: "BTCUSDT" }],
+      scenario_count: 1,
+      strategies: ["trend_pullback_continuation"],
+      test_type: "forward_virtual" as const,
+      timeframes: ["1m"]
+    },
+    run_id: "11111111-1111-4111-8111-111111111111",
+    started_at: "2026-06-06T10:00:00.000Z",
+    status: "running" as const,
+    summary: {
+      blocked_signals: 1,
+      current_equity: 1012.5,
+      execution_candidates: 2,
+      filled_trades: 1,
+      last_tick_at: "2026-06-06T10:02:00.000Z",
+      open_positions: 1,
+      realized_pnl: 12.5,
+      signals_seen: 3,
+      unrealized_pnl: 2.5
+    }
+  };
 }

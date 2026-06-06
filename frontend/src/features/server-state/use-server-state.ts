@@ -261,6 +261,29 @@ export function useRunStrategyTest() {
   });
 }
 
+export function useCancelStrategyTestRun() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (runId: string) => api.strategyTests.cancelRun(runId),
+    onSuccess: async (response) => {
+      queryClient.setQueryData(serverStateKeys.strategyTests.run(response.run_id), response);
+      queryClient.setQueryData(serverStateKeys.strategyTests.status(response.run_id), response);
+      await queryClient.invalidateQueries({ queryKey: serverStateKeys.strategyTests.all() });
+    }
+  });
+}
+
+export function useStrategyTestStatus(runId: string | null, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestRunResponse>({
+    queryKey: serverStateKeys.strategyTests.status(runId ?? "none"),
+    queryFn: () => api.strategyTests.getStatus(runId as string),
+    enabled: options.enabled ?? Boolean(runId),
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
 export function useStrategyTestReport(runId: string | null, options: PlannedQueryOptions = {}) {
   return useQuery<StrategyTestReport>({
     queryKey: serverStateKeys.strategyTests.report(runId ?? "none"),

@@ -276,7 +276,7 @@ async def close_market_trade(
     virtual_trade = virtual_trading_service.get_virtual_trade(trade_id)
     if virtual_trade is not None:
         invalidation_alert = (
-            trade_invalidation_service.evaluate_trade(virtual_trade)
+            _evaluate_invalidation_for_close(virtual_trade)
             if request.reason == "invalidation"
             else None
         )
@@ -337,7 +337,7 @@ async def close_virtual_trade(
 ) -> VirtualTrade:
     current_trade = virtual_trading_service.get_virtual_trade(trade_id)
     invalidation_alert = (
-        trade_invalidation_service.evaluate_trade(current_trade)
+        _evaluate_invalidation_for_close(current_trade)
         if current_trade is not None and request.reason == "invalidation"
         else None
     )
@@ -362,6 +362,18 @@ async def close_virtual_trade(
             )
     await _publish_virtual_close_events(trade)
     return annotate_virtual_trade_view(trade)
+
+
+def _evaluate_invalidation_for_close(trade: VirtualTrade) -> TradeInvalidationAlert | None:
+    try:
+        return trade_invalidation_service.evaluate_trade(trade)
+    except Exception as exc:
+        logger.warning(
+            "Trade invalidation lookup skipped for close-market trade %s: %s",
+            trade.id,
+            exc,
+        )
+        return None
 
 
 async def _publish_virtual_close_events(trade: VirtualTrade) -> None:

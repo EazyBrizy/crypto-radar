@@ -162,28 +162,19 @@ Start the scanner explicitly with `POST /api/v1/radar/scanner/start` after `/hea
 - Never bypass `RiskGateService` for virtual or real entry paths.
 - Never send live orders unless all live safety flags, exchange connection checks, account snapshot checks, and protective-order checks pass.
 
-## Known fix 6.0 regressions
+## Local Test Runtime
 
-Baseline captured on 2026-06-11 before runtime changes. The documented project command is `PYTHONPATH=backend:. python -m pytest backend/tests -q`; in this workspace plain `python`, `py -3.12`, and the local `.venv` launchers are unavailable or point to a missing Python 3.12 install, so the same pytest command was executed with the bundled Codex Python and `PYTHONPATH=backend;.` on Windows.
+Use the repository-managed backend virtual environment for local tests. The setup script installs
+uv-managed Python 3.12 into `.uv-python`, recreates the root `.venv`, and installs
+`backend/requirements-dev.txt`:
 
-Baseline result:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_backend.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\test_backend.ps1
+```
 
-- Full backend suite: `14 failed, 938 passed, 49 warnings, 4 subtests passed`.
-- `backend/tests/test_backtest_runner.py`: 4 failed, 6 passed.
-- `backend/tests/test_strategy_test_signal_selection.py`: 6 failed, 3 passed.
-- `backend/tests/test_signal_lifecycle_worker.py`: 2 failed, 5 passed.
-- `backend/tests/test_virtual_trading_api_realtime_smoke.py`: 1 failed.
-- `backend/tests/test_trading_e2e_virtual_flow.py`: 3 passed.
-
-Failure groups and likely root cause:
-
-- Backtest runner and strategy-test signal selection produce zero trades where tests expect opened positions. The common symptom is empty `trades_count`, empty `metrics["by_entry_model"]`, and empty selected trades. This matches the fix 6.0 RiskGate/trade-plan completeness regression: synthetic strategy signals are reaching execution without a complete normalized trade plan/invalidation contract.
-- `backend/tests/test_pipeline_contract.py::PipelineContractTest::test_architecture_project_contains_contract_topics` fails because `docs/architectureproject.md` is missing.
-- Signal lifecycle realtime publishing fails in `backend/app/services/signal_views.py` because old or test-created signals can carry `confirmation` as a `dict`, while `_rr_metadata_sources` expects a typed object with `.checks`.
-- Virtual trading API realtime smoke fails because the test helper `_radar_signal()` does not accept `execution_gate`, while the strategy signal upsert path forwards `signal.execution_gate`.
-- Baseline found a case-sensitive docs mismatch: README and `docs/PROJECT_STRUCTURE.md` referenced `docs/FRONTEND.md`, while the frontend guide filename used lowercase casing.
-
-No runtime logic was changed for this baseline.
+`pyproject.toml` configures pytest with `pythonpath = ["backend", "."]`, so tests do not need a
+manual `PYTHONPATH` or a Codex bundled Python fallback.
 
 ## Change Rules
 

@@ -1,2 +1,12 @@
 [tool.mypy]
 strict = true
+
+[tool.pytest.ini_options]
+cache_dir = ".pytest-cache"
+pythonpath = [
+    "backend",
+    ".",
+]
+testpaths = [
+    "backend/tests",
+]

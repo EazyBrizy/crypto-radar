@@ -38,8 +38,8 @@ def warn_if_migrations_outdated() -> None:
     except Exception as exc:
         logger.warning(
             "Could not verify Alembic migration status at startup: %s. "
-            "Run `cd backend; .\\.venv\\Scripts\\python.exe -m alembic current` "
-            "and compare with `cd backend; .\\.venv\\Scripts\\python.exe -m alembic heads`.",
+            "Run `cd backend; ..\\.venv\\Scripts\\python.exe -m alembic current` "
+            "and compare with `cd backend; ..\\.venv\\Scripts\\python.exe -m alembic heads`.",
             exc,
         )
         return
@@ -49,7 +49,7 @@ def warn_if_migrations_outdated() -> None:
 
     logger.warning(
         "Database migrations are not at Alembic head: current=%s head=%s. "
-        "Run `cd backend; .\\.venv\\Scripts\\python.exe -m alembic upgrade head` before local checks.",
+        "Run `cd backend; ..\\.venv\\Scripts\\python.exe -m alembic upgrade head` before local checks.",
         _format_heads(status.current_heads),
         _format_heads(status.script_heads),
     )

@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendDir = Join-Path $RootDir "backend"
 $FrontendDir = Join-Path $RootDir "frontend"
-$BackendVenvPython = Join-Path $BackendDir ".venv\Scripts\python.exe"
+$BackendVenvPython = Join-Path $RootDir ".venv\Scripts\python.exe"
 $BackendPython = $BackendVenvPython
 $BackendPythonPath = $null
 $ComposeFile = Join-Path $RootDir "infra\docker-compose.yml"
@@ -281,13 +281,13 @@ else {
     if ($BundledPython) {
         $BackendPython = $BundledPython
         $BackendPythonPath = @(
-            (Join-Path $BackendDir ".venv\Lib\site-packages"),
+            (Join-Path $RootDir ".venv\Lib\site-packages"),
             $BackendDir
         ) -join ";"
-        Write-WarningLine "backend\.venv Python is not runnable; using bundled Python with backend\.venv site-packages."
+        Write-WarningLine ".venv Python is not runnable; using bundled Python with .venv site-packages."
     }
     else {
-        throw "backend\.venv was not found or is not runnable. Create it first: cd backend; py -3.12 -m venv .venv; .\.venv\Scripts\python.exe -m pip install -r requirements.txt"
+        throw ".venv was not found or is not runnable. Create it first: powershell -ExecutionPolicy Bypass -File .\scripts\setup_backend.ps1"
     }
 }
 

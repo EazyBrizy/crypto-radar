@@ -20,12 +20,27 @@ class StaticSignals:
         return None
 
 
+class RaisingSignals:
+    def get_signal(self, signal_id: str) -> RadarSignal | None:
+        raise RuntimeError(f"signal store unavailable: {signal_id}")
+
+
 class StaticCandles:
     def __init__(self, candles: list[OHLCVCandle]) -> None:
         self._candles = candles
 
     def list_candles(self, **_kwargs) -> list[OHLCVCandle]:
         return self._candles
+
+
+class RaisingCandles:
+    def list_candles(self, **kwargs) -> list[OHLCVCandle]:
+        raise RuntimeError(f"candle store unavailable: {kwargs.get('symbol')}")
+
+
+class RaisingFeatureEngine:
+    def process_candles(self, candles: list[OHLCVCandle]) -> Features | None:
+        raise RuntimeError(f"feature engine unavailable: {len(candles)} candles")
 
 
 class MemoryActions:
@@ -39,6 +54,14 @@ class MemoryActions:
         record = TradeInvalidationActionRecord(action=action, created_at=datetime.now(timezone.utc))
         self.records[(alert.trade_id, alert.fingerprint)] = record
         return record
+
+
+class RaisingActions:
+    def latest_for_alert(self, alert):
+        raise RuntimeError(f"action store unavailable: {alert.trade_id}")
+
+    def record(self, alert, action, *, user_id: str = "demo_user"):
+        raise RuntimeError("record should not be called")
 
 
 class StaticOpenTrades:
@@ -66,6 +89,117 @@ class CapturingBroker:
 
 
 class TradeInvalidationServiceTest(unittest.TestCase):
+    def test_signal_lookup_failure_returns_best_effort_unavailable_alert(self) -> None:
+        trade = _trade(strategy="trend_pullback_continuation", side="long")
+        service = TradeInvalidationService(
+            signals=RaisingSignals(),
+            candles=StaticCandles(_flat_then_drop_candles()),
+            feature_engine=FeatureEngine(),
+            actions=MemoryActions(),
+        )
+
+        with self.assertLogs("app.services.trade_invalidation", level="WARNING") as logs:
+            alert = service.evaluate_trade(trade)
+
+        self.assertFalse(alert.invalidated)
+        self.assertEqual(alert.status, "unavailable")
+        self.assertIn("Signal invalidation plan is unavailable", alert.reason or "")
+        self.assertIn("signal store unavailable", "\n".join(logs.output))
+
+    def test_candle_lookup_failure_returns_best_effort_missing_candles_alert(self) -> None:
+        trade = _trade(strategy="trend_pullback_continuation", side="long")
+        signal = _signal(
+            strategy=trade.strategy,
+            direction="long",
+            invalidation=SignalInvalidationSnapshot(
+                price=94.0,
+                hard_stop=90.0,
+                conditions=["Close below EMA50"],
+                metadata={"ema_50": 99.0},
+            ),
+        )
+        service = TradeInvalidationService(
+            signals=StaticSignals(signal),
+            candles=RaisingCandles(),
+            feature_engine=FeatureEngine(),
+            actions=MemoryActions(),
+        )
+
+        with self.assertLogs("app.services.trade_invalidation", level="WARNING") as logs:
+            alert = service.evaluate_trade(trade)
+
+        log_output = "\n".join(logs.output)
+        self.assertFalse(alert.invalidated)
+        self.assertEqual(alert.status, "unavailable")
+        self.assertEqual(alert.metadata["data_status"], "missing_candles")
+        self.assertEqual(alert.current_price, trade.current_price)
+        self.assertIn(trade.id, log_output)
+        self.assertIn(trade.exchange, log_output)
+        self.assertIn(trade.symbol, log_output)
+        self.assertIn(trade.timeframe, log_output)
+        self.assertIn("candle store unavailable", log_output)
+
+    def test_feature_processing_failure_returns_best_effort_missing_candles_alert(self) -> None:
+        trade = _trade(strategy="trend_pullback_continuation", side="long")
+        signal = _signal(
+            strategy=trade.strategy,
+            direction="long",
+            invalidation=SignalInvalidationSnapshot(
+                price=94.0,
+                hard_stop=90.0,
+                conditions=["Close below EMA50"],
+                metadata={"ema_50": 99.0},
+            ),
+        )
+        service = TradeInvalidationService(
+            signals=StaticSignals(signal),
+            candles=StaticCandles(_flat_then_drop_candles()),
+            feature_engine=RaisingFeatureEngine(),
+            actions=MemoryActions(),
+        )
+
+        with self.assertLogs("app.services.trade_invalidation", level="WARNING") as logs:
+            alert = service.evaluate_trade(trade)
+
+        log_output = "\n".join(logs.output)
+        self.assertFalse(alert.invalidated)
+        self.assertEqual(alert.status, "unavailable")
+        self.assertEqual(alert.metadata["data_status"], "missing_candles")
+        self.assertEqual(alert.current_price, trade.current_price)
+        self.assertIn(trade.id, log_output)
+        self.assertIn(trade.exchange, log_output)
+        self.assertIn(trade.symbol, log_output)
+        self.assertIn(trade.timeframe, log_output)
+        self.assertIn("feature engine unavailable", log_output)
+
+    def test_action_lookup_failure_returns_alert_without_user_action(self) -> None:
+        trade = _trade(strategy="trend_pullback_continuation", side="long")
+        signal = _signal(
+            strategy=trade.strategy,
+            direction="long",
+            invalidation=SignalInvalidationSnapshot(
+                price=94.0,
+                hard_stop=90.0,
+                conditions=["Close below EMA50"],
+                metadata={"ema_50": 99.0},
+            ),
+        )
+        service = TradeInvalidationService(
+            signals=StaticSignals(signal),
+            candles=StaticCandles(_flat_then_drop_candles()),
+            feature_engine=FeatureEngine(),
+            actions=RaisingActions(),
+        )
+
+        with self.assertLogs("app.services.trade_invalidation", level="WARNING") as logs:
+            alert = service.evaluate_trade(trade)
+
+        self.assertTrue(alert.invalidated)
+        self.assertEqual(alert.status, "invalidated")
+        self.assertIsNone(alert.user_action)
+        self.assertIn(trade.id, "\n".join(logs.output))
+        self.assertIn("action store unavailable", "\n".join(logs.output))
+
     def test_trend_pullback_long_returns_market_close_prompt_when_logic_breaks(self) -> None:
         trade = _trade(strategy="trend_pullback_continuation", side="long")
         signal = _signal(

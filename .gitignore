@@ -8,10 +8,15 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.pytest-cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# uv-managed local Python/cache
+.uv-cache/
+.uv-python/
 
 # Virtual environments
 .venv/

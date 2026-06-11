@@ -246,20 +246,40 @@ class TradeInvalidationService:
     def _signal_for_trade(self, trade: TradeLike) -> RadarSignal | None:
         if not trade.signal_id:
             return None
-        return self._signals.get_signal(trade.signal_id)
+        try:
+            return self._signals.get_signal(trade.signal_id)
+        except Exception as exc:
+            logger.warning(
+                "Trade invalidation signal lookup failed for trade=%s signal_id=%s: %s",
+                trade.id,
+                trade.signal_id,
+                exc,
+            )
+            return None
 
     def _latest_features(self, trade: TradeLike) -> Features | None:
         timeframe = _safe_timeframe(trade.timeframe)
         if timeframe is None:
             return None
-        candles = self._candles.list_candles(
-            exchange=trade.exchange,
-            symbol=trade.symbol,
-            timeframe=timeframe,
-            include_open=True,
-            limit=250,
-        )
-        return self._feature_engine.process_candles(candles)
+        try:
+            candles = self._candles.list_candles(
+                exchange=trade.exchange,
+                symbol=trade.symbol,
+                timeframe=timeframe,
+                include_open=True,
+                limit=250,
+            )
+            return self._feature_engine.process_candles(candles)
+        except Exception as exc:
+            logger.warning(
+                "Trade invalidation latest features lookup failed for trade=%s exchange=%s symbol=%s timeframe=%s: %s",
+                trade.id,
+                trade.exchange,
+                trade.symbol,
+                timeframe,
+                exc,
+            )
+            return None
 
     def _triggered_conditions(
         self,
@@ -313,7 +333,15 @@ class TradeInvalidationService:
         return alert.model_copy(update={"fingerprint": _alert_fingerprint(alert)})
 
     def _with_user_action(self, alert: TradeInvalidationAlert) -> TradeInvalidationAlert:
-        record = self._actions.latest_for_alert(alert)
+        try:
+            record = self._actions.latest_for_alert(alert)
+        except Exception as exc:
+            logger.warning(
+                "Trade invalidation action lookup failed for trade=%s: %s",
+                alert.trade_id,
+                exc,
+            )
+            return alert
         if record is None:
             return alert
         return alert.model_copy(

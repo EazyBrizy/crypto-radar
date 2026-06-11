@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Protocol, Sequence
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from app.services.strategy_testing.report_builder import (
 )
 from app.services.strategy_testing.runner import strategy_test_user_uuid
 from app.services.strategy_testing.schemas import (
+    StrategyTestActiveRunResponse,
     StrategyTestMetricRow,
     StrategyTestReport,
     StrategyTestRunDetailResponse,
@@ -94,8 +96,53 @@ class StrategyTestingService:
             for detail in self._run_store.list_runs(user_id=user_id, limit=limit, status=status)
         ]
 
+    def get_active_run(self, user_id: str = "demo_user") -> StrategyTestActiveRunResponse:
+        active_run = _latest_active_run(_active_run_candidates(self._run_store, user_id))
+        if active_run is None:
+            return StrategyTestActiveRunResponse(
+                active_run=None,
+                can_run=True,
+                stale_threshold_seconds=STRATEGY_TEST_STALE_THRESHOLD_SECONDS,
+                allowed_actions=["refresh"],
+            )
+
+        stale = _is_stale_run(active_run)
+        if stale:
+            return StrategyTestActiveRunResponse(
+                active_run=active_run,
+                can_run=True,
+                disabled_reason_code=None,
+                disabled_reason=None,
+                is_stale=True,
+                stale_threshold_seconds=STRATEGY_TEST_STALE_THRESHOLD_SECONDS,
+                allowed_actions=["refresh", "cancel"],
+            )
+
+        return StrategyTestActiveRunResponse(
+            active_run=active_run,
+            can_run=False,
+            disabled_reason_code="active_strategy_test_run",
+            disabled_reason=(
+                f"Strategy test run {active_run.run_id} is {active_run.status}; "
+                "wait for it to finish or cancel it before starting another run."
+            ),
+            is_stale=False,
+            stale_threshold_seconds=STRATEGY_TEST_STALE_THRESHOLD_SECONDS,
+            allowed_actions=["refresh", "cancel"],
+        )
+
     def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
         return self._run_store.get_run(run_id)
+
+    def cancel_run(self, run_id: UUID) -> StrategyTestRunResponse:
+        detail = self._run_store.get_run(run_id)
+        if detail is None:
+            raise LookupError(f"Strategy test run is not found: {run_id}")
+        if detail.run.status == "cancelled":
+            return detail.run
+        if detail.run.status not in {"queued", "running", "stopping"}:
+            raise ValueError(f"Strategy test run cannot be cancelled from status {detail.run.status}")
+        return self._run_store.mark_cancelled(run_id).run
 
     def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
         if self._run_store.get_run(run_id) is None:
@@ -119,3 +166,44 @@ def _failure_message(matrix_result: StrategyTestMatrixResult) -> str:
     if matrix_result.errors:
         return f"All strategy test scenarios failed: {matrix_result.errors[0]['error']}"
     return "All strategy test scenarios failed"
+
+
+STRATEGY_TEST_ACTIVE_STATUSES: tuple[StrategyTestRunStatus, ...] = ("queued", "running", "stopping")
+STRATEGY_TEST_STALE_THRESHOLD_SECONDS = 900
+
+
+def _active_run_candidates(
+    run_store: StrategyTestRunStore,
+    user_id: str,
+) -> list[StrategyTestRunResponse]:
+    candidates: list[StrategyTestRunResponse] = []
+    for status in STRATEGY_TEST_ACTIVE_STATUSES:
+        candidates.extend(
+            detail.run
+            for detail in run_store.list_runs(
+                user_id=user_id,
+                limit=10,
+                status=status,
+            )
+        )
+    return candidates
+
+
+def _latest_active_run(candidates: Sequence[StrategyTestRunResponse]) -> StrategyTestRunResponse | None:
+    if not candidates:
+        return None
+    return max(candidates, key=_run_sort_time)
+
+
+def _run_sort_time(run: StrategyTestRunResponse) -> datetime:
+    return run.started_at or run.created_at or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _is_stale_run(run: StrategyTestRunResponse) -> bool:
+    if run.status != "running":
+        return False
+    heartbeat_at = run.last_heartbeat_at or run.started_at or run.created_at
+    if heartbeat_at is None:
+        return False
+    age_seconds = (datetime.now(timezone.utc) - heartbeat_at.astimezone(timezone.utc)).total_seconds()
+    return age_seconds > STRATEGY_TEST_STALE_THRESHOLD_SECONDS

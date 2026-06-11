@@ -1,21 +1,25 @@
 "use client";
 
-import { Play, RefreshCw } from "lucide-react";
+import { BarChart3, Play, RefreshCw, XCircle } from "lucide-react";
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import { Badge } from "@/components/Badge";
 import type { MarketPairOption, StrategyConfig } from "@/features/server-state/types";
 import {
+  useCancelStrategyTestRun,
   useRunStrategyTest,
+  useStrategyTestActiveRun,
   useStrategyTestReport,
   useStrategyTestRuns
 } from "@/hooks/use-radar-queries";
 import { StrategyTestReport } from "./StrategyTestReport";
 import { StrategyTestRunsTable } from "./StrategyTestRunsTable";
 import type {
+  StrategyTestActiveRunResponse,
   StrategyTestMode,
   StrategyTestPair,
   StrategyTestRunRequest,
+  StrategyTestRunResponse,
   StrategyTestRunStatus,
   StrategyTestSameCandlePolicy
 } from "./types";
@@ -41,7 +45,7 @@ const POLICY_LABELS: Record<StrategyTestSameCandlePolicy, string> = {
   stop_first: "Stop first",
   target_first: "Target first"
 };
-const ACTIVE_RUN_STATUSES = new Set<StrategyTestRunStatus>(["queued", "running"]);
+const ACTIVE_RUN_STATUSES = new Set<StrategyTestRunStatus>(["queued", "running", "stopping"]);
 const STRATEGY_TEST_RUN_POLL_MS = 2_500;
 
 export function StrategyTestingPanel({
@@ -52,8 +56,10 @@ export function StrategyTestingPanel({
   const strategyOptions = useMemo(() => enabledStrategyOptions(strategyConfigs), [strategyConfigs]);
   const pairOptions = useMemo(() => availablePairs.slice(0, 50), [availablePairs]);
   const timeframeOptions = useMemo(() => availableTimeframes(strategyOptions), [strategyOptions]);
+  const activeRunQuery = useStrategyTestActiveRun(undefined, { refetchInterval: STRATEGY_TEST_RUN_POLL_MS });
   const runsQuery = useStrategyTestRuns({ limit: 25 }, { refetchInterval: STRATEGY_TEST_RUN_POLL_MS });
   const runMutation = useRunStrategyTest();
+  const cancelRunMutation = useCancelStrategyTestRun();
   const [selectedStrategyCodes, setSelectedStrategyCodes] = useState<string[] | null>(null);
   const [selectedPairIds, setSelectedPairIds] = useState<string[] | null>(null);
   const [selectedTimeframes, setSelectedTimeframes] = useState<string[] | null>(null);
@@ -90,10 +96,21 @@ export function StrategyTestingPanel({
   const mutationRunIsMissingFromList = Boolean(
     runMutation.data && !runs.some((run) => run.run_id === runMutation.data?.run_id)
   );
-  const hasActiveRun =
-    runs.some((run) => isActiveStrategyTestRun(run.status)) ||
-    (mutationRunIsMissingFromList && isActiveStrategyTestRun(runMutation.data?.status));
-  const canRun = scenarioEstimate > 0 && !dateError && !numberError && !runMutation.isPending && !hasActiveRun;
+  const recentActiveRun = runs.find((run) => isActiveStrategyTestRun(run.status)) ?? null;
+  const fallbackActiveRun = recentActiveRun ??
+    (mutationRunIsMissingFromList && isActiveStrategyTestRun(runMutation.data?.status) ? runMutation.data ?? null : null);
+  const activeRunState = activeRunQuery.data ?? null;
+  const activeRun = activeRunState?.active_run ?? fallbackActiveRun;
+  const activeRunStateLoaded = activeRunState !== null;
+  const activeRunBlocksRun = activeRunStateLoaded ? !activeRunState.can_run : Boolean(fallbackActiveRun);
+  const activeRunIsStale = Boolean(activeRunState?.active_run && activeRunState.is_stale);
+  const showRunInProgress = Boolean((activeRunState?.active_run && !activeRunState.is_stale) || (!activeRunStateLoaded && fallbackActiveRun));
+  const canRun = scenarioEstimate > 0 &&
+    !dateError &&
+    !numberError &&
+    !runMutation.isPending &&
+    !cancelRunMutation.isPending &&
+    !activeRunBlocksRun;
   const reportQuery = useStrategyTestReport(selectedReportRunId, {
     enabled: Boolean(selectedReportRunId),
     refetchInterval: selectedRunIsActive ? STRATEGY_TEST_RUN_POLL_MS : false
@@ -107,7 +124,8 @@ export function StrategyTestingPanel({
       setFormError(
         dateError ??
         numberError ??
-        (hasActiveRun ? "A strategy test run is already in progress." : "Select at least one strategy, pair, and timeframe.")
+        activeRunState?.disabled_reason ??
+        (activeRunBlocksRun ? "A strategy test run is already in progress." : "Select at least one strategy, pair, and timeframe.")
       );
       return;
     }
@@ -131,14 +149,37 @@ export function StrategyTestingPanel({
     }
   }
 
+  async function handleCancelRun(runId: string) {
+    setFormError(null);
+    try {
+      const response = await cancelRunMutation.mutateAsync(runId);
+      setSelectedReportRunId(response.run_id);
+    } catch (error) {
+      setFormError(errorMessage(error) ?? "Unable to cancel strategy test run.");
+    }
+  }
+
   return (
     <form className="strategy-testing-panel" onSubmit={handleRun}>
       <div className="strategy-test-status-strip">
         <Badge tone="blue">{scenarioEstimate} scenarios</Badge>
         <Badge tone="purple">{runs.length} recent runs</Badge>
         {runsQuery.isLoading ? <Badge tone="yellow">Loading runs</Badge> : null}
-        {hasActiveRun ? <Badge tone="yellow">Run in progress</Badge> : null}
+        {activeRunQuery.isLoading ? <Badge tone="yellow">Loading active run</Badge> : null}
+        {showRunInProgress ? <Badge tone="yellow">Run in progress</Badge> : null}
+        {activeRunIsStale ? <Badge tone="yellow">Stale active run</Badge> : null}
       </div>
+
+      {activeRun ? (
+        <ActiveRunNotice
+          activeRunState={activeRunState}
+          cancelPending={cancelRunMutation.isPending}
+          onCancel={handleCancelRun}
+          onOpenReport={(runId) => setSelectedReportRunId(runId)}
+          onRefresh={() => void activeRunQuery.refetch()}
+          run={activeRun}
+        />
+      ) : null}
 
       <div className="strategy-test-grid">
         <SelectionGroup title="Strategies">
@@ -404,6 +445,7 @@ function buildRunRequest({
     start_at: new Date(startAt).toISOString(),
     strategies: selectedStrategyCodes,
     tags: ["backtest"],
+    test_type: "historical_backtest",
     timeframes: selectedTimeframes
   };
 }
@@ -417,4 +459,80 @@ function toStrategyTestPair(pair: MarketPairOption): StrategyTestPair {
 
 function errorMessage(error: unknown): string | null {
   return error instanceof Error ? error.message : null;
+}
+
+function ActiveRunNotice({
+  activeRunState,
+  cancelPending,
+  onCancel,
+  onOpenReport,
+  onRefresh,
+  run
+}: {
+  activeRunState: StrategyTestActiveRunResponse | null;
+  cancelPending: boolean;
+  onCancel: (runId: string) => void;
+  onOpenReport: (runId: string) => void;
+  onRefresh: () => void;
+  run: StrategyTestRunResponse;
+}) {
+  const allowedActions = new Set(activeRunState?.allowed_actions ?? ["refresh"]);
+  return (
+    <section aria-label="Active strategy test run" className="strategy-test-active-run">
+      <div className="strategy-test-active-run-header">
+        <strong>Active run {shortRunId(run.run_id)}</strong>
+        <Badge tone={activeRunState?.is_stale ? "yellow" : "blue"}>{run.status}</Badge>
+        {activeRunState?.is_stale ? <Badge tone="yellow">Stale active run</Badge> : null}
+      </div>
+      {activeRunState?.disabled_reason ? (
+        <p className="strategy-test-active-run-reason">{activeRunState.disabled_reason}</p>
+      ) : null}
+      <dl className="strategy-test-active-run-meta">
+        <div>
+          <dt>Run ID</dt>
+          <dd>{run.run_id}</dd>
+        </div>
+        <div>
+          <dt>Created</dt>
+          <dd>{formatOptionalDate(run.created_at)}</dd>
+        </div>
+        <div>
+          <dt>Started</dt>
+          <dd>{formatOptionalDate(run.started_at)}</dd>
+        </div>
+      </dl>
+      <div className="strategy-test-active-run-actions">
+        <button className="secondary-action" onClick={onRefresh} type="button">
+          <RefreshCw size={16} />
+          Refresh active run
+        </button>
+        <button className="secondary-action" onClick={() => onOpenReport(run.run_id)} type="button">
+          <BarChart3 size={16} />
+          Open report
+        </button>
+        {allowedActions.has("cancel") ? (
+          <button
+            className="secondary-action"
+            disabled={cancelPending}
+            onClick={() => onCancel(run.run_id)}
+            type="button"
+          >
+            <XCircle size={16} />
+            Cancel run
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function shortRunId(runId: string): string {
+  return runId.slice(0, 8);
+}
+
+function formatOptionalDate(value: string | null): string {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
 }

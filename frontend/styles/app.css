@@ -2902,6 +2902,62 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   align-items: center;
 }
 
+.strategy-test-active-run {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.strategy-test-active-run-header,
+.strategy-test-active-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.strategy-test-active-run-header strong {
+  color: #e5e7eb;
+  font-size: 13px;
+}
+
+.strategy-test-active-run-reason {
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.strategy-test-active-run-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.strategy-test-active-run-meta > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #0b1220;
+}
+
+.strategy-test-active-run-meta dt {
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.strategy-test-active-run-meta dd {
+  overflow-wrap: anywhere;
+  color: #e5e7eb;
+  font-size: 12px;
+}
+
 .strategy-test-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3438,6 +3494,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .compact-risk-grid,
   .strategy-test-grid,
   .strategy-test-controls,
+  .strategy-test-active-run-meta,
   .strategy-test-metric-grid,
     .strategy-test-summary-grid,
     .strategy-test-adjustment-grid,
@@ -3492,6 +3549,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .watch-pair-grid,
   .strategy-test-grid,
   .strategy-test-controls,
+  .strategy-test-active-run-meta,
   .strategy-test-metric-grid,
   .strategy-test-summary-grid,
   .strategy-test-adjustment-grid,
@@ -3526,6 +3584,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .strategy-pair-grid,
   .strategy-test-grid,
   .strategy-test-controls,
+  .strategy-test-active-run-meta,
   .strategy-test-mode-row,
   .strategy-test-metric-grid,
   .strategy-test-summary-grid,

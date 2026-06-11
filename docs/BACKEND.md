@@ -42,6 +42,9 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - Run `test_type` is backend-owned and is either `historical_backtest` or `forward_virtual`.
 - Run status values are `queued`, `running`, `completed`, `failed`, `cancelled`, and `stopping`.
 - API responses include `summary`, `runtime_state`, and `last_heartbeat_at`; frontend code must display these values instead of reconstructing run state.
+- `GET /api/v1/strategy-tests/runs/active` is the source of truth for run eligibility. It returns `active_run`, `can_run`, `disabled_reason_code`, `disabled_reason`, `is_stale`, `stale_threshold_seconds`, and `allowed_actions`.
+- Active strategy-test runs are `queued`, `running`, and `stopping`. A run is stale only when the backend heartbeat/started/created timestamps exceed the backend stale threshold; the frontend must not duplicate this decision.
+- `POST /api/v1/strategy-tests/runs/{run_id}/cancel` owns cancellation. Active runs transition through the store to `cancelled`; completed and failed runs reject cancellation with a conflict response.
 - `mark_running`, `mark_completed`, `mark_failed`, `mark_stopping`, and `mark_cancelled` are the store boundary for status and heartbeat transitions.
 
 ## Core Services

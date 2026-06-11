@@ -69,6 +69,9 @@ corepack pnpm openapi:generate
 ## Strategy Testing Fields
 
 - Strategy test run responses include backend-owned `test_type`, `status`, `summary`, `runtime_state`, and `last_heartbeat_at`.
+- The Strategy Testing panel must call the backend active-run endpoint and display `can_run`, `disabled_reason`, `disabled_reason_code`, `is_stale`, `stale_threshold_seconds`, and `allowed_actions` as received.
+- The Run button is enabled only when the backend active-run response says `can_run=true` and the local form is valid. Active-run stale detection is not a frontend calculation.
+- Cancel and refresh controls are rendered from backend active-run state and allowed actions; cancelling a run calls the backend cancel endpoint.
 - The frontend may display these fields and form validation state, but it must not compute stale decisions, eligibility, risk, PnL, or execution readiness.
 - `forward_virtual` and `historical_backtest` are API values from the backend contract, not separate frontend workflows.
 

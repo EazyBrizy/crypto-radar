@@ -187,6 +187,7 @@ export const serverStateKeys = {
   },
   strategyTests: {
     all: () => [...serverStateKeys.all, "strategy-tests"] as const,
+    active: (userId?: string) => [...serverStateKeys.strategyTests.all(), "active", userId ?? DEV_FALLBACK_USER_ID] as const,
     runs: (filters?: StrategyTestRunFilters) => [...serverStateKeys.strategyTests.all(), "runs", normalizeStrategyTestRunFilters(filters)] as const,
     run: (runId: string) => [...serverStateKeys.strategyTests.all(), "run", runId] as const,
     trades: (runId: string) => [...serverStateKeys.strategyTests.all(), "trades", runId] as const,

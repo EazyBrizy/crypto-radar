@@ -1,6 +1,7 @@
 import { requestJson } from "./client";
 import { currentUserId } from "./user-identity";
 import type {
+  StrategyTestActiveRunResponse,
   StrategyTestReport,
   StrategyTestRunDetailResponse,
   StrategyTestRunRequest,
@@ -26,6 +27,7 @@ export const strategyTestsApi = {
     return rawJson<StrategyTestRunResponse>("/api/v1/strategy-tests/runs", {
       body: JSON.stringify({
         user_id: userId,
+        test_type: request.test_type ?? "historical_backtest",
         strategies: request.strategies,
         pairs: request.pairs,
         timeframes: request.timeframes,
@@ -47,6 +49,16 @@ export const strategyTestsApi = {
   async listRuns(params: StrategyTestRunListParams = {}): Promise<StrategyTestRunResponse[]> {
     const userId = params.userId ?? await currentUserId();
     return rawJson<StrategyTestRunResponse[]>(strategyTestRunsPath({ ...params, userId }));
+  },
+  async activeRun(userId?: string): Promise<StrategyTestActiveRunResponse> {
+    const resolvedUserId = userId ?? await currentUserId();
+    const query = new URLSearchParams({ user_id: resolvedUserId });
+    return rawJson<StrategyTestActiveRunResponse>(`/api/v1/strategy-tests/runs/active?${query.toString()}`);
+  },
+  async cancelRun(runId: string): Promise<StrategyTestRunResponse> {
+    return rawJson<StrategyTestRunResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: "POST"
+    });
   },
   async getRun(runId: string): Promise<StrategyTestRunResponse> {
     const detail = await rawJson<StrategyTestRunDetailResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}`);

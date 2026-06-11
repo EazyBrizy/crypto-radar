@@ -118,6 +118,16 @@ class StrategyTestRunDetailResponse(BaseModel):
     rejections: list[str] = Field(default_factory=list)
 
 
+class StrategyTestActiveRunResponse(BaseModel):
+    active_run: StrategyTestRunResponse | None = None
+    can_run: bool
+    disabled_reason_code: str | None = None
+    disabled_reason: str | None = None
+    is_stale: bool = False
+    stale_threshold_seconds: int
+    allowed_actions: list[str] = Field(default_factory=list)
+
+
 class StrategyTestRunListResponse(BaseModel):
     runs: list[StrategyTestRunResponse] = Field(default_factory=list)
     total: int = 0

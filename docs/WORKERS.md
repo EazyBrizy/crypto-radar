@@ -35,6 +35,12 @@ Start it manually with `POST /api/v1/radar/scanner/start` when autostart is disa
 
 Execution-ready notifications must come from backend gate state. Legacy fallback paths must still require execution-candidate status, closed candle, and `settings.execution_min_score`.
 
+## Strategy Test Runtime
+
+Strategy-test active-run state is backend-owned. Workers and services that execute strategy-test runs must update `strategy_test_runs.last_heartbeat_at` through the run store while a run is `running` or `stopping`.
+
+The active-run API decides whether a run is stale from `last_heartbeat_at`, `started_at`, and `created_at` using the backend stale threshold. Frontend code may display `is_stale` and `stale_threshold_seconds`, but it must not reimplement stale-run policy.
+
 ## Signal Outcome Workers
 
 - `backend/app/workers/signal_outcome_worker.py`: evaluates open signal outcomes against market movement and terminal pending-entry states.

@@ -4,6 +4,7 @@ import { api } from "@/api";
 import { isActivePendingEntryStatus } from "@/domain/pending-entry-status";
 import { isExecutionCandidateStatus } from "@/domain/signal-status";
 import type {
+  StrategyTestActiveRunResponse,
   StrategyTestReport,
   StrategyTestRunRequest,
   StrategyTestRunResponse,
@@ -244,6 +245,16 @@ export function useStrategyTestRuns(filters?: StrategyTestRunFilters, options: P
   });
 }
 
+export function useStrategyTestActiveRun(userId?: string | null, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestActiveRunResponse>({
+    queryKey: serverStateKeys.strategyTests.active(userId ?? undefined),
+    queryFn: () => api.strategyTests.activeRun(userId ?? undefined),
+    enabled: options.enabled ?? true,
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
 export function useRunStrategyTest() {
   const queryClient = useQueryClient();
 
@@ -256,6 +267,18 @@ export function useRunStrategyTest() {
         queryClient.invalidateQueries({ queryKey: serverStateKeys.journal.all() }),
         queryClient.invalidateQueries({ queryKey: serverStateKeys.trades.all() })
       ]);
+    }
+  });
+}
+
+export function useCancelStrategyTestRun() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (runId: string) => api.strategyTests.cancelRun(runId),
+    onSuccess: async (response) => {
+      queryClient.setQueryData(serverStateKeys.strategyTests.run(response.run_id), response);
+      await queryClient.invalidateQueries({ queryKey: serverStateKeys.strategyTests.all() });
     }
   });
 }

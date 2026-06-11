@@ -1,5 +1,6 @@
 export type StrategyTestMode = "discovery" | "research_virtual" | "production_like";
-export type StrategyTestRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type StrategyTestType = "historical_backtest" | "forward_virtual";
+export type StrategyTestRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopping";
 export type StrategyTestSameCandlePolicy = "stop_first" | "target_first" | "ignore_ambiguous";
 
 export const STRATEGY_TEST_MODES: StrategyTestMode[] = ["discovery", "research_virtual", "production_like"];
@@ -16,6 +17,7 @@ export interface StrategyTestPair {
 
 export interface StrategyTestRunRequest {
   user_id?: string;
+  test_type?: StrategyTestType;
   strategies: string[];
   pairs: StrategyTestPair[];
   timeframes: string[];
@@ -55,12 +57,25 @@ export interface StrategyTestRunSummary {
 export interface StrategyTestRunResponse {
   run_id: string;
   status: StrategyTestRunStatus;
+  test_type: StrategyTestType;
   requested_matrix: StrategyTestRequestedMatrix;
   summary: StrategyTestRunSummary;
+  runtime_state: Record<string, unknown>;
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+  last_heartbeat_at: string | null;
   error: string | null;
+}
+
+export interface StrategyTestActiveRunResponse {
+  active_run: StrategyTestRunResponse | null;
+  can_run: boolean;
+  disabled_reason_code: string | null;
+  disabled_reason: string | null;
+  is_stale: boolean;
+  stale_threshold_seconds: number;
+  allowed_actions: string[];
 }
 
 export interface StrategyTestRunDetailResponse {

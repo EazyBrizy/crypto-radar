@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,8 @@ import type { MarketPairOption, StrategyConfig } from "@/features/server-state/t
 import { StrategyTestingPanel } from "./StrategyTestingPanel";
 
 const mocks = vi.hoisted(() => ({
+  activeRun: null as unknown,
+  cancelStrategyTest: vi.fn(),
   report: null as unknown,
   reportError: null as Error | null,
   runStrategyTest: vi.fn(),
@@ -13,6 +15,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/use-radar-queries", () => ({
+  useCancelStrategyTestRun: () => ({
+    error: null,
+    isPending: false,
+    mutateAsync: mocks.cancelStrategyTest
+  }),
   useRunStrategyTest: () => ({
     error: null,
     isPending: false,
@@ -22,6 +29,13 @@ vi.mock("@/hooks/use-radar-queries", () => ({
     data: mocks.report,
     error: mocks.reportError,
     isLoading: false
+  }),
+  useStrategyTestActiveRun: () => ({
+    data: mocks.activeRun,
+    error: null,
+    isFetching: false,
+    isLoading: false,
+    refetch: vi.fn()
   }),
   useStrategyTestRuns: () => ({
     data: mocks.runs,
@@ -40,6 +54,8 @@ vi.mock("@tanstack/react-virtual", () => ({
 
 describe("StrategyTestingPanel", () => {
   afterEach(() => {
+    mocks.activeRun = null;
+    mocks.cancelStrategyTest.mockReset();
     mocks.report = null;
     mocks.reportError = null;
     mocks.runStrategyTest.mockReset();
@@ -60,22 +76,59 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
   });
 
-  it("disables Run while another strategy test is active", () => {
-    mocks.runs = [{
-      created_at: "2026-06-02T00:00:00.000Z",
-      error: null,
-      finished_at: null,
-      requested_matrix: { scenario_count: 3 },
-      run_id: "22222222-2222-4222-8222-222222222222",
-      started_at: null,
-      status: "queued",
-      summary: {}
-    }];
+  it("disables Run and shows backend reason while another strategy test is active", () => {
+    mocks.activeRun = activeRunState({
+      active_run: strategyTestRun({
+        run_id: "22222222-2222-4222-8222-222222222222",
+        status: "running"
+      }),
+      can_run: false,
+      disabled_reason: "Backend says another strategy test run is active.",
+      disabled_reason_code: "active_strategy_test_run",
+      is_stale: false
+    });
 
     renderPanel();
 
     expect(screen.getByText("Run in progress")).toBeInTheDocument();
+    expect(screen.getByText(/Backend says another strategy test run is active/u)).toBeInTheDocument();
+    const notice = screen.getByLabelText("Active strategy test run");
+    expect(within(notice).getByText("Active run 22222222")).toBeInTheDocument();
+    expect(within(notice).getByText("running")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
+  });
+
+  it("shows cancel action for stale active run from backend state", async () => {
+    const user = userEvent.setup();
+    mocks.activeRun = activeRunState({
+      active_run: strategyTestRun({
+        run_id: "33333333-3333-4333-8333-333333333333",
+        status: "running"
+      }),
+      allowed_actions: ["refresh", "cancel"],
+      can_run: true,
+      is_stale: true
+    });
+    mocks.cancelStrategyTest.mockResolvedValue(strategyTestRun({
+      run_id: "33333333-3333-4333-8333-333333333333",
+      status: "cancelled"
+    }));
+
+    renderPanel();
+
+    const notice = screen.getByLabelText("Active strategy test run");
+    expect(within(notice).getByText("Stale active run")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Cancel run/u }));
+
+    expect(mocks.cancelStrategyTest).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333");
+  });
+
+  it("enables Run when backend reports no active run and form is valid", async () => {
+    mocks.activeRun = activeRunState({ active_run: null, can_run: true, is_stale: false });
+
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeEnabled());
   });
 
   it("runs with selected strategies, pairs, and timeframes", async () => {
@@ -84,11 +137,14 @@ describe("StrategyTestingPanel", () => {
       created_at: "2026-06-02T00:00:00.000Z",
       error: null,
       finished_at: null,
+      last_heartbeat_at: null,
       requested_matrix: { pairs: [{ exchange: "bybit", symbol: "BTCUSDT" }], scenario_count: 3, strategies: ["trend_pullback_continuation"], timeframes: ["1m", "5m", "15m"] },
       run_id: "11111111-1111-4111-8111-111111111111",
+      runtime_state: {},
       started_at: null,
       status: "queued",
-      summary: {}
+      summary: {},
+      test_type: "historical_backtest"
     });
 
     renderPanel();
@@ -121,6 +177,36 @@ function renderPanel({
   strategyConfigs?: StrategyConfig[];
 } = {}) {
   render(<StrategyTestingPanel availablePairs={availablePairs} strategyConfigs={strategyConfigs} />);
+}
+
+function activeRunState(overrides: Record<string, unknown> = {}) {
+  return {
+    active_run: null,
+    allowed_actions: ["refresh"],
+    can_run: true,
+    disabled_reason: null,
+    disabled_reason_code: null,
+    is_stale: false,
+    stale_threshold_seconds: 900,
+    ...overrides
+  };
+}
+
+function strategyTestRun(overrides: Record<string, unknown> = {}) {
+  return {
+    created_at: "2026-06-02T00:00:00.000Z",
+    error: null,
+    finished_at: null,
+    last_heartbeat_at: "2026-06-02T00:01:00.000Z",
+    requested_matrix: { scenario_count: 3 },
+    run_id: "22222222-2222-4222-8222-222222222222",
+    runtime_state: {},
+    started_at: "2026-06-02T00:00:00.000Z",
+    status: "running",
+    summary: {},
+    test_type: "forward_virtual",
+    ...overrides
+  };
 }
 
 function marketPair(): MarketPairOption {

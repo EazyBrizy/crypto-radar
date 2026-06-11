@@ -3,6 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status as http_status
 
 from app.services.strategy_testing.schemas import (
+    StrategyTestActiveRunResponse,
     StrategyTestReport,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
@@ -38,6 +39,17 @@ async def create_strategy_test_run(
     return run
 
 
+@router.get("/runs/active", response_model=StrategyTestActiveRunResponse)
+async def get_active_strategy_test_run(
+    user_id: str = "demo_user",
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> StrategyTestActiveRunResponse:
+    try:
+        return service.get_active_run(user_id=user_id)
+    except (LookupError, ValueError) as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
 @router.get("/runs", response_model=list[StrategyTestRunResponse])
 async def list_strategy_test_runs(
     user_id: str = "demo_user",
@@ -60,6 +72,19 @@ async def get_strategy_test_run(
     if run is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Strategy test run not found")
     return run
+
+
+@router.post("/runs/{run_id}/cancel", response_model=StrategyTestRunResponse)
+async def cancel_strategy_test_run(
+    run_id: UUID,
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> StrategyTestRunResponse:
+    try:
+        return service.cancel_run(run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/trades", response_model=list[StrategyTestTrade])

@@ -143,6 +143,32 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(list_response.json()[0]["test_type"], "historical_backtest")
         self.assertEqual(list_response.json()[0]["summary"]["scenario_count"], 12)
 
+    def test_post_forward_virtual_run_starts_runtime_without_historical_matrix(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_FailingStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            response = client.post(
+                "/api/v1/strategy-tests/runs",
+                json={**_payload(), "test_type": "forward_virtual"},
+            )
+            list_response = client.get("/api/v1/strategy-tests/runs")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
+        self.assertEqual(response.json()["test_type"], "forward_virtual")
+        self.assertEqual(list_response.json()[0]["status"], "running")
+        self.assertEqual(list_response.json()[0]["test_type"], "forward_virtual")
+        self.assertEqual(list_response.json()[0]["runtime_state"]["status"], "listening")
+        self.assertEqual(list_response.json()[0]["runtime_state"]["processed_signals"], 0)
+
     def test_active_run_endpoint_returns_backend_gate_state(self) -> None:
         store = _EphemeralStrategyTestRunStore()
         heartbeat = datetime.now(timezone.utc)
@@ -362,6 +388,23 @@ class _EphemeralStrategyTestRunStore:
     def mark_cancelled(self, run_id: UUID) -> StrategyTestRunDetailResponse:
         return self._mark(run_id, "cancelled")
 
+    def update_runtime_state(
+        self,
+        run_id: UUID,
+        runtime_state: dict[str, Any],
+        *,
+        heartbeat: bool = True,
+    ) -> StrategyTestRunDetailResponse:
+        detail = self._runs[run_id]
+        update: dict[str, Any] = {
+            "runtime_state": {**detail.run.runtime_state, **runtime_state},
+        }
+        if heartbeat:
+            update["last_heartbeat_at"] = _now()
+        detail = StrategyTestRunDetailResponse(run=detail.run.model_copy(update=update))
+        self._runs[run_id] = detail
+        return detail
+
     def _mark(self, run_id: UUID, status: StrategyTestRunStatus) -> StrategyTestRunDetailResponse:
         detail = self._runs[run_id]
         updated = detail.run.model_copy(update={"status": status})
@@ -399,6 +442,18 @@ class _NoopStrategyTestMatrixRunner:
             scenario_summaries=[],
             trades=[],
         )
+
+
+class _FailingStrategyTestMatrixRunner:
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+    ) -> StrategyTestMatrixResult:
+        _ = request, run_id, user_uuid
+        raise AssertionError("forward_virtual must not use historical matrix runner")
 
 
 def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:

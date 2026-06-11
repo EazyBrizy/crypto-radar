@@ -43,6 +43,10 @@ The active-run API decides whether a run is stale from `last_heartbeat_at`, `sta
 
 Strategy-test scenario execution delegates to `ProductionBacktestRunner`. `production_like` runs keep strict RiskGate behavior; `research_virtual` and `discovery` may surface backend warnings and assumptions, but trade-plan normalization, stale decisions, eligibility, risk, and PnL stay backend-owned.
 
+`backend/app/services/strategy_testing/forward_runtime.py` owns `forward_virtual` processing. It selects active runs with `test_type="forward_virtual"` and `status="running"`, filters scanner ticks/signals by the requested matrix, persists strategy signals, uses `SignalExecutionGateSnapshot`, delegates virtual entry to `VirtualTradingService`, delegates pending entry arming to `PendingEntryService`, writes strategy-test trades, and merges `runtime_state` through the run store.
+
+`backend/app/workers/forward_strategy_test_worker.py` is the minimal worker entrypoint. Its loop refreshes forward-run heartbeats and finalizes `stopping` runs as `cancelled`; market-data integrations can call `process_market_tick()` to feed scanner ticks into the runtime. `cancelled` runs are ignored by the runtime.
+
 ## Signal Outcome Workers
 
 - `backend/app/workers/signal_outcome_worker.py`: evaluates open signal outcomes against market movement and terminal pending-entry states.

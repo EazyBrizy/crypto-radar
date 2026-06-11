@@ -252,6 +252,31 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
         self.assertIsNotNone(cancelled.run.finished_at)
         self.assertIsNotNone(cancelled.run.last_heartbeat_at)
 
+    def test_update_runtime_state_merges_state_and_updates_heartbeat(self) -> None:
+        created = self.store.create_run(_request(test_type="forward_virtual"))
+        self.store.mark_running(created.run.run_id)
+
+        first = self.store.update_runtime_state(
+            created.run.run_id,
+            {"status": "listening", "processed_signals": 1},
+        )
+        second = self.store.update_runtime_state(
+            created.run.run_id,
+            {"opened_trades": 1},
+        )
+
+        self.assertEqual(first.run.runtime_state["status"], "listening")
+        self.assertEqual(second.run.runtime_state["status"], "listening")
+        self.assertEqual(second.run.runtime_state["processed_signals"], 1)
+        self.assertEqual(second.run.runtime_state["opened_trades"], 1)
+        self.assertIsNotNone(second.run.last_heartbeat_at)
+        with self.SessionFactory() as session:
+            run = session.get(StrategyTestRun, created.run.run_id)
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.runtime_state["processed_signals"], 1)
+            self.assertEqual(run.runtime_state["opened_trades"], 1)
+
     def test_demo_user_resolves_to_seeded_demo_username(self) -> None:
         created = self.store.create_run(_request(user_id="demo_user"))
 

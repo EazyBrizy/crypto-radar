@@ -5,6 +5,7 @@ from typing import Protocol, Sequence
 from uuid import UUID
 
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
+from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
 from app.services.strategy_testing.report_builder import (
     StrategyTestReportBuilder,
     build_matrix_metric_results,
@@ -45,10 +46,15 @@ class StrategyTestingService:
         run_store: StrategyTestRunStore | None = None,
         trade_store: StrategyTestTradeStore | None = None,
         matrix_runner: StrategyTestMatrixRunner | None = None,
+        forward_runtime: ForwardStrategyTestRuntime | None = None,
     ) -> None:
         self._run_store = run_store or PostgresStrategyTestRunStore()
         self._trade_store = trade_store or ClickHouseStrategyTestStore()
         self._matrix_runner = matrix_runner or StrategyTestMatrixRunner()
+        self._forward_runtime = forward_runtime or ForwardStrategyTestRuntime(
+            run_store=self._run_store,
+            trade_store=self._trade_store,
+        )
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
         created = self._run_store.create_run(request)
@@ -58,6 +64,8 @@ class StrategyTestingService:
         return self._run_store.create_run(request).run
 
     def execute_run(self, run_id: UUID, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        if request.test_type == "forward_virtual":
+            return self._forward_runtime.start_run(run_id, request).run
         self._run_store.mark_running(run_id)
         try:
             user_uuid = strategy_test_user_uuid(request.user_id)

@@ -46,6 +46,10 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - Active strategy-test runs are `queued`, `running`, and `stopping`. A run is stale only when the backend heartbeat/started/created timestamps exceed the backend stale threshold; the frontend must not duplicate this decision.
 - `POST /api/v1/strategy-tests/runs/{run_id}/cancel` owns cancellation. Active runs transition through the store to `cancelled`; completed and failed runs reject cancellation with a conflict response.
 - `mark_running`, `mark_completed`, `mark_failed`, `mark_stopping`, and `mark_cancelled` are the store boundary for status and heartbeat transitions.
+- `historical_backtest` runs execute through `StrategyTestMatrixRunner` and `ProductionBacktestRunner`.
+- `forward_virtual` runs start as backend-owned runtime runs: `StrategyTestingService.execute_run` marks them `running`, initializes `runtime_state.status="listening"`, and leaves processing to `ForwardStrategyTestRuntime`.
+- `ForwardStrategyTestRuntime` consumes scanner ticks or `StrategySignal` objects, filters them by the requested strategy/pair/timeframe matrix, persists signals through `SignalService`, uses `SignalExecutionGateSnapshot` as the execution source of truth, and delegates virtual entries to `VirtualTradingService` or pending entries to `PendingEntryService`.
+- `forward_virtual` must never place real orders. It records virtual trades and lightweight forward metrics into the existing strategy-test stores and updates `runtime_state` counters such as `processed_ticks`, `processed_signals`, `opened_trades`, `pending_entries_armed`, `trades_written`, and `metrics_written`.
 
 ## Backtest Execution Policy
 
@@ -127,6 +131,7 @@ Important rules:
 ## Background Workers
 
 - Scanner runner: `backend/app/workers/signal_worker.py`
+- Forward strategy-test worker: `backend/app/workers/forward_strategy_test_worker.py`
 - Derivative snapshots: `backend/app/workers/derivative_snapshot_worker.py`
 - Exchange instrument rules: `backend/app/workers/exchange_instrument_worker.py`
 - Orderbook snapshots: `backend/app/workers/orderbook_snapshot_worker.py`

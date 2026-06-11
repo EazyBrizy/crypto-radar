@@ -74,6 +74,7 @@ corepack pnpm openapi:generate
 - Cancel and refresh controls are rendered from backend active-run state and allowed actions; cancelling a run calls the backend cancel endpoint.
 - The frontend may display these fields and form validation state, but it must not compute stale decisions, eligibility, risk, PnL, or execution readiness.
 - `forward_virtual` and `historical_backtest` are API values from the backend contract, not separate frontend workflows.
+- For fronttests, display backend `runtime_state.status` and counters such as `processed_ticks`, `processed_signals`, `opened_trades`, `trades_written`, and `metrics_written` as received. Common runtime statuses include `listening`, `processing`, `degraded`, and `cancelled`; the backend owns their meaning.
 
 ## Execution Rendering Contract
 

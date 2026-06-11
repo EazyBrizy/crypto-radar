@@ -146,6 +146,15 @@ class StrategyTestRunStore(Protocol):
     def mark_cancelled(self, run_id: UUID) -> StrategyTestRunDetailResponse:
         ...
 
+    def update_runtime_state(
+        self,
+        run_id: UUID,
+        runtime_state: dict[str, Any],
+        *,
+        heartbeat: bool = True,
+    ) -> StrategyTestRunDetailResponse:
+        ...
+
 
 class ClickHouseStrategyTestClient(Protocol):
     def command(self, command: str) -> Any:
@@ -549,6 +558,26 @@ class PostgresStrategyTestRunStore:
             run.status = "cancelled"
             run.finished_at = now
             run.last_heartbeat_at = now
+            session.flush()
+            detail = _run_to_detail(run)
+            session.commit()
+            return detail
+
+    def update_runtime_state(
+        self,
+        run_id: UUID,
+        runtime_state: dict[str, Any],
+        *,
+        heartbeat: bool = True,
+    ) -> StrategyTestRunDetailResponse:
+        with self._session_factory() as session:
+            run = _get_run_or_raise(session, run_id)
+            run.runtime_state = {
+                **_json_object(run.runtime_state),
+                **dict(runtime_state),
+            }
+            if heartbeat:
+                run.last_heartbeat_at = datetime.now(timezone.utc)
             session.flush()
             detail = _run_to_detail(run)
             session.commit()

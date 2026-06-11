@@ -47,6 +47,13 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - `POST /api/v1/strategy-tests/runs/{run_id}/cancel` owns cancellation. Active runs transition through the store to `cancelled`; completed and failed runs reject cancellation with a conflict response.
 - `mark_running`, `mark_completed`, `mark_failed`, `mark_stopping`, and `mark_cancelled` are the store boundary for status and heartbeat transitions.
 
+## Backtest Execution Policy
+
+- `ProductionBacktestRunner` keeps RiskGate in the entry path. Backtests must normalize strategy signals into production-compatible trade plans before RiskGate; they must not bypass risk, sizing, take-profit, stop, or lifecycle validation.
+- The backtest normalizer reuses pipeline invalidation, exit-plan, risk/reward, trade-plan enrichment, and trade-plan completeness services. Legacy strategy fields are accepted only after they become a complete `TradePlan` with invalidation conditions and executable targets.
+- `production_like` stays strict. `research_virtual` and `discovery` may record assumptions and warnings, but base price/stop/target invariants still belong to backend services.
+- Backtest metrics and assumptions preserve diagnostics: `signals_seen`, `risk_rejections`, `execution_rejections`, `trade_plan_completion_warnings`, `risk_gate_blockers`, and `backtest_trade_plan_assumptions`.
+
 ## Core Services
 
 - Signal service: `backend/app/services/signal_service.py`

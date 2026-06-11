@@ -31,6 +31,18 @@ The strategy engine produces raw candidates, then `StrategySignalPipeline` final
 
 Trigger snapshots are required for execution candidates. A missing or failed trigger must block execution through `trigger_not_confirmed`; it should not be patched around in workers or UI.
 
+## Trade Plan Contract
+
+Strategy signals must either produce a complete `trade_plan` or provide enough legacy entry/stop/target fields for backend enrichment to build one. A complete execution plan has:
+
+- an entry price or range;
+- a structural stop;
+- invalidation conditions or a non-fallback invalidation source;
+- at least one executable, directional take-profit target;
+- risk/reward metadata that still points to an executable target when reporting guards are disabled.
+
+Backtest and strategy-test flows may record explicit legacy assumptions when enriching old signals, but they still pass through the same trade-plan completeness and RiskGate services as production-compatible execution.
+
 ## Execution Gate
 
 `SignalExecutionGateService` is the only place that turns a finalized strategy signal into execution permissions. It owns:

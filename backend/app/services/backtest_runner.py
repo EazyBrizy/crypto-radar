@@ -9,17 +9,22 @@ from decimal import Decimal
 from typing import Any, Awaitable, Callable, Mapping, Sequence, TypeVar
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
 
+from app.domain.virtual_trade_status import is_terminal_virtual_trade_status
 from app.schemas.backtest import BacktestResultResponse, BacktestRunRequest, BacktestRunResult
 from app.schemas.candle import OHLCVCandle
 from app.schemas.market import Features
 from app.schemas.risk import RiskDecision
 from app.schemas.signal import RadarSignal, StrategySignal
+from app.schemas.trade_plan import TradePlan
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualExecutionReport, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.execution_ambiguity import normalize_virtual_execution_ambiguity_policy
 from app.services.feature_engine import FeatureEngine
 from app.services.historical_candle_provider import ClickHouseHistoricalCandleProvider, HistoricalCandleProvider
 from app.services.risk_gate import RiskContextService, RiskGateService
+from app.services.risk_reward_assessment import RiskRewardAssessmentService
+from app.services.trade_plan_completeness import trade_plan_completeness_service
+from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.services.virtual_trade_lifecycle import (
     apply_virtual_trade_candle,
     arm_virtual_trade_time_stop,
@@ -28,7 +33,12 @@ from app.services.virtual_trade_lifecycle import (
 )
 from app.services.virtual_trading.execution_engine import VirtualExecutionEngine
 from app.strategies.engine import StrategyEngine
-from app.strategies.pipeline import StrategySignalPipeline
+from app.strategies.pipeline import (
+    ExitManagementLayer,
+    InvalidationLayer,
+    StrategyEvaluationContext,
+    StrategySignalPipeline,
+)
 
 DEFAULT_WARMUP_CANDLES = 200
 DEFAULT_ROLLING_WINDOW_CANDLES = 200
@@ -148,6 +158,9 @@ class _BacktestState:
     signals_seen: int = 0
     risk_rejections: int = 0
     execution_rejections: int = 0
+    trade_plan_completion_warnings: list[str] = field(default_factory=list)
+    risk_gate_blockers: list[str] = field(default_factory=list)
+    backtest_trade_plan_assumptions: list[str] = field(default_factory=list)
 
     @property
     def open_position(self) -> _SimulatedPosition | None:
@@ -165,6 +178,13 @@ class _PositionConstraints:
     max_positions_per_symbol: int = 1
     cooldown_bars_after_close: int = 0
     allow_opposite_signal_flip: bool = False
+
+
+@dataclass(frozen=True)
+class BacktestExecutionPolicy:
+    mode: str
+    production_mode: bool
+    preserve_legacy_backtest: bool = False
 
 
 @dataclass(frozen=True)
@@ -333,6 +353,7 @@ class ProductionBacktestRunner:
     ) -> BacktestDetailedRunResult:
         normalized_mode = _normalize_backtest_mode(mode)
         assumptions = _assumptions_for_backtest(request, normalized_mode, options)
+        execution_policy = _execution_policy_for_backtest(normalized_mode, assumptions)
         request = _request_with_mode_options(request, normalized_mode, assumptions)
         loaded_candles = await self._historical_candle_provider.load_candles(
             exchange=request.exchange,
@@ -371,7 +392,7 @@ class ProductionBacktestRunner:
             next_open_positions: list[_SimulatedPosition] = []
             for position in state.open_positions:
                 updated_position = self._execution_simulator.apply_candle(position, candle)
-                if updated_position.trade.status == "closed":
+                if is_terminal_virtual_trade_status(updated_position.trade.status):
                     closed_position = _replace_position(updated_position, exit_index=index)
                     state.cash_equity += _net_pnl(closed_position)
                     state.closed_positions.append(closed_position)
@@ -420,7 +441,7 @@ class ProductionBacktestRunner:
                         candle=candle,
                         index=index,
                         state=state,
-                        mode=normalized_mode,
+                        execution_policy=execution_policy,
                     )
                     if position is not None:
                         state.open_positions.append(position)
@@ -441,6 +462,7 @@ class ProductionBacktestRunner:
             )
 
         metrics = _metrics_from_state(state)
+        assumptions = _assumptions_with_runtime_diagnostics(assumptions, state)
         final_equity = state.cash_equity
         initial_capital = float(request.initial_capital)
         result = BacktestResultResponse(
@@ -504,10 +526,17 @@ class ProductionBacktestRunner:
         candle: OHLCVCandle,
         index: int,
         state: _BacktestState,
-        mode: str,
+        execution_policy: BacktestExecutionPolicy,
     ) -> _SimulatedPosition | None:
         if signal is None:
             return None
+        signal = _normalize_signal_for_backtest(
+            signal=signal,
+            features=features,
+            request=request,
+            execution_policy=execution_policy,
+            state=state,
+        )
         radar_signal = _radar_signal_from_strategy_signal(signal, candle)
         entry_price = _entry_price(signal) or features.close
         request_fee_rate = float(request.fee_rate)
@@ -564,12 +593,14 @@ class ProductionBacktestRunner:
                 ),
                 risk_settings=risk_settings,
             )
-        except ValueError:
+        except ValueError as exc:
             state.risk_rejections += 1
+            state.risk_gate_blockers.append(str(exc))
             return None
-        pre_execution_decision = _decision_for_mode(pre_execution_decision, mode)
+        pre_execution_decision = _decision_for_mode(pre_execution_decision, execution_policy.mode)
         if not pre_execution_decision.can_enter:
             state.risk_rejections += 1
+            state.risk_gate_blockers.extend(pre_execution_decision.blockers)
             return None
 
         execution = self._execution_simulator.simulate_entry(
@@ -608,12 +639,14 @@ class ProductionBacktestRunner:
                 ),
                 risk_settings=risk_settings,
             )
-        except ValueError:
+        except ValueError as exc:
             state.risk_rejections += 1
+            state.risk_gate_blockers.append(str(exc))
             return None
-        post_execution_decision = _decision_for_mode(post_execution_decision, mode)
+        post_execution_decision = _decision_for_mode(post_execution_decision, execution_policy.mode)
         if not post_execution_decision.can_enter:
             state.risk_rejections += 1
+            state.risk_gate_blockers.extend(post_execution_decision.blockers)
             return None
 
         execution = _execution_with_risk_decision(execution, post_execution_decision)
@@ -647,6 +680,209 @@ def _normalize_backtest_mode(mode: str) -> str:
     if normalized in {"discovery", "research_virtual", "production_like"}:
         return normalized
     return "production_like"
+
+
+def _execution_policy_for_backtest(
+    mode: str,
+    assumptions: Mapping[str, Any],
+) -> BacktestExecutionPolicy:
+    return BacktestExecutionPolicy(
+        mode=mode,
+        production_mode=mode == "production_like",
+        preserve_legacy_backtest=bool(assumptions.get("preserve_legacy_backtest")),
+    )
+
+
+def _normalize_signal_for_backtest(
+    *,
+    signal: StrategySignal,
+    features: Features,
+    request: BacktestRunRequest,
+    execution_policy: BacktestExecutionPolicy,
+    state: _BacktestState,
+) -> StrategySignal:
+    trade_plan_enrichment = TradePlanEnrichmentService()
+    signal = trade_plan_enrichment.ensure_trade_plan(signal)
+    strategy_params = _strategy_params_from_request(request)
+    pipeline_settings = _backtest_pipeline_settings(
+        request=request,
+        strategy_params=strategy_params,
+        execution_policy=execution_policy,
+    )
+    context = StrategyEvaluationContext(
+        signal_features=features,
+        strategy_params=strategy_params,
+        pipeline_settings=pipeline_settings,
+        rr_guard_context="backtest",
+    )
+    risk_reward = RiskRewardAssessmentService().assess(
+        signal,
+        pipeline_settings,
+        rr_guard_context="backtest",
+    )
+    invalidation = InvalidationLayer().build(signal, context)
+    exit_plan = ExitManagementLayer().build(signal, context)
+    trade_plan = trade_plan_enrichment.enrich(
+        signal=signal,
+        exit_plan=exit_plan,
+        invalidation=invalidation,
+        risk_reward=risk_reward,
+    )
+    trade_plan = _trade_plan_with_executable_backtest_rr_target(trade_plan)
+    trade_plan = _trade_plan_with_explicit_backtest_targets(trade_plan, state=state)
+    trade_plan = _trade_plan_with_backtest_assumption_metadata(
+        trade_plan,
+        state=state,
+        execution_policy=execution_policy,
+    )
+    completeness = trade_plan_completeness_service.assess(
+        signal,
+        trade_plan,
+        settings=pipeline_settings,
+        context={"backtest_features": features, "backtest_request": request},
+        production_mode=execution_policy.production_mode,
+    )
+    trade_plan = trade_plan_enrichment.attach_completeness_metadata(
+        trade_plan=trade_plan,
+        completeness=completeness,
+        production_mode=execution_policy.production_mode,
+    )
+    if completeness.warnings:
+        state.trade_plan_completion_warnings.extend(completeness.warnings)
+    return signal.model_copy(
+        update={
+            "invalidation": invalidation,
+            "exit_plan": exit_plan,
+            "trade_plan": trade_plan,
+            "first_target_rr": risk_reward.first_target_rr,
+            "final_target_rr": risk_reward.final_target_rr,
+            "selected_rr": risk_reward.rr,
+            "selected_rr_target": risk_reward.target_key,
+            "min_rr_ratio": risk_reward.min_rr,
+        },
+        deep=True,
+    )
+
+
+def _backtest_pipeline_settings(
+    *,
+    request: BacktestRunRequest,
+    strategy_params: Mapping[str, Any],
+    execution_policy: BacktestExecutionPolicy,
+) -> dict[str, Any]:
+    values = {
+        **dict(_risk_settings_params_from_request(request)),
+        **dict(strategy_params),
+    }
+    values["signal_mode"] = "production" if execution_policy.production_mode else execution_policy.mode
+    if execution_policy.production_mode:
+        values["production_mode"] = True
+    values["backtest_mode"] = execution_policy.mode
+    values["backtest_execution_policy"] = "production_compatible"
+    if execution_policy.preserve_legacy_backtest:
+        values["preserve_legacy_backtest"] = True
+    return values
+
+
+def _trade_plan_with_executable_backtest_rr_target(trade_plan: TradePlan) -> TradePlan:
+    if trade_plan.risk_rules.selected_rr_target not in {None, "disabled"}:
+        return trade_plan
+    risk_rules = trade_plan.risk_rules.model_copy(
+        update={
+            "selected_rr": trade_plan.risk_rules.final_target_rr or trade_plan.risk_rules.first_target_rr,
+            "selected_rr_target": "final",
+        }
+    )
+    metadata = dict(trade_plan.metadata)
+    assumptions = list(metadata.get("backtest_assumptions") or [])
+    assumptions.append("backtest_rr_guard_disabled_uses_final_target_for_execution")
+    metadata["backtest_assumptions"] = _dedupe_strings([str(item) for item in assumptions])
+    metadata["rr_guard_disabled_for_reporting"] = True
+    return trade_plan.model_copy(
+        update={
+            "metadata": metadata,
+            "risk_rules": risk_rules,
+        },
+        deep=True,
+    )
+
+
+def _trade_plan_with_explicit_backtest_targets(
+    trade_plan: TradePlan,
+    *,
+    state: _BacktestState,
+) -> TradePlan:
+    targets = []
+    changed = False
+    for target in trade_plan.targets:
+        if target.source != "legacy_fields" or target.thesis is None:
+            targets.append(target)
+            continue
+        if target.thesis.source != "risk_multiple_fallback":
+            targets.append(target)
+            continue
+        metadata = _target_metadata_without_fallback_thesis(target.metadata)
+        targets.append(target.model_copy(update={"thesis": None, "metadata": metadata}))
+        changed = True
+    if not changed:
+        return trade_plan
+    state.backtest_trade_plan_assumptions.append("backtest_explicit_legacy_targets_preserved")
+    metadata = dict(trade_plan.metadata)
+    assumptions = list(metadata.get("backtest_assumptions") or [])
+    assumptions.append("backtest_explicit_legacy_targets_preserved")
+    metadata["backtest_assumptions"] = _dedupe_strings([str(item) for item in assumptions])
+    return trade_plan.model_copy(update={"targets": targets, "metadata": metadata}, deep=True)
+
+
+def _target_metadata_without_fallback_thesis(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned = dict(metadata)
+    nested = cleaned.get("metadata")
+    if isinstance(nested, Mapping):
+        cleaned["metadata"] = _target_metadata_without_fallback_thesis(nested)
+    for key in (
+        "fallback_target_used",
+        "fallback_target_source",
+        "market_target_source",
+        "target_confidence",
+        "target_priority",
+        "target_source",
+        "target_thesis",
+        "target_thesis_source",
+    ):
+        cleaned.pop(key, None)
+    return cleaned
+
+
+def _trade_plan_with_backtest_assumption_metadata(
+    trade_plan: TradePlan,
+    *,
+    state: _BacktestState,
+    execution_policy: BacktestExecutionPolicy,
+) -> TradePlan:
+    assumption = "backtest_pipeline_invalidation_enrichment"
+    if execution_policy.preserve_legacy_backtest:
+        assumption = "preserve_legacy_backtest_pipeline_invalidation_enrichment"
+    state.backtest_trade_plan_assumptions.append(assumption)
+    metadata = dict(trade_plan.metadata)
+    assumptions = list(metadata.get("backtest_assumptions") or [])
+    assumptions.append(assumption)
+    metadata["backtest_assumptions"] = _dedupe_strings([str(item) for item in assumptions])
+    metadata["backtest_execution_policy"] = "production_compatible"
+    metadata["backtest_mode"] = execution_policy.mode
+    if execution_policy.preserve_legacy_backtest:
+        metadata["preserve_legacy_backtest"] = True
+    return trade_plan.model_copy(update={"metadata": metadata}, deep=True)
+
+
+def _assumptions_with_runtime_diagnostics(
+    assumptions: Mapping[str, Any],
+    state: _BacktestState,
+) -> dict[str, Any]:
+    values = dict(assumptions)
+    values["trade_plan_completion_warnings"] = _dedupe_strings(state.trade_plan_completion_warnings)
+    values["risk_gate_blockers"] = _dedupe_strings(state.risk_gate_blockers)
+    values["backtest_trade_plan_assumptions"] = _dedupe_strings(state.backtest_trade_plan_assumptions)
+    return values
 
 
 def _assumptions_for_backtest(
@@ -1388,6 +1624,9 @@ def _metrics_from_state(state: _BacktestState) -> dict[str, Any]:
         "signals_seen": state.signals_seen,
         "risk_rejections": state.risk_rejections,
         "execution_rejections": state.execution_rejections,
+        "trade_plan_completion_warnings": _dedupe_strings(state.trade_plan_completion_warnings),
+        "risk_gate_blockers": _dedupe_strings(state.risk_gate_blockers),
+        "backtest_trade_plan_assumptions": _dedupe_strings(state.backtest_trade_plan_assumptions),
     }
     return _round_metrics(metrics)
 

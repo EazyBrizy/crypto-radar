@@ -41,6 +41,8 @@ Strategy-test active-run state is backend-owned. Workers and services that execu
 
 The active-run API decides whether a run is stale from `last_heartbeat_at`, `started_at`, and `created_at` using the backend stale threshold. Frontend code may display `is_stale` and `stale_threshold_seconds`, but it must not reimplement stale-run policy.
 
+Strategy-test scenario execution delegates to `ProductionBacktestRunner`. `production_like` runs keep strict RiskGate behavior; `research_virtual` and `discovery` may surface backend warnings and assumptions, but trade-plan normalization, stale decisions, eligibility, risk, and PnL stay backend-owned.
+
 ## Signal Outcome Workers
 
 - `backend/app/workers/signal_outcome_worker.py`: evaluates open signal outcomes against market movement and terminal pending-entry states.

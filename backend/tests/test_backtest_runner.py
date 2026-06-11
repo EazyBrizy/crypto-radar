@@ -153,6 +153,32 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertIn("mae_r_avg", result.result.metrics)
         self.assertIn("by_strategy", result.result.metrics)
 
+    def test_backtest_enriches_legacy_signal_trade_plan_before_risk_gate(self) -> None:
+        candles = _candles()
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=DeterministicStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(_request(candles))
+
+        self.assertEqual(result.risk_rejections, 0)
+        self.assertEqual(result.execution_rejections, 0)
+        self.assertEqual(len(result.trades), 1)
+        trade_plan = result.trades[0].trade_plan
+        self.assertTrue(trade_plan["metadata"]["trade_plan_complete"])
+        self.assertTrue(trade_plan["metadata"]["execution_allowed_virtual"])
+        self.assertEqual(trade_plan["metadata"]["backtest_execution_policy"], "production_compatible")
+        self.assertIn(
+            "backtest_pipeline_invalidation_enrichment",
+            trade_plan["metadata"]["backtest_assumptions"],
+        )
+        self.assertTrue(trade_plan["invalidation"]["conditions"])
+        assert result.run_result.result is not None
+        self.assertEqual(result.run_result.result.metrics["risk_rejections"], 0)
+        self.assertEqual(result.run_result.result.metrics["risk_gate_blockers"], [])
+
     def test_runner_does_not_include_future_candles_in_feature_window(self) -> None:
         candles = _candles()
         feature_engine = RecordingFeatureEngine()

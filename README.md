@@ -32,11 +32,10 @@ Use this order for a clean local check of scanner plus virtual trading. Keep the
 1. Install dependencies:
 
 ```powershell
-cd backend
 py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
 
-cd ..\frontend
+cd frontend
 corepack enable
 corepack pnpm install
 
@@ -53,9 +52,9 @@ docker compose -f infra\docker-compose.yml --profile infra up -d postgres redis 
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m alembic current
-.\.venv\Scripts\python.exe -m alembic heads
+..\.venv\Scripts\python.exe -m alembic upgrade head
+..\.venv\Scripts\python.exe -m alembic current
+..\.venv\Scripts\python.exe -m alembic heads
 cd ..
 ```
 
@@ -77,7 +76,7 @@ $env:REAL_POSITION_SYNC_ENABLED="false"
 $env:ENABLE_LIVE_TRADING="false"
 $env:ENABLE_BYBIT_LIVE_ORDER_PLACEMENT="false"
 $env:ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT="false"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 5. Start frontend:
@@ -218,16 +217,16 @@ PostgreSQL schema changes must go through Alembic:
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m alembic revision -m "describe_change"
-.\.venv\Scripts\python.exe -m alembic upgrade head
+..\.venv\Scripts\python.exe -m alembic revision -m "describe_change"
+..\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
 Check local migration state:
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m alembic current
-.\.venv\Scripts\python.exe -m alembic heads
+..\.venv\Scripts\python.exe -m alembic current
+..\.venv\Scripts\python.exe -m alembic heads
 ```
 
 Make targets are available for the same checks:
@@ -246,7 +245,7 @@ Backend:
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m pytest
+..\.venv\Scripts\python.exe -m pytest
 ```
 
 Frontend:

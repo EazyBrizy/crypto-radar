@@ -12,9 +12,12 @@ $ErrorActionPreference = "Stop"
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendDir = Join-Path $RootDir "backend"
 $FrontendDir = Join-Path $RootDir "frontend"
-$BackendVenvPython = Join-Path $BackendDir ".venv\Scripts\python.exe"
+$BackendVenvDir = Join-Path $RootDir ".venv"
+$BackendVenvPython = Join-Path $BackendVenvDir "Scripts\python.exe"
+$BackendRequirements = Join-Path $BackendDir "requirements.txt"
+$BackendDevRequirements = Join-Path $BackendDir "requirements-dev.txt"
+$BackendDependencyStamp = Join-Path $BackendVenvDir ".crypto-radar-deps.stamp"
 $BackendPython = $BackendVenvPython
-$BackendPythonPath = $null
 $ComposeFile = Join-Path $RootDir "infra\docker-compose.yml"
 $CmdExe = if ($env:ComSpec) { $env:ComSpec } else { Join-Path $env:SystemRoot "System32\cmd.exe" }
 
@@ -71,6 +74,165 @@ function Test-PythonExecutable {
             $PSNativeCommandUseErrorActionPreference = $previousNativePreference
         }
     }
+}
+
+function Get-BundledPythonCandidates {
+    $WorkspaceUserDir = Split-Path (Split-Path $RootDir -Parent) -Parent
+    return @(
+        (Join-Path $WorkspaceUserDir ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"),
+        (Join-Path ([Environment]::GetFolderPath("UserProfile")) ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe")
+    )
+}
+
+function Resolve-HostPython {
+    $PathPython = Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1
+    $candidates = @(
+        $env:CRYPTO_RADAR_BACKEND_PYTHON,
+        $PathPython
+    )
+
+    foreach ($candidate in ($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        if (Test-PythonExecutable -Path $candidate) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Resolve-BundledPython {
+    foreach ($candidate in (Get-BundledPythonCandidates)) {
+        if (Test-PythonExecutable -Path $candidate) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Invoke-VenvCreationWithPython {
+    param([string]$PythonPath)
+
+    try {
+        & $PythonPath -m venv $BackendVenvDir
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        Write-WarningLine "Could not create .venv with $PythonPath`: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Invoke-PyLauncherVenv {
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    try {
+        & py -3.12 -c "import sys; raise SystemExit(0)" *> $null
+        if ($LASTEXITCODE -ne 0) {
+            return $false
+        }
+
+        & py -3.12 -m venv $BackendVenvDir
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        return $false
+    }
+}
+
+function New-BackendVenv {
+    if (Test-Path -LiteralPath $BackendVenvDir) {
+        $resolvedVenvDir = (Resolve-Path -LiteralPath $BackendVenvDir).Path
+        if (-not $resolvedVenvDir.StartsWith($RootDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to remove path outside workspace: $resolvedVenvDir"
+        }
+
+        Write-WarningLine "Removing broken backend environment at $resolvedVenvDir..."
+        Remove-Item -LiteralPath $resolvedVenvDir -Recurse -Force
+    }
+
+    $HostPython = Resolve-HostPython
+    if ($HostPython) {
+        Write-Info "Creating backend environment: $BackendVenvDir"
+        if (Invoke-VenvCreationWithPython -PythonPath $HostPython) {
+            return
+        }
+    }
+
+    Write-Info "Trying Python Launcher for Python 3.12..."
+    if (Invoke-PyLauncherVenv) {
+        return
+    }
+
+    $BundledPython = Resolve-BundledPython
+    if ($BundledPython) {
+        Write-Info "Creating backend environment with bundled Python: $BackendVenvDir"
+        if (Invoke-VenvCreationWithPython -PythonPath $BundledPython) {
+            return
+        }
+    }
+
+    throw "Could not create .venv. Install Python 3.12 or set CRYPTO_RADAR_BACKEND_PYTHON to a runnable python.exe."
+}
+
+function Get-DependencyFingerprint {
+    $files = @($BackendRequirements, $BackendDevRequirements)
+    $lines = foreach ($file in $files) {
+        if (-not (Test-Path -LiteralPath $file)) {
+            throw "Dependency file was not found: $file"
+        }
+
+        $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $file
+        "$([System.IO.Path]::GetFileName($file)):$($hash.Hash)"
+    }
+
+    return ($lines -join "`n")
+}
+
+function Test-BackendDependencies {
+    if (-not (Test-PythonExecutable -Path $BackendVenvPython)) {
+        return $false
+    }
+
+    try {
+        & $BackendVenvPython -c "import alembic, fastapi, pytest, pydantic_settings, sqlalchemy, uvicorn; raise SystemExit(0)" *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        return $false
+    }
+}
+
+function Sync-BackendDependencies {
+    $fingerprint = Get-DependencyFingerprint
+    $stampMatches = $false
+
+    if (Test-Path -LiteralPath $BackendDependencyStamp) {
+        $stampMatches = ((Get-Content -Raw -LiteralPath $BackendDependencyStamp).Trim() -eq $fingerprint.Trim())
+    }
+
+    if ($stampMatches -and (Test-BackendDependencies)) {
+        return
+    }
+
+    Write-Info "Installing backend dependencies into $BackendVenvDir..."
+    & $BackendVenvPython -m pip install -r $BackendDevRequirements
+    if ($LASTEXITCODE -ne 0) {
+        throw "Backend dependency installation failed with exit code $LASTEXITCODE."
+    }
+
+    Set-Content -LiteralPath $BackendDependencyStamp -Value $fingerprint -Encoding utf8
+}
+
+function Initialize-BackendEnvironment {
+    if (-not (Test-PythonExecutable -Path $BackendVenvPython)) {
+        Write-WarningLine ".venv Python is not runnable; recreating the single backend environment."
+        New-BackendVenv
+    }
+
+    Sync-BackendDependencies
 }
 
 function Wait-HttpOk {
@@ -265,31 +427,7 @@ function Invoke-BackendCommand {
     }
 }
 
-if (Test-PythonExecutable -Path $BackendVenvPython) {
-    $BackendPython = $BackendVenvPython
-}
-else {
-    $WorkspaceUserDir = Split-Path (Split-Path $RootDir -Parent) -Parent
-    $BundledCandidates = @(
-        $env:CRYPTO_RADAR_BACKEND_PYTHON,
-        (Join-Path $WorkspaceUserDir ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"),
-        (Join-Path ([Environment]::GetFolderPath("UserProfile")) ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe")
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-
-    $BundledPython = $BundledCandidates | Where-Object { Test-PythonExecutable -Path $_ } | Select-Object -First 1
-
-    if ($BundledPython) {
-        $BackendPython = $BundledPython
-        $BackendPythonPath = @(
-            (Join-Path $BackendDir ".venv\Lib\site-packages"),
-            $BackendDir
-        ) -join ";"
-        Write-WarningLine "backend\.venv Python is not runnable; using bundled Python with backend\.venv site-packages."
-    }
-    else {
-        throw "backend\.venv was not found or is not runnable. Create it first: cd backend; py -3.12 -m venv .venv; .\.venv\Scripts\python.exe -m pip install -r requirements.txt"
-    }
-}
+Initialize-BackendEnvironment
 
 Assert-Command -Name "node" -InstallHint "Install Node.js 24.x and open a new PowerShell."
 Assert-Command -Name "corepack" -InstallHint "Corepack should come with Node.js. Check your Node.js installation."
@@ -326,10 +464,6 @@ $backendEnv = @{
     ENABLE_BYBIT_LIVE_ORDER_PLACEMENT = "false"
     ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT = "false"
     REQUIRE_PROTECTIVE_STOP_FOR_LIVE_ENTRY = "true"
-}
-
-if ($BackendPythonPath) {
-    $backendEnv["PYTHONPATH"] = $BackendPythonPath
 }
 
 if ($NoScanner) {

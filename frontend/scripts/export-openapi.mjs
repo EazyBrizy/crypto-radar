@@ -35,7 +35,6 @@ function exportSchemaFromFastApiApp() {
   const pythonCandidates = [
     process.env.CRYPTO_RADAR_BACKEND_PYTHON,
     resolve(frontendDir, "../.venv/Scripts/python.exe"),
-    resolve(frontendDir, "../backend/.venv/Scripts/python.exe"),
     resolve(os.homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe"),
     "python"
   ].filter(Boolean);
@@ -52,7 +51,7 @@ function exportSchemaFromFastApiApp() {
       env: {
         ...process.env,
         PYTHONPATH: [
-          resolve(backendDir, ".venv/Lib/site-packages"),
+          resolve(frontendDir, "../.venv/Lib/site-packages"),
           backendDir,
         ].join(process.platform === "win32" ? ";" : ":"),
       },

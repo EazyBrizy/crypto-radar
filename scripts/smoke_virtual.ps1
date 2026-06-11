@@ -19,7 +19,6 @@ function Test-PythonExecutable {
 }
 
 $PythonCandidates = @(
-    (Join-Path $RootDir "backend\.venv\Scripts\python.exe"),
     (Join-Path $RootDir ".venv\Scripts\python.exe"),
     (Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"),
     (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
@@ -28,7 +27,7 @@ $PythonCandidates = @(
 
 $Python = $PythonCandidates | Where-Object { Test-PythonExecutable -Path $_ } | Select-Object -First 1
 if (-not $Python) {
-    throw "Python was not found. Create backend\.venv or install Python."
+    throw "Python was not found. Create .venv from the repository root or install Python."
 }
 
 $Corepack = Get-Command corepack -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1

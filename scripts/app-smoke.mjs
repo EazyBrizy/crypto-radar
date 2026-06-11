@@ -39,7 +39,7 @@ try {
   const backendEnv = {
     ...process.env,
     PYTHONPATH: [
-      path.join(backendDir, ".venv", "Lib", "site-packages"),
+      path.join(rootDir, ".venv", "Lib", "site-packages"),
       backendDir,
     ].join(path.delimiter),
     CRYPTO_RADAR_SCANNER_ENABLED: "false",
@@ -237,7 +237,7 @@ async function reservePort(port, label) {
 function resolvePython() {
   const candidates = [
     process.env.CRYPTO_RADAR_BACKEND_PYTHON,
-    path.join(backendDir, ".venv", "Scripts", "python.exe"),
+    path.join(rootDir, ".venv", "Scripts", "python.exe"),
     path.join(os.homedir(), ".cache", "codex-runtimes", "codex-primary-runtime", "dependencies", "python", "python.exe"),
     "python",
   ].filter(Boolean);

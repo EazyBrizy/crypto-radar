@@ -79,11 +79,13 @@ Dockerfile уже использует `python:3.12-slim`. Локальная ve
 Для локального перехода:
 
 ```powershell
-cd backend
+# Run from the repository root.
 Remove-Item -Recurse -Force .venv
 py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m unittest discover tests
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
+Push-Location backend
+..\.venv\Scripts\python.exe -m unittest discover tests
+Pop-Location
 ```
 
 Если `py -3.12` недоступен, нужно вызвать установленный `python.exe` из Python

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 from uuid import UUID, uuid4
 
 from app.schemas.market import MarketData
 from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot, StrategySignal
 from app.schemas.trade import ManualConfirmRequest, VirtualTrade
-from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
+from app.services.strategy_testing.forward_runtime import ForwardRuntimeResult, ForwardStrategyTestRuntime
 from app.services.strategy_testing.schemas import (
     StrategyTestMetricRow,
     StrategyTestPair,
@@ -19,6 +21,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunStatus,
     StrategyTestTrade,
 )
+from app.workers.forward_strategy_test_worker import ForwardStrategyTestWorker
 
 
 RUN_ID = UUID("11111111-2222-4333-8444-555555555555")
@@ -113,6 +116,36 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run_store.get_run(stopping.run_id).run.status, "cancelled")  # type: ignore[union-attr]
         self.assertEqual(run_store.get_run(cancelled.run_id).run.status, "cancelled")  # type: ignore[union-attr]
         self.assertEqual(virtual_trading.open_calls, [])
+
+
+class ForwardStrategyTestWorkerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_process_strategy_signal_delegates_to_runtime_and_updates_last_result(self) -> None:
+        runtime = _WorkerSignalRuntime()
+        worker = ForwardStrategyTestWorker(runtime=runtime)  # type: ignore[arg-type]
+        signal = _strategy_signal()
+
+        result = await worker.process_strategy_signal(signal)
+
+        self.assertIs(result, worker.last_result)
+        self.assertEqual(result.signals_processed, 1)
+        self.assertEqual(runtime.signals, [signal])
+
+    async def test_heartbeat_exception_sets_last_result_errors_and_keeps_loop_running(self) -> None:
+        runtime = _FailingHeartbeatRuntime()
+        worker = ForwardStrategyTestWorker(runtime=runtime)  # type: ignore[arg-type]
+        worker._interval_seconds = 0.01
+        task = asyncio.create_task(worker._run())
+
+        try:
+            await _wait_until(lambda: runtime.heartbeat_calls >= 2 or task.done())
+
+            self.assertFalse(task.done())
+            self.assertGreaterEqual(runtime.heartbeat_calls, 2)
+            self.assertEqual(worker.last_result.errors, ["heartbeat failed"])
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+                await task
 
 
 def _run(
@@ -330,6 +363,31 @@ class _Scanner:
     async def process_tick(self, tick: MarketData) -> list[StrategySignal]:
         self.ticks.append(tick)
         return list(self._signals)
+
+
+class _WorkerSignalRuntime:
+    def __init__(self) -> None:
+        self.signals: list[StrategySignal] = []
+
+    async def process_strategy_signal(self, signal: StrategySignal) -> ForwardRuntimeResult:
+        self.signals.append(signal)
+        return ForwardRuntimeResult(signals_processed=1)
+
+
+class _FailingHeartbeatRuntime:
+    def __init__(self) -> None:
+        self.heartbeat_calls = 0
+
+    def heartbeat_active_runs(self) -> ForwardRuntimeResult:
+        self.heartbeat_calls += 1
+        raise RuntimeError("heartbeat failed")
+
+
+async def _wait_until(predicate: Callable[[], bool], *, attempts: int = 30) -> None:
+    for _ in range(attempts):
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
 
 
 if __name__ == "__main__":

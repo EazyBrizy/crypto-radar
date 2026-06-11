@@ -5,6 +5,7 @@ import contextlib
 import logging
 
 from app.schemas.market import MarketData
+from app.schemas.signal import StrategySignal
 from app.services.strategy_testing.forward_runtime import ForwardRuntimeResult, ForwardStrategyTestRuntime
 
 logger = logging.getLogger(__name__)
@@ -70,9 +71,17 @@ class ForwardStrategyTestWorker:
         self._last_result = await self._runtime.process_market_tick(tick)
         return self._last_result
 
+    async def process_strategy_signal(self, signal: StrategySignal) -> ForwardRuntimeResult:
+        self._last_result = await self._runtime.process_strategy_signal(signal)
+        return self._last_result
+
     async def _run(self) -> None:
         while True:
-            self._last_result = self._runtime.heartbeat_active_runs()
+            try:
+                self._last_result = self._runtime.heartbeat_active_runs()
+            except Exception as exc:
+                logger.warning("Forward strategy test heartbeat failed: %s", exc)
+                self._last_result = ForwardRuntimeResult(errors=[str(exc)])
             await asyncio.sleep(self._interval_seconds)
 
 

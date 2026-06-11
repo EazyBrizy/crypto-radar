@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 from uuid import UUID
 
@@ -49,6 +50,7 @@ from app.services.virtual_trading import (
 )
 
 router = APIRouter(prefix="/trades", tags=["trades"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=TradeJournalResponse)
@@ -295,8 +297,12 @@ async def close_market_trade(
                     "close_market",
                     alert=invalidation_alert,
                 )
-            except LookupError as exc:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except Exception as exc:
+                logger.warning(
+                    "Trade invalidation close-market action recording skipped for trade %s: %s",
+                    trade_id,
+                    exc,
+                )
         if was_open:
             await _publish_virtual_close_events(closed_trade)
         return CloseMarketTradeResponse(
@@ -348,8 +354,12 @@ async def close_virtual_trade(
                 "close_market",
                 alert=invalidation_alert,
             )
-        except LookupError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.warning(
+                "Trade invalidation close-market action recording skipped for trade %s: %s",
+                trade_id,
+                exc,
+            )
     await _publish_virtual_close_events(trade)
     return annotate_virtual_trade_view(trade)
 

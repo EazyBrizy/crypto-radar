@@ -1167,6 +1167,35 @@ class TradeApiMarketCloseTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.trade.close_reason, "invalidation")
         self.assertIn("invalidated", result.message)
 
+    async def test_market_close_endpoint_keeps_close_when_invalidation_action_recording_fails(self) -> None:
+        service = VirtualTradeLifecycleTest._service()
+        trade = service.open_virtual_trade(
+            VirtualTradeLifecycleTest._signal(direction="long", stop_loss=90.0),
+            ManualConfirmRequest(fee_rate=0.001),
+        )
+        service.update_market_price("bybit", "BTCUSDT", 95.0)
+        broker = CapturingBroker()
+
+        with (
+            patch("app.api.v1.trades.virtual_trading_service", service),
+            patch("app.api.v1.trades.realtime_event_broker", broker),
+            patch(
+                "app.api.v1.trades.trade_invalidation_service.record_user_action",
+                side_effect=LookupError("action store unavailable"),
+            ) as record_action,
+            self.assertLogs("app.api.v1.trades", level="WARNING") as logs,
+        ):
+            result = await close_market_trade(trade.id, CloseMarketTradeRequest(reason="invalidation"))
+
+        self.assertEqual(result.status, "closed")
+        self.assertIsNotNone(result.trade)
+        assert result.trade is not None
+        self.assertEqual(result.trade.status, "invalidated")
+        self.assertEqual(result.trade.close_reason, "invalidation")
+        self.assertEqual([event["type"] for event in broker.events], ["trade.closed"])
+        record_action.assert_called_once()
+        self.assertIn("action recording skipped", logs.output[0])
+
     async def test_market_close_endpoint_keeps_real_trade_as_not_implemented_stub(self) -> None:
         real_trade = RealTrade(
             id="real_1",

@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
-StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+StrategyTestType = Literal["historical_backtest", "forward_virtual"]
+StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "stopping"]
 StrategyTestSameCandlePolicy = Literal[
     "conservative_stop_first",
     "target_first",
@@ -48,6 +49,7 @@ class StrategyTestPair(BaseModel):
 
 class StrategyTestRunRequest(BaseModel):
     user_id: str = "demo_user"
+    test_type: StrategyTestType = "historical_backtest"
     strategies: list[str]
     pairs: list[StrategyTestPair]
     timeframes: list[str]
@@ -98,11 +100,14 @@ class StrategyTestRunRequest(BaseModel):
 class StrategyTestRunResponse(BaseModel):
     run_id: UUID
     status: StrategyTestRunStatus
+    test_type: StrategyTestType = "historical_backtest"
     requested_matrix: dict[str, Any]
     summary: dict[str, Any] = Field(default_factory=dict)
+    runtime_state: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
     error: str | None = None
 
 

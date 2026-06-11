@@ -66,6 +66,12 @@ corepack pnpm openapi:generate
 - Zustand is for local UI state only: sidebar, filters, selected ids, realtime UI status.
 - Domain enum helpers live in `frontend/src/domain/`.
 
+## Strategy Testing Fields
+
+- Strategy test run responses include backend-owned `test_type`, `status`, `summary`, `runtime_state`, and `last_heartbeat_at`.
+- The frontend may display these fields and form validation state, but it must not compute stale decisions, eligibility, risk, PnL, or execution readiness.
+- `forward_virtual` and `historical_backtest` are API values from the backend contract, not separate frontend workflows.
+
 ## Execution Rendering Contract
 
 The Radar UI displays backend execution state. It must not recompute whether a signal is executable.

@@ -29,6 +29,7 @@ class StrategyTestingApiContractTest(unittest.TestCase):
     def test_run_request_accepts_matrix_inputs(self) -> None:
         request = _request()
 
+        self.assertEqual(request.test_type, "historical_backtest")
         self.assertEqual(
             request.strategies,
             [
@@ -41,6 +42,32 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(request.pairs[0].exchange, "bybit")
         self.assertEqual(request.pairs[0].symbol, "BTCUSDT")
         self.assertEqual(request.timeframes, ["1h", "4h"])
+
+    def test_run_request_accepts_forward_virtual_test_type(self) -> None:
+        request = _request(test_type="forward_virtual")
+
+        self.assertEqual(request.test_type, "forward_virtual")
+
+    def test_run_response_exposes_forward_runtime_fields_and_statuses(self) -> None:
+        heartbeat = _now()
+
+        response = StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="stopping",
+            test_type="forward_virtual",
+            requested_matrix={},
+            summary={"scenario_count": 1},
+            runtime_state={"processed_candles": 3},
+            last_heartbeat_at=heartbeat,
+        )
+
+        payload = response.model_dump(mode="json")
+
+        self.assertEqual(payload["status"], "stopping")
+        self.assertEqual(payload["test_type"], "forward_virtual")
+        self.assertEqual(payload["summary"], {"scenario_count": 1})
+        self.assertEqual(payload["runtime_state"], {"processed_candles": 3})
+        self.assertEqual(payload["last_heartbeat_at"], "2026-01-01T00:00:00Z")
 
     def test_end_at_must_be_after_start_at(self) -> None:
         request = _request()
@@ -89,6 +116,9 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(list_response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "queued")
+        self.assertEqual(data["test_type"], "historical_backtest")
+        self.assertEqual(data["runtime_state"], {})
+        self.assertIsNone(data["last_heartbeat_at"])
         self.assertIn("run_id", data)
         self.assertEqual(
             data["requested_matrix"]["strategies"],
@@ -106,9 +136,11 @@ class StrategyTestingApiContractTest(unittest.TestCase):
             ],
         )
         self.assertEqual(data["requested_matrix"]["timeframes"], ["1h", "4h"])
+        self.assertEqual(data["requested_matrix"]["test_type"], "historical_backtest")
         self.assertEqual(data["requested_matrix"]["scenario_count"], 12)
         self.assertEqual(list_response.json()[0]["run_id"], data["run_id"])
         self.assertEqual(list_response.json()[0]["status"], "completed")
+        self.assertEqual(list_response.json()[0]["test_type"], "historical_backtest")
         self.assertEqual(list_response.json()[0]["summary"]["scenario_count"], 12)
 
     def test_existing_backtests_route_remains_registered(self) -> None:
@@ -122,9 +154,10 @@ def _now() -> datetime:
     return datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def _request(tags: list[str] | None = None) -> StrategyTestRunRequest:
+def _request(tags: list[str] | None = None, test_type: str = "historical_backtest") -> StrategyTestRunRequest:
     now = _now()
     request_kwargs = {
+        "test_type": test_type,
         "strategies": [
             "trend_pullback_continuation",
             "volatility_squeeze_breakout",
@@ -175,6 +208,7 @@ class _EphemeralStrategyTestRunStore:
         run = StrategyTestRunResponse(
             run_id=uuid4(),
             status="queued",
+            test_type=request.test_type,
             requested_matrix=_requested_matrix(request),
         )
         detail = StrategyTestRunDetailResponse(run=run)
@@ -259,6 +293,7 @@ class _NoopStrategyTestMatrixRunner:
 def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:
     return {
         "user_id": request.user_id,
+        "test_type": request.test_type,
         "mode": request.mode,
         "strategies": request.strategies,
         "pairs": [pair.model_dump() for pair in request.pairs],

@@ -36,6 +36,14 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - Strategies and testing: `backend/app/api/v1/strategies.py`, `backend/app/api/v1/strategy_tests.py`, `backend/app/api/v1/strategy_lab.py`, `backend/app/api/v1/backtests.py`
 - Notifications, users, billing, AI, analytics: matching files in `backend/app/api/v1/`
 
+## Strategy Testing Runtime Contract
+
+- `strategy_test_runs` is represented by Alembic revisions, `backend/app/models/strategy_testing.py`, `backend/app/services/strategy_testing/schemas.py`, and `PostgresStrategyTestRunStore`.
+- Run `test_type` is backend-owned and is either `historical_backtest` or `forward_virtual`.
+- Run status values are `queued`, `running`, `completed`, `failed`, `cancelled`, and `stopping`.
+- API responses include `summary`, `runtime_state`, and `last_heartbeat_at`; frontend code must display these values instead of reconstructing run state.
+- `mark_running`, `mark_completed`, `mark_failed`, `mark_stopping`, and `mark_cancelled` are the store boundary for status and heartbeat transitions.
+
 ## Core Services
 
 - Signal service: `backend/app/services/signal_service.py`

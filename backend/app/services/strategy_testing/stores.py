@@ -18,6 +18,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestType,
     StrategyTestTrade,
 )
 from app.services.user_identity import resolve_app_user
@@ -137,6 +138,12 @@ class StrategyTestRunStore(Protocol):
         ...
 
     def mark_failed(self, run_id: UUID, error: str) -> StrategyTestRunDetailResponse:
+        ...
+
+    def mark_stopping(self, run_id: UUID) -> StrategyTestRunDetailResponse:
+        ...
+
+    def mark_cancelled(self, run_id: UUID) -> StrategyTestRunDetailResponse:
         ...
 
 
@@ -435,6 +442,7 @@ class PostgresStrategyTestRunStore:
                 user_id=user.id,
                 requested_user_id=request.user_id,
                 status="queued",
+                test_type=request.test_type,
                 mode=request.mode,
                 requested_strategies=list(request.strategies),
                 requested_pairs=[pair.model_dump(mode="json") for pair in request.pairs],
@@ -442,6 +450,8 @@ class PostgresStrategyTestRunStore:
                 start_at=request.start_at,
                 end_at=request.end_at,
                 params=_stored_params(request),
+                summary={},
+                runtime_state={},
                 metric_set=list(request.metric_set),
                 tags=list(request.tags),
                 created_at=now,
@@ -482,7 +492,9 @@ class PostgresStrategyTestRunStore:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
             run.status = "running"
-            run.started_at = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
+            run.started_at = now
+            run.last_heartbeat_at = now
             run.error = None
             session.flush()
             detail = _run_to_detail(run)
@@ -496,20 +508,47 @@ class PostgresStrategyTestRunStore:
     ) -> StrategyTestRunDetailResponse:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
+            now = datetime.now(timezone.utc)
             run.status = "completed"
-            run.finished_at = datetime.now(timezone.utc)
+            run.finished_at = now
+            run.last_heartbeat_at = now
+            run.summary = dict(summary or {})
             run.error = None
             session.flush()
-            detail = _run_to_detail(run, summary=summary)
+            detail = _run_to_detail(run)
             session.commit()
             return detail
 
     def mark_failed(self, run_id: UUID, error: str) -> StrategyTestRunDetailResponse:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
+            now = datetime.now(timezone.utc)
             run.status = "failed"
-            run.finished_at = datetime.now(timezone.utc)
+            run.finished_at = now
+            run.last_heartbeat_at = now
             run.error = error
+            session.flush()
+            detail = _run_to_detail(run)
+            session.commit()
+            return detail
+
+    def mark_stopping(self, run_id: UUID) -> StrategyTestRunDetailResponse:
+        with self._session_factory() as session:
+            run = _get_run_or_raise(session, run_id)
+            run.status = "stopping"
+            run.last_heartbeat_at = datetime.now(timezone.utc)
+            session.flush()
+            detail = _run_to_detail(run)
+            session.commit()
+            return detail
+
+    def mark_cancelled(self, run_id: UUID) -> StrategyTestRunDetailResponse:
+        with self._session_factory() as session:
+            run = _get_run_or_raise(session, run_id)
+            now = datetime.now(timezone.utc)
+            run.status = "cancelled"
+            run.finished_at = now
+            run.last_heartbeat_at = now
             session.flush()
             detail = _run_to_detail(run)
             session.commit()
@@ -536,18 +575,19 @@ def _stored_params(request: StrategyTestRunRequest) -> dict[str, Any]:
 
 def _run_to_detail(
     run: StrategyTestRun,
-    *,
-    summary: dict[str, Any] | None = None,
 ) -> StrategyTestRunDetailResponse:
     return StrategyTestRunDetailResponse(
         run=StrategyTestRunResponse(
             run_id=run.id,
             status=cast(StrategyTestRunStatus, run.status),
+            test_type=cast(StrategyTestType, run.test_type),
             requested_matrix=_requested_matrix(run),
-            summary=summary or {},
+            summary=_json_object(run.summary),
+            runtime_state=_json_object(run.runtime_state),
             created_at=run.created_at,
             started_at=run.started_at,
             finished_at=run.finished_at,
+            last_heartbeat_at=run.last_heartbeat_at,
             error=run.error,
         ),
     )
@@ -558,6 +598,7 @@ def _requested_matrix(run: StrategyTestRun) -> dict[str, Any]:
     request_params = params.get(REQUEST_PARAMS_KEY, params)
     return {
         "user_id": run.requested_user_id,
+        "test_type": run.test_type,
         "mode": run.mode,
         "strategies": list(run.requested_strategies),
         "pairs": list(run.requested_pairs),
@@ -573,6 +614,10 @@ def _requested_matrix(run: StrategyTestRun) -> dict[str, Any]:
         "tags": list(run.tags),
         "scenario_count": len(run.requested_strategies) * len(run.requested_pairs) * len(run.requested_timeframes),
     }
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
 
 def _trade_select_columns_sql() -> str:
     return ",\n                ".join(ClickHouseStrategyTestStore._trade_columns)

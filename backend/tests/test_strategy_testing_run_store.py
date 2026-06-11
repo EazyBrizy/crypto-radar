@@ -24,6 +24,12 @@ MIGRATION_PATH = (
     / "versions"
     / "202606010003_create_strategy_test_runs.py"
 )
+FORWARD_RUNTIME_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "alembic"
+    / "versions"
+    / "202606060004_add_forward_strategy_test_runtime.py"
+)
 
 
 class StrategyTestingRunModelTest(unittest.TestCase):
@@ -35,8 +41,19 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         table = StrategyTestRun.__table__
         constraint_names = {constraint.name for constraint in table.constraints}
         index_names = {index.name for index in table.indexes}
+        column_names = set(table.c.keys())
+        status_constraint = next(
+            constraint
+            for constraint in table.constraints
+            if constraint.name == "ck_strategy_test_runs_status"
+        )
 
+        self.assertIn("test_type", column_names)
+        self.assertIn("summary", column_names)
+        self.assertIn("runtime_state", column_names)
+        self.assertIn("last_heartbeat_at", column_names)
         self.assertIn("ck_strategy_test_runs_status", constraint_names)
+        self.assertIn("ck_strategy_test_runs_test_type", constraint_names)
         self.assertIn("ck_strategy_test_runs_mode", constraint_names)
         self.assertIn("ck_strategy_test_runs_time_range", constraint_names)
         self.assertIn("ck_strategy_test_runs_requested_strategies_non_empty", constraint_names)
@@ -44,6 +61,10 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("ix_strategy_test_runs_user_created", index_names)
         self.assertIn("ix_strategy_test_runs_status_created", index_names)
         self.assertIn("ix_strategy_test_runs_mode", index_names)
+        self.assertIn("ix_strategy_test_runs_test_type", index_names)
+        status_sql = str(status_constraint.sqltext)
+        self.assertIn("cancelled", status_sql)
+        self.assertIn("stopping", status_sql)
 
     def test_migration_contains_table_constraints_and_indexes(self) -> None:
         migration = MIGRATION_PATH.read_text(encoding="utf-8")
@@ -60,6 +81,19 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("ix_strategy_test_runs_status_created", migration)
         self.assertIn("ix_strategy_test_runs_mode", migration)
         self.assertIn("op.drop_table(\"strategy_test_runs\")", migration)
+
+    def test_forward_runtime_migration_contract_is_reflected_by_model(self) -> None:
+        migration = FORWARD_RUNTIME_MIGRATION_PATH.read_text(encoding="utf-8")
+        table = StrategyTestRun.__table__
+
+        self.assertIn("test_type", table.c)
+        self.assertIn("summary", table.c)
+        self.assertIn("runtime_state", table.c)
+        self.assertIn("last_heartbeat_at", table.c)
+        self.assertIn("ck_strategy_test_runs_test_type", {constraint.name for constraint in table.constraints})
+        self.assertIn("ix_strategy_test_runs_test_type", {index.name for index in table.indexes})
+        self.assertIn("forward_virtual", migration)
+        self.assertIn("stopping", migration)
 
 
 class PostgresStrategyTestRunStoreTest(unittest.TestCase):
@@ -89,6 +123,10 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
         detail = self.store.create_run(_request())
 
         self.assertEqual(detail.run.status, "queued")
+        self.assertEqual(detail.run.test_type, "historical_backtest")
+        self.assertEqual(detail.run.summary, {})
+        self.assertEqual(detail.run.runtime_state, {})
+        self.assertIsNone(detail.run.last_heartbeat_at)
         matrix = detail.run.requested_matrix
         self.assertEqual(matrix["user_id"], "demo_user")
         self.assertEqual(matrix["mode"], "research_virtual")
@@ -113,6 +151,18 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
             self.assertEqual(run.user_id, self.demo_user_id)
             self.assertEqual(run.requested_user_id, "demo_user")
             self.assertEqual(run.status, "queued")
+            self.assertEqual(run.test_type, "historical_backtest")
+
+    def test_create_run_persists_forward_virtual_test_type(self) -> None:
+        detail = self.store.create_run(_request(test_type="forward_virtual"))
+
+        self.assertEqual(detail.run.test_type, "forward_virtual")
+        self.assertEqual(detail.run.requested_matrix["test_type"], "forward_virtual")
+        with self.SessionFactory() as session:
+            run = session.get(StrategyTestRun, detail.run.run_id)
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.test_type, "forward_virtual")
 
     def test_list_and_get_return_persisted_run(self) -> None:
         created = self.store.create_run(_request())
@@ -142,29 +192,38 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
 
         self.assertEqual(running.run.status, "running")
         self.assertIsNotNone(running.run.started_at)
+        self.assertIsNotNone(running.run.last_heartbeat_at)
         with self.SessionFactory() as session:
             run = session.get(StrategyTestRun, created.run.run_id)
             self.assertIsNotNone(run)
             assert run is not None
             self.assertEqual(run.status, "running")
             self.assertIsNotNone(run.started_at)
+            self.assertIsNotNone(run.last_heartbeat_at)
 
-    def test_mark_completed_sets_finished_at_and_status(self) -> None:
+    def test_mark_completed_persists_summary_finished_at_and_heartbeat(self) -> None:
         created = self.store.create_run(_request())
 
         completed = self.store.mark_completed(created.run.run_id, summary={"trades_count": 0})
+        reloaded = self.store.get_run(created.run.run_id)
 
         self.assertEqual(completed.run.status, "completed")
         self.assertEqual(completed.run.summary, {"trades_count": 0})
         self.assertIsNotNone(completed.run.finished_at)
+        self.assertIsNotNone(completed.run.last_heartbeat_at)
+        self.assertIsNotNone(reloaded)
+        assert reloaded is not None
+        self.assertEqual(reloaded.run.summary, {"trades_count": 0})
         with self.SessionFactory() as session:
             run = session.get(StrategyTestRun, created.run.run_id)
             self.assertIsNotNone(run)
             assert run is not None
             self.assertEqual(run.status, "completed")
+            self.assertEqual(run.summary, {"trades_count": 0})
             self.assertIsNotNone(run.finished_at)
+            self.assertIsNotNone(run.last_heartbeat_at)
 
-    def test_mark_failed_sets_error_and_status(self) -> None:
+    def test_mark_failed_sets_error_finished_at_and_heartbeat(self) -> None:
         created = self.store.create_run(_request())
 
         failed = self.store.mark_failed(created.run.run_id, "historical data unavailable")
@@ -172,6 +231,7 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
         self.assertEqual(failed.run.status, "failed")
         self.assertEqual(failed.run.error, "historical data unavailable")
         self.assertIsNotNone(failed.run.finished_at)
+        self.assertIsNotNone(failed.run.last_heartbeat_at)
         with self.SessionFactory() as session:
             run = session.get(StrategyTestRun, created.run.run_id)
             self.assertIsNotNone(run)
@@ -179,6 +239,18 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
             self.assertEqual(run.status, "failed")
             self.assertEqual(run.error, "historical data unavailable")
             self.assertIsNotNone(run.finished_at)
+            self.assertIsNotNone(run.last_heartbeat_at)
+
+    def test_mark_stopping_and_cancelled_use_forward_runtime_statuses(self) -> None:
+        created = self.store.create_run(_request(test_type="forward_virtual"))
+
+        stopping = self.store.mark_stopping(created.run.run_id)
+        cancelled = self.store.mark_cancelled(created.run.run_id)
+
+        self.assertEqual(stopping.run.status, "stopping")
+        self.assertEqual(cancelled.run.status, "cancelled")
+        self.assertIsNotNone(cancelled.run.finished_at)
+        self.assertIsNotNone(cancelled.run.last_heartbeat_at)
 
     def test_demo_user_resolves_to_seeded_demo_username(self) -> None:
         created = self.store.create_run(_request(user_id="demo_user"))
@@ -190,10 +262,11 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
             self.assertEqual(run.user_id, self.demo_user_id)
 
 
-def _request(user_id: str = "demo_user") -> StrategyTestRunRequest:
+def _request(user_id: str = "demo_user", test_type: str = "historical_backtest") -> StrategyTestRunRequest:
     start_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return StrategyTestRunRequest(
         user_id=user_id,
+        test_type=test_type,
         strategies=["trend_pullback_continuation"],
         pairs=[
             StrategyTestPair(exchange="bybit", symbol="btcusdt"),
@@ -216,6 +289,8 @@ def _patch_sqlite_column_types() -> list[tuple[Any, Any]]:
         "requested_pairs",
         "requested_timeframes",
         "params",
+        "summary",
+        "runtime_state",
         "metric_set",
         "tags",
     ):
@@ -274,6 +349,7 @@ def _create_sqlite_tables(engine: Any) -> None:
                     user_id UUID NOT NULL,
                     requested_user_id TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    test_type TEXT NOT NULL,
                     mode TEXT NOT NULL,
                     requested_strategies JSON NOT NULL,
                     requested_pairs JSON NOT NULL,
@@ -281,12 +357,15 @@ def _create_sqlite_tables(engine: Any) -> None:
                     start_at DATETIME NOT NULL,
                     end_at DATETIME NOT NULL,
                     params JSON NOT NULL,
+                    summary JSON NOT NULL,
+                    runtime_state JSON NOT NULL,
                     metric_set JSON NOT NULL,
                     tags JSON NOT NULL,
                     error TEXT,
                     created_at DATETIME NOT NULL,
                     started_at DATETIME,
                     finished_at DATETIME,
+                    last_heartbeat_at DATETIME,
                     FOREIGN KEY(user_id) REFERENCES app_users(id)
                 )
                 """

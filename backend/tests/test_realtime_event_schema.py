@@ -67,6 +67,42 @@ class RealtimeEventSchemaTest(unittest.TestCase):
             self.assertIsNotNone(event["payload"]["signal"]["card_view"])
             self.assertIsNotNone(event["payload"]["signal"]["details_view"])
 
+    def test_signal_event_normalizes_legacy_dict_snapshots_before_rendering(self) -> None:
+        signal = _signal().model_copy(
+            update={
+                "confirmation": {
+                    "passed": True,
+                    "checks": [
+                        {
+                            "name": "risk_reward_guard",
+                            "status": "passed",
+                            "reason": "RR is acceptable",
+                            "metadata": {"rr_state": "passed"},
+                        }
+                    ],
+                },
+                "execution_gate": {
+                    "status": "passed",
+                    "feed_kind": "execution_signal",
+                    "can_notify": True,
+                    "can_enter_now": True,
+                    "can_arm_pending": True,
+                    "can_show_in_execution_feed": True,
+                    "reasons": [],
+                    "warnings": [],
+                },
+            }
+        )
+
+        event = signal_updated_event(signal)
+
+        json.dumps(event, ensure_ascii=False)
+        signal_payload = event["payload"]["signal"]
+        self.assertIsInstance(signal_payload["confirmation"], dict)
+        self.assertEqual(signal_payload["execution_gate"]["feed_kind"], "execution_signal")
+        self.assertIsNotNone(signal_payload["card_view"])
+        self.assertEqual(signal_payload["card_view"]["status_label"], "Execution-ready")
+
     def test_notification_created_event_has_persisted_payload(self) -> None:
         notification = NotificationResponse(
             id=uuid4(),

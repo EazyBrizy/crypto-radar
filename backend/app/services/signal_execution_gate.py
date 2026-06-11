@@ -15,6 +15,7 @@ from app.schemas.signal import (
     StrategySignal,
 )
 from app.schemas.trade_plan import TradePlan
+from app.services.signal_snapshot_normalization import normalize_signal_snapshots
 
 SignalLike: TypeAlias = RadarSignal | StrategySignal
 
@@ -32,6 +33,7 @@ class SignalExecutionGateService:
         strict_edge_mode: bool = False,
         execution_score_threshold: int | None = None,
     ) -> SignalExecutionGateSnapshot:
+        signal = normalize_signal_snapshots(signal)
         hard_blockers: list[SignalExecutionGateReason] = []
         reasons: list[SignalExecutionGateReason] = []
         warnings: list[SignalExecutionGateReason] = []

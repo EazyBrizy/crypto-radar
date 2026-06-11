@@ -26,6 +26,7 @@ from app.schemas.signal import (
 from app.schemas.signal_action import SignalActionBlocker, SignalActionState
 from app.schemas.trade import PnLView, TradeJournalEntry, TradeView
 from app.services.reason_codes import normalize_reason_code
+from app.services.signal_snapshot_normalization import normalize_signal_snapshots
 
 
 def annotate_signal_views(
@@ -33,6 +34,7 @@ def annotate_signal_views(
     *,
     action_state: SignalActionState | None = None,
 ) -> RadarSignal:
+    signal = normalize_signal_snapshots(signal)
     return signal.model_copy(
         update={
             "auto_entry": None,
@@ -47,6 +49,7 @@ def build_signal_card_view(
     *,
     action_state: SignalActionState | None = None,
 ) -> SignalCardView:
+    signal = normalize_signal_snapshots(signal)
     trade_plan = build_trade_plan_view(signal)
     rr_state = _rr_state(signal)
     badges = [
@@ -94,6 +97,7 @@ def build_signal_details_view(
     *,
     action_state: SignalActionState | None = None,
 ) -> SignalDetailsView:
+    signal = normalize_signal_snapshots(signal)
     trade_plan = build_trade_plan_view(signal)
     blockers, warnings = _details_blockers(signal, action_state)
     primary_status = _primary_status(signal, action_state, blockers)
@@ -147,6 +151,7 @@ def build_signal_details_view(
 
 
 def build_trade_plan_view(signal: RadarSignal) -> SignalTradePlanView:
+    signal = normalize_signal_snapshots(signal)
     plan = signal.trade_plan
     targets = [
         SignalTargetView(
@@ -203,6 +208,7 @@ def build_trade_plan_view(signal: RadarSignal) -> SignalTradePlanView:
 
 
 def build_radar_summary(signals: list[RadarSignal]) -> RadarSummary:
+    signals = [normalize_signal_snapshots(signal) for signal in signals]
     return RadarSummary(
         total_signals=len(signals),
         execution_ready_signals=sum(1 for signal in signals if _signal_can_enter(signal)),

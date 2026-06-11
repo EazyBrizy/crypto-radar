@@ -5,9 +5,10 @@ from typing import Any, Protocol
 
 from app.repositories.signal_repository import SIGNAL_INVALIDATED_EVENT, SIGNAL_UPDATED_EVENT
 from app.schemas.market import Features
-from app.schemas.signal import RadarSignal
+from app.schemas.signal import RadarSignal, SignalConfirmationSnapshot, SignalLayerCheck
 from app.services.message_broker import realtime_event_broker
 from app.services.realtime_events import signal_invalidated_event, signal_updated_event
+from app.services.signal_snapshot_normalization import normalize_confirmation_snapshot, normalize_signal_snapshots
 from app.services.signal_risk_reward import signal_rr_warning_reason
 from app.services.signal_service import SignalService, signal_service
 from app.services.trade_invalidation import signal_invalidation_conditions
@@ -97,6 +98,7 @@ class SignalLifecycleWorker:
 
 
 def _lifecycle_decision(signal: RadarSignal, features: Features) -> _LifecycleDecision | None:
+    signal = normalize_signal_snapshots(signal)
     invalidation_reason = _invalidation_reason(signal, features)
     if invalidation_reason:
         return _LifecycleDecision(
@@ -231,26 +233,27 @@ def _confirmation_signal_updates(signal: RadarSignal, features: Features) -> dic
     return updates
 
 
-def _confirmation_snapshot(signal: RadarSignal, features: Features) -> dict[str, Any]:
-    checks = signal.confirmation.model_dump(mode="json").get("checks", []) if signal.confirmation else []
+def _confirmation_snapshot(signal: RadarSignal, features: Features) -> SignalConfirmationSnapshot:
+    confirmation = normalize_confirmation_snapshot(signal.confirmation)
+    checks = list(confirmation.checks) if confirmation is not None else []
     trigger_name = "previous_high_trigger" if signal.direction == "long" else "previous_low_trigger"
     trigger_level = features.previous_high if signal.direction == "long" else features.previous_low
     checks.append(
-        {
-            "name": trigger_name,
-            "status": "passed",
-            "score": trigger_level,
-            "reason": "Closed confirmation candle broke the previous candle with >=1.1x volume",
-            "metadata": {
+        SignalLayerCheck(
+            name=trigger_name,
+            status="passed",
+            score=trigger_level,
+            reason="Closed confirmation candle broke the previous candle with >=1.1x volume",
+            metadata={
                 "close": features.close,
                 "open": features.open,
                 "volume_spike": features.volume_spike,
                 "previous_high": features.previous_high,
                 "previous_low": features.previous_low,
             },
-        }
+        )
     )
-    return {"passed": True, "checks": checks}
+    return SignalConfirmationSnapshot(passed=True, checks=checks)
 
 
 def _status_reason_blocks_actionable(signal: RadarSignal) -> bool:
@@ -269,9 +272,10 @@ def _status_reason_blocks_actionable(signal: RadarSignal) -> bool:
 
 
 def _hard_rr_guard_blocked(signal: RadarSignal) -> bool:
-    if signal.confirmation is None:
+    confirmation = normalize_confirmation_snapshot(signal.confirmation)
+    if confirmation is None:
         return False
-    for check in signal.confirmation.checks:
+    for check in confirmation.checks:
         if check.name != "risk_reward_guard":
             continue
         if check.metadata.get("risk_reward_blocked") is True:

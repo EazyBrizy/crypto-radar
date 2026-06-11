@@ -18,7 +18,7 @@ from app.api.v1 import trades as trades_api
 from app.domain.signal_status import is_market_opportunity_status
 from app.repositories.pending_entry_repository import PendingEntryIntentRepository
 from app.schemas.market import MarketData
-from app.schemas.signal import RadarSignal, StrategySignal
+from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot, StrategySignal
 from app.services.market_scanner import MarketScanner
 from app.services.pending_entry import PendingEntryService
 from app.services.pending_entry_trigger import PendingEntryTriggerService
@@ -391,6 +391,7 @@ def _radar_signal(
     take_profit_1: float | None = 110.0,
     risk_reward: float | None = 2.0,
     explanation: list[str] | None = None,
+    execution_gate: SignalExecutionGateSnapshot | None = None,
     updated_at: datetime | None = None,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
@@ -410,6 +411,7 @@ def _radar_signal(
         stop_loss=stop_loss,
         take_profit_1=take_profit_1,
         explanation=explanation or [],
+        execution_gate=execution_gate,
         created_at=now,
         updated_at=updated_at or now,
         expires_at=now + timedelta(hours=1),

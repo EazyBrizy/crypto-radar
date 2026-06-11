@@ -54,6 +54,13 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - `production_like` stays strict. `research_virtual` and `discovery` may record assumptions and warnings, but base price/stop/target invariants still belong to backend services.
 - Backtest metrics and assumptions preserve diagnostics: `signals_seen`, `risk_rejections`, `execution_rejections`, `trade_plan_completion_warnings`, `risk_gate_blockers`, and `backtest_trade_plan_assumptions`.
 
+## Signal Snapshot Serialization Boundary
+
+- PostgreSQL, Redis, and realtime payloads store signal snapshots as JSON dictionaries. Backend service, execution-gate, lifecycle, and view code must normalize those dictionaries back into Pydantic snapshot models before reading fields such as `confirmation.checks` or `execution_gate.feed_kind`.
+- `backend/app/services/signal_snapshot_normalization.py` is the shared boundary helper for old records, repository hydration, `model_copy` updates, and realtime/view rendering. Do not add scattered per-view `dict` accessors for the same snapshots.
+- Signal lifecycle updates should emit typed snapshots such as `SignalConfirmationSnapshot`. Repositories serialize typed snapshots with `model_dump(mode="json")` before writing JSON fields.
+- Realtime events must contain JSON-compatible dictionaries produced from backend schemas. Pydantic objects must not leak into WebSocket/SSE payloads.
+
 ## Core Services
 
 - Signal service: `backend/app/services/signal_service.py`

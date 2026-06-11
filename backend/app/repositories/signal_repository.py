@@ -20,6 +20,7 @@ from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.market import CandleState
 from app.schemas.signal import RadarSignal, SignalScoreBreakdown, StrategySignal
 from app.schemas.trade_plan import TradePlan, build_trade_plan_from_legacy_fields
+from app.services.signal_snapshot_normalization import normalize_signal_snapshots
 from app.services.signal_outcome_service import SignalOutcomeService
 
 MAX_STORED_SIGNALS = 200
@@ -833,55 +834,57 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
     created_at = _as_utc(record.created_at or record.detected_at)
     updated_at = _as_utc(record.updated_at or created_at)
     status = record.status
-    return RadarSignal(
-        id=str(record.id),
-        symbol=record.pair.symbol,
-        exchange=record.exchange.code,
-        strategy=record.strategy_version.strategy.code,
-        direction=record.direction,
-        confidence=float(record.confidence),
-        risk_reward=_float(record.risk_reward),
-        first_target_rr=_float(snapshot.get("first_target_rr")),
-        final_target_rr=_float(snapshot.get("final_target_rr")),
-        selected_rr=_float(snapshot.get("selected_rr")),
-        selected_rr_target=_string_or_none(snapshot.get("selected_rr_target")),
-        min_rr_ratio=_float(snapshot.get("min_rr_ratio")),
-        urgency=snapshot.get("urgency", "medium"),
-        status=status,
-        score=int(round(float(record.score))),
-        timeframe=record.timeframe,
-        candle_state=_snapshot_candle_state(snapshot),
-        entry_min=_float(snapshot.get("entry_min")),
-        entry_max=_float(snapshot.get("entry_max")),
-        stop_loss=_float(record.stop_loss),
-        take_profit_1=_float(take_profit[0]) if len(take_profit) > 0 else None,
-        take_profit_2=_float(take_profit[1]) if len(take_profit) > 1 else None,
-        explanation=explanation if isinstance(explanation, list) else _split_explanation(record.explanation),
-        risks=risks if isinstance(risks, list) else [],
-        score_breakdown=SignalScoreBreakdown.model_validate(score_breakdown or {}),
-        status_reason=_string_or_none(snapshot.get("status_reason")),
-        quality=snapshot.get("quality") if isinstance(snapshot.get("quality"), dict) else None,
-        regime=snapshot.get("regime") if isinstance(snapshot.get("regime"), dict) else None,
-        setup=snapshot.get("setup") if isinstance(snapshot.get("setup"), dict) else None,
-        confirmation=snapshot.get("confirmation") if isinstance(snapshot.get("confirmation"), dict) else None,
-        trigger=snapshot.get("trigger") if isinstance(snapshot.get("trigger"), dict) else None,
-        invalidation=snapshot.get("invalidation") if isinstance(snapshot.get("invalidation"), dict) else None,
-        exit_plan=snapshot.get("exit_plan") if isinstance(snapshot.get("exit_plan"), dict) else None,
-        trade_plan=trade_plan,
-        auto_entry=None,
-        edge=snapshot.get("edge") if isinstance(snapshot.get("edge"), dict) else None,
-        no_trade_filter=snapshot.get("no_trade_filter") if isinstance(snapshot.get("no_trade_filter"), dict) else None,
-        decision=snapshot.get("decision_snapshot") if isinstance(snapshot.get("decision_snapshot"), dict) else None,
-        execution_gate=snapshot.get("execution_gate") if isinstance(snapshot.get("execution_gate"), dict) else None,
-        created_at=created_at,
-        updated_at=updated_at,
-        expires_at=_as_utc(record.expires_at) if record.expires_at else None,
-        confirmed_at=updated_at if record.status == "confirmed" else None,
-        rejected_at=updated_at if record.status == "invalidated" else None,
-        decision_mode=decision.get("decision_mode"),
-        decision_note=decision.get("decision_note"),
-        confirmed_trade_id=decision.get("confirmed_trade_id"),
-        lifecycle_trace=_signal_lifecycle_trace(snapshot, record.id),
+    return normalize_signal_snapshots(
+        RadarSignal(
+            id=str(record.id),
+            symbol=record.pair.symbol,
+            exchange=record.exchange.code,
+            strategy=record.strategy_version.strategy.code,
+            direction=record.direction,
+            confidence=float(record.confidence),
+            risk_reward=_float(record.risk_reward),
+            first_target_rr=_float(snapshot.get("first_target_rr")),
+            final_target_rr=_float(snapshot.get("final_target_rr")),
+            selected_rr=_float(snapshot.get("selected_rr")),
+            selected_rr_target=_string_or_none(snapshot.get("selected_rr_target")),
+            min_rr_ratio=_float(snapshot.get("min_rr_ratio")),
+            urgency=snapshot.get("urgency", "medium"),
+            status=status,
+            score=int(round(float(record.score))),
+            timeframe=record.timeframe,
+            candle_state=_snapshot_candle_state(snapshot),
+            entry_min=_float(snapshot.get("entry_min")),
+            entry_max=_float(snapshot.get("entry_max")),
+            stop_loss=_float(record.stop_loss),
+            take_profit_1=_float(take_profit[0]) if len(take_profit) > 0 else None,
+            take_profit_2=_float(take_profit[1]) if len(take_profit) > 1 else None,
+            explanation=explanation if isinstance(explanation, list) else _split_explanation(record.explanation),
+            risks=risks if isinstance(risks, list) else [],
+            score_breakdown=SignalScoreBreakdown.model_validate(score_breakdown or {}),
+            status_reason=_string_or_none(snapshot.get("status_reason")),
+            quality=snapshot.get("quality") if isinstance(snapshot.get("quality"), dict) else None,
+            regime=snapshot.get("regime") if isinstance(snapshot.get("regime"), dict) else None,
+            setup=snapshot.get("setup") if isinstance(snapshot.get("setup"), dict) else None,
+            confirmation=snapshot.get("confirmation") if isinstance(snapshot.get("confirmation"), dict) else None,
+            trigger=snapshot.get("trigger") if isinstance(snapshot.get("trigger"), dict) else None,
+            invalidation=snapshot.get("invalidation") if isinstance(snapshot.get("invalidation"), dict) else None,
+            exit_plan=snapshot.get("exit_plan") if isinstance(snapshot.get("exit_plan"), dict) else None,
+            trade_plan=trade_plan,
+            auto_entry=None,
+            edge=snapshot.get("edge") if isinstance(snapshot.get("edge"), dict) else None,
+            no_trade_filter=snapshot.get("no_trade_filter") if isinstance(snapshot.get("no_trade_filter"), dict) else None,
+            decision=snapshot.get("decision_snapshot") if isinstance(snapshot.get("decision_snapshot"), dict) else None,
+            execution_gate=snapshot.get("execution_gate") if isinstance(snapshot.get("execution_gate"), dict) else None,
+            created_at=created_at,
+            updated_at=updated_at,
+            expires_at=_as_utc(record.expires_at) if record.expires_at else None,
+            confirmed_at=updated_at if record.status == "confirmed" else None,
+            rejected_at=updated_at if record.status == "invalidated" else None,
+            decision_mode=decision.get("decision_mode"),
+            decision_note=decision.get("decision_note"),
+            confirmed_trade_id=decision.get("confirmed_trade_id"),
+            lifecycle_trace=_signal_lifecycle_trace(snapshot, record.id),
+        )
     )
 
 
@@ -1035,7 +1038,7 @@ def _apply_signal_updates(
     ):
         if key in updates:
             snapshot_key = "decision_snapshot" if key == "decision" else key
-            if key in {"trigger", "edge", "no_trade_filter", "decision", "execution_gate"}:
+            if key in {"confirmation", "trigger", "edge", "no_trade_filter", "decision", "execution_gate"}:
                 snapshot[snapshot_key] = _model_dump_optional(updates[key])
             else:
                 snapshot[snapshot_key] = updates[key]

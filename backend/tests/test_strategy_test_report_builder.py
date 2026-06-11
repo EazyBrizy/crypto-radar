@@ -113,6 +113,18 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_api_returns_500_response_when_report_builder_crashes(self) -> None:
+        app.dependency_overrides[get_strategy_testing_service] = lambda: _CrashingReportService()
+        client = TestClient(app)
+
+        try:
+            response = client.get(f"/api/v1/strategy-tests/reports/{RUN_ID}")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"], "Strategy test report failed")
+
 
 class _SpyMetricRegistry:
     def __init__(self) -> None:
@@ -160,6 +172,12 @@ class _AnalyticsStore:
 class _MissingReportService:
     def build_report(self, run_id: UUID) -> StrategyTestReport:
         raise ValueError(f"Strategy test run is not found: {run_id}")
+
+
+class _CrashingReportService:
+    def build_report(self, run_id: UUID) -> StrategyTestReport:
+        _ = run_id
+        raise RuntimeError("analytics store is unavailable")
 
 
 def _builder(

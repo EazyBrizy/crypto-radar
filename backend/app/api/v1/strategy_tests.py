@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status as http_status
@@ -15,6 +16,7 @@ from app.services.strategy_testing.service import StrategyTestingService
 
 
 router = APIRouter(prefix="/strategy-tests", tags=["strategy-tests"])
+logger = logging.getLogger(__name__)
 
 
 def get_strategy_testing_service() -> StrategyTestingService:
@@ -121,3 +123,9 @@ async def get_strategy_test_report(
         return service.build_report(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Strategy test report build failed for run_id=%s", run_id)
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Strategy test report failed",
+        ) from exc

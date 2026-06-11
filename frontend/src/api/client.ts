@@ -27,6 +27,7 @@ export async function request<T>(operation: () => Promise<ApiResult<T>>): Promis
 }
 
 export async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const request = describeApiRequest(`${API_BASE}${path}`, init);
   try {
     const headers = new Headers(init.headers);
     if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
@@ -35,7 +36,7 @@ export async function requestJson<T>(path: string, init: RequestInit = {}): Prom
       headers
     });
     if (!response.ok) {
-      throw new Error(await responseErrorDetail(response));
+      throw new ApiHttpError(formatApiHttpErrorMessage(request, response.status, await responseErrorDetail(response)));
     }
     return await response.json() as T;
   } catch (exc) {
@@ -46,7 +47,7 @@ export async function requestJson<T>(path: string, init: RequestInit = {}): Prom
 async function unwrap<T>(result: ApiResult<T>): Promise<T> {
   if (result.error || !result.response.ok) {
     const detail = getErrorDetail(result.error);
-    throw new Error(detail ?? `API error ${result.response.status}`);
+    throw new ApiHttpError(formatGenericApiHttpErrorMessage(result.response.status, detail));
   }
 
   if (result.data === undefined) {
@@ -112,6 +113,23 @@ export function formatApiTimeoutMessage(request: ApiRequestDescriptor): string {
 
 export function formatApiNetworkErrorMessage(request: ApiRequestDescriptor): string {
   return `FastAPI network error: ${request.method} ${request.path} at ${request.apiBase}. Check that the backend is running.`;
+}
+
+export function formatApiHttpErrorMessage(request: ApiRequestDescriptor, status: number, detail?: string | null): string {
+  const suffix = detail ? `: ${detail}` : "";
+  return `FastAPI API error: ${request.method} ${request.path} at ${request.apiBase} returned ${status}${suffix}`;
+}
+
+function formatGenericApiHttpErrorMessage(status: number, detail?: string | null): string {
+  const suffix = detail ? `: ${detail}` : "";
+  return `FastAPI API error ${status}${suffix}`;
+}
+
+class ApiHttpError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ApiHttpError";
+  }
 }
 
 function normalizeApiError(exc: unknown): Error {

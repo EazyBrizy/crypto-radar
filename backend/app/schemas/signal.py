@@ -101,6 +101,20 @@ class MarketRegimeSnapshot(BaseModel):
     direction: Literal["bullish", "bearish", "range", "unknown"] = "unknown"
     strength: Literal["weak", "normal", "strong", "unknown"] = "unknown"
     alignment: Literal["aligned", "mixed", "against", "unknown"] = "unknown"
+    regime_type: Literal[
+        "trend_up",
+        "trend_down",
+        "range",
+        "chop",
+        "volatility_compression",
+        "volatility_expansion",
+        "post_impulse",
+        "liquidity_sweep_zone",
+        "unknown",
+    ] = "unknown"
+    volatility_state: Literal["compression", "normal", "expansion", "unknown"] = "unknown"
+    structure_state: Literal["trend", "range", "chop", "unknown"] = "unknown"
+    compatibility: dict[str, Any] = Field(default_factory=dict)
     score_adjustment: int = 0
     checks: List[SignalLayerCheck] = Field(default_factory=list)
 

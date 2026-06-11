@@ -268,6 +268,77 @@ describe("SignalDetails", () => {
     expect(screen.getByText("11111111")).toBeInTheDocument();
   });
 
+  it("renders market regime compatibility from backend snapshots", () => {
+    render(
+      <SignalDetails
+        actionState={actionState({ can_enter_now: false })}
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={baseSignal({
+          details_view: detailsView({
+            primary_status: "blocked",
+            primary_status_label: "Blocked",
+            primary_status_tone: "red",
+            primary_action_label: "Wait",
+            can_enter_now: false,
+            top_blockers: [
+              {
+                code: "strategy_regime_incompatible",
+                severity: "blocker",
+                category: "execution",
+                user_message: "Trend pullback is blocked in chop.",
+                debug_messages: ["strategy_regime_incompatible"]
+              }
+            ]
+          }),
+          execution_gate: {
+            status: "blocked",
+            feed_kind: "blocked",
+            can_notify: false,
+            can_enter_now: false,
+            can_arm_pending: false,
+            can_show_in_execution_feed: false,
+            reasons: [
+              {
+                code: "strategy_regime_incompatible",
+                severity: "blocker",
+                source: "market_regime",
+                message: "Trend pullback is blocked in chop.",
+                metadata: { regime_type: "chop", strategy: "trend_pullback_continuation" }
+              }
+            ],
+            warnings: [],
+            metadata: {}
+          },
+          regime: {
+            signal_timeframe: "15m",
+            context_timeframe: "1h",
+            direction: "bullish",
+            strength: "strong",
+            alignment: "against",
+            regime_type: "chop",
+            volatility_state: "normal",
+            structure_state: "chop",
+            compatibility: {
+              compatible: false,
+              status: "failed",
+              reason_code: "strategy_regime_incompatible",
+              reason: "Trend pullback is blocked in chop."
+            },
+            score_adjustment: -20,
+            checks: []
+          } as RadarSignal["regime"]
+        })}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Market regime" })).toBeInTheDocument();
+    expect(screen.getByText("chop")).toBeInTheDocument();
+    expect(screen.getByText("Trend pullback is blocked in chop.")).toBeInTheDocument();
+  });
+
   it("shows latest terminal pending-entry reason outside collapsed diagnostics", () => {
     render(
       <SignalDetails

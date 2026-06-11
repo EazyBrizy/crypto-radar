@@ -65,6 +65,13 @@ class SignalExecutionGateService:
             else:
                 reasons.append(trigger_reason)
 
+        regime_reason = _regime_compatibility_reason(signal)
+        if regime_reason is not None:
+            if regime_reason.severity == "blocker":
+                hard_blockers.append(regime_reason)
+            else:
+                warnings.append(regime_reason)
+
         no_trade = signal.no_trade_filter
         if _no_trade_blocked(no_trade):
             hard_blockers.append(
@@ -271,6 +278,32 @@ def _trigger_failed_reason(
         message,
         metadata,
     )
+
+
+def _regime_compatibility_reason(signal: SignalLike) -> SignalExecutionGateReason | None:
+    regime = getattr(signal, "regime", None)
+    checks = getattr(regime, "checks", None)
+    if not checks:
+        return None
+    for check in checks:
+        if getattr(check, "name", None) != "strategy_regime_compatibility":
+            continue
+        status = str(getattr(check, "status", "") or "").strip().lower()
+        if status not in {"failed", "warning"}:
+            return None
+        metadata = dict(getattr(check, "metadata", {}) or {})
+        code = str(
+            metadata.get("reason_code")
+            or ("strategy_regime_incompatible" if status == "failed" else "strategy_regime_watchlist")
+        )
+        return _reason(
+            code,
+            "blocker" if status == "failed" else "warning",
+            "market_regime",
+            getattr(check, "reason", None) or "Strategy regime compatibility check is not passed.",
+            metadata,
+        )
+    return None
 
 
 def _rr_metadata_sources(signal: SignalLike) -> list[Mapping[str, Any]]:

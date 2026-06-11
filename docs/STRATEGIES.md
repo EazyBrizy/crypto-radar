@@ -41,6 +41,23 @@ Trigger snapshots are required for execution candidates. A missing or failed tri
 
 Failed trigger snapshots carry `failed_checks`, `trigger_type`, and strategy evidence in metadata so status resolution, execution gate reasons, and UI diagnostics all explain why a high-score setup is still not actionable.
 
+## Market Regime Compatibility
+
+`MarketRegimeFilter` emits both the legacy direction/strength/alignment fields and a richer regime snapshot:
+
+- `regime_type`: `trend_up`, `trend_down`, `range`, `chop`, `volatility_compression`, `volatility_expansion`, `post_impulse`, `liquidity_sweep_zone`, or `unknown`;
+- `volatility_state`: `compression`, `normal`, `expansion`, or `unknown`;
+- `structure_state`: `trend`, `range`, `chop`, or `unknown`;
+- `compatibility`: backend-only policy evidence surfaced to execution gate and UI.
+
+The compatibility layer writes a `strategy_regime_compatibility` check. Failed compatibility must keep the signal non-actionable and add the `strategy_regime_incompatible` execution-gate blocker.
+
+Strategy matrix:
+
+- `trend_pullback_continuation`: allow `trend_up` longs and `trend_down` shorts; block chop/range unless `allow_range_pullback=true`; block signals against a strong trend.
+- `liquidity_sweep_reversal`: prefer range and liquidity-sweep-zone regimes; against a strong trend, require absorption and reclaim evidence.
+- `volatility_squeeze_breakout`: require volatility compression before breakout; post-impulse breakouts wait for pullback/retest evidence.
+
 ## Execution Gate
 
 `SignalExecutionGateService` is the only place that turns a finalized strategy signal into execution permissions. It owns:

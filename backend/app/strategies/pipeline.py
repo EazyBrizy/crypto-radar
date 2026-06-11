@@ -706,12 +706,43 @@ class MarketRegimeFilter:
                 checks.append(level_check)
                 adjustment += level_adjustment
 
+        volatility_state = _market_volatility_state(signal_features)
+        structure_state = _market_structure_state(features, direction, strength)
+        regime_type = _market_regime_type(
+            signal=signal,
+            signal_features=signal_features,
+            regime_features=features,
+            volatility_state=volatility_state,
+            structure_state=structure_state,
+            direction=direction,
+        )
+        compatibility_check = _strategy_regime_compatibility_check(
+            signal=signal,
+            regime_type=regime_type,
+            volatility_state=volatility_state,
+            structure_state=structure_state,
+            direction=direction,
+            strength=strength,
+            alignment=alignment,
+            params=context.strategy_params,
+        )
+        checks.append(compatibility_check)
+        compatibility = {
+            **compatibility_check.metadata,
+            "status": compatibility_check.status,
+            "reason": compatibility_check.reason,
+        }
+
         return MarketRegimeSnapshot(
             signal_timeframe=signal_features.timeframe,
             context_timeframe=context_timeframe,
             direction=direction,
             strength=strength,
             alignment=alignment,
+            regime_type=regime_type,
+            volatility_state=volatility_state,
+            structure_state=structure_state,
+            compatibility=compatibility,
             score_adjustment=adjustment,
             checks=checks,
         )
@@ -1188,6 +1219,223 @@ def _features_have_severe_ema200_chop(features: Features) -> bool:
     score = features.ema_200_chop_score
     crosses = features.ema_200_cross_count_50 or 0
     return bool((score is not None and score >= 70) or crosses >= 4)
+
+
+def _market_volatility_state(features: Features) -> str:
+    body_atr, range_atr = _candle_atr_values(features)
+    compressed = (
+        (features.bb_width_percentile is not None and features.bb_width_percentile <= 20)
+        or (features.range_20_atr is not None and features.range_20_atr <= 3.0)
+    )
+    expanding = (
+        body_atr >= 2.0
+        or range_atr >= 3.2
+        or bool(features.atr_increasing and features.volume_spike >= 2.5)
+    )
+    if expanding:
+        return "expansion"
+    if compressed:
+        return "compression"
+    if (
+        features.bb_width_percentile is None
+        and features.range_20_atr is None
+        and body_atr == 0
+        and range_atr == 0
+    ):
+        return "unknown"
+    return "normal"
+
+
+def _market_structure_state(features: Features, direction: str, strength: str) -> str:
+    if _features_have_regime_chop(features):
+        return "chop"
+    if direction in {"bullish", "bearish"} and strength in {"normal", "strong"}:
+        return "trend"
+    if _features_have_range_structure(features) or direction == "range":
+        return "range"
+    return "unknown"
+
+
+def _market_regime_type(
+    *,
+    signal: StrategySignal,
+    signal_features: Features,
+    regime_features: Features,
+    volatility_state: str,
+    structure_state: str,
+    direction: str,
+) -> str:
+    body_atr, range_atr = _candle_atr_values(signal_features)
+    if structure_state == "chop":
+        return "chop"
+    if _features_have_liquidity_sweep_zone(signal_features) or _trade_plan_metadata_number(signal, "swept_level") is not None:
+        return "liquidity_sweep_zone"
+    if body_atr >= 2.0 or range_atr >= 3.2:
+        return "post_impulse"
+    if volatility_state == "compression":
+        return "volatility_compression"
+    if volatility_state == "expansion":
+        return "volatility_expansion"
+    if structure_state == "trend":
+        if direction == "bullish":
+            return "trend_up"
+        if direction == "bearish":
+            return "trend_down"
+    if structure_state == "range" or _features_have_range_structure(regime_features):
+        return "range"
+    return "unknown"
+
+
+def _strategy_regime_compatibility_check(
+    *,
+    signal: StrategySignal,
+    regime_type: str,
+    volatility_state: str,
+    structure_state: str,
+    direction: str,
+    strength: str,
+    alignment: str,
+    params: Mapping[str, Any],
+) -> SignalLayerCheck:
+    status = "passed"
+    compatible = True
+    reason_code = "strategy_regime_compatible"
+    reason = "Strategy is compatible with the current market regime."
+
+    if signal.strategy == "trend_pullback_continuation":
+        if regime_type == "chop" or structure_state == "chop":
+            status = "failed"
+            compatible = False
+            reason_code = "strategy_regime_incompatible"
+            reason = "Trend pullback is blocked in chop."
+        elif structure_state == "range" and not _bool_param(params, "allow_range_pullback", False):
+            status = "failed"
+            compatible = False
+            reason_code = "strategy_regime_incompatible"
+            reason = "Trend pullback is blocked in range without allow_range_pullback=true."
+        elif alignment == "against" and strength == "strong":
+            status = "failed"
+            compatible = False
+            reason_code = "strategy_regime_incompatible"
+            reason = "Trend pullback is blocked against a strong higher-timeframe trend."
+        elif not _trend_pullback_regime_matches(signal.direction.lower(), regime_type, direction):
+            status = "warning"
+            reason_code = "strategy_regime_watchlist"
+            reason = "Trend pullback is waiting for clearer trend alignment."
+
+    elif signal.strategy == "liquidity_sweep_reversal":
+        if alignment == "against" and strength == "strong":
+            if _liquidity_sweep_strong_trend_requirements_met(signal):
+                reason = "Liquidity sweep has absorption and reclaim evidence against the strong trend."
+            else:
+                status = "failed"
+                compatible = False
+                reason_code = "strategy_regime_incompatible"
+                reason = "Liquidity sweep against a strong trend requires absorption and reclaim evidence."
+        elif regime_type not in {"range", "liquidity_sweep_zone"} and structure_state != "range":
+            status = "warning"
+            reason_code = "strategy_regime_watchlist"
+            reason = "Liquidity sweep works best in range or liquidity-sweep-zone regimes."
+
+    elif signal.strategy == "volatility_squeeze_breakout":
+        if regime_type == "post_impulse" and not _breakout_retest_evidence_present(signal):
+            status = "warning"
+            reason_code = "strategy_regime_post_impulse_retest"
+            reason = "Post-impulse breakout requires a retest before execution."
+        elif volatility_state != "compression" and regime_type != "volatility_compression":
+            status = "failed"
+            compatible = False
+            reason_code = "strategy_regime_incompatible"
+            reason = "Volatility squeeze breakout requires prior compression."
+
+    metadata = {
+        "reason_code": reason_code,
+        "compatible": compatible,
+        "strategy": signal.strategy,
+        "direction": signal.direction.lower(),
+        "regime_type": regime_type,
+        "volatility_state": volatility_state,
+        "structure_state": structure_state,
+        "trend_direction": direction,
+        "trend_strength": strength,
+        "alignment": alignment,
+    }
+    return SignalLayerCheck(
+        name="strategy_regime_compatibility",
+        status=status,
+        reason=reason,
+        metadata=metadata,
+    )
+
+
+def _candle_atr_values(features: Features) -> tuple[float, float]:
+    atr = features.atr_14
+    if atr is None or atr <= 0:
+        return 0.0, 0.0
+    body = abs(features.close - features.open)
+    candle_range = max(features.high - features.low, 0.0)
+    return body / atr, candle_range / atr
+
+
+def _features_have_regime_chop(features: Features) -> bool:
+    score = features.ema_200_chop_score
+    crosses = features.ema_200_cross_count_50 or 0
+    if (score is not None and score >= 55) or crosses >= 3:
+        return True
+    if features.adx is not None and features.adx <= 18 and _ema_stack_separation_atr(features) <= 0.75:
+        return True
+    return False
+
+
+def _features_have_range_structure(features: Features) -> bool:
+    if features.range_20_atr is not None and features.range_20_atr <= 4.0:
+        return True
+    if features.adx is not None and features.adx < 18:
+        return True
+    if features.range_20 is not None and features.range_50_average is not None:
+        return features.range_20 <= features.range_50_average * 0.85
+    return False
+
+
+def _features_have_liquidity_sweep_zone(features: Features) -> bool:
+    atr = features.atr_14 or 0.0
+    high_retests = features.swing_high_touch_count >= 2 and _near_level(features.close, features.swing_high, atr)
+    low_retests = features.swing_low_touch_count >= 2 and _near_level(features.close, features.swing_low, atr)
+    return bool(high_retests or low_retests)
+
+
+def _near_level(price: float, level: float | None, atr: float) -> bool:
+    if level is None:
+        return False
+    tolerance = max(atr * 1.5, abs(price) * 0.0025)
+    return abs(price - level) <= tolerance
+
+
+def _ema_stack_separation_atr(features: Features) -> float:
+    values = [value for value in (features.ema_20, features.ema_50, features.ema_200) if value is not None]
+    if len(values) < 2 or features.atr_14 is None or features.atr_14 <= 0:
+        return 999.0
+    return (max(values) - min(values)) / features.atr_14
+
+
+def _trend_pullback_regime_matches(side: str, regime_type: str, direction: str) -> bool:
+    return (
+        (side == "long" and (regime_type == "trend_up" or direction == "bullish"))
+        or (side == "short" and (regime_type == "trend_down" or direction == "bearish"))
+    )
+
+
+def _liquidity_sweep_strong_trend_requirements_met(signal: StrategySignal) -> bool:
+    absorption_score = _trade_plan_metadata_number(signal, "absorption_score") or 0.0
+    reclaim_score = _trade_plan_metadata_number(signal, "reclaim_score") or 0.0
+    confirmation = bool(_trade_plan_metadata_bool(signal, "confirmation"))
+    return absorption_score >= 0.5 and (confirmation or reclaim_score >= 0.5)
+
+
+def _breakout_retest_evidence_present(signal: StrategySignal) -> bool:
+    post_hold_score = _trade_plan_metadata_number(signal, "post_breakout_hold_score") or 0.0
+    retest_quality_score = _trade_plan_metadata_number(signal, "retest_quality_score") or 0.0
+    return max(post_hold_score, retest_quality_score) >= 0.65
 
 
 class InvalidationLayer:

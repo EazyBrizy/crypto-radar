@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from app.core.config import settings
 from app.schemas.decision import DecisionReason, SignalDecisionSnapshot
 from app.schemas.signal import (
+    MarketRegimeSnapshot,
     NoTradeFilterResult,
     SignalEdgeSnapshot,
+    SignalLayerCheck,
     SignalTriggerSnapshot,
     StrategySignal,
 )
@@ -155,6 +157,32 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertEqual(gate.feed_kind, "blocked")
         self.assertFalse(gate.can_notify)
         self.assertIn("trigger_not_confirmed", _reason_codes(gate))
+
+    def test_regime_blocker_reaches_execution_gate(self) -> None:
+        signal = _signal(
+            regime=MarketRegimeSnapshot(
+                checks=[
+                    SignalLayerCheck(
+                        name="strategy_regime_compatibility",
+                        status="failed",
+                        reason="Trend pullback is blocked in chop.",
+                        metadata={
+                            "reason_code": "strategy_regime_incompatible",
+                            "compatible": False,
+                            "regime_type": "chop",
+                            "strategy": "trend_pullback_continuation",
+                        },
+                    )
+                ]
+            )
+        )
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.status, "blocked")
+        self.assertEqual(gate.feed_kind, "blocked")
+        self.assertFalse(gate.can_show_in_execution_feed)
+        self.assertIn("strategy_regime_incompatible", _reason_codes(gate))
 
     def test_strict_walk_forward_eligibility_blocks_execution_signal(self) -> None:
         previous = settings.execution_require_walk_forward_edge

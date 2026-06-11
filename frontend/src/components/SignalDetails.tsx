@@ -154,6 +154,7 @@ export function SignalDetails({
 
       <TriggerCompact signal={signal} />
       <ExecutionEvidenceCompact signal={signal} />
+      <MarketRegimeCompact signal={signal} />
       <ActivePendingEntryCompact
         pendingEntry={activePendingEntry}
         onReconfirmPendingEntry={onReconfirmPendingEntry}
@@ -325,6 +326,53 @@ function ExecutionEvidenceCompact({ signal }: { signal: RadarSignal }) {
           <p>{dedup.reason}</p>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function MarketRegimeCompact({ signal }: { signal: RadarSignal }) {
+  const { tKey, tReason } = useI18n();
+  const regime = signal.regime ?? null;
+  if (!regime) return null;
+
+  const compatibility = recordValue(regime.compatibility) ?? {};
+  const regimeBlocker = signal.execution_gate?.reasons.find((reason) => reason.code === "strategy_regime_incompatible") ?? null;
+  const regimeWarning = signal.execution_gate?.warnings.find((reason) => reason.code.startsWith("strategy_regime_")) ?? null;
+  const status = stringValue(compatibility.status)
+    ?? (compatibility.compatible === true ? "passed" : compatibility.compatible === false ? "failed" : "unknown");
+  const hasRegimeIssue = Boolean(
+    regimeBlocker || regimeWarning || status === "failed" || status === "warning" || compatibility.compatible === false
+  );
+  const reasonCode = hasRegimeIssue
+    ? stringValue(compatibility.reason_code) ?? regimeBlocker?.code ?? regimeWarning?.code ?? null
+    : null;
+  const reason = hasRegimeIssue
+    ? regimeBlocker?.message ?? regimeWarning?.message ?? stringValue(compatibility.reason) ?? null
+    : null;
+  const tone = marketRegimeTone(status, compatibility.compatible, Boolean(regimeBlocker));
+  const badgeLabel = regimeBlocker
+    ? "Blocked"
+    : status === "warning"
+      ? "Watchlist"
+      : status === "passed" || compatibility.compatible === true
+        ? "Compatible"
+        : formatOptionalText(status);
+
+  return (
+    <div className="risk-reward-detail-block market-regime-compact">
+      <div className="section-title compact-section-title">
+        <ShieldAlert size={18} />
+        <h3>{tKey("signalDetails.marketRegime")}</h3>
+        <Badge tone={tone}>{badgeLabel}</Badge>
+      </div>
+      <div className="compact-metric-grid">
+        <MetricLine label="Regime" value={formatOptionalText(regime.regime_type)} />
+        <MetricLine label="Structure / volatility" value={`${formatOptionalText(regime.structure_state)} / ${formatOptionalText(regime.volatility_state)}`} />
+        <MetricLine label="Alignment" value={`${regime.alignment} / ${regime.strength}`} />
+        <MetricLine label="Compatibility" value={formatOptionalText(status)} />
+        <MetricLine label="Primary blocker" value={reasonCode ? tReason(reasonCode) : "-"} />
+      </div>
+      {reason ? <p>{reason}</p> : null}
     </div>
   );
 }
@@ -953,6 +1001,13 @@ function riskGateTone(status: string | null | undefined): ViewTone {
   if (status === "passed") return "green";
   if (status === "failed") return "red";
   if (status === "warning") return "yellow";
+  return "neutral";
+}
+
+function marketRegimeTone(status: string, compatible: unknown, blocked: boolean): ViewTone {
+  if (blocked || status === "failed" || compatible === false) return "red";
+  if (status === "warning") return "yellow";
+  if (status === "passed" || compatible === true) return "green";
   return "neutral";
 }
 

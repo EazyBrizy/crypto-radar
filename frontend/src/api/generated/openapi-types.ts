@@ -1002,6 +1002,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/strategy-tests/runs/{run_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Strategy Test Run Status */
+        get: operations["get_strategy_test_run_status_api_v1_strategy_tests_runs__run_id__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-tests/runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Strategy Test Run */
+        post: operations["cancel_strategy_test_run_api_v1_strategy_tests_runs__run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-tests/runs/{run_id}/calibration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Strategy Test Calibration */
+        post: operations["publish_strategy_test_calibration_api_v1_strategy_tests_runs__run_id__calibration_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/strategy-tests/runs/{run_id}/trades": {
         parameters: {
             query?: never;
@@ -1011,6 +1062,23 @@ export interface paths {
         };
         /** List Strategy Test Trades */
         get: operations["list_strategy_test_trades_api_v1_strategy_tests_runs__run_id__trades_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-tests/runs/{run_id}/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Strategy Test Signals */
+        get: operations["list_strategy_test_signals_api_v1_strategy_tests_runs__run_id__signals_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2491,6 +2559,8 @@ export interface components {
             suggested_max_size_usd?: number | null;
             /** Message */
             message?: string | null;
+            /** Technical Message */
+            technical_message?: string | null;
         };
         /** ExternalExchangeOrderResponse */
         ExternalExchangeOrderResponse: {
@@ -2945,6 +3015,28 @@ export interface components {
              */
             alignment: "aligned" | "mixed" | "against" | "unknown";
             /**
+             * Regime Type
+             * @default unknown
+             * @enum {string}
+             */
+            regime_type: "trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "liquidity_sweep_zone" | "unknown";
+            /**
+             * Volatility State
+             * @default unknown
+             * @enum {string}
+             */
+            volatility_state: "compression" | "normal" | "expansion" | "unknown";
+            /**
+             * Structure State
+             * @default unknown
+             * @enum {string}
+             */
+            structure_state: "trend" | "range" | "chop" | "unknown";
+            /** Compatibility */
+            compatibility?: {
+                [key: string]: unknown;
+            };
+            /**
              * Score Adjustment
              * @default 0
              */
@@ -3321,6 +3413,10 @@ export interface components {
             filled_trade_id?: string | null;
             /** Failure Reason */
             failure_reason?: string | null;
+            /** Technical Message */
+            technical_message?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
             view?: components["schemas"]["PendingEntryView"] | null;
         };
         /** PendingEntryView */
@@ -3337,6 +3433,8 @@ export interface components {
             reason_code?: string | null;
             /** Reason */
             reason: string;
+            /** Technical Message */
+            technical_message?: string | null;
             /** Entry Zone */
             entry_zone: string;
             /** Current Price */
@@ -3592,13 +3690,19 @@ export interface components {
             regime?: components["schemas"]["MarketRegimeSnapshot"] | null;
             setup?: components["schemas"]["StrategySetupSnapshot"] | null;
             confirmation?: components["schemas"]["SignalConfirmationSnapshot"] | null;
+            trigger?: components["schemas"]["SignalTriggerSnapshot"] | null;
             invalidation?: components["schemas"]["SignalInvalidationSnapshot"] | null;
             exit_plan?: components["schemas"]["SignalExitPlanSnapshot"] | null;
             trade_plan?: components["schemas"]["TradePlan"] | null;
+            /**
+             * @deprecated
+             * @description Deprecated legacy signal.auto_entry; use PendingEntryIntentRead instead.
+             */
             auto_entry?: components["schemas"]["SignalAutoEntrySnapshot"] | null;
             edge?: components["schemas"]["SignalEdgeSnapshot"] | null;
             no_trade_filter?: components["schemas"]["NoTradeFilterResult"] | null;
             decision?: components["schemas"]["SignalDecisionSnapshot"] | null;
+            execution_gate?: components["schemas"]["SignalExecutionGateSnapshot"] | null;
             /**
              * Created At
              * Format: date-time
@@ -3646,6 +3750,16 @@ export interface components {
              */
             execution_ready_signals: number;
             /**
+             * Watchlist Signals
+             * @default 0
+             */
+            watchlist_signals: number;
+            /**
+             * Market Ideas
+             * @default 0
+             */
+            market_ideas: number;
+            /**
              * High Confidence Signals
              * @default 0
              */
@@ -3660,6 +3774,26 @@ export interface components {
              * @default 0
              */
             blocked_ideas: number;
+            /**
+             * Visible Market Ideas
+             * @default 0
+             */
+            visible_market_ideas: number;
+            /**
+             * Hidden Blocked Ideas
+             * @default 0
+             */
+            hidden_blocked_ideas: number;
+            /**
+             * Hidden Low Score Ideas
+             * @default 0
+             */
+            hidden_low_score_ideas: number;
+            /**
+             * Diagnostic Blocked Ideas
+             * @default 0
+             */
+            diagnostic_blocked_ideas: number;
         };
         /** RealConfirmRequest */
         RealConfirmRequest: {
@@ -3824,6 +3958,8 @@ export interface components {
             symbol: string;
             /** Message */
             message: string;
+            /** Technical Message */
+            technical_message?: string | null;
             risk_decision?: components["schemas"]["RiskDecision"] | null;
             /** Risk Decision Id */
             risk_decision_id?: string | null;
@@ -4034,6 +4170,14 @@ export interface components {
             blockers?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Reason Codes */
+            reason_codes?: string[];
+            /** Technical Message */
+            technical_message?: string | null;
+            /** Technical Messages */
+            technical_messages?: string[];
             /** Rr */
             rr?: number | null;
             /** Min Rr Ratio */
@@ -4255,6 +4399,14 @@ export interface components {
             blockers?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Reason Codes */
+            reason_codes?: string[];
+            /** Technical Message */
+            technical_message?: string | null;
+            /** Technical Messages */
+            technical_messages?: string[];
             /** Exchange */
             exchange: string;
             /** Symbol */
@@ -5096,6 +5248,65 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** SignalExecutionGateReason */
+        SignalExecutionGateReason: {
+            /** Code */
+            code: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "blocker" | "warning" | "info";
+            /** Source */
+            source: string;
+            /** Message */
+            message: string;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /** SignalExecutionGateSnapshot */
+        SignalExecutionGateSnapshot: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "passed" | "warning" | "blocked";
+            /**
+             * Feed Kind
+             * @enum {string}
+             */
+            feed_kind: "market_idea" | "watchlist" | "execution_signal" | "blocked";
+            /**
+             * Can Notify
+             * @default false
+             */
+            can_notify: boolean;
+            /**
+             * Can Enter Now
+             * @default false
+             */
+            can_enter_now: boolean;
+            /**
+             * Can Arm Pending
+             * @default false
+             */
+            can_arm_pending: boolean;
+            /**
+             * Can Show In Execution Feed
+             * @default false
+             */
+            can_show_in_execution_feed: boolean;
+            /** Reasons */
+            reasons?: components["schemas"]["SignalExecutionGateReason"][];
+            /** Warnings */
+            warnings?: components["schemas"]["SignalExecutionGateReason"][];
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         /** SignalExitPlanSnapshot */
         SignalExitPlanSnapshot: {
             /** Targets */
@@ -5240,6 +5451,38 @@ export interface components {
              */
             invalidation: string;
         };
+        /** SignalTriggerSnapshot */
+        SignalTriggerSnapshot: {
+            /**
+             * Trigger Type
+             * @default none
+             * @enum {string}
+             */
+            trigger_type: "closed_candle" | "reclaim" | "breakdown" | "pullback_touch" | "liquidity_reclaim" | "breakout_retest" | "none";
+            /**
+             * Passed
+             * @default false
+             */
+            passed: boolean;
+            /** Price */
+            price?: number | null;
+            /**
+             * Candle State
+             * @default closed
+             * @enum {string}
+             */
+            candle_state: "open" | "closed";
+            /** Confirmed At */
+            confirmed_at?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Checks */
+            checks?: components["schemas"]["SignalLayerCheck"][];
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         /** StopLossPlan */
         StopLossPlan: {
             /**
@@ -5361,7 +5604,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "exact" | "strategy_timeframe_regime" | "strategy_global" | "none";
+            source: "exact" | "strategy_timeframe_regime" | "strategy_global" | "strategy_test" | "none";
             /**
              * Confidence
              * @enum {string}
@@ -5377,8 +5620,43 @@ export interface components {
             wins_count: number;
             /** Losses Count */
             losses_count: number;
+            /**
+             * Pending Armed Count
+             * @default 0
+             */
+            pending_armed_count: number;
+            /**
+             * Filled Count
+             * @default 0
+             */
+            filled_count: number;
+            /**
+             * No Entry Count
+             * @default 0
+             */
+            no_entry_count: number;
+            /**
+             * Execution Rejected Count
+             * @default 0
+             */
+            execution_rejected_count: number;
             /** Entry Touch Rate */
             entry_touch_rate: number;
+            /**
+             * Fill Rate
+             * @default 0
+             */
+            fill_rate: number;
+            /**
+             * No Entry Rate
+             * @default 0
+             */
+            no_entry_rate: number;
+            /**
+             * Execution Rejected Rate
+             * @default 0
+             */
+            execution_rejected_rate: number;
             /** Winrate */
             winrate: number;
             /** Tp1 Rate */
@@ -5411,6 +5689,10 @@ export interface components {
             fees_bps: number;
             /** Slippage Bps */
             slippage_bps: number;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * StrategyExecutionSettings
@@ -5798,6 +6080,25 @@ export interface components {
             /** Checks */
             checks?: components["schemas"]["SignalLayerCheck"][];
         };
+        /** StrategyTestCalibrationPublishResponse */
+        StrategyTestCalibrationPublishResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "historical_backtest" | "forward_virtual" | "mixed";
+            /** Profiles Updated */
+            profiles_updated: number;
+            /** Eligible Count */
+            eligible_count: number;
+            /** Blocked Count */
+            blocked_count: number;
+        };
         /** StrategyTestCandidateAdjustment */
         StrategyTestCandidateAdjustment: {
             /** Strategy Code */
@@ -5837,7 +6138,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            status: "queued" | "running" | "completed" | "failed" | "cancelled" | "stopping";
             /**
              * Mode
              * @enum {string}
@@ -5923,6 +6224,10 @@ export interface components {
             warnings?: string[];
             /** Rejections */
             rejections?: string[];
+            /** Runtime State */
+            runtime_state?: {
+                [key: string]: unknown;
+            };
         };
         /** StrategyTestRunRequest */
         StrategyTestRunRequest: {
@@ -5931,6 +6236,12 @@ export interface components {
              * @default demo_user
              */
             user_id: string;
+            /**
+             * Test Type
+             * @default historical_backtest
+             * @enum {string}
+             */
+            test_type: "historical_backtest" | "forward_virtual";
             /** Strategies */
             strategies: string[];
             /** Pairs */
@@ -5994,7 +6305,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            status: "queued" | "running" | "completed" | "failed" | "cancelled" | "stopping";
             /** Requested Matrix */
             requested_matrix: {
                 [key: string]: unknown;
@@ -6011,6 +6322,112 @@ export interface components {
             finished_at?: string | null;
             /** Error */
             error?: string | null;
+        };
+        /** StrategyTestSignal */
+        StrategyTestSignal: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "discovery" | "research_virtual" | "production_like";
+            /** Scenario Id */
+            scenario_id: string;
+            /** Strategy Code */
+            strategy_code: string;
+            /** Strategy Version */
+            strategy_version: string;
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+            /** Timeframe */
+            timeframe: string;
+            /** Direction */
+            direction: string;
+            /** Signal Id */
+            signal_id: string;
+            /**
+             * Signal Time
+             * Format: date-time
+             */
+            signal_time: string;
+            /** Signal Score */
+            signal_score?: number | null;
+            /** Feed Kind */
+            feed_kind: string;
+            /** Gate Status */
+            gate_status: string;
+            /** Status */
+            status: string;
+            /**
+             * Trigger Passed
+             * @default false
+             */
+            trigger_passed: boolean;
+            /** Edge Status */
+            edge_status: string;
+            /** Selected Rr */
+            selected_rr?: number | null;
+            /** Entry Min */
+            entry_min?: string | null;
+            /** Entry Max */
+            entry_max?: string | null;
+            /** Stop Loss */
+            stop_loss?: string | null;
+            /** Target 1 */
+            target_1?: string | null;
+            /** Outcome */
+            outcome: string;
+            /** Outcome Reason */
+            outcome_reason: string;
+            /**
+             * Entry Touched
+             * @default false
+             */
+            entry_touched: boolean;
+            /**
+             * Filled
+             * @default false
+             */
+            filled: boolean;
+            /**
+             * Risk Rejected
+             * @default false
+             */
+            risk_rejected: boolean;
+            /**
+             * Execution Rejected
+             * @default false
+             */
+            execution_rejected: boolean;
+            /**
+             * No Entry
+             * @default false
+             */
+            no_entry: boolean;
+            /** Bars To Entry */
+            bars_to_entry?: number | null;
+            /** Bars To Outcome */
+            bars_to_outcome?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** StrategyTestTrade */
         StrategyTestTrade: {
@@ -6906,6 +7323,10 @@ export interface components {
             };
             /** Rejected Reason */
             rejected_reason?: string | null;
+            /** Technical Message */
+            technical_message?: string | null;
+            /** Technical Messages */
+            technical_messages?: string[];
             /** Warnings */
             warnings?: string[];
             /** Blockers */
@@ -6953,6 +7374,10 @@ export interface components {
             market_impact_bps: number;
             /** Reason */
             reason?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Technical Message */
+            technical_message?: string | null;
             /** Warnings */
             warnings?: string[];
             /** Raw Inputs Snapshot */
@@ -9503,7 +9928,7 @@ export interface operations {
         parameters: {
             query?: {
                 user_id?: string;
-                status?: ("queued" | "running" | "completed" | "failed" | "cancelled") | null;
+                status?: ("queued" | "running" | "completed" | "failed" | "cancelled" | "stopping") | null;
                 limit?: number;
             };
             header?: never;
@@ -9596,6 +10021,99 @@ export interface operations {
             };
         };
     };
+    get_strategy_test_run_status_api_v1_strategy_tests_runs__run_id__status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_strategy_test_run_api_v1_strategy_tests_runs__run_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_strategy_test_calibration_api_v1_strategy_tests_runs__run_id__calibration_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestCalibrationPublishResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_strategy_test_trades_api_v1_strategy_tests_runs__run_id__trades_get: {
         parameters: {
             query?: {
@@ -9617,6 +10135,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StrategyTestTrade"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_strategy_test_signals_api_v1_strategy_tests_runs__run_id__signals_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestSignal"][];
                 };
             };
             /** @description Validation Error */

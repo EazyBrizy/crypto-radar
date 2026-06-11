@@ -1409,6 +1409,9 @@ def _strategy_signal_regime_key(signal: StrategySignal) -> str:
     regime = signal.regime
     if regime is None:
         return "unknown"
+    regime_type = getattr(regime, "regime_type", None)
+    if regime_type and regime_type != "unknown":
+        return str(regime_type)
     for key in ("label", "state", "trend"):
         value = getattr(regime, key, None)
         if value:
@@ -2131,6 +2134,9 @@ def _regime_key(signal: RadarSignal) -> str:
     regime = signal.regime
     if regime is None:
         return "unknown"
+    regime_type = getattr(regime, "regime_type", None)
+    if regime_type and regime_type != "unknown":
+        return str(regime_type)
     return f"{regime.direction}:{regime.strength}:{regime.alignment}"
 
 

@@ -114,6 +114,16 @@ class SignalStatusResolver:
         if signal.status == "watchlist":
             return ("watchlist", signal.status_reason or "Strategy conditions are forming")
 
+        compatibility_check = _strategy_regime_compatibility_check(regime)
+        if compatibility_check is not None and compatibility_check.status == "failed":
+            return ("watchlist", _strategy_regime_incompatible_reason(compatibility_check))
+        if (
+            compatibility_check is not None
+            and compatibility_check.status == "warning"
+            and compatibility_check.metadata.get("reason_code") == "strategy_regime_post_impulse_retest"
+        ):
+            return ("wait_for_pullback", compatibility_check.reason or "Post-impulse breakout requires a retest")
+
         if not risk_reward.passed:
             return ("ready", risk_reward.reason)
 
@@ -488,6 +498,14 @@ def _trigger_not_confirmed_reason(trigger: SignalTriggerSnapshot | None) -> str:
     if trigger is None:
         return "trigger_not_confirmed: execution requires a confirmed trigger"
     return f"trigger_not_confirmed: {trigger.reason or 'signal trigger is not confirmed'}"
+
+
+def _strategy_regime_compatibility_check(regime: MarketRegimeSnapshot) -> SignalLayerCheck | None:
+    return next((check for check in regime.checks if check.name == "strategy_regime_compatibility"), None)
+
+
+def _strategy_regime_incompatible_reason(check: SignalLayerCheck) -> str:
+    return f"strategy_regime_incompatible: {check.reason or 'strategy is incompatible with the current market regime'}"
 
 
 def _has_strong_regime_conflict(regime: MarketRegimeSnapshot) -> bool:

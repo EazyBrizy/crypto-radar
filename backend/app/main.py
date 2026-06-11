@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import AsyncIterator
 
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
 from app.services.realtime_gateway import realtime_gateway
 from app.workers.derivative_snapshot_worker import DerivativeSnapshotSyncRunner
 from app.workers.exchange_instrument_worker import ExchangeInstrumentRuleSyncRunner
+from app.workers.forward_strategy_test_worker import ForwardStrategyTestWorker
 from app.workers.orderbook_snapshot_worker import OrderbookSnapshotWorker
 from app.workers.real_position_sync_worker import BybitRealPositionSyncClient, RealPositionSyncWorker
 from app.workers.signal_worker import ScannerRunner, SignalExpiryWorker
@@ -56,7 +58,8 @@ def _real_position_sync_enabled() -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    runner = ScannerRunner()
+    forward_strategy_test_worker = ForwardStrategyTestWorker()
+    runner = ScannerRunner(forward_strategy_tests=forward_strategy_test_worker)
     instrument_rule_runner = ExchangeInstrumentRuleSyncRunner()
     derivative_snapshot_runner = DerivativeSnapshotSyncRunner()
     orderbook_snapshot_worker = OrderbookSnapshotWorker()
@@ -76,6 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.orderbook_snapshot_worker = orderbook_snapshot_worker
     app.state.signal_expiry_worker = signal_expiry_worker
     app.state.real_position_sync_worker = real_position_sync_worker
+    app.state.forward_strategy_test_worker = forward_strategy_test_worker
     app.state.scanner_autostart_enabled = scanner_autostart_enabled
     app.state.exchange_instrument_rule_sync_enabled = instrument_rule_sync_enabled
     app.state.derivative_snapshot_sync_enabled = derivative_snapshot_sync_enabled
@@ -108,6 +112,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         logging.info("Real position sync disabled by settings")
 
+    forward_strategy_test_worker.start()
+
     if scanner_autostart_enabled:
         runner.start()
     else:
@@ -116,12 +122,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await runner.stop()
+        await forward_strategy_test_worker.stop()
         await signal_expiry_worker.stop()
         await orderbook_snapshot_worker.stop()
         await real_position_sync_worker.stop()
         await derivative_snapshot_runner.stop()
         await instrument_rule_runner.stop()
-        await runner.stop()
         await realtime_gateway.stop_broker_bridge()
         close_clickhouse_client()
         close_redis_client()
@@ -156,6 +163,7 @@ async def health() -> dict[str, object]:
     derivative_snapshot_runner = getattr(app.state, "derivative_snapshot_sync_runner", None)
     orderbook_snapshot_worker = getattr(app.state, "orderbook_snapshot_worker", None)
     real_position_sync_worker = getattr(app.state, "real_position_sync_worker", None)
+    forward_strategy_test_worker = getattr(app.state, "forward_strategy_test_worker", None)
     scanner_status = runner.scanner_status if runner else {}
     storage_health = await asyncio.to_thread(get_storage_health)
     return {
@@ -205,6 +213,17 @@ async def health() -> dict[str, object]:
         "real_position_sync_last_result": (
             real_position_sync_worker.last_result
             if real_position_sync_worker is not None
+            else {}
+        ),
+        "forward_strategy_test_running": bool(
+            forward_strategy_test_worker and forward_strategy_test_worker.is_running
+        ),
+        "forward_strategy_test_stopping": bool(
+            forward_strategy_test_worker and forward_strategy_test_worker.is_stopping
+        ),
+        "forward_strategy_test_last_result": (
+            asdict(forward_strategy_test_worker.last_result)
+            if forward_strategy_test_worker is not None
             else {}
         ),
         "processed_signals": runner.processed_signals if runner else 0,

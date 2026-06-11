@@ -1,8 +1,10 @@
 import unittest
+from dataclasses import asdict
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.api.v1.radar import _scanner_config_status, _scanner_status, start_scanner
+from app.services.strategy_testing.forward_runtime import ForwardRuntimeResult
 from app.services.radar_config_service import ScannerUniverse
 from app.workers.signal_worker import ScannerRunner
 
@@ -131,6 +133,183 @@ class RadarScannerStatusTest(unittest.IsolatedAsyncioTestCase):
         runner = ScannerRunner(scanner=FakeScanner(stats))  # type: ignore[arg-type]
         runner._task = FakeRunningTask()  # type: ignore[assignment]
         return runner
+
+
+class MainForwardStrategyTestWorkerWiringTest(unittest.IsolatedAsyncioTestCase):
+    async def test_lifespan_starts_forward_worker_when_scanner_autostart_is_disabled(self) -> None:
+        from app import main as app_main
+
+        events: list[str] = []
+        fake_app = SimpleNamespace(state=SimpleNamespace())
+        FakeForwardStrategyTestWorker.instances = []
+        FakeScannerRunner.instances = []
+
+        with (
+            patch("app.main.ForwardStrategyTestWorker", FakeForwardStrategyTestWorker, create=True),
+            patch("app.main.ScannerRunner", FakeScannerRunner),
+            patch("app.main.ExchangeInstrumentRuleSyncRunner", _worker_factory("instrument", events)),
+            patch("app.main.DerivativeSnapshotSyncRunner", _worker_factory("derivative", events)),
+            patch("app.main.OrderbookSnapshotWorker", _worker_factory("orderbook", events)),
+            patch("app.main.SignalExpiryWorker", _worker_factory("expiry", events)),
+            patch("app.main.RealPositionSyncWorker", _worker_factory("positions", events)),
+            patch("app.main.BybitRealPositionSyncClient", object),
+            patch("app.main._scanner_enabled", return_value=False),
+            patch("app.main._instrument_rule_sync_enabled", return_value=False),
+            patch("app.main._derivative_snapshot_sync_enabled", return_value=False),
+            patch("app.main._orderbook_snapshot_sync_enabled", return_value=False),
+            patch("app.main._real_position_sync_enabled", return_value=False),
+            patch("app.main.warn_if_migrations_outdated", return_value=None),
+            patch("app.main.realtime_gateway", FakeRealtimeGateway(events)),
+            patch("app.main.close_clickhouse_client", return_value=None),
+            patch("app.main.close_redis_client", return_value=None),
+            patch("app.main.dispose_database_engine", return_value=None),
+        ):
+            async with app_main.lifespan(fake_app):  # type: ignore[arg-type]
+                self.assertEqual(len(FakeForwardStrategyTestWorker.instances), 1)
+                worker = FakeForwardStrategyTestWorker.instances[0]
+                self.assertIs(fake_app.state.forward_strategy_test_worker, worker)
+                self.assertIs(FakeScannerRunner.instances[0].forward_strategy_tests, worker)
+                self.assertTrue(worker.started)
+                self.assertFalse(FakeScannerRunner.instances[0].started)
+
+            self.assertLess(
+                events.index("scanner.stop"),
+                events.index("forward.stop"),
+            )
+            self.assertLess(
+                events.index("forward.stop"),
+                events.index("realtime.stop"),
+            )
+
+    async def test_health_includes_forward_strategy_test_worker_status(self) -> None:
+        from app import main as app_main
+
+        worker = SimpleNamespace(
+            is_running=True,
+            is_stopping=False,
+            last_result=ForwardRuntimeResult(signals_processed=2, ticks_processed=3),
+        )
+        app_main.app.state.forward_strategy_test_worker = worker
+
+        try:
+            with patch("app.main.get_storage_health", return_value={"status": "ok"}):
+                status = await app_main.health()
+        finally:
+            app_main.app.state._state.pop("forward_strategy_test_worker", None)
+
+        self.assertTrue(status["forward_strategy_test_running"])
+        self.assertFalse(status["forward_strategy_test_stopping"])
+        self.assertEqual(
+            status["forward_strategy_test_last_result"],
+            asdict(worker.last_result),
+        )
+
+
+class FakeForwardStrategyTestWorker:
+    instances: list["FakeForwardStrategyTestWorker"] = []
+
+    def __init__(self) -> None:
+        self.started = False
+        self.stopped = False
+        self.last_result = ForwardRuntimeResult(signals_processed=1)
+        self.instances.append(self)
+
+    @property
+    def is_running(self) -> bool:
+        return self.started and not self.stopped
+
+    @property
+    def is_stopping(self) -> bool:
+        return False
+
+    def start(self) -> None:
+        self.started = True
+
+    async def stop(self) -> None:
+        self.stopped = True
+        _wiring_events().append("forward.stop")
+
+
+class FakeScannerRunner:
+    instances: list["FakeScannerRunner"] = []
+
+    def __init__(self, *, forward_strategy_tests: object | None = None) -> None:
+        self.forward_strategy_tests = forward_strategy_tests
+        self.started = False
+        self.instances.append(self)
+
+    @property
+    def is_running(self) -> bool:
+        return self.started
+
+    @property
+    def is_stopping(self) -> bool:
+        return False
+
+    @property
+    def scanner_status(self) -> dict[str, object]:
+        return {}
+
+    @property
+    def processed_signals(self) -> int:
+        return 0
+
+    def start(self) -> None:
+        self.started = True
+
+    async def stop(self) -> None:
+        _wiring_events().append("scanner.stop")
+
+
+class FakeRealtimeGateway:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+        _set_wiring_events(events)
+
+    def start_broker_bridge(self) -> None:
+        self._events.append("realtime.start")
+
+    async def stop_broker_bridge(self) -> None:
+        self._events.append("realtime.stop")
+
+
+class _NoopWorker:
+    def __init__(self, name: str, events: list[str]) -> None:
+        self._name = name
+        self._events = events
+        self.started = False
+        self.last_result: dict[str, object] = {}
+
+    @property
+    def is_running(self) -> bool:
+        return self.started
+
+    def start(self) -> None:
+        self.started = True
+        self._events.append(f"{self._name}.start")
+
+    async def stop(self) -> None:
+        self._events.append(f"{self._name}.stop")
+
+
+def _worker_factory(name: str, events: list[str]) -> type[_NoopWorker]:
+    class Worker(_NoopWorker):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(name, events)
+
+    return Worker
+
+
+_WIRING_EVENTS: list[str] = []
+
+
+def _set_wiring_events(events: list[str]) -> None:
+    global _WIRING_EVENTS
+    _WIRING_EVENTS = events
+
+
+def _wiring_events() -> list[str]:
+    return _WIRING_EVENTS
 
 
 class FakeRadarConfigService:

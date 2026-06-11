@@ -24,6 +24,11 @@ from app.schemas.strategy_performance import (
     StrategyEdgeProfile,
     StrategyPerformanceDaily,
 )
+from app.services.strategy_testing.eligibility_profiles import (
+    PostgresStrategyExecutionEligibilityProfileStore,
+    StrategyExecutionEligibilityProfileRecord,
+    StrategyExecutionEligibilityProfileStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +161,7 @@ class StrategyPerformanceProfileQuery:
     timeframe: str | None = None
     market_regime: str | None = None
     score_bucket: ScoreBucket | None = None
+    direction: str | None = None
 
 
 @dataclass(frozen=True)
@@ -399,10 +405,12 @@ class StrategyPerformanceService:
         *,
         outcome_source: SignalOutcomeSource | None = None,
         performance_store: StrategyPerformanceStore | None = None,
+        eligibility_store: StrategyExecutionEligibilityProfileStore | None = None,
         min_sample_size: int | None = None,
     ) -> None:
         self._outcome_source = outcome_source or PostgresSignalOutcomeSource()
         self._performance_store = performance_store or ClickHouseStrategyPerformanceStore()
+        self._eligibility_store = eligibility_store
         self._min_sample_size = (
             int(settings.strategy_performance_min_sample_size)
             if min_sample_size is None
@@ -434,9 +442,31 @@ class StrategyPerformanceService:
         timeframe: str,
         market_regime: str | None,
         score: float | None,
+        direction: str | None = None,
     ) -> StrategyEdgeProfile:
         normalized_regime = _normalize_dimension(market_regime) if market_regime else None
         score_bucket = score_bucket_for(score) if score is not None else None
+        normalized_direction = _direction(direction) if direction else None
+        eligibility_profile = await self._get_strategy_test_profile(
+            strategy=strategy,
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            market_regime=normalized_regime,
+            score_bucket=score_bucket,
+            direction=normalized_direction,
+        )
+        if eligibility_profile is not None:
+            return _edge_profile_from_eligibility(
+                eligibility_profile,
+                strategy=strategy,
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                market_regime=normalized_regime,
+                score_bucket=score_bucket,
+                min_sample_size=self._min_sample_size,
+            )
         attempts: list[tuple[EdgeProfileSource, StrategyPerformanceProfileQuery]] = [
             (
                 "exact",
@@ -447,6 +477,7 @@ class StrategyPerformanceService:
                     timeframe=timeframe,
                     market_regime=normalized_regime,
                     score_bucket=score_bucket,
+                    direction=normalized_direction,
                 ),
             ),
             (
@@ -455,6 +486,7 @@ class StrategyPerformanceService:
                     strategy=strategy,
                     timeframe=timeframe,
                     market_regime=normalized_regime,
+                    direction=normalized_direction,
                 ),
             ),
             ("strategy_global", StrategyPerformanceProfileQuery(strategy=strategy)),
@@ -505,6 +537,30 @@ class StrategyPerformanceService:
             timeframe=timeframe,
             market_regime=normalized_regime,
             score_bucket=score_bucket,
+        )
+
+    async def _get_strategy_test_profile(
+        self,
+        *,
+        strategy: str,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        market_regime: str | None,
+        score_bucket: ScoreBucket | None,
+        direction: str | None,
+    ) -> StrategyExecutionEligibilityProfileRecord | None:
+        if self._eligibility_store is None:
+            return None
+        return await asyncio.to_thread(
+            self._eligibility_store.find_best_profile,
+            strategy=strategy,
+            exchange=exchange,
+            symbol=_normalize_symbol_scope(symbol),
+            timeframe=timeframe,
+            market_regime=market_regime,
+            score_bucket=score_bucket,
+            direction=direction,
         )
 
 
@@ -698,6 +754,9 @@ def _profile_where(query: StrategyPerformanceProfileQuery) -> tuple[str, dict[st
     if query.score_bucket is not None:
         clauses.append("score_bucket = {score_bucket:String}")
         parameters["score_bucket"] = query.score_bucket
+    if query.direction is not None:
+        clauses.append("direction = {direction:String}")
+        parameters["direction"] = query.direction
     return " AND ".join(clauses), parameters
 
 
@@ -790,6 +849,80 @@ def _edge_profile(
     )
 
 
+def _edge_profile_from_eligibility(
+    profile: StrategyExecutionEligibilityProfileRecord,
+    *,
+    strategy: str,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    market_regime: str | None,
+    score_bucket: ScoreBucket | None,
+    min_sample_size: int,
+) -> StrategyEdgeProfile:
+    metrics = dict(profile.metrics)
+    winrate = _float(metrics.get("winrate"))
+    sample_size = int(profile.sample_size or 0)
+    wins_count = int(sample_size * winrate) if sample_size else 0
+    losses_count = max(sample_size - wins_count, 0)
+    return StrategyEdgeProfile(
+        strategy=strategy,
+        exchange=exchange,
+        symbol=symbol,
+        timeframe=timeframe,
+        market_regime=market_regime,
+        score_bucket=score_bucket,
+        source="strategy_test",
+        confidence=_eligibility_confidence(sample_size, min_sample_size),
+        sample_size=sample_size,
+        trades_count=int(metrics.get("trades_count") or sample_size),
+        signals_count=int(metrics.get("signals_count") or 0),
+        wins_count=wins_count,
+        losses_count=losses_count,
+        pending_armed_count=int(metrics.get("pending_armed_count") or 0),
+        filled_count=int(metrics.get("filled_count") or metrics.get("trades_count") or sample_size),
+        no_entry_count=int(metrics.get("no_entry_count") or 0),
+        execution_rejected_count=int(metrics.get("execution_rejected_count") or 0),
+        entry_touch_rate=_float(metrics.get("entry_touch_rate")),
+        fill_rate=_float(metrics.get("fill_rate")),
+        no_entry_rate=_float(metrics.get("no_entry_rate")),
+        execution_rejected_rate=_float(metrics.get("execution_rejection_rate")),
+        winrate=winrate,
+        tp1_rate=_float(metrics.get("tp1_rate")),
+        tp2_rate=_float(metrics.get("tp2_rate")),
+        stop_rate=_float(metrics.get("stop_rate")),
+        invalidation_rate=_float(metrics.get("invalidation_rate")),
+        avg_win_r=_float(metrics.get("avg_win_r")),
+        avg_loss_r=_float(metrics.get("avg_loss_r")),
+        expectancy_r=_float(metrics.get("expectancy_r")),
+        profit_factor=profile.profit_factor,
+        max_drawdown_r=profile.max_drawdown_r or 0.0,
+        median_bars_to_entry=_optional_float(metrics.get("median_bars_to_entry")),
+        median_bars_to_outcome=_optional_float(metrics.get("median_bars_to_outcome")),
+        avg_mfe_r=_float(metrics.get("avg_mfe_r")),
+        avg_mae_r=_float(metrics.get("avg_mae_r")),
+        fees_bps=_float(metrics.get("fees_bps")),
+        slippage_bps=_float(metrics.get("slippage_bps")),
+        metadata={
+            "profile_source": profile.source,
+            "run_ids": list(profile.run_ids),
+            "eligible": profile.eligible,
+            "reason_code": profile.reason_code,
+            "reason": profile.reason,
+            "source": "strategy_test",
+            **metrics,
+        },
+    )
+
+
+def _eligibility_confidence(sample_size: int, min_sample_size: int) -> EdgeProfileConfidence:
+    if sample_size <= 0:
+        return "insufficient_sample"
+    if sample_size >= min_sample_size:
+        return "high"
+    return "low"
+
+
 def _outcome_to_input(outcome: SignalOutcome) -> StrategyPerformanceOutcome:
     metadata = outcome.metadata_ or {}
     signal = outcome.signal
@@ -877,6 +1010,10 @@ def _normalize_dimension(value: Any) -> str:
     return text or "unknown"
 
 
+def _normalize_symbol_scope(value: Any) -> str:
+    return _normalize_dimension(value).replace("/", "").replace(":PERP", "").upper()
+
+
 def _rate(numerator: int, denominator: int) -> float:
     return numerator / denominator if denominator > 0 else 0.0
 
@@ -921,4 +1058,6 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-strategy_performance_service = StrategyPerformanceService()
+strategy_performance_service = StrategyPerformanceService(
+    eligibility_store=PostgresStrategyExecutionEligibilityProfileStore(),
+)

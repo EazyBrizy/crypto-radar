@@ -1,7 +1,8 @@
 "use client";
 
-import { X } from "lucide-react";
+import { Upload, X } from "lucide-react";
 import type { ReactNode } from "react";
+import { useState } from "react";
 
 import { Badge } from "@/components/Badge";
 import { StrategyTestMetricGrid, formatMetricValue } from "./StrategyTestMetricGrid";
@@ -9,6 +10,7 @@ import { StrategyTestSignalList } from "./StrategyTestSignalList";
 import { StrategyTestTradeList } from "./StrategyTestTradeList";
 import type {
   StrategyTestCandidateAdjustment,
+  StrategyTestCalibrationPublishResponse,
   StrategyTestMetric,
   StrategyTestMetricValue,
   StrategyTestReport as StrategyTestReportData,
@@ -20,6 +22,7 @@ interface StrategyTestReportProps {
   error?: Error | null;
   loading?: boolean;
   onClose?: () => void;
+  onPublishCalibration?: (runId: string) => Promise<StrategyTestCalibrationPublishResponse> | StrategyTestCalibrationPublishResponse;
   report: StrategyTestReportData | null;
   run: StrategyTestRunResponse | null;
 }
@@ -39,12 +42,31 @@ export function StrategyTestReport({
   error,
   loading = false,
   onClose,
+  onPublishCalibration,
   report,
   run
 }: StrategyTestReportProps) {
+  const [calibrationResult, setCalibrationResult] = useState<StrategyTestCalibrationPublishResponse | null>(null);
+  const [calibrationError, setCalibrationError] = useState<string | null>(null);
+  const [calibrationBusy, setCalibrationBusy] = useState(false);
   const liveForward = !report && isForwardRun(run);
   const summaryMetrics = liveForward ? [] : report?.summary_metrics ?? summaryMetricsFromRun(run);
   const adjustments = report?.candidate_adjustments ?? [];
+  const canPublishCalibration = Boolean(report && report.status === "completed" && onPublishCalibration);
+
+  async function handlePublishCalibration() {
+    if (!report || !onPublishCalibration || calibrationBusy) return;
+    setCalibrationBusy(true);
+    setCalibrationError(null);
+    try {
+      const result = await onPublishCalibration(report.run_id);
+      setCalibrationResult(result);
+    } catch (error) {
+      setCalibrationError(error instanceof Error ? error.message : "Unable to publish calibration");
+    } finally {
+      setCalibrationBusy(false);
+    }
+  }
 
   return (
     <section className="strategy-test-report-panel strategy-test-report-full" aria-live="polite">
@@ -71,6 +93,25 @@ export function StrategyTestReport({
             <Badge tone={report?.rejections?.length ? "red" : "neutral"}>{report?.rejections?.length ?? 0} rejections</Badge>
             {report ? <Badge tone="purple">{report.sections.length} sections</Badge> : null}
           </div>
+
+          {canPublishCalibration ? (
+            <div className="strategy-test-report-actions">
+              <button
+                className="secondary-action"
+                disabled={calibrationBusy}
+                onClick={handlePublishCalibration}
+                type="button"
+              >
+                <Upload size={16} /> {calibrationBusy ? "Publishing calibration" : "Use this run for calibration"}
+              </button>
+            </div>
+          ) : null}
+          {calibrationResult ? (
+            <p className="strategy-test-calibration-result">
+              Calibration profiles updated: {calibrationResult.eligible_count} eligible, {calibrationResult.blocked_count} blocked
+            </p>
+          ) : null}
+          {calibrationError ? <p className="form-error">{calibrationError}</p> : null}
 
           {liveForward ? null : (
             <StrategyTestMetricGrid emptyLabel="No summary metrics" limit={9} metrics={summaryMetrics} />

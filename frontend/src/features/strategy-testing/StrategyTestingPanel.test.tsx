@@ -18,6 +18,11 @@ vi.mock("@/hooks/use-radar-queries", () => ({
     isPending: false,
     mutateAsync: vi.fn()
   }),
+  usePublishStrategyTestCalibration: () => ({
+    error: null,
+    isPending: false,
+    mutateAsync: vi.fn()
+  }),
   useRunStrategyTest: () => ({
     error: null,
     isPending: false,

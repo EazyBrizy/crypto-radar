@@ -192,6 +192,7 @@ export const serverStateKeys = {
     status: (runId: string) => [...serverStateKeys.strategyTests.all(), "status", runId] as const,
     trades: (runId: string) => [...serverStateKeys.strategyTests.all(), "trades", runId] as const,
     signals: (runId: string) => [...serverStateKeys.strategyTests.all(), "signals", runId] as const,
+    calibration: (runId: string) => [...serverStateKeys.strategyTests.all(), "calibration", runId] as const,
     reports: (filters?: StrategyTestReportFilters) => [...serverStateKeys.strategyTests.all(), "reports", normalizeStrategyTestReportFilters(filters)] as const,
     report: (runId: string) => [...serverStateKeys.strategyTests.all(), "report", runId] as const
   },

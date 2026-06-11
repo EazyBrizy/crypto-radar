@@ -220,6 +220,25 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(response.json()["status"], "cancelled")
         self.assertTrue(service.cancel_called)
 
+    def test_publish_strategy_test_calibration_route_returns_counts(self) -> None:
+        service = _CalibrationService()
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+
+        try:
+            response = client.post(f"/api/v1/strategy-tests/runs/{service.run_id}/calibration")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(service.publish_called)
+        data = response.json()
+        self.assertEqual(data["run_id"], str(service.run_id))
+        self.assertEqual(data["profiles_updated"], 3)
+        self.assertEqual(data["eligible_count"], 2)
+        self.assertEqual(data["blocked_count"], 1)
+        self.assertEqual(data["source"], "historical_backtest")
+
 
 def _now() -> datetime:
     return datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -430,6 +449,24 @@ class _WorkerOwnedForwardService:
         run = self._runs[run_id].model_copy(update={"status": "cancelled"})
         self._runs[run_id] = run
         return run
+
+
+class _CalibrationService:
+    def __init__(self) -> None:
+        self.run_id = uuid4()
+        self.publish_called = False
+
+    def publish_calibration(self, run_id: UUID):
+        from app.services.strategy_testing.schemas import StrategyTestCalibrationPublishResponse
+
+        self.publish_called = True
+        return StrategyTestCalibrationPublishResponse(
+            run_id=run_id,
+            source="historical_backtest",
+            profiles_updated=3,
+            eligible_count=2,
+            blocked_count=1,
+        )
 
 
 def _signal(run_id: UUID) -> StrategyTestSignal:

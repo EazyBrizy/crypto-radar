@@ -224,6 +224,50 @@ describe("SignalDetails", () => {
     expect(screen.getByText("Better same-direction signal already active.")).toBeInTheDocument();
   });
 
+  it("shows strategy-test edge source and run id in execution evidence", () => {
+    render(
+      <SignalDetails
+        actionState={actionState({ can_enter_now: true })}
+        busy={false}
+        executionPreview={null}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={baseSignal({
+          edge: {
+            status: "positive",
+            sample_size: 80,
+            min_sample_size: 50,
+            winrate: 0.6,
+            avg_win_r: 1.4,
+            avg_loss_r: -0.8,
+            expectancy_r: 0.24,
+            expectancy_after_costs_r: 0.18,
+            profit_factor: 1.8,
+            confidence_score: 0.9,
+            source: "backtest",
+            score_bucket: "80-89",
+            metadata: {
+              profile_source: "historical_backtest",
+              run_ids: ["11111111-1111-4111-8111-111111111111"],
+              strategy_eligibility: {
+                eligible: true,
+                reason_code: "strategy_eligibility_passed",
+                reason: "Strategy test metrics pass execution eligibility thresholds.",
+                source: "historical_backtest",
+                metrics: { expectancy_after_costs_r: 0.18 }
+              }
+            }
+          }
+        })}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Strategy eligibility" })).toBeInTheDocument();
+    expect(screen.getByText("Edge source")).toBeInTheDocument();
+    expect(screen.getByText("historical_backtest")).toBeInTheDocument();
+    expect(screen.getByText("11111111")).toBeInTheDocument();
+  });
+
   it("shows latest terminal pending-entry reason outside collapsed diagnostics", () => {
     render(
       <SignalDetails

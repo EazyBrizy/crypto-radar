@@ -7,6 +7,7 @@ import { Badge } from "@/components/Badge";
 import type { MarketPairOption, StrategyConfig } from "@/features/server-state/types";
 import {
   useCancelStrategyTestRun,
+  usePublishStrategyTestCalibration,
   useRunStrategyTest,
   useStrategyTestReport,
   useStrategyTestRuns
@@ -67,6 +68,7 @@ export function StrategyTestingPanel({
   const runsQuery = useStrategyTestRuns({ limit: 25 }, { refetchInterval: STRATEGY_TEST_RUN_POLL_MS });
   const runMutation = useRunStrategyTest();
   const cancelMutation = useCancelStrategyTestRun();
+  const calibrationMutation = usePublishStrategyTestCalibration();
   const [testType, setTestType] = useState<StrategyTestType>(DEFAULT_TEST_TYPE);
   const [selectedStrategyCodes, setSelectedStrategyCodes] = useState<string[] | null>(null);
   const [selectedPairIds, setSelectedPairIds] = useState<string[] | null>(null);
@@ -364,6 +366,7 @@ export function StrategyTestingPanel({
           error={reportQuery.error instanceof Error ? reportQuery.error : null}
           loading={reportQuery.isLoading}
           onClose={() => setSelectedReportRunId(null)}
+          onPublishCalibration={(runId) => calibrationMutation.mutateAsync(runId)}
           report={reportQuery.data ?? null}
           run={selectedRunForReport}
         />

@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401
 from app.core.database import Base
-from app.models.strategy_testing import StrategyTestRun
+from app.models.strategy_testing import StrategyExecutionEligibilityProfile, StrategyTestRun
 from app.models.user import AppUser
 from app.services.strategy_testing.schemas import StrategyTestPair, StrategyTestRunRequest
 from app.services.strategy_testing.stores import PostgresStrategyTestRunStore
@@ -29,6 +29,12 @@ FORWARD_MIGRATION_PATH = (
     / "alembic"
     / "versions"
     / "202606060004_add_forward_strategy_test_runtime.py"
+)
+ELIGIBILITY_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "alembic"
+    / "versions"
+    / "202606110001_create_strategy_execution_eligibility_profiles.py"
 )
 
 
@@ -67,6 +73,24 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("stopping", status_constraints["ck_strategy_test_runs_status"])
         self.assertIn("cancelled", status_constraints["ck_strategy_test_runs_status"])
 
+    def test_model_has_strategy_execution_eligibility_profiles_table(self) -> None:
+        self.assertIn("strategy_execution_eligibility_profiles", Base.metadata.tables)
+        self.assertIs(
+            Base.metadata.tables["strategy_execution_eligibility_profiles"],
+            StrategyExecutionEligibilityProfile.__table__,
+        )
+        table = StrategyExecutionEligibilityProfile.__table__
+        column_names = set(table.c.keys())
+        index_names = {index.name for index in table.indexes}
+
+        self.assertIn("strategy_code", column_names)
+        self.assertIn("symbol_scope", column_names)
+        self.assertIn("eligible", column_names)
+        self.assertIn("source", column_names)
+        self.assertIn("metrics", column_names)
+        self.assertIn("run_ids", column_names)
+        self.assertIn("ux_strategy_execution_eligibility_profile_key", index_names)
+
     def test_migration_contains_table_constraints_and_indexes(self) -> None:
         migration = MIGRATION_PATH.read_text(encoding="utf-8")
 
@@ -93,6 +117,17 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("last_heartbeat_at", migration)
         self.assertIn("stopping", migration)
         self.assertIn("cancelled", migration)
+
+    def test_strategy_execution_eligibility_profile_migration_exists(self) -> None:
+        self.assertTrue(ELIGIBILITY_MIGRATION_PATH.exists())
+        migration = ELIGIBILITY_MIGRATION_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('revision = "202606110001"', migration)
+        self.assertIn("strategy_execution_eligibility_profiles", migration)
+        self.assertIn("strategy_code", migration)
+        self.assertIn("symbol_scope", migration)
+        self.assertIn("run_ids", migration)
+        self.assertIn("ux_strategy_execution_eligibility_profile_key", migration)
 
 
 class PostgresStrategyTestRunStoreTest(unittest.TestCase):

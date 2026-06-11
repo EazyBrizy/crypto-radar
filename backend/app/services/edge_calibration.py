@@ -22,6 +22,7 @@ class EdgeProfileProvider(Protocol):
         timeframe: str,
         market_regime: str | None,
         score: float | None,
+        direction: str | None = None,
     ) -> StrategyEdgeProfile:
         ...
 
@@ -54,6 +55,7 @@ class EdgeCalibrationService:
                 timeframe=signal.timeframe,
                 market_regime=market_regime,
                 score=score,
+                direction=str(signal.direction).lower() if getattr(signal, "direction", None) else None,
             )
         except Exception as exc:
             logger.warning(
@@ -83,9 +85,26 @@ class EdgeCalibrationService:
                 },
             )
 
-        expectancy_r = _expectancy_r(profile)
-        estimated_costs_r, costs_metadata = _estimated_costs_r(profile, signal)
-        expectancy_after_costs_r = expectancy_r - estimated_costs_r
+        profile_metadata = dict(profile.metadata)
+        expectancy_r = _strategy_test_metric(profile_metadata, "expectancy_r")
+        if expectancy_r is None:
+            expectancy_r = _expectancy_r(profile)
+        if profile.source == "strategy_test":
+            expectancy_after_costs_r = _strategy_test_metric(
+                profile_metadata,
+                "expectancy_after_costs_r",
+                "validation_expectancy_r",
+            )
+            if expectancy_after_costs_r is None:
+                expectancy_after_costs_r = expectancy_r
+            costs_metadata = {
+                "costs_converted_to_r": True,
+                "estimated_costs_r": 0.0,
+                "strategy_test_costs_already_modeled": True,
+            }
+        else:
+            estimated_costs_r, costs_metadata = _estimated_costs_r(profile, signal)
+            expectancy_after_costs_r = expectancy_r - estimated_costs_r
         status = _edge_status(
             sample_size=profile.sample_size,
             min_sample_size=self._min_sample_size,
@@ -100,8 +119,8 @@ class EdgeCalibrationService:
                 expectancy_after_costs_r=expectancy_after_costs_r,
                 profit_factor=profile.profit_factor,
                 confidence_score=0.0,
-                source="outcome",
-                metadata=metrics_metadata,
+                source=_edge_snapshot_source(profile),
+                metadata={**metrics_metadata, **profile_metadata},
             )
         )
 
@@ -120,14 +139,15 @@ class EdgeCalibrationService:
                 sample_size=profile.sample_size,
                 min_sample_size=self._min_sample_size,
             ),
-            source="outcome",
+            source=_edge_snapshot_source(profile),
             score_bucket=profile.score_bucket,
             metadata={
-                "profile_source": profile.source,
+                "profile_source": profile_metadata.get("profile_source") or profile.source,
                 "profile_confidence": profile.confidence,
                 "heuristic_score": score,
                 "expected_value_r": expectancy_after_costs_r,
                 "market_regime": market_regime,
+                **profile_metadata,
                 **metrics_metadata,
                 "strategy_eligibility": eligibility.to_metadata(),
                 **costs_metadata,
@@ -231,6 +251,25 @@ def _profile_metrics_metadata(profile: StrategyEdgeProfile) -> dict[str, Any]:
         "no_entry_count": profile.no_entry_count,
         "execution_rejected_count": profile.execution_rejected_count,
     }
+
+
+def _strategy_test_metric(metadata: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = metadata.get(key)
+        try:
+            return None if value is None else float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _edge_snapshot_source(profile: StrategyEdgeProfile) -> str:
+    if profile.source != "strategy_test":
+        return "outcome"
+    profile_source = str(profile.metadata.get("profile_source") or "")
+    if profile_source == "historical_backtest":
+        return "backtest"
+    return "mixed"
 
 
 def _market_regime(signal: RadarSignal | StrategySignal) -> str | None:

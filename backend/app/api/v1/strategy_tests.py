@@ -4,6 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 
 from app.services.strategy_testing.schemas import (
     StrategyTestReport,
+    StrategyTestCalibrationPublishResponse,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
     StrategyTestRunResponse,
@@ -84,6 +85,22 @@ async def cancel_strategy_test_run(
         return service.cancel_run(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/calibration", response_model=StrategyTestCalibrationPublishResponse)
+async def publish_strategy_test_calibration(
+    run_id: UUID,
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> StrategyTestCalibrationPublishResponse:
+    try:
+        return service.publish_calibration(run_id)
+    except ValueError as exc:
+        status_code = (
+            http_status.HTTP_400_BAD_REQUEST
+            if "completed" in str(exc).lower()
+            else http_status.HTTP_404_NOT_FOUND
+        )
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/trades", response_model=list[StrategyTestTrade])

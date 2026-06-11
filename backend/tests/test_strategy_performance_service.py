@@ -11,6 +11,7 @@ from app.services.strategy_performance_service import (
     build_daily_performance,
     score_bucket_for,
 )
+from app.services.strategy_testing.eligibility_profiles import StrategyExecutionEligibilityProfileRecord
 
 
 DAY = date(2026, 1, 2)
@@ -37,6 +38,16 @@ class FakePerformanceStore:
 class EmptyOutcomeSource:
     def list_closed_outcomes(self, *, day: date) -> list[StrategyPerformanceOutcome]:
         return []
+
+
+class FakeEligibilityProfileStore:
+    def __init__(self, profile: StrategyExecutionEligibilityProfileRecord | None = None) -> None:
+        self.profile = profile
+        self.calls: list[dict[str, object]] = []
+
+    def find_best_profile(self, **kwargs: object) -> StrategyExecutionEligibilityProfileRecord | None:
+        self.calls.append(kwargs)
+        return self.profile
 
 
 class StrategyPerformanceServiceTest(unittest.IsolatedAsyncioTestCase):
@@ -169,6 +180,68 @@ class StrategyPerformanceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile.confidence, "medium")
         self.assertEqual(profile.sample_size, 6)
         self.assertEqual(len(store.queries), 2)
+
+    async def test_edge_profile_reads_strategy_test_profile_before_daily_store(self) -> None:
+        daily_store = FakePerformanceStore()
+        eligibility_store = FakeEligibilityProfileStore(
+            StrategyExecutionEligibilityProfileRecord(
+                strategy_code="trend_pullback_continuation",
+                exchange="bybit",
+                symbol_scope="BTCUSDT",
+                timeframe="15m",
+                market_regime=REGIME,
+                score_bucket="80-89",
+                direction="long",
+                eligible=True,
+                source="historical_backtest",
+                metrics={
+                    "signals_count": 8,
+                    "trades_count": 6,
+                    "winrate": 0.66,
+                    "expectancy_r": 0.24,
+                    "expectancy_after_costs_r": 0.18,
+                    "profit_factor": 1.8,
+                    "entry_touch_rate": 0.75,
+                    "fill_rate": 0.75,
+                    "no_entry_rate": 0.25,
+                    "max_drawdown_r": 1.2,
+                },
+                sample_size=6,
+                expectancy_after_costs_r=0.18,
+                profit_factor=1.8,
+                entry_touch_rate=0.75,
+                no_entry_rate=0.25,
+                max_drawdown_r=1.2,
+                run_ids=["11111111-1111-4111-8111-111111111111"],
+                reason_code="eligible",
+                reason="Strategy test metrics pass execution eligibility thresholds.",
+            )
+        )
+        service = StrategyPerformanceService(
+            outcome_source=EmptyOutcomeSource(),
+            performance_store=daily_store,  # type: ignore[arg-type]
+            eligibility_store=eligibility_store,  # type: ignore[arg-type]
+            min_sample_size=5,
+        )
+
+        profile = await service.get_edge_profile(
+            strategy="trend_pullback_continuation",
+            exchange="bybit",
+            symbol="BTC/USDT:PERP",
+            timeframe="15m",
+            market_regime=REGIME,
+            score=82,
+            direction="long",
+        )
+
+        self.assertEqual(profile.source, "strategy_test")
+        self.assertEqual(profile.confidence, "high")
+        self.assertEqual(profile.sample_size, 6)
+        self.assertEqual(profile.metadata["profile_source"], "historical_backtest")
+        self.assertEqual(profile.metadata["run_ids"], ["11111111-1111-4111-8111-111111111111"])
+        self.assertEqual(daily_store.queries, [])
+        self.assertEqual(eligibility_store.calls[0]["symbol"], "BTCUSDT")
+        self.assertEqual(eligibility_store.calls[0]["direction"], "long")
 
     async def test_low_global_sample_returns_low_confidence(self) -> None:
         store = FakePerformanceStore(

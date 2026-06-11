@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import { StrategyTestReport } from "./StrategyTestReport";
 import type { StrategyTestReport as StrategyTestReportData, StrategyTestRunResponse } from "./types";
@@ -45,6 +46,23 @@ describe("StrategyTestReport", () => {
     expect(screen.getByText("Open positions")).toBeInTheDocument();
     expect(screen.getByText("Current equity")).toBeInTheDocument();
     expect(screen.getByText("1012.5")).toBeInTheDocument();
+  });
+
+  it("publishes completed run for calibration", async () => {
+    const user = userEvent.setup();
+    const onPublishCalibration = vi.fn().mockResolvedValue({
+      blocked_count: 1,
+      eligible_count: 2,
+      profiles_updated: 3,
+      run_id: "11111111-1111-4111-8111-111111111111",
+      source: "historical_backtest"
+    });
+    render(<StrategyTestReport onPublishCalibration={onPublishCalibration} report={report()} run={null} />);
+
+    await user.click(screen.getByRole("button", { name: "Use this run for calibration" }));
+
+    expect(onPublishCalibration).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(await screen.findByText("Calibration profiles updated: 2 eligible, 1 blocked")).toBeInTheDocument();
   });
 });
 

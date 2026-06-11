@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 ScoreBucket = Literal["0-49", "50-59", "60-69", "70-79", "80-89", "90-100"]
 EdgeProfileConfidence = Literal["high", "medium", "low", "insufficient_sample"]
-EdgeProfileSource = Literal["exact", "strategy_timeframe_regime", "strategy_global", "none"]
+EdgeProfileSource = Literal["exact", "strategy_timeframe_regime", "strategy_global", "strategy_test", "none"]
 
 
 class StrategyPerformanceDaily(BaseModel):
@@ -97,3 +97,4 @@ class StrategyEdgeProfile(BaseModel):
     avg_mae_r: float
     fees_bps: float = Field(ge=0)
     slippage_bps: float = Field(ge=0)
+    metadata: dict[str, object] = Field(default_factory=dict)

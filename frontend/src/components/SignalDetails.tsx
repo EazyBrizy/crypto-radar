@@ -307,6 +307,12 @@ function ExecutionEvidenceCompact({ signal }: { signal: RadarSignal }) {
             </Badge>
           </div>
           <p>{eligibility.reason}</p>
+          {eligibility.source || eligibility.runIds.length ? (
+            <div className="compact-metric-grid">
+              {eligibility.source ? <MetricLine label="Edge source" value={eligibility.source} /> : null}
+              {eligibility.runIds.length ? <MetricLine label="Calibration run" value={eligibility.runIds.map(shortId).join(", ")} /> : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {dedup ? (
@@ -823,13 +829,16 @@ function RealTradeConfirmationModal({
   );
 }
 
-function strategyEligibility(signal: RadarSignal): { eligible: boolean | null; reason: string } | null {
+function strategyEligibility(signal: RadarSignal): { eligible: boolean | null; reason: string; runIds: string[]; source: string | null } | null {
   const raw = recordValue(signal.edge?.metadata.strategy_eligibility)
     ?? recordValue(signal.execution_gate?.metadata.strategy_eligibility);
   if (!raw) return null;
+  const edgeMetadata = recordValue(signal.edge?.metadata) ?? {};
   return {
     eligible: typeof raw.eligible === "boolean" ? raw.eligible : null,
-    reason: stringValue(raw.reason) ?? stringValue(raw.reason_code) ?? "-"
+    reason: stringValue(raw.reason) ?? stringValue(raw.reason_code) ?? "-",
+    runIds: stringList(edgeMetadata.run_ids ?? raw.run_ids),
+    source: stringValue(edgeMetadata.profile_source) ?? stringValue(raw.source)
   };
 }
 
@@ -851,6 +860,15 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item)).filter(Boolean);
+}
+
+function shortId(value: string): string {
+  return value.length > 8 ? value.slice(0, 8) : value;
 }
 
 function formatOptionalText(value: string | null | undefined): string {

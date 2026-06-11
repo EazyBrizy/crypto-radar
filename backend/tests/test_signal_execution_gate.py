@@ -183,6 +183,60 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertEqual(gate.feed_kind, "blocked")
         self.assertIn("strategy_eligibility_failed", _reason_codes(gate))
 
+    def test_execution_gate_allows_positive_strategy_test_profile(self) -> None:
+        signal = _signal(
+            edge=_edge(
+                "positive",
+                sample_size=80,
+                expectancy=0.18,
+                profit_factor=1.4,
+                metadata={
+                    "profile_source": "historical_backtest",
+                    "run_ids": ["11111111-1111-4111-8111-111111111111"],
+                    "entry_touch_rate": 0.8,
+                    "no_entry_rate": 0.1,
+                    "strategy_eligibility": {
+                        "eligible": True,
+                        "reason_code": "strategy_eligibility_passed",
+                        "reason": "Strategy test metrics pass execution eligibility thresholds.",
+                        "source": "historical_backtest",
+                    },
+                },
+            )
+        )
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.status, "passed")
+        self.assertEqual(gate.feed_kind, "execution_signal")
+        self.assertTrue(gate.can_show_in_execution_feed)
+
+    def test_execution_gate_blocks_negative_strategy_test_profile(self) -> None:
+        signal = _signal(
+            edge=_edge(
+                "negative",
+                sample_size=80,
+                expectancy=-0.12,
+                profit_factor=0.8,
+                metadata={
+                    "profile_source": "historical_backtest",
+                    "run_ids": ["11111111-1111-4111-8111-111111111111"],
+                    "strategy_eligibility": {
+                        "eligible": False,
+                        "reason_code": "strategy_eligibility_failed",
+                        "reason": "Strategy test expectancy is below threshold.",
+                        "source": "historical_backtest",
+                    },
+                },
+            )
+        )
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.status, "blocked")
+        self.assertEqual(gate.feed_kind, "blocked")
+        self.assertIn("edge_negative", _reason_codes(gate))
+
 
 def _signal(**overrides) -> StrategySignal:
     trade_plan = build_trade_plan_from_legacy_fields(

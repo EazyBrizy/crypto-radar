@@ -5,6 +5,7 @@ import { isActivePendingEntryStatus } from "@/domain/pending-entry-status";
 import { isExecutionCandidateStatus } from "@/domain/signal-status";
 import type {
   StrategyTestReport,
+  StrategyTestCalibrationPublishResponse,
   StrategyTestRunRequest,
   StrategyTestRunResponse,
   StrategyTestSignal,
@@ -270,6 +271,22 @@ export function useCancelStrategyTestRun() {
       queryClient.setQueryData(serverStateKeys.strategyTests.run(response.run_id), response);
       queryClient.setQueryData(serverStateKeys.strategyTests.status(response.run_id), response);
       await queryClient.invalidateQueries({ queryKey: serverStateKeys.strategyTests.all() });
+    }
+  });
+}
+
+export function usePublishStrategyTestCalibration() {
+  const queryClient = useQueryClient();
+
+  return useMutation<StrategyTestCalibrationPublishResponse, Error, string>({
+    mutationFn: (runId: string) => api.strategyTests.publishCalibration(runId),
+    onSuccess: async (response) => {
+      queryClient.setQueryData(serverStateKeys.strategyTests.calibration(response.run_id), response);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.strategyTests.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.radar.all() }),
+        queryClient.invalidateQueries({ queryKey: serverStateKeys.signals.all() })
+      ]);
     }
   });
 }

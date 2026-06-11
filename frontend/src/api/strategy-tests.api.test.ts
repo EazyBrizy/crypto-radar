@@ -44,6 +44,14 @@ describe("strategyTestsApi", () => {
 
     expect(requestSpy).toHaveBeenCalledWith("/api/v1/strategy-tests/runs/run-1/cancel", { method: "POST" });
   });
+
+  it("builds publishCalibration path", async () => {
+    const requestSpy = vi.spyOn(client, "requestJson").mockResolvedValue({ run_id: "run-1", profiles_updated: 1 } as never);
+
+    await strategyTestsApi.publishCalibration("run-1");
+
+    expect(requestSpy).toHaveBeenCalledWith("/api/v1/strategy-tests/runs/run-1/calibration", { method: "POST" });
+  });
 });
 
 function forwardRequest(): StrategyTestRunRequest {

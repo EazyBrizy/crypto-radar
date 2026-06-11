@@ -101,6 +101,14 @@ export interface StrategyTestRunDetailResponse {
   rejections: string[];
 }
 
+export interface StrategyTestCalibrationPublishResponse {
+  run_id: string;
+  source: "historical_backtest" | "forward_virtual" | "mixed";
+  profiles_updated: number;
+  eligible_count: number;
+  blocked_count: number;
+}
+
 type DecimalJson = number | string;
 
 export interface StrategyTestTrade {

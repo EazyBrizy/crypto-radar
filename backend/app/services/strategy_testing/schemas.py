@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
 StrategyTestType = Literal["historical_backtest", "forward_virtual"]
+StrategyTestCalibrationSource = Literal["historical_backtest", "forward_virtual", "mixed"]
 StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "stopping"]
 StrategyTestSameCandlePolicy = Literal[
     "conservative_stop_first",
@@ -117,6 +118,14 @@ class StrategyTestRunDetailResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     rejections: list[str] = Field(default_factory=list)
     runtime_state: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyTestCalibrationPublishResponse(BaseModel):
+    run_id: UUID
+    source: StrategyTestCalibrationSource
+    profiles_updated: int = Field(ge=0)
+    eligible_count: int = Field(ge=0)
+    blocked_count: int = Field(ge=0)
 
 
 class StrategyTestRunListResponse(BaseModel):

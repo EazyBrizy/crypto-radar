@@ -92,6 +92,33 @@ class EdgeCalibrationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(snapshot.winrate)
         self.assertEqual(snapshot.confidence_score, 0.0)
 
+    async def test_edge_calibration_reads_strategy_test_profile_metadata(self) -> None:
+        provider = FakeEdgeProfileProvider(
+            _profile(
+                source="strategy_test",
+                confidence="high",
+                sample_size=80,
+                signals_count=90,
+                winrate=0.6,
+                avg_win_r=1.5,
+                avg_loss_r=-1.0,
+                metadata={
+                    "profile_source": "historical_backtest",
+                    "run_ids": ["11111111-1111-4111-8111-111111111111"],
+                    "reason_code": "eligible",
+                },
+            )
+        )
+        service = EdgeCalibrationService(performance_service=provider, min_sample_size=50)
+
+        snapshot = await service.evaluate_signal_edge(_signal())
+
+        self.assertEqual(snapshot.status, "positive")
+        self.assertEqual(snapshot.source, "backtest")
+        self.assertEqual(snapshot.metadata["profile_source"], "historical_backtest")
+        self.assertEqual(snapshot.metadata["run_ids"], ["11111111-1111-4111-8111-111111111111"])
+        self.assertEqual(provider.calls[0]["direction"], "long")
+
 
 def _signal() -> RadarSignal:
     now = datetime.now(timezone.utc)
@@ -130,6 +157,7 @@ def _profile(
     avg_loss_r: float = 0.0,
     fees_bps: float = 0.0,
     slippage_bps: float = 0.0,
+    metadata: dict[str, Any] | None = None,
 ) -> StrategyEdgeProfile:
     return StrategyEdgeProfile(
         strategy="trend_pullback_continuation",
@@ -162,6 +190,7 @@ def _profile(
         avg_mae_r=-0.4,
         fees_bps=fees_bps,
         slippage_bps=slippage_bps,
+        metadata=metadata or {},
     )
 
 

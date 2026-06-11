@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
 from app.services.strategy_testing.forward_runner import StrategyForwardTestRunner
+from app.services.strategy_testing.eligibility_publisher import StrategyTestEligibilityPublisher
 from app.services.strategy_testing.report_builder import (
     StrategyTestReportBuilder,
     build_matrix_metric_results,
@@ -13,6 +14,7 @@ from app.services.strategy_testing.report_builder import (
 from app.services.strategy_testing.runner import strategy_test_user_uuid
 from app.services.strategy_testing.schemas import (
     StrategyTestMetricRow,
+    StrategyTestCalibrationPublishResponse,
     StrategyTestPair,
     StrategyTestReport,
     StrategyTestRunDetailResponse,
@@ -56,11 +58,16 @@ class StrategyTestingService:
         trade_store: StrategyTestTradeStore | None = None,
         matrix_runner: StrategyTestMatrixRunner | None = None,
         forward_runner: StrategyForwardTestRunner | None = None,
+        eligibility_publisher: StrategyTestEligibilityPublisher | None = None,
     ) -> None:
         self._run_store = run_store or PostgresStrategyTestRunStore()
         self._trade_store = trade_store or ClickHouseStrategyTestStore()
         self._matrix_runner = matrix_runner or StrategyTestMatrixRunner()
         self._forward_runner = forward_runner or StrategyForwardTestRunner()
+        self._eligibility_publisher = eligibility_publisher or StrategyTestEligibilityPublisher(
+            run_store=self._run_store,
+            analytics_store=self._trade_store,
+        )
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
         created = self._run_store.create_run(request)
@@ -168,6 +175,9 @@ class StrategyTestingService:
 
     def list_reports(self, user_id: str = "demo_user", limit: int = 50) -> list[StrategyTestReport]:
         return self._report_builder().list_reports(user_id=user_id, limit=limit)
+
+    def publish_calibration(self, run_id: UUID) -> StrategyTestCalibrationPublishResponse:
+        return self._eligibility_publisher.publish_run(run_id)
 
     def _report_builder(self) -> StrategyTestReportBuilder:
         return StrategyTestReportBuilder(

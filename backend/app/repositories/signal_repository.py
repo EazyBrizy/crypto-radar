@@ -29,6 +29,7 @@ SIGNAL_CREATED_EVENT = "signal.created"
 SIGNAL_UPDATED_EVENT = "signal.updated"
 SIGNAL_CONFIRMED_EVENT = "signal.confirmed"
 SIGNAL_INVALIDATED_EVENT = "signal.invalidated"
+SIGNAL_REJECTED_EVENT = "signal.rejected"
 SIGNAL_EXPIRED_EVENT = "signal.expired"
 SIGNAL_AUTO_ENTRY_ARMED_EVENT = "signal.auto_entry_armed"
 SIGNAL_AUTO_ENTRY_FAILED_EVENT = "signal.auto_entry_failed"
@@ -450,8 +451,8 @@ class PostgresSignalRepository:
     def reject_signal(self, signal_id: str, note: str | None = None) -> SignalWriteResult | None:
         return self._transition_signal(
             signal_id,
-            new_status="invalidated",
-            event_type=SIGNAL_INVALIDATED_EVENT,
+            new_status="rejected",
+            event_type=SIGNAL_REJECTED_EVENT,
             decision={"decision_note": note},
         )
 
@@ -879,7 +880,7 @@ def _record_to_radar_signal(record: TradingSignal) -> RadarSignal:
             updated_at=updated_at,
             expires_at=_as_utc(record.expires_at) if record.expires_at else None,
             confirmed_at=updated_at if record.status == "confirmed" else None,
-            rejected_at=updated_at if record.status == "invalidated" else None,
+            rejected_at=updated_at if record.status == "rejected" else None,
             decision_mode=decision.get("decision_mode"),
             decision_note=decision.get("decision_note"),
             confirmed_trade_id=decision.get("confirmed_trade_id"),
@@ -1138,8 +1139,6 @@ def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str
 
 
 def _api_status_to_db(status: str) -> str:
-    if status == "rejected":
-        return "invalidated"
     return status
 
 
@@ -1147,7 +1146,7 @@ def _strategy_signal_status_to_db(status: str, score: int) -> str:
     if status in OPEN_SIGNAL_STATUSES:
         return status
     if status == "rejected":
-        return "invalidated"
+        return "rejected"
     return "actionable" if score >= 70 else "watchlist"
 
 

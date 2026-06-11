@@ -95,7 +95,24 @@ describe("signal status domain helper", () => {
     }
     expect(isExecutionCandidateStatus("confirmed")).toBe(true);
     expect(isTerminalSignalStatus("invalidated")).toBe(true);
+    expect(isTerminalSignalStatus("rejected")).toBe(true);
     expect(isTerminalSignalStatus("expired")).toBe(true);
+  });
+
+  it("keeps rejected and invalidated distinct while blocked comes from execution gate", () => {
+    const rejectedSignal = { ...baseSignal, status: "rejected" } satisfies RadarSignal;
+    const invalidatedSignal = { ...baseSignal, status: "invalidated" } satisfies RadarSignal;
+    const blockedSignal = withExecutionGate({ ...baseSignal, status: "active" }, "blocked", {
+      can_show_in_execution_feed: false,
+      can_enter_now: false,
+      can_arm_pending: false
+    });
+
+    expect(rejectedSignal.status).not.toBe(invalidatedSignal.status);
+    expect(signalFeedKind(rejectedSignal)).toBe("blocked");
+    expect(signalFeedKind(invalidatedSignal)).toBe("blocked");
+    expect(blockedSignal.status).toBe("active");
+    expect(signalFeedKind(blockedSignal)).toBe("blocked");
   });
 
   it("requires backend permission for actionable and entry-touched signals", () => {

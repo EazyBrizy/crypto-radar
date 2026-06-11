@@ -11,7 +11,7 @@ from app.repositories.signal_repository import (
     SIGNAL_AUTO_ENTRY_ARMED_EVENT,
     SIGNAL_CONFIRMED_EVENT,
     SIGNAL_CREATED_EVENT,
-    SIGNAL_INVALIDATED_EVENT,
+    SIGNAL_REJECTED_EVENT,
     SIGNAL_UPDATED_EVENT,
     SignalWriteResult,
     _signal_expires_at,
@@ -140,14 +140,14 @@ class EphemeralSignalRepository:
         now = datetime.now(timezone.utc)
         updated = signal.model_copy(
             update={
-                "status": "invalidated",
+                "status": "rejected",
                 "updated_at": now,
                 "rejected_at": now,
                 "decision_note": note,
             }
         )
         self._signals[signal_id] = updated
-        return _write_result(updated, False, SIGNAL_INVALIDATED_EVENT)
+        return _write_result(updated, False, SIGNAL_REJECTED_EVENT)
 
     def arm_auto_entry(self, signal_id: str, *, request: dict) -> SignalWriteResult | None:
         signal = self._signals.get(signal_id)

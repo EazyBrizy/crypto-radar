@@ -14,7 +14,9 @@ Crypto Radar is a realtime crypto market radar and trading control plane. The ba
 - [Project structure](docs/PROJECT_STRUCTURE.md)
 - [Backend guide](docs/BACKEND.md)
 - [Database guide](docs/DATABASE.md)
-- [Frontend guide](docs/FRONTEND.md)
+- [Frontend guide](docs/frontend.md)
+- [Strategies guide](docs/STRATEGIES.md)
+- [Workers guide](docs/WORKERS.md)
 
 ## Prerequisites
 
@@ -127,6 +129,46 @@ Equivalent PowerShell command:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\smoke_virtual.ps1
 ```
+
+## Operator Guide
+
+Use the Strategy Testing panel in Dashboard Settings for new strategy-test work. The supported API path is `/api/v1/strategy-tests`; `strategy_lab` is legacy compatibility and should not be used for new backtest, forward-test, report, or calibration flows.
+
+### Run A Historical Strategy Test
+
+1. Open Dashboard Settings and find Strategy Testing.
+2. Select the Historical backtest tab.
+3. Choose strategies, pairs, timeframes, historical start/end dates, mode, same-candle policy, and advanced parameters.
+4. Start the run. Historical runs execute through `/api/v1/strategy-tests/runs` with `test_type="historical_backtest"`.
+5. Review the final report, conversion funnel, signals, trades, metrics, PnL, and equity curve.
+
+### Run A Forward Virtual Test
+
+1. Select the Forward test tab.
+2. Choose start/end or a duration preset and confirm the isolated virtual-account warning.
+3. Start the run. Forward runs use `test_type="forward_virtual"` and background processing through the strategy forward test worker.
+4. Watch the compact live dashboard from `/api/v1/strategy-tests/runs/{run_id}/status`.
+5. Cancel running forward tests from the runs table when needed.
+
+Forward virtual tests never place real orders, arm real pending entries, or publish every test signal into the main radar feed.
+
+### Publish Calibration
+
+1. Wait until a strategy test run is completed.
+2. Open its report and choose "Use this run for calibration".
+3. The backend publishes eligibility profiles and returns eligible/blocked counts.
+4. New radar signals can then receive edge statuses from strategy-test profiles: `unknown`, `insufficient_sample`, `positive`, or `negative`.
+
+### Understand Why `execution_ready` Is 0
+
+`execution_ready` is intentionally strict. Check these in order:
+
+- Radar filter: blocked low-score ideas are diagnostics and appear only in the blocked/diagnostics view.
+- Signal details: `execution_gate.reasons` explains blockers such as forming candle, trigger not confirmed, trade plan incomplete, risk/reward failure, regime incompatibility, dedup suppression, or negative edge.
+- Strategy trigger: each strategy has its own trigger rules; high score alone is not enough.
+- Market regime: strategies only pass in compatible regimes.
+- Calibration: missing or insufficient strategy-test profiles can keep edge unknown or insufficient, especially in strict walk-forward mode.
+- Notifications: duplicate execution notifications are suppressed by Redis bucketed idempotency within `NOTIFICATION_DEDUP_WINDOW_SECONDS`.
 
 ## One-Command Dev
 

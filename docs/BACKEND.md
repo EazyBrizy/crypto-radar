@@ -23,6 +23,17 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - NATS JetStream is provisioned by config and infra through `NATS_URL`, `infra/docker-compose.yml`, and Helm values. Do not claim a runtime NATS publisher unless you add and test one; new durable publishing should consume `outbox_events` and mark publish status.
 - Realtime delivery uses Redis Pub/Sub plus FastAPI WebSocket/SSE endpoints. See `backend/app/api/v1/realtime.py`, `backend/app/services/realtime_gateway.py`, `backend/app/services/realtime_events.py`.
 
+## Signal Feed Taxonomy
+
+Radar signals are not all trade calls. Keep these categories distinct in backend schemas, persistence, analytics, and UI copy:
+
+- `market_idea`: an observable setup that may be useful context but is not ready for execution.
+- `watchlist`: a setup worth monitoring, usually waiting for confirmation, edge, trigger, or candle closure.
+- `execution_signal`: the only feed kind allowed to notify, enter now, or arm pending entry when the gate permits it.
+- `blocked`: a diagnostic idea. It preserves why the scanner rejected a setup and must not be presented as a trading signal.
+
+`SignalExecutionGateSnapshot` is the single source of truth for feed kind, action booleans, blockers, warnings, and execution visibility. Do not duplicate eligibility policy in route handlers, workers, repositories, or frontend code. If an action is disabled, the backend must return a reason code and user-facing message through the gate/action-state contracts.
+
 ## API Areas
 
 - Radar and scanner: `backend/app/api/v1/radar.py`
@@ -35,6 +46,8 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - Watchlists and alerts: `backend/app/api/v1/watchlists.py`
 - Strategies and testing: `backend/app/api/v1/strategies.py`, `backend/app/api/v1/strategy_tests.py`, `backend/app/api/v1/strategy_lab.py`, `backend/app/api/v1/backtests.py`
 - Notifications, users, billing, AI, analytics: matching files in `backend/app/api/v1/`
+
+Use `strategy_tests` for new strategy-testing work. `strategy_lab` is legacy compatibility surface; do not reimplement old strategy-lab flows when adding backtest, forward-test, report, or calibration behavior.
 
 ## Core Services
 
@@ -72,6 +85,13 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
   - `SignalExecutionGateSnapshot` is the canonical contract for whether a signal can notify, enter now, arm pending entry, and appear in the execution feed.
   - Write-side deduplication compares open signals by exchange, normalized symbol, and direction before notification. Suppressed/replaced decisions are stored in signal metadata.
   - Edge and strategy eligibility are attached before gate evaluation. Strict walk-forward eligibility is controlled by backend settings.
+
+- Strategy testing: `backend/app/services/strategy_testing/`
+  - `historical_backtest` runs replay historical candles and persist run state, signals, trades, metrics, reports, and calibration candidates.
+  - `forward_virtual` runs in the background against live scanner ticks with an isolated virtual account. It is for research/production-like observation only and must not place real orders.
+  - PostgreSQL owns run state, request metadata, reports, status, cancellation, and calibration profile publication.
+  - ClickHouse owns high-volume strategy-test signals, trades, metrics, and analytics rows.
+  - Published calibration profiles feed `edge_calibration_service` and execution eligibility; future agents should extend this path rather than creating a parallel strategy-test store.
 
 - Outcomes and diagnostics: `backend/app/services/signal_outcome_service.py`, `backend/app/domain/pending_entry_reason.py`
   - Pending-entry terminal outcomes preserve reason codes for no-entry, virtual rejection, temporary failure, and expiry-before-touch cases.

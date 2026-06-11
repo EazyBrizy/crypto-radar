@@ -52,6 +52,7 @@ corepack pnpm openapi:generate
 - Signal feed: `frontend/src/components/SignalFeed.tsx`, `frontend/src/components/SignalCard.tsx`.
 - Signal details and action state: `frontend/src/components/SignalDetails.tsx`, `frontend/src/components/signal-details-view-model.ts`.
 - Pending entries queue: `PendingEntriesQueue` inside `frontend/src/features/app-shell/RadarPage.tsx`.
+- Strategy testing: `frontend/src/features/strategy-testing/StrategyTestingPanel.tsx`, `StrategyTestRunsTable.tsx`, `StrategyTestReport.tsx`, `StrategyTestMetricGrid.tsx`, and `StrategyTestTradeList.tsx`.
 - Exchange connections: settings page plus server-state hooks in `frontend/src/features/server-state/use-server-state.ts`.
 - Virtual trades and PnL: `frontend/src/features/app-shell/TradesPage.tsx`, `frontend/src/components/data-table/TradeJournalTable.tsx`, `frontend/src/features/app-shell/ActiveTradeChart.tsx`.
 - Charts: `frontend/src/components/charts/`.
@@ -77,6 +78,19 @@ The Radar UI displays backend execution state. It must not recompute whether a s
 - Use pending-entry `view.reason_code` and backend terminal metadata for no-entry, rejected, expired, or temporary-failure outcomes.
 - `signal.execution_ready` means the backend approved an execution-ready notification. Legacy `signal.created` is displayed as a non-execution idea unless its payload explicitly says otherwise.
 - Signal cards and details should render backend blockers such as `forming_candle`, `trigger_not_confirmed`, `dedup_suppressed_by_better_signal`, strategy eligibility failures, and pending-entry terminal reasons without doing trading math.
+- Blocked low-score ideas are diagnostics. In the normal working feed they should be hidden by backend feed policy; in the blocked diagnostics filter they must be labeled as not for execution and should not emphasize entry/TP as a call to trade.
+- Disabled action buttons must show backend-provided reasons. Do not render a disabled virtual entry or pending-entry button without a visible caption or tooltip reason.
+
+## Strategy Testing UI
+
+`StrategyTestingPanel` is the canonical frontend for strategy tests. It exposes two explicit tabs:
+
+- Historical backtest: builds `test_type="historical_backtest"` requests with historical start/end dates, mode, same-candle policy, and advanced parameters.
+- Forward test: builds `test_type="forward_virtual"` requests with start/end or duration presets, isolated virtual-account warning, and forward-test tags.
+
+The runs table should show test type, status, scenario counts, signals, trades, PnL/equity, created time, report action, and cancel controls for running forward tests. Live forward status is polled from `/api/v1/strategy-tests/runs/{run_id}/status` and rendered as a compact dashboard; it must not inject every forward-test signal into the main radar feed.
+
+Use `frontend/src/api/strategy-tests.api.ts` for all strategy-test calls. Do not add new work to the legacy `strategy_lab` UI/API path unless the task is explicitly compatibility maintenance.
 
 ## Hard Rules
 

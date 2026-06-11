@@ -84,7 +84,20 @@ The gate checks backend thresholds for:
 - no-entry rate;
 - validation sample, expectancy, profit factor, and drawdown in strict mode.
 
-Use `scripts/calibrate_execution_gate.py` for train/validation calibration around existing strategy testing and backtest services.
+### Strategy-Test Calibration Flow
+
+Historical backtests and forward virtual tests can publish calibration profiles from `backend/app/services/strategy_testing/`. Publication summarizes run metrics by strategy, exchange, symbol scope, timeframe, market regime, score bucket, and direction.
+
+Published profiles are stored as strategy execution eligibility data and read by `edge_calibration_service`:
+
+- no profile: `SignalEdgeSnapshot.status="unknown"`;
+- insufficient sample: `status="insufficient_sample"`;
+- metrics pass backend thresholds: `status="positive"`;
+- metrics fail thresholds: `status="negative"`.
+
+Profiles should preserve source, run ids, sample size, signal/trade counts, entry-touch rate, fill/no-entry rate, winrate, expectancy after costs, profit factor, drawdown, validation period, and a reason code/message. Radar details may display edge source and run id when the edge came from strategy-test calibration.
+
+Use `scripts/calibrate_execution_gate.py` for offline train/validation experiments, but product behavior should flow through `strategy_tests` run publication. Do not build new calibration on the legacy `strategy_lab` path.
 
 ## Deduplication
 

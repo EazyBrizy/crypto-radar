@@ -182,6 +182,7 @@ class StrategySignalPipeline:
         regime = MarketRegimeFilter().evaluate(signal, context)
         if _has_severe_ema200_chop(regime) and signal.strategy == "trend_pullback_continuation":
             return None
+        signal = signal.model_copy(update={"regime": regime})
         signal = _apply_regime_score(signal, regime)
         setup = StrategySetupLayer().evaluate(signal)
         risk_reward = RiskRewardAssessmentService().assess(
@@ -794,40 +795,399 @@ class TriggerLayer:
         context: StrategyEvaluationContext,
         confirmation: SignalConfirmationSnapshot,
     ) -> SignalTriggerSnapshot:
-        trigger_type = _trigger_type_for_strategy(signal)
-        closed_candle = signal.candle_state == "closed"
-        passed = confirmation.passed and closed_candle
-        reason = (
-            "Trigger confirmed on closed candle."
-            if passed
-            else "Trigger requires a closed candle."
-            if not closed_candle
-            else "Strategy confirmation has not passed."
+        if signal.strategy == "liquidity_sweep_reversal":
+            return _liquidity_sweep_trigger(signal, context, confirmation)
+        if signal.strategy == "volatility_squeeze_breakout":
+            return _breakout_trigger(signal, context, confirmation)
+        if signal.strategy == "trend_pullback_continuation":
+            return _trend_pullback_trigger(signal, context, confirmation)
+        return _fallback_current_trigger(signal, context, confirmation)
+
+
+def _fallback_current_trigger(
+    signal: StrategySignal,
+    context: StrategyEvaluationContext,
+    confirmation: SignalConfirmationSnapshot,
+) -> SignalTriggerSnapshot:
+    trigger_type = _trigger_type_for_strategy(signal)
+    closed_candle = signal.candle_state == "closed"
+    passed = confirmation.passed and closed_candle
+    reason = (
+        "Trigger confirmed on closed candle."
+        if passed
+        else "Trigger requires a closed candle."
+        if not closed_candle
+        else "Strategy confirmation has not passed."
+    )
+    failed_checks = _trigger_failed_checks(
+        {
+            "closed_candle": closed_candle,
+            "confirmation_passed": confirmation.passed,
+        }
+    )
+    return _trigger_snapshot(
+        signal,
+        context,
+        confirmation,
+        trigger_type=trigger_type,
+        passed=passed,
+        reason=reason,
+        check_name="trigger_confirmation",
+        evidence={
+            "closed_candle": closed_candle,
+            "confirmation_passed": confirmation.passed,
+        },
+        failed_checks=failed_checks,
+        source="confirmation_layer",
+    )
+
+
+def _liquidity_sweep_trigger(
+    signal: StrategySignal,
+    context: StrategyEvaluationContext,
+    confirmation: SignalConfirmationSnapshot,
+) -> SignalTriggerSnapshot:
+    features = context.signal_features
+    direction = signal.direction.lower()
+    closed_candle = signal.candle_state == "closed"
+    swept_level = _trade_plan_metadata_number(signal, "swept_level")
+    if swept_level is None:
+        swept_level = _trade_plan_metadata_number(signal, "level")
+    requires_reclaim = _trade_plan_metadata_bool(signal, "requires_reclaim")
+    if requires_reclaim is None:
+        requires_reclaim = _trade_plan_metadata_bool(signal, "require_reclaim")
+    if requires_reclaim is None:
+        requires_reclaim = True
+    confirmation_candle = bool(_trade_plan_metadata_bool(signal, "confirmation"))
+    reclaim_score = _trade_plan_metadata_number(signal, "reclaim_score") or 0.0
+    reclaimed_by_close = (
+        swept_level is not None
+        and (
+            (direction == "long" and features.close > swept_level)
+            or (direction == "short" and features.close < swept_level)
         )
-        check = SignalLayerCheck(
-            name="trigger_confirmation",
-            status="passed" if passed else "failed",
-            reason=reason,
-            metadata={
-                "trigger_type": trigger_type,
-                "confirmation_passed": confirmation.passed,
-                "candle_state": signal.candle_state,
-            },
+    )
+    reclaim_ok = reclaimed_by_close and (not requires_reclaim or confirmation_candle or reclaim_score >= 0.5)
+
+    require_absorption = _bool_param(context.strategy_params, "require_absorption", False)
+    min_absorption = _strategy_numeric_param(context.strategy_params, "min_absorption_score", signal.strategy, 0.35)
+    absorption_score = _trade_plan_metadata_number(signal, "absorption_score")
+    absorption_ok = not require_absorption or (
+        absorption_score is not None and absorption_score >= min_absorption
+    )
+
+    require_oi_flush = _bool_param(context.strategy_params, "require_oi_flush", False)
+    min_oi_flush = _strategy_numeric_param(context.strategy_params, "min_oi_flush_score", signal.strategy, 0.01)
+    oi_flush_score = _trade_plan_metadata_number(signal, "oi_flush_score")
+    oi_flush_ok = not require_oi_flush or (oi_flush_score is not None and oi_flush_score >= min_oi_flush)
+
+    evidence = {
+        "closed_candle": closed_candle,
+        "confirmation_passed": confirmation.passed,
+        "swept_level_exists": swept_level is not None,
+        "reclaim_close_confirmed": reclaim_ok,
+        "requires_reclaim": requires_reclaim,
+        "confirmation_candle": confirmation_candle,
+        "reclaim_score": reclaim_score,
+        "absorption_required": require_absorption,
+        "absorption_ok": absorption_ok,
+        "absorption_score": absorption_score,
+        "oi_flush_required": require_oi_flush,
+        "oi_flush_ok": oi_flush_ok,
+        "oi_flush_score": oi_flush_score,
+        "close": features.close,
+        "swept_level": swept_level,
+    }
+    failed_checks = _trigger_failed_checks(
+        {
+            "closed_candle": closed_candle,
+            "confirmation_passed": confirmation.passed,
+            "swept_level_exists": swept_level is not None,
+            "reclaim_close_confirmed": reclaim_ok,
+            "absorption_ok": absorption_ok,
+            "oi_flush_ok": oi_flush_ok,
+        }
+    )
+    passed = not failed_checks
+    reason = _first_trigger_reason(
+        failed_checks,
+        {
+            "closed_candle": "Trigger requires a closed candle.",
+            "confirmation_passed": "Strategy confirmation has not passed.",
+            "swept_level_exists": "Liquidity sweep trigger requires a swept level.",
+            "reclaim_close_confirmed": "Sweep detected but reclaim close is not confirmed",
+            "absorption_ok": "Absorption required but missing",
+            "oi_flush_ok": "OI flush required but unavailable/failed",
+        },
+        success="Liquidity sweep reclaim trigger confirmed.",
+    )
+    return _trigger_snapshot(
+        signal,
+        context,
+        confirmation,
+        trigger_type="liquidity_reclaim",
+        passed=passed,
+        reason=reason,
+        check_name="liquidity_sweep_trigger",
+        evidence=evidence,
+        failed_checks=failed_checks,
+        source="strategy_trigger_layer",
+    )
+
+
+def _breakout_trigger(
+    signal: StrategySignal,
+    context: StrategyEvaluationContext,
+    confirmation: SignalConfirmationSnapshot,
+) -> SignalTriggerSnapshot:
+    features = context.signal_features
+    direction = signal.direction.lower()
+    closed_candle = signal.candle_state == "closed"
+    range_high = _trade_plan_metadata_number(signal, "range_high")
+    if range_high is None:
+        range_high = features.donchian_high_20
+    range_low = _trade_plan_metadata_number(signal, "range_low")
+    if range_low is None:
+        range_low = features.donchian_low_20
+
+    compression_ok = _breakout_compression_ok(signal, context)
+    outside_level = (
+        (direction == "long" and range_high is not None and features.close > range_high)
+        or (direction == "short" and range_low is not None and features.close < range_low)
+    )
+    breakout_closed = _trade_plan_metadata_bool(signal, "breakout_closed")
+    if breakout_closed is None:
+        breakout_closed = outside_level
+    large_candle = bool(_trade_plan_metadata_bool(signal, "large_candle"))
+    retest_required = bool(_trade_plan_metadata_bool(signal, "retest_required"))
+    post_hold_score = _trade_plan_metadata_number(signal, "post_breakout_hold_score") or 0.0
+    retest_quality_score = _trade_plan_metadata_number(signal, "retest_quality_score") or 0.0
+    retest_passed = max(post_hold_score, retest_quality_score) >= 0.65
+    retest_ok = not retest_required or retest_passed
+    trigger_type = "breakout_retest" if retest_required else "closed_candle"
+
+    evidence = {
+        "closed_candle": closed_candle,
+        "confirmation_passed": confirmation.passed,
+        "compression_existed": compression_ok,
+        "closed_outside_breakout_level": bool(outside_level),
+        "breakout_closed": bool(breakout_closed),
+        "large_candle": large_candle,
+        "retest_required": retest_required,
+        "retest_passed": retest_passed,
+        "post_breakout_hold_score": post_hold_score,
+        "retest_quality_score": retest_quality_score,
+        "range_high": range_high,
+        "range_low": range_low,
+        "close": features.close,
+    }
+    failed_checks = _trigger_failed_checks(
+        {
+            "closed_candle": closed_candle,
+            "confirmation_passed": confirmation.passed,
+            "compression_existed": compression_ok,
+            "closed_outside_breakout_level": bool(outside_level),
+            "breakout_closed": bool(breakout_closed),
+            "retest_ok": retest_ok,
+        }
+    )
+    passed = not failed_checks
+    reason = _first_trigger_reason(
+        failed_checks,
+        {
+            "closed_candle": "Trigger requires a closed candle.",
+            "confirmation_passed": "Strategy confirmation has not passed.",
+            "compression_existed": "Breakout trigger requires prior volatility compression.",
+            "closed_outside_breakout_level": "Breakout trigger requires a close outside the breakout level.",
+            "breakout_closed": "Breakout close is not confirmed.",
+            "retest_ok": "breakout requires retest" if large_candle or retest_required else "Breakout retest is not confirmed.",
+        },
+        success="Breakout trigger confirmed.",
+    )
+    return _trigger_snapshot(
+        signal,
+        context,
+        confirmation,
+        trigger_type=trigger_type,
+        passed=passed,
+        reason=reason,
+        check_name="breakout_trigger",
+        evidence=evidence,
+        failed_checks=failed_checks,
+        source="strategy_trigger_layer",
+    )
+
+
+def _trend_pullback_trigger(
+    signal: StrategySignal,
+    context: StrategyEvaluationContext,
+    confirmation: SignalConfirmationSnapshot,
+) -> SignalTriggerSnapshot:
+    features = context.signal_features
+    closed_candle = signal.candle_state == "closed"
+    require_structural_zone = bool(_trade_plan_metadata_bool(signal, "require_structural_zone"))
+    structural_zone_ok = _trade_plan_metadata_bool(signal, "structural_zone_ok")
+    structural_ok = not require_structural_zone or structural_zone_ok is True
+    reclaimed_zone = bool(_trade_plan_metadata_bool(signal, "reclaimed_pullback_zone"))
+    absorption_confirmed = bool(_trade_plan_metadata_bool(signal, "absorption_confirmed"))
+    continuation_score = _trade_plan_metadata_number(signal, "continuation_score") or 0.0
+    min_continuation_score = _trade_plan_metadata_number(signal, "min_continuation_score")
+    if min_continuation_score is None:
+        min_continuation_score = _strategy_numeric_param(
+            context.strategy_params,
+            "min_continuation_score",
+            signal.strategy,
+            0.45,
         )
-        return SignalTriggerSnapshot(
-            trigger_type=trigger_type,
-            passed=passed,
-            price=_entry_price(signal) or context.signal_features.close,
-            candle_state=signal.candle_state,
-            confirmed_at=_signal_timestamp_datetime(signal.timestamp) if passed else None,
-            reason=reason,
-            checks=[check],
-            metadata={
-                "strategy": signal.strategy,
-                "timeframe": signal.timeframe,
-                "source": "confirmation_layer",
-            },
+    continuation_ok = continuation_score >= min_continuation_score
+    require_htf_alignment = _bool_param(context.strategy_params, "require_htf_alignment", False)
+    htf_alignment = signal.regime.alignment if signal.regime is not None else "unknown"
+    htf_alignment_ok = not require_htf_alignment or htf_alignment == "aligned"
+    ema_chop_blocked = _features_have_severe_ema200_chop(features)
+    pullback_held = reclaimed_zone or absorption_confirmed or continuation_ok
+    trigger_type = "reclaim" if reclaimed_zone or absorption_confirmed else "pullback_touch"
+
+    evidence = {
+        "closed_candle": closed_candle,
+        "confirmation_passed": confirmation.passed,
+        "require_structural_zone": require_structural_zone,
+        "structural_zone_ok": structural_zone_ok,
+        "structural_ok": structural_ok,
+        "reclaimed_pullback_zone": reclaimed_zone,
+        "absorption_confirmed": absorption_confirmed,
+        "continuation_score": continuation_score,
+        "min_continuation_score": min_continuation_score,
+        "require_htf_alignment": require_htf_alignment,
+        "htf_alignment": htf_alignment,
+        "htf_alignment_ok": htf_alignment_ok,
+        "pullback_held_or_reclaimed": pullback_held,
+        "ema200_chop_blocked": ema_chop_blocked,
+    }
+    failed_checks = _trigger_failed_checks(
+        {
+            "closed_candle": closed_candle,
+            "structural_ok": structural_ok,
+            "htf_alignment_ok": htf_alignment_ok,
+            "pullback_held_or_reclaimed": pullback_held,
+            "ema200_chop_clear": not ema_chop_blocked,
+            "confirmation_passed": confirmation.passed,
+        }
+    )
+    passed = not failed_checks
+    reason = _first_trigger_reason(
+        failed_checks,
+        {
+            "closed_candle": "Trigger requires a closed candle.",
+            "structural_ok": "Trend pullback requires a structural zone before trigger.",
+            "htf_alignment_ok": "Trend pullback trigger requires higher timeframe alignment.",
+            "pullback_held_or_reclaimed": "Trend pullback trigger requires the structural zone to hold or reclaim.",
+            "ema200_chop_clear": "Trend pullback trigger is blocked by EMA200 chop.",
+            "confirmation_passed": "Strategy confirmation has not passed.",
+        },
+        success="Trend pullback trigger confirmed.",
+    )
+    return _trigger_snapshot(
+        signal,
+        context,
+        confirmation,
+        trigger_type=trigger_type,
+        passed=passed,
+        reason=reason,
+        check_name="trend_pullback_trigger",
+        evidence=evidence,
+        failed_checks=failed_checks,
+        source="strategy_trigger_layer",
+    )
+
+
+def _trigger_snapshot(
+    signal: StrategySignal,
+    context: StrategyEvaluationContext,
+    confirmation: SignalConfirmationSnapshot,
+    *,
+    trigger_type: str,
+    passed: bool,
+    reason: str,
+    check_name: str,
+    evidence: dict[str, Any],
+    failed_checks: list[str],
+    source: str,
+) -> SignalTriggerSnapshot:
+    metadata = {
+        "strategy": signal.strategy,
+        "timeframe": signal.timeframe,
+        "source": source,
+        "trigger_type": trigger_type,
+        "failed_checks": failed_checks,
+        "confirmation_passed": confirmation.passed,
+        "candle_state": signal.candle_state,
+        **evidence,
+    }
+    check = SignalLayerCheck(
+        name=check_name,
+        status="passed" if passed else "failed",
+        reason=reason,
+        metadata=metadata,
+    )
+    return SignalTriggerSnapshot(
+        trigger_type=trigger_type,
+        passed=passed,
+        price=_entry_price(signal) or context.signal_features.close,
+        candle_state=signal.candle_state,
+        confirmed_at=_signal_timestamp_datetime(signal.timestamp) if passed else None,
+        reason=reason,
+        checks=[check],
+        metadata=metadata,
+    )
+
+
+def _trigger_failed_checks(checks: Mapping[str, bool]) -> list[str]:
+    return [name for name, passed in checks.items() if not passed]
+
+
+def _first_trigger_reason(
+    failed_checks: list[str],
+    reasons: Mapping[str, str],
+    *,
+    success: str,
+) -> str:
+    if not failed_checks:
+        return success
+    return reasons.get(failed_checks[0], "Strategy trigger is not confirmed.")
+
+
+def _breakout_compression_ok(signal: StrategySignal, context: StrategyEvaluationContext) -> bool:
+    features = context.signal_features
+    bb_squeeze = _trade_plan_metadata_bool(signal, "bb_squeeze")
+    if bb_squeeze is None:
+        threshold = _strategy_numeric_param(
+            context.strategy_params,
+            "bb_width_percentile_threshold",
+            signal.strategy,
+            20.0,
         )
+        bb_squeeze = features.bb_width_percentile is not None and features.bb_width_percentile < threshold
+    atr_compressed = _trade_plan_metadata_bool(signal, "atr_compressed")
+    if atr_compressed is None:
+        atr_compressed = (
+            features.atr_14 is not None
+            and features.atr_sma_50 is not None
+            and features.atr_14 < features.atr_sma_50
+        )
+    range_contracting = _trade_plan_metadata_bool(signal, "range_contracting")
+    if range_contracting is None:
+        range_contracting = (
+            features.range_20 is not None
+            and features.range_50_average is not None
+            and features.range_20 < features.range_50_average
+        )
+    return bool(bb_squeeze and atr_compressed and range_contracting)
+
+
+def _features_have_severe_ema200_chop(features: Features) -> bool:
+    score = features.ema_200_chop_score
+    crosses = features.ema_200_cross_count_50 or 0
+    return bool((score is not None and score >= 70) or crosses >= 4)
 
 
 class InvalidationLayer:

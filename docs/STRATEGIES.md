@@ -31,6 +31,16 @@ The strategy engine produces raw candidates, then `StrategySignalPipeline` final
 
 Trigger snapshots are required for execution candidates. A missing or failed trigger must block execution through `trigger_not_confirmed`; it should not be patched around in workers or UI.
 
+## Strategy-Specific Triggers
+
+`TriggerLayer` uses strategy-specific trigger checks instead of a generic `confirmation.passed && closed_candle` rule.
+
+- `liquidity_sweep_reversal` requires a closed candle, a swept level, and a reclaim close in the reversal direction. Optional absorption and OI-flush requirements are enforced from strategy params when enabled.
+- `volatility_squeeze_breakout` requires prior compression, a closed candle outside the breakout level, and a retest/hold when the setup metadata marks the breakout as large or retest-required.
+- `trend_pullback_continuation` requires a closed candle, the configured structural-zone and HTF-alignment requirements, held/reclaimed pullback evidence, and no severe EMA200 chop.
+
+Failed trigger snapshots carry `failed_checks`, `trigger_type`, and strategy evidence in metadata so status resolution, execution gate reasons, and UI diagnostics all explain why a high-score setup is still not actionable.
+
 ## Execution Gate
 
 `SignalExecutionGateService` is the only place that turns a finalized strategy signal into execution permissions. It owns:

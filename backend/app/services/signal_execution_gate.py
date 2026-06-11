@@ -60,7 +60,10 @@ class SignalExecutionGateService:
 
         trigger_reason = _trigger_failed_reason(signal, execution_candidate=execution_candidate)
         if trigger_reason is not None:
-            hard_blockers.append(trigger_reason)
+            if trigger_reason.severity == "blocker":
+                hard_blockers.append(trigger_reason)
+            else:
+                reasons.append(trigger_reason)
 
         no_trade = signal.no_trade_filter
         if _no_trade_blocked(no_trade):
@@ -251,10 +254,10 @@ def _trigger_failed_reason(
     *,
     execution_candidate: bool,
 ) -> SignalExecutionGateReason | None:
-    if not execution_candidate:
-        return None
     trigger = getattr(signal, "trigger", None)
     if trigger is not None and getattr(trigger, "passed", False) is True:
+        return None
+    if trigger is None and not execution_candidate:
         return None
     message = "Execution requires a confirmed trigger."
     metadata: dict[str, Any] = {}
@@ -263,7 +266,7 @@ def _trigger_failed_reason(
         metadata = _model_metadata(trigger)
     return _reason(
         "trigger_not_confirmed",
-        "blocker",
+        "blocker" if execution_candidate else "info",
         "trigger",
         message,
         metadata,

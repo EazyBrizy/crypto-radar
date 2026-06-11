@@ -6,8 +6,11 @@ from typing import Any, Protocol
 from app.repositories.strategy_execution_eligibility import StrategyExecutionEligibilityProfileKey
 from app.schemas.signal import RadarSignal, SignalEdgeSnapshot, StrategySignal
 from app.schemas.strategy_performance import StrategyEdgeProfile
-from app.services.execution_strategy_registry import ExecutionStrategyEligibilityService
 from app.schemas.user import RiskManagementSettings
+from app.services.execution_strategy_registry import (
+    ExecutionStrategyEligibilityService,
+    execution_strategy_eligibility_service,
+)
 from app.services.strategy_performance_service import score_bucket_for, strategy_performance_service
 
 logger = logging.getLogger(__name__)
@@ -32,9 +35,11 @@ class EdgeCalibrationService:
         self,
         *,
         performance_service: EdgeProfileProvider | None = None,
+        eligibility_service: ExecutionStrategyEligibilityService | None = None,
         min_sample_size: int | None = None,
     ) -> None:
         self._performance_service = performance_service or strategy_performance_service
+        self._eligibility_service = eligibility_service or execution_strategy_eligibility_service
         self._min_sample_size = (
             RiskManagementSettings().edge_min_sample_size
             if min_sample_size is None
@@ -103,7 +108,7 @@ class EdgeCalibrationService:
             source="outcome",
             metadata=metrics_metadata,
         )
-        eligibility = ExecutionStrategyEligibilityService().evaluate(
+        eligibility = self._eligibility_service.evaluate(
             edge_for_eligibility,
             profile_key=_eligibility_profile_key(
                 signal=signal,

@@ -3,10 +3,12 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import patch
 
 from app.schemas.signal import MarketRegimeSnapshot, RadarSignal
 from app.schemas.strategy_performance import StrategyEdgeProfile
 from app.services.edge_calibration import EdgeCalibrationService
+from app.services.execution_strategy_registry import ExecutionStrategyEligibility
 
 
 class FakeEdgeProfileProvider:
@@ -17,6 +19,23 @@ class FakeEdgeProfileProvider:
     async def get_edge_profile(self, **kwargs: Any) -> StrategyEdgeProfile:
         self.calls.append(kwargs)
         return self.profile
+
+
+class FakeEligibilityService:
+    def __init__(self, reason_code: str = "fake_strategy_eligibility") -> None:
+        self.reason_code = reason_code
+        self.calls: list[Any] = []
+
+    def evaluate(self, edge: Any, **kwargs: Any) -> ExecutionStrategyEligibility:
+        _ = kwargs
+        self.calls.append(edge)
+        return ExecutionStrategyEligibility(
+            eligible=False,
+            reason_code=self.reason_code,
+            reason="Fake eligibility service was used.",
+            source="fake",
+            metrics={"sample_size": edge.sample_size},
+        )
 
 
 class EdgeCalibrationServiceTest(unittest.IsolatedAsyncioTestCase):
@@ -51,6 +70,57 @@ class EdgeCalibrationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(provider.calls[0]["symbol"], "BTCUSDT")
         self.assertEqual(provider.calls[0]["market_regime"], "bullish:strong:aligned")
         self.assertEqual(provider.calls[0]["score"], 82.0)
+
+    async def test_uses_injected_eligibility_service_for_strategy_metadata(self) -> None:
+        provider = FakeEdgeProfileProvider(
+            _profile(
+                source="exact",
+                confidence="high",
+                sample_size=80,
+                signals_count=90,
+                winrate=0.6,
+                avg_win_r=1.5,
+                avg_loss_r=-1.0,
+            )
+        )
+        eligibility_service = FakeEligibilityService()
+        service = EdgeCalibrationService(
+            performance_service=provider,
+            min_sample_size=50,
+            eligibility_service=eligibility_service,
+        )
+
+        snapshot = await service.evaluate_signal_edge(_signal())
+
+        self.assertEqual(len(eligibility_service.calls), 1)
+        self.assertEqual(eligibility_service.calls[0].sample_size, 80)
+        self.assertEqual(snapshot.metadata["strategy_eligibility"]["reason_code"], "fake_strategy_eligibility")
+        self.assertEqual(snapshot.metadata["strategy_eligibility"]["source"], "fake")
+
+    async def test_default_eligibility_service_uses_registry_singleton(self) -> None:
+        provider = FakeEdgeProfileProvider(
+            _profile(
+                source="exact",
+                confidence="high",
+                sample_size=80,
+                signals_count=90,
+                winrate=0.6,
+                avg_win_r=1.5,
+                avg_loss_r=-1.0,
+            )
+        )
+        eligibility_service = FakeEligibilityService(reason_code="singleton_strategy_eligibility")
+        with patch(
+            "app.services.edge_calibration.execution_strategy_eligibility_service",
+            eligibility_service,
+            create=True,
+        ):
+            service = EdgeCalibrationService(performance_service=provider, min_sample_size=50)
+
+        snapshot = await service.evaluate_signal_edge(_signal())
+
+        self.assertEqual(len(eligibility_service.calls), 1)
+        self.assertEqual(snapshot.metadata["strategy_eligibility"]["reason_code"], "singleton_strategy_eligibility")
 
     async def test_insufficient_sample_status_keeps_metrics(self) -> None:
         provider = FakeEdgeProfileProvider(

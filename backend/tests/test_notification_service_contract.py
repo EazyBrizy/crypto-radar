@@ -1,5 +1,6 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Callable
 from uuid import UUID, uuid4
 
 from app.schemas.notification import (
@@ -31,9 +32,56 @@ class FakeSessionFactory:
     pass
 
 
+class FakeRedisDedup:
+    def __init__(self, now: Callable[[], datetime]) -> None:
+        self._now = now
+        self.values: dict[str, tuple[str, float | None]] = {}
+
+    def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool | None:
+        now_ts = self._now().timestamp()
+        self.values = {
+            existing_key: existing_value
+            for existing_key, existing_value in self.values.items()
+            if existing_value[1] is None or existing_value[1] > now_ts
+        }
+        if nx and key in self.values:
+            return None
+        self.values[key] = (value, now_ts + ex if ex is not None else None)
+        return True
+
+
+class AllowingRedisDedup:
+    def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool:
+        return True
+
+
+class MutableClock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 6, 11, 8, 0, tzinfo=timezone.utc)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, seconds: int) -> None:
+        self.now += timedelta(seconds=seconds)
+
+
 class SpyNotificationService(NotificationService):
-    def __init__(self, hot_store: FakeHotStore, broker: FakeBroker) -> None:
-        super().__init__(session_factory=FakeSessionFactory(), hot_store=hot_store, broker=broker)  # type: ignore[arg-type]
+    def __init__(
+        self,
+        hot_store: FakeHotStore,
+        broker: FakeBroker,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        redis_client_factory: Callable[[], object] | None = None,
+    ) -> None:
+        super().__init__(
+            session_factory=FakeSessionFactory(),
+            hot_store=hot_store,
+            broker=broker,
+            redis_client_factory=redis_client_factory or (lambda: AllowingRedisDedup()),
+            clock=clock,
+        )  # type: ignore[arg-type]
         self.marked: list[tuple[UUID, str, str | None]] = []
         self.created = _notification()
 
@@ -99,6 +147,43 @@ class NotificationServiceContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(notification.payload["selected_rr"], 2.5)
         self.assertEqual(notification.payload["status_reason"], "trigger confirmed")
         self.assertEqual(notification.payload["edge"]["status"], "positive")
+
+    async def test_notification_service_suppresses_duplicate_execution_signal(self) -> None:
+        clock = MutableClock()
+        redis = FakeRedisDedup(clock)
+        hot_store = FakeHotStore()
+        service = SpyNotificationService(
+            hot_store,
+            FakeBroker(),
+            clock=clock,
+            redis_client_factory=lambda: redis,
+        )
+
+        first = await service.create_signal_notification(_signal())
+        second = await service.create_signal_notification(_signal().model_copy(update={"id": "sig_execution_2"}))
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(len(hot_store.notifications), 1)
+
+    async def test_notification_service_allows_after_window(self) -> None:
+        clock = MutableClock()
+        redis = FakeRedisDedup(clock)
+        hot_store = FakeHotStore()
+        service = SpyNotificationService(
+            hot_store,
+            FakeBroker(),
+            clock=clock,
+            redis_client_factory=lambda: redis,
+        )
+
+        first = await service.create_signal_notification(_signal())
+        clock.advance(301)
+        second = await service.create_signal_notification(_signal().model_copy(update={"id": "sig_execution_2"}))
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(len(hot_store.notifications), 2)
 
 
 def _notification() -> NotificationResponse:

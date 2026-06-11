@@ -1,12 +1,13 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
 from app.models.notification import Notification, NotificationDelivery
@@ -30,6 +31,11 @@ NOTIFICATION_PUBSUB = "pubsub:notifications:new"
 
 class NotificationHotStore(Protocol):
     def write_notification(self, notification: NotificationResponse) -> None:
+        ...
+
+
+class NotificationDedupStore(Protocol):
+    def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> object:
         ...
 
 
@@ -65,10 +71,15 @@ class NotificationService:
         session_factory: sessionmaker[Session] = SessionLocal,
         hot_store: NotificationHotStore | None = None,
         broker: RedisMessageBroker = realtime_event_broker,
+        redis_client_factory: Callable[[], NotificationDedupStore] | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._hot_store = hot_store or RedisNotificationHotStore()
         self._broker = broker
+        self._redis_client_factory = redis_client_factory or get_redis_client
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._execution_notification_memory: dict[str, float] = {}
 
     def list_notifications(
         self,
@@ -130,7 +141,14 @@ class NotificationService:
             )
         )
 
-    async def create_signal_notification(self, signal: RadarSignal, user_id: str = "demo_user") -> NotificationResponse:
+    async def create_signal_notification(
+        self,
+        signal: RadarSignal,
+        user_id: str = "demo_user",
+    ) -> NotificationResponse | None:
+        if not self.should_create_execution_notification(signal, user_id):
+            return None
+
         gate = signal.execution_gate.model_dump(mode="json") if signal.execution_gate is not None else None
         edge = signal.edge.model_dump(mode="json") if signal.edge is not None else None
         return await self.create_notification(
@@ -160,6 +178,53 @@ class NotificationService:
                 channels=["websocket"],
             )
         )
+
+    def should_create_execution_notification(self, signal: RadarSignal, user_id: str = "demo_user") -> bool:
+        window_seconds = _notification_dedup_window_seconds()
+        key = _execution_notification_dedup_key(
+            signal=signal,
+            user_id=user_id,
+            now=self._clock(),
+            window_seconds=window_seconds,
+        )
+        if key is None:
+            return True
+
+        try:
+            result = self._redis_client_factory().set(
+                key,
+                str(signal.id),
+                nx=True,
+                ex=window_seconds,
+            )
+        except Exception as exc:
+            logger.warning("Redis notification dedup failed; using in-memory fallback: %s", exc)
+            return self._should_create_execution_notification_in_memory(key, window_seconds)
+
+        if bool(result):
+            self._remember_execution_notification_in_memory(key, window_seconds)
+            return True
+        return False
+
+    def _should_create_execution_notification_in_memory(self, key: str, window_seconds: int) -> bool:
+        now_ts = self._clock().timestamp()
+        self._prune_execution_notification_memory(now_ts)
+        if self._execution_notification_memory.get(key, 0.0) > now_ts:
+            return False
+        self._execution_notification_memory[key] = now_ts + window_seconds
+        return True
+
+    def _remember_execution_notification_in_memory(self, key: str, window_seconds: int) -> None:
+        now_ts = self._clock().timestamp()
+        self._prune_execution_notification_memory(now_ts)
+        self._execution_notification_memory[key] = now_ts + window_seconds
+
+    def _prune_execution_notification_memory(self, now_ts: float) -> None:
+        self._execution_notification_memory = {
+            key: expires_at
+            for key, expires_at in self._execution_notification_memory.items()
+            if expires_at > now_ts
+        }
 
     def update_notification(
         self,
@@ -294,6 +359,37 @@ def _build_delivery(channel: str, now: datetime) -> NotificationDelivery:
         sent_at=now,
         error="Provider delivery is not configured",
     )
+
+
+def _notification_dedup_window_seconds() -> int:
+    return max(1, int(settings.notification_dedup_window_seconds))
+
+
+def _execution_notification_dedup_key(
+    *,
+    signal: RadarSignal,
+    user_id: str,
+    now: datetime,
+    window_seconds: int,
+) -> str | None:
+    exchange = _notification_key_part(signal.exchange)
+    symbol = _notification_symbol_key(signal.symbol)
+    direction = _notification_key_part(signal.direction)
+    user = _notification_key_part(user_id)
+    if not exchange or not symbol or not direction or not user:
+        return None
+    bucket = int(now.timestamp() // window_seconds)
+    return f"notification:dedup:{user}:{exchange}:{symbol}:{direction}:execution_signal:{bucket}"
+
+
+def _notification_key_part(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def _notification_symbol_key(symbol: object) -> str:
+    return _notification_key_part(symbol).replace("/", "").replace(":perp", "")
 
 
 def _notification_to_response(notification: Notification) -> NotificationResponse:

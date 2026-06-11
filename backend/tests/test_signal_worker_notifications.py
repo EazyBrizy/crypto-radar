@@ -1,8 +1,11 @@
 import unittest
-from datetime import datetime, timezone
-from uuid import uuid4
+from datetime import datetime, timedelta, timezone
+from typing import Callable
+from uuid import UUID, uuid4
 
+from app.schemas.notification import NotificationCreateRequest, NotificationDeliveryResponse, NotificationResponse
 from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot
+from app.services.notification_service import NotificationService
 from app.workers.signal_worker import _should_notify_signal, _should_publish_created_signal
 
 
@@ -115,6 +118,40 @@ class SignalWorkerNotificationGateTest(unittest.TestCase):
         )
 
 
+class SignalWorkerNotificationIdempotencyTest(unittest.IsolatedAsyncioTestCase):
+    async def test_signal_worker_no_duplicate_after_restart_simulation(self) -> None:
+        clock = WorkerMutableClock()
+        redis = WorkerFakeRedisDedup(clock)
+        hot_store = WorkerFakeHotStore()
+        service = WorkerSpyNotificationService(
+            hot_store,
+            clock=clock,
+            redis_client_factory=lambda: redis,
+        )
+        execution_gate = SignalExecutionGateSnapshot(
+            status="passed",
+            feed_kind="execution_signal",
+            can_notify=True,
+            can_enter_now=True,
+            can_arm_pending=True,
+            can_show_in_execution_feed=True,
+        )
+
+        first_restart_seen: set[tuple[str, str, str]] = set()
+        first_signal = _signal(execution_gate=execution_gate)
+        self.assertTrue(_should_notify_signal(first_signal, notified_execution_keys=first_restart_seen))
+        first = await service.create_signal_notification(first_signal)
+
+        second_restart_seen: set[tuple[str, str, str]] = set()
+        second_signal = _signal(execution_gate=execution_gate)
+        self.assertTrue(_should_notify_signal(second_signal, notified_execution_keys=second_restart_seen))
+        second = await service.create_signal_notification(second_signal)
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(len(hot_store.notifications), 1)
+
+
 def _signal(
     *,
     symbol: str = "BTCUSDT",
@@ -144,6 +181,118 @@ def _signal(
         created_at=now,
         updated_at=now,
         execution_gate=execution_gate,
+    )
+
+
+class WorkerFakeHotStore:
+    def __init__(self) -> None:
+        self.notifications: list[NotificationResponse] = []
+
+    def write_notification(self, notification: NotificationResponse) -> None:
+        self.notifications.append(notification)
+
+
+class WorkerFakeBroker:
+    async def publish(self, event: dict[str, object]) -> None:
+        return None
+
+
+class WorkerFakeSessionFactory:
+    pass
+
+
+class WorkerFakeRedisDedup:
+    def __init__(self, now: Callable[[], datetime]) -> None:
+        self._now = now
+        self.values: dict[str, tuple[str, float | None]] = {}
+
+    def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool | None:
+        now_ts = self._now().timestamp()
+        self.values = {
+            existing_key: existing_value
+            for existing_key, existing_value in self.values.items()
+            if existing_value[1] is None or existing_value[1] > now_ts
+        }
+        if nx and key in self.values:
+            return None
+        self.values[key] = (value, now_ts + ex if ex is not None else None)
+        return True
+
+
+class WorkerMutableClock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 6, 11, 8, 0, tzinfo=timezone.utc)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, seconds: int) -> None:
+        self.now += timedelta(seconds=seconds)
+
+
+class WorkerSpyNotificationService(NotificationService):
+    def __init__(
+        self,
+        hot_store: WorkerFakeHotStore,
+        *,
+        clock: Callable[[], datetime],
+        redis_client_factory: Callable[[], object],
+    ) -> None:
+        super().__init__(
+            session_factory=WorkerFakeSessionFactory(),
+            hot_store=hot_store,
+            broker=WorkerFakeBroker(),  # type: ignore[arg-type]
+            redis_client_factory=redis_client_factory,
+            clock=clock,
+        )  # type: ignore[arg-type]
+
+    def _create_notification_record(self, request: NotificationCreateRequest) -> NotificationResponse:
+        notification_id = uuid4()
+        return NotificationResponse(
+            id=notification_id,
+            user_id=uuid4(),
+            type=request.type,
+            title=request.title,
+            body=request.body,
+            payload=request.payload,
+            is_read=False,
+            created_at=datetime.now(timezone.utc),
+            deliveries=[
+                NotificationDeliveryResponse(
+                    id=uuid4(),
+                    notification_id=notification_id,
+                    channel="websocket",
+                    status="queued",
+                    provider_msg_id=None,
+                    sent_at=None,
+                    error=None,
+                )
+            ],
+        )
+
+    def get_notification(self, notification_id: str) -> NotificationResponse:
+        return _notification_response(UUID(notification_id))
+
+    def _mark_websocket_delivered(
+        self,
+        notification_id: UUID,
+        provider_msg_id: str,
+        redis_error: str | None,
+    ) -> None:
+        return None
+
+
+def _notification_response(notification_id: UUID) -> NotificationResponse:
+    return NotificationResponse(
+        id=notification_id,
+        user_id=uuid4(),
+        type="signal.execution_ready",
+        title="Execution signal",
+        body="body",
+        payload={},
+        is_read=False,
+        created_at=datetime.now(timezone.utc),
+        deliveries=[],
     )
 
 

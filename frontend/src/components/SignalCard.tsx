@@ -125,6 +125,9 @@ function executionGateBadges(signal: RadarSignal): SignalBadgeView[] {
   const badges: SignalBadgeView[] = [];
   const reasons = signal.execution_gate?.reasons ?? [];
   const hasReason = (code: string) => reasons.some((reason) => reason.code === code);
+  if (signal.execution_gate?.feed_kind === "blocked" && !reasons.some((reason) => reason.severity === "blocker")) {
+    badges.push({ code: "blocked_diagnostic", label: "Blocked diagnostic", tone: "red" });
+  }
   if (signal.candle_state === "open" || hasReason("forming_candle")) {
     badges.push({ code: "forming_candle_preview", label: "Forming candle preview", tone: "yellow" });
   }

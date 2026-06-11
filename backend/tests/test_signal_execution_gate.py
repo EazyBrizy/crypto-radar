@@ -40,14 +40,16 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertFalse(gate.can_show_in_execution_feed)
         self.assertIn("forming_candle", _reason_codes(gate))
 
-    def test_low_score_is_market_idea_not_execution_signal(self) -> None:
+    def test_low_score_is_blocked_diagnostic_not_market_idea(self) -> None:
         signal = _signal(score=23)
 
         gate = SignalExecutionGateService().evaluate(signal)
 
-        self.assertEqual(gate.feed_kind, "market_idea")
+        self.assertEqual(gate.feed_kind, "blocked")
         self.assertFalse(gate.can_show_in_execution_feed)
         self.assertIn("score_below_execution_threshold", _reason_codes(gate))
+        reason = next(reason for reason in gate.reasons if reason.code == "score_below_execution_threshold")
+        self.assertEqual(reason.metadata["score"], 23)
 
     def test_no_trade_hard_block_is_blocked_not_ready(self) -> None:
         signal = _signal(

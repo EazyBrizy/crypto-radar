@@ -223,7 +223,11 @@ class RadarService:
                 MAX_RADAR_ACTION_STATE_SIGNALS,
                 len(visible_signals),
             )
-        return RadarResponse(signals=visible_signals, summary=build_radar_summary(visible_signals))
+        summary = build_radar_summary(visible_signals)
+        source_blocked_ideas = sum(1 for signal in signals if _gate_feed_kind(signal) == "blocked")
+        if source_blocked_ideas > summary.blocked_ideas:
+            summary = summary.model_copy(update={"blocked_ideas": source_blocked_ideas})
+        return RadarResponse(signals=visible_signals, summary=summary)
 
     def _with_views(
         self,

@@ -152,6 +152,29 @@ describe("signal status domain helper", () => {
     expect(canShowEnterButton({ ...blockedSignal, details_view: null })).toBe(false);
   });
 
+  it("keeps low-score blocked diagnostics out of execution and watchlist feeds", () => {
+    const blockedDiagnostic = withExecutionGate(baseSignal, "blocked", {
+      can_show_in_execution_feed: false,
+      can_enter_now: false,
+      can_arm_pending: false
+    });
+    blockedDiagnostic.execution_gate!.reasons = [
+      {
+        code: "score_below_execution_threshold",
+        severity: "info",
+        source: "score",
+        message: "Score 23 is below execution threshold 70.",
+        metadata: { score: 23, execution_score_threshold: 70 }
+      }
+    ];
+
+    expect(signalFeedKind(blockedDiagnostic)).toBe("blocked");
+    expect(isBlockedSignal(blockedDiagnostic)).toBe(true);
+    expect(isWatchlistSignal(blockedDiagnostic)).toBe(false);
+    expect(isExecutionFeedSignal(blockedDiagnostic)).toBe(false);
+    expect(canShowSignalEntryAction(blockedDiagnostic)).toBe(false);
+  });
+
   it("lets execution gate override legacy can_enter and details action state", () => {
     const blockedByGate = withExecutionGate(
       withBackendEnter({ ...baseSignal, status: "actionable", can_enter: true }, true),

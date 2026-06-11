@@ -60,7 +60,7 @@ def build_signal_card_view(
         badges.append(
             SignalBadgeView(
                 code=f"feed_{signal.execution_gate.feed_kind}",
-                label=signal.execution_gate.feed_kind.replace("_", " "),
+                label=_feed_kind_label(signal.execution_gate.feed_kind, signal),
                 tone=_feed_kind_tone(signal.execution_gate.feed_kind),
             )
         )
@@ -412,7 +412,7 @@ def _status_label(signal: RadarSignal, action_state: SignalActionState | None) -
         if signal.execution_gate.feed_kind == "execution_signal" and signal.execution_gate.can_enter_now:
             return "Execution-ready"
         if signal.execution_gate.feed_kind == "blocked":
-            return "Execution blocked"
+            return _blocked_status_label(signal)
         if signal.execution_gate.feed_kind == "market_idea":
             return "Market idea"
         if signal.execution_gate.feed_kind == "watchlist":
@@ -451,7 +451,7 @@ def _opportunity_label(signal: RadarSignal, action_state: SignalActionState | No
         if signal.execution_gate.feed_kind == "execution_signal":
             return "Execution-ready"
         if signal.execution_gate.feed_kind == "blocked":
-            return "Blocked"
+            return _blocked_status_label(signal)
         if signal.execution_gate.feed_kind == "watchlist":
             return "Watchlist"
         return "Market idea"
@@ -639,18 +639,37 @@ def _feed_kind_tone(feed_kind: str) -> ViewTone:
     return "neutral"
 
 
+def _feed_kind_label(feed_kind: str, signal: RadarSignal) -> str:
+    if feed_kind == "execution_signal":
+        return "execution signal"
+    if feed_kind == "blocked":
+        return _blocked_status_label(signal)
+    return feed_kind.replace("_", " ")
+
+
 def _gate_feed_kind(signal: RadarSignal) -> str | None:
     return signal.execution_gate.feed_kind if signal.execution_gate is not None else None
+
+
+def _blocked_status_label(signal: RadarSignal) -> str:
+    gate = signal.execution_gate
+    if gate is None:
+        return "Execution blocked"
+    if any(reason.severity == "blocker" for reason in gate.reasons):
+        return "Execution blocked"
+    return "Blocked diagnostic"
 
 
 def _execution_blocked_reason(signal: RadarSignal) -> str | None:
     gate = signal.execution_gate
     if gate is None or gate.feed_kind != "blocked":
         return None
-    blocker = next((reason for reason in gate.reasons if reason.severity == "blocker"), None)
-    if blocker is None:
-        return "Execution blocked"
-    return f"Execution blocked: {blocker.message}"
+    reason = next((reason for reason in gate.reasons if reason.severity == "blocker"), None)
+    if reason is None:
+        reason = gate.reasons[0] if gate.reasons else None
+    if reason is None:
+        return _blocked_status_label(signal)
+    return f"{_blocked_status_label(signal)}: {reason.message}"
 
 
 def _disabled_label(action_state: SignalActionState | None) -> str | None:

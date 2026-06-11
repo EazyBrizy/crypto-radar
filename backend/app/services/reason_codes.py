@@ -93,6 +93,7 @@ KNOWN_REASON_CODES = {
     "risk_profile_restricted",
     "risk_reward_below_minimum",
     "risk_reward_soft_warning",
+    "score_below_execution_threshold",
     "slippage_above_configured_max",
     "spread_above_0_3_percent",
     "spread_above_1_percent_market_order_blocked",

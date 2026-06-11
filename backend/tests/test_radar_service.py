@@ -260,6 +260,71 @@ class RadarServiceTest(unittest.TestCase):
         self.assertIn("Daily risk limit reached", response.signals[0].display_reason or "")
         self.assertEqual(risk_preview.calls, [{"signal_id": gate_passed.id, "user_id": "demo_user", "record_audit": False}])
 
+    def test_all_market_opportunities_hides_blocked_feed_but_counts_summary(self) -> None:
+        active = _signal(status="active", rr_status="passed", execution_gate=_execution_gate(can_show=False, feed_kind="market_idea", status="warning"))
+        blocked = _signal(
+            status="actionable",
+            rr_status="passed",
+            score=23,
+            execution_gate=_execution_gate(
+                can_show=False,
+                feed_kind="blocked",
+                status="warning",
+                reasons=[
+                    {
+                        "code": "score_below_execution_threshold",
+                        "severity": "info",
+                        "source": "score",
+                        "message": "Score 23 is below execution threshold 70.",
+                        "metadata": {"score": 23, "execution_score_threshold": 70},
+                    }
+                ],
+            ),
+        )
+        service = _service(
+            [active, blocked],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="all_market_opportunities")
+
+        self.assertEqual([signal.id for signal in response.signals], [active.id])
+        self.assertEqual(response.summary.total_signals, 1)
+        self.assertEqual(response.summary.blocked_ideas, 1)
+
+    def test_blocked_mode_returns_low_score_diagnostics_with_backend_reason(self) -> None:
+        blocked = _signal(
+            status="actionable",
+            rr_status="passed",
+            score=25,
+            execution_gate=_execution_gate(
+                can_show=False,
+                feed_kind="blocked",
+                status="warning",
+                reasons=[
+                    {
+                        "code": "score_below_execution_threshold",
+                        "severity": "info",
+                        "source": "score",
+                        "message": "Score 25 is below execution threshold 70.",
+                        "metadata": {"score": 25, "execution_score_threshold": 70},
+                    }
+                ],
+            ),
+        )
+        service = _service(
+            [blocked],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="blocked")
+
+        self.assertEqual([signal.id for signal in response.signals], [blocked.id])
+        self.assertEqual(response.signals[0].card_view.status_label, "Blocked diagnostic")
+        self.assertIn("Score 25 is below execution threshold 70.", response.signals[0].card_view.reason)
+
     def test_user_execution_ready_mode_is_resolved_when_request_mode_is_absent(self) -> None:
         actionable = _signal(status="actionable", rr_status="passed")
         waiting_entry = _signal(status="ready", rr_status="passed")
@@ -423,6 +488,7 @@ def _execution_gate(
     can_show: bool,
     feed_kind: str = "execution_signal",
     status: str = "passed",
+    reasons: list[dict[str, object]] | None = None,
 ) -> SignalExecutionGateSnapshot:
     return SignalExecutionGateSnapshot(
         status=status,
@@ -431,6 +497,7 @@ def _execution_gate(
         can_enter_now=can_show,
         can_arm_pending=can_show,
         can_show_in_execution_feed=can_show,
+        reasons=reasons or [],
     )
 
 

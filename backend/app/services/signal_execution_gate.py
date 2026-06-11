@@ -40,6 +40,7 @@ class SignalExecutionGateService:
         status = str(signal.status).strip().lower()
         score = int(signal.score or 0)
         score_threshold = int(execution_score_threshold or settings.execution_min_score)
+        market_idea_score_threshold = int(settings.radar_min_market_idea_score)
         execution_candidate = is_execution_candidate_status(status)
 
         if status == "expired":
@@ -127,7 +128,11 @@ class SignalExecutionGateService:
                     "info",
                     "score",
                     f"Score {score} is below execution threshold {score_threshold}.",
-                    {"score": score, "execution_score_threshold": score_threshold},
+                    {
+                        "score": score,
+                        "execution_score_threshold": score_threshold,
+                        "market_idea_score_threshold": market_idea_score_threshold,
+                    },
                 )
             )
 
@@ -155,7 +160,13 @@ class SignalExecutionGateService:
         feed_kind = (
             "execution_signal"
             if execution_ready
-            else _non_execution_feed_kind(status, score, hard_blockers, score_threshold)
+            else _non_execution_feed_kind(
+                status,
+                score,
+                hard_blockers,
+                execution_score_threshold=score_threshold,
+                market_idea_score_threshold=market_idea_score_threshold,
+            )
         )
         gate_status = "blocked" if hard_blockers else "warning" if warnings or reasons else "passed"
         can_show = feed_kind == "execution_signal" and gate_status in {"passed", "warning"}
@@ -172,6 +183,7 @@ class SignalExecutionGateService:
                 "status": status,
                 "score": score,
                 "execution_score_threshold": score_threshold,
+                "market_idea_score_threshold": market_idea_score_threshold,
                 "execution_candidate_status": execution_candidate,
                 "strict_edge_mode": strict_edge_mode,
             },
@@ -182,9 +194,13 @@ def _non_execution_feed_kind(
     status: str,
     score: int,
     hard_blockers: list[SignalExecutionGateReason],
+    *,
     execution_score_threshold: int,
+    market_idea_score_threshold: int,
 ) -> str:
     if hard_blockers:
+        return "blocked"
+    if score < market_idea_score_threshold:
         return "blocked"
     if status in {"watchlist", "ready", "wait_for_pullback"}:
         return "watchlist"

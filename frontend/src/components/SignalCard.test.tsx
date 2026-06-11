@@ -103,6 +103,43 @@ describe("SignalCard", () => {
     expect(screen.getByText("Trigger not confirmed")).toBeInTheDocument();
     expect(screen.getByText("Execution blocked: Trigger has not confirmed on a closed candle")).toBeInTheDocument();
   });
+
+  it("labels low-score blocked ideas as diagnostic and shows the backend score reason", () => {
+    render(<SignalCard signal={baseSignal({
+      score: 23,
+      card_view: {
+        ...baseSignal().card_view!,
+        status_label: "Backend ready",
+        status_tone: "red",
+        opportunity_label: "Blocked",
+        opportunity_tone: "red",
+        badges: [{ code: "feed_blocked", label: "blocked", tone: "red" }],
+        reason: "Score 23 is below execution threshold 70."
+      },
+      execution_gate: {
+        status: "warning",
+        feed_kind: "blocked",
+        can_notify: false,
+        can_enter_now: false,
+        can_arm_pending: false,
+        can_show_in_execution_feed: false,
+        reasons: [
+          {
+            code: "score_below_execution_threshold",
+            severity: "info",
+            source: "score",
+            message: "Score 23 is below execution threshold 70.",
+            metadata: { score: 23, execution_score_threshold: 70 }
+          }
+        ],
+        warnings: [],
+        metadata: {}
+      }
+    })} selected={false} onSelect={vi.fn()} />);
+
+    expect(screen.getAllByText("Blocked diagnostic").length).toBeGreaterThan(0);
+    expect(screen.getByText("Execution blocked: Score 23 is below execution threshold 70.")).toBeInTheDocument();
+  });
 });
 
 function baseSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {

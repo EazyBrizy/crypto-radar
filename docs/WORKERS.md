@@ -37,9 +37,9 @@ Execution-ready notifications must come from backend gate state. Legacy fallback
 
 ## Strategy Test Runtime
 
-Strategy-test active-run state is backend-owned. Workers and services that execute strategy-test runs must update `strategy_test_runs.last_heartbeat_at` through the run store while a run is `running` or `stopping`.
+Strategy-test active-run state is backend-owned for `queued`, `running`, and `stopping` runs. Workers and services that execute strategy-test runs must update `strategy_test_runs.last_heartbeat_at` through the run store while a run is `running` or `stopping`; queued runs use `created_at` for stale recovery.
 
-The active-run API decides whether a run is stale from `last_heartbeat_at`, `started_at`, and `created_at` using the backend stale threshold. Frontend code may display `is_stale` and `stale_threshold_seconds`, but it must not reimplement stale-run policy.
+The active-run API applies stale policy to `queued`, `running`, and `stopping` from `last_heartbeat_at`, then `started_at`, then `created_at` using the backend stale threshold. Frontend code may display `is_stale` and `stale_threshold_seconds`, but it must not reimplement stale-run policy.
 
 Strategy-test scenario execution delegates to `ProductionBacktestRunner`. `production_like` runs keep strict RiskGate behavior; `research_virtual` and `discovery` may surface backend warnings and assumptions, but trade-plan normalization, stale decisions, eligibility, risk, and PnL stay backend-owned.
 

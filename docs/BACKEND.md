@@ -144,6 +144,8 @@ Important rules:
 
 Workers are started from `backend/app/main.py` lifespan according to settings. Local MVP defaults keep scanner autostart and optional external sync workers disabled:
 
+- The forward strategy-test worker is lifespan-managed, visible in `/health` as `forward_strategy_test_*`, receives `StrategySignal` output from the scanner, and closes the loop for active `forward_virtual` runs through the forward runtime.
+
 - `CRYPTO_RADAR_SCANNER_ENABLED=false`
 - `EXCHANGE_INSTRUMENT_SYNC_ENABLED=false`
 - `DERIVATIVE_SNAPSHOT_SYNC_ENABLED=false`

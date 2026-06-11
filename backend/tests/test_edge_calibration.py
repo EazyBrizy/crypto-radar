@@ -89,6 +89,28 @@ class EdgeCalibrationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.status, "unknown")
         self.assertEqual(snapshot.sample_size, 0)
         self.assertEqual(snapshot.source, "none")
+
+    async def test_regime_key_wins_over_legacy_direction_strength_alignment(self) -> None:
+        provider = FakeEdgeProfileProvider(
+            _profile(source="none", confidence="insufficient_sample", sample_size=0, signals_count=0)
+        )
+        service = EdgeCalibrationService(performance_service=provider, min_sample_size=50)
+        signal = _signal().model_copy(
+            update={
+                "regime": MarketRegimeSnapshot(
+                    primary_label="trend_up",
+                    base_label="trend_up",
+                    direction="bullish",
+                    strength="strong",
+                    alignment="aligned",
+                    regime_key="trend_up:strong:aligned",
+                )
+            }
+        )
+
+        snapshot = await service.evaluate_signal_edge(signal)
+
+        self.assertEqual(provider.calls[0]["market_regime"], "trend_up:strong:aligned")
         self.assertIsNone(snapshot.winrate)
         self.assertEqual(snapshot.confidence_score, 0.0)
 

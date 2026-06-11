@@ -95,14 +95,64 @@ class NoTradeFilterResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+MarketRegimeLabel = Literal[
+    "trend_up",
+    "trend_down",
+    "range",
+    "chop",
+    "volatility_compression",
+    "volatility_expansion",
+    "post_impulse",
+    "news_pump",
+    "liquidity_vacuum",
+    "market_wide_risk_off",
+    "unknown",
+]
+MarketRegimeType = Literal[
+    "trend_up",
+    "trend_down",
+    "range",
+    "chop",
+    "volatility_compression",
+    "volatility_expansion",
+    "post_impulse",
+    "liquidity_sweep_zone",
+    "unknown",
+]
+MarketRegimeVolatilityState = Literal["compression", "normal", "expansion", "unknown"]
+MarketRegimeStructureState = Literal["trend", "range", "chop", "unknown"]
+
+
+class MarketRegimeCandidate(BaseModel):
+    label: MarketRegimeLabel
+    score: float = Field(default=0.0, ge=0, le=100)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    detected: bool = False
+    reason: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class MarketRegimeSnapshot(BaseModel):
     signal_timeframe: str = "stream"
     context_timeframe: Optional[str] = None
     direction: Literal["bullish", "bearish", "range", "unknown"] = "unknown"
     strength: Literal["weak", "normal", "strong", "unknown"] = "unknown"
     alignment: Literal["aligned", "mixed", "against", "unknown"] = "unknown"
+    regime_type: MarketRegimeType = "unknown"
+    volatility_state: MarketRegimeVolatilityState = "unknown"
+    structure_state: MarketRegimeStructureState = "unknown"
+    compatibility: dict[str, Any] = Field(default_factory=dict)
     score_adjustment: int = 0
     checks: List[SignalLayerCheck] = Field(default_factory=list)
+    primary_label: MarketRegimeLabel = "unknown"
+    labels: list[MarketRegimeLabel] = Field(default_factory=list)
+    base_label: MarketRegimeLabel = "unknown"
+    volatility_label: MarketRegimeLabel = "unknown"
+    event_labels: list[MarketRegimeLabel] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    candidates: list[MarketRegimeCandidate] = Field(default_factory=list)
+    regime_key: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class StrategySetupSnapshot(BaseModel):

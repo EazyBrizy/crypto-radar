@@ -5,6 +5,7 @@ from app.schemas.market import AlphaMarketContext, Features
 from app.schemas.risk import StrategyExecutionSettings
 from app.schemas.signal import StrategySignal
 from app.services.edge_calibration import edge_calibration_service
+from app.services.market_regime import MarketWideRegimeContext
 from app.services.signal_execution_gate import signal_execution_gate_service
 from app.services.support_resistance import SupportResistanceSnapshot
 from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
@@ -79,6 +80,7 @@ class StrategyEngine:
         strategy_configs: Mapping[str, Any] | None = None,
         rr_guard_context: str = "discovery",
         alpha_context: AlphaMarketContext | None = None,
+        market_wide_context: MarketWideRegimeContext | None = None,
     ) -> List[StrategySignal]:
         signals: List[StrategySignal] = []
         for strategy in self._strategies:
@@ -105,6 +107,7 @@ class StrategyEngine:
                 context_features_by_timeframe=context_features_by_timeframe or {},
                 support_resistance_by_timeframe=support_resistance_by_timeframe or {},
                 market_quality=market_quality,
+                market_wide_context=market_wide_context,
                 strategy_params=market_params,
                 execution_settings=execution_settings,
                 pipeline_settings=pipeline_settings,

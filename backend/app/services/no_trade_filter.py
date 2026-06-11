@@ -7,6 +7,8 @@ from typing import Any
 from app.schemas.market import Features
 from app.schemas.signal import NoTradeFilterResult, SignalLayerCheck, StrategySignal
 
+TREND_STRATEGIES = {"trend_pullback_continuation"}
+
 
 class NoTradeFilterService:
     def evaluate(
@@ -32,6 +34,7 @@ class NoTradeFilterService:
 
         checks = [
             _missing_market_data_check(context, settings_map),
+            *_market_regime_no_trade_checks(signal, context, settings_map),
             _low_liquidity_check(signal, context, settings_map),
             _high_spread_check(signal, context, settings_map),
             _high_slippage_check(context, settings_map),
@@ -59,6 +62,122 @@ class NoTradeFilterService:
                 "warning_codes": warning_codes,
             },
         )
+
+
+def _market_regime_no_trade_checks(
+    signal: StrategySignal,
+    context: Any,
+    settings: Mapping[str, Any],
+) -> list[SignalLayerCheck]:
+    regime = signal.regime or _context_value(context, "regime")
+    if regime is None:
+        return [
+            SignalLayerCheck(
+                name="market_regime_no_trade",
+                status="skipped",
+                reason="Market regime snapshot is unavailable for no-trade filter",
+            )
+        ]
+
+    labels = _regime_labels(regime)
+    block_labels = set(
+        _string_list_setting(
+            settings,
+            "block_regime_labels_for_entry",
+            ["liquidity_vacuum", "news_pump"],
+        )
+    )
+    detail_checks: list[SignalLayerCheck] = []
+    if "liquidity_vacuum" in labels:
+        status = "failed" if "liquidity_vacuum" in block_labels else "warning"
+        detail_checks.append(
+            SignalLayerCheck(
+                name="liquidity_vacuum",
+                status=status,
+                reason="Liquidity vacuum regime blocks fresh entries" if status == "failed" else "Liquidity vacuum regime requires caution",
+                metadata=_regime_metadata(regime),
+            )
+        )
+    if "news_pump" in labels:
+        allow_news = _bool_setting(settings, "allow_news_pump_mode", False)
+        status = "passed" if allow_news else "failed" if "news_pump" in block_labels else "warning"
+        detail_checks.append(
+            SignalLayerCheck(
+                name="news_pump_mode",
+                status=status,
+                reason=(
+                    "News/pump mode is explicitly allowed by settings"
+                    if allow_news
+                    else "News/pump mode blocks fresh entries"
+                    if status == "failed"
+                    else "News/pump mode requires caution"
+                ),
+                metadata=_regime_metadata(regime),
+            )
+        )
+    if "market_wide_risk_off" in labels:
+        blocks_longs = _bool_setting(settings, "risk_off_blocks_longs", True)
+        allow_long = _bool_setting(settings, "allow_long_in_market_wide_risk_off", False)
+        long_blocked = signal.direction.upper() == "LONG" and blocks_longs and not allow_long
+        detail_checks.append(
+            SignalLayerCheck(
+                name="market_wide_risk_off",
+                status="failed" if long_blocked else "warning",
+                reason=(
+                    "Market-wide risk-off blocks long entries"
+                    if long_blocked
+                    else "Market-wide risk-off is active; shorts still require liquidity and news checks"
+                ),
+                metadata={**_regime_metadata(regime), "risk_off_blocks_longs": blocks_longs},
+            )
+        )
+    if "post_impulse" in labels:
+        block_post_impulse = _bool_setting(settings, "block_post_impulse_entry", False)
+        detail_checks.append(
+            SignalLayerCheck(
+                name="post_impulse_entry",
+                status="failed" if block_post_impulse else "warning",
+                reason=(
+                    "Post-impulse regime blocks fresh entries until pullback"
+                    if block_post_impulse
+                    else "Post-impulse regime favors waiting for pullback confirmation"
+                ),
+                metadata=_regime_metadata(regime),
+            )
+        )
+    if "chop" in labels and signal.strategy in TREND_STRATEGIES:
+        detail_checks.append(
+            SignalLayerCheck(
+                name="chop_regime",
+                status="warning",
+                reason="Chop regime reduces trend-continuation reliability",
+                metadata=_regime_metadata(regime),
+            )
+        )
+    if not detail_checks:
+        return [
+            SignalLayerCheck(
+                name="market_regime_no_trade",
+                status="passed",
+                reason="No blocking market-regime labels are active",
+                metadata=_regime_metadata(regime),
+            )
+        ]
+
+    summary_status = "failed" if any(check.status == "failed" for check in detail_checks) else "warning"
+    summary_reason = "; ".join(check.reason or check.name for check in detail_checks if check.status in {"failed", "warning"})
+    return [
+        SignalLayerCheck(
+            name="market_regime_no_trade",
+            status=summary_status,
+            reason=summary_reason,
+            metadata={
+                **_regime_metadata(regime),
+                "detail_check_names": [check.name for check in detail_checks],
+            },
+        ),
+        *detail_checks,
+    ]
 
 
 def _missing_market_data_check(
@@ -586,6 +705,35 @@ def _checks(snapshot: Any) -> list[SignalLayerCheck]:
     return result
 
 
+def _regime_labels(regime: Any) -> set[str]:
+    labels = _attribute(regime, "labels") or []
+    result = {str(label) for label in labels if str(label)}
+    for key in ("primary_label", "base_label", "volatility_label"):
+        value = _attribute(regime, key)
+        if value:
+            result.add(str(value))
+    for label in _attribute(regime, "event_labels") or []:
+        result.add(str(label))
+    legacy_type = _attribute(regime, "regime_type")
+    if legacy_type:
+        result.add(str(legacy_type))
+    return result
+
+
+def _regime_metadata(regime: Any) -> dict[str, Any]:
+    metadata = _attribute(regime, "metadata")
+    return {
+        "primary_label": _attribute(regime, "primary_label"),
+        "labels": list(_regime_labels(regime)),
+        "base_label": _attribute(regime, "base_label"),
+        "volatility_label": _attribute(regime, "volatility_label"),
+        "event_labels": list(_attribute(regime, "event_labels") or []),
+        "regime_key": _attribute(regime, "regime_key"),
+        "confidence": _attribute(regime, "confidence"),
+        "metadata": dict(metadata) if isinstance(metadata, Mapping) else {},
+    }
+
+
 def _attribute(value: Any, key: str) -> Any:
     if value is None:
         return None
@@ -606,6 +754,15 @@ def _bool_setting(settings: Mapping[str, Any], key: str, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _string_list_setting(settings: Mapping[str, Any], key: str, default: list[str]) -> list[str]:
+    value = settings.get(key, default)
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return list(default)
 
 
 def _positive_float_setting(settings: Mapping[str, Any], *keys: str) -> float | None:

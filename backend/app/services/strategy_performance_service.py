@@ -852,6 +852,14 @@ def _market_regime(signal: TradingSignal | None, metadata: dict[str, Any]) -> st
     if isinstance(regime, str) and regime:
         return _normalize_dimension(regime)
     if isinstance(regime, dict):
+        regime_key = regime.get("regime_key")
+        if regime_key:
+            return _normalize_dimension(regime_key)
+        primary_label = _normalize_dimension(regime.get("primary_label") or "unknown")
+        if primary_label != "unknown":
+            strength = _normalize_dimension(regime.get("strength") or "unknown")
+            alignment = _normalize_dimension(regime.get("alignment") or "unknown")
+            return f"{primary_label}:{strength}:{alignment}"
         direction = _normalize_dimension(regime.get("direction") or "unknown")
         strength = _normalize_dimension(regime.get("strength") or "unknown")
         alignment = _normalize_dimension(regime.get("alignment") or "unknown")

@@ -237,6 +237,21 @@ def _market_regime(signal: RadarSignal | StrategySignal) -> str | None:
     regime = signal.regime
     if regime is None:
         return None
+    regime_key = getattr(regime, "regime_key", None)
+    if regime_key is None and isinstance(regime, dict):
+        regime_key = regime.get("regime_key")
+    if regime_key:
+        return str(regime_key)
+    primary_label = getattr(regime, "primary_label", None)
+    if primary_label is None and isinstance(regime, dict):
+        primary_label = regime.get("primary_label")
+    if primary_label and primary_label != "unknown":
+        strength = getattr(regime, "strength", None)
+        alignment = getattr(regime, "alignment", None)
+        if isinstance(regime, dict):
+            strength = regime.get("strength", strength)
+            alignment = regime.get("alignment", alignment)
+        return f"{primary_label}:{strength or 'unknown'}:{alignment or 'unknown'}"
     direction = getattr(regime, "direction", None)
     strength = getattr(regime, "strength", None)
     alignment = getattr(regime, "alignment", None)

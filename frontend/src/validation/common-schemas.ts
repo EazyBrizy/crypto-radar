@@ -41,6 +41,40 @@ export const ExecutionGateStatusSchema = z.enum(["passed", "warning", "blocked"]
 export const RadarRiskRewardStatusSchema = z.enum(["passed", "warning", "failed", "skipped", "unknown"]);
 export const RiskCheckStatusSchema = z.enum(["passed", "warning", "failed"]);
 export const ViewToneSchema = z.enum(["green", "red", "yellow", "blue", "purple", "neutral"]);
+export const MarketRegimeTypeSchema = z.enum([
+  "trend_up",
+  "trend_down",
+  "range",
+  "chop",
+  "volatility_compression",
+  "volatility_expansion",
+  "post_impulse",
+  "liquidity_sweep_zone",
+  "unknown"
+]);
+export const MarketRegimeLabelSchema = z.enum([
+  "trend_up",
+  "trend_down",
+  "range",
+  "chop",
+  "volatility_compression",
+  "volatility_expansion",
+  "post_impulse",
+  "news_pump",
+  "liquidity_vacuum",
+  "market_wide_risk_off",
+  "unknown"
+]);
+export const MarketRegimeVolatilityStateSchema = z.enum(["compression", "normal", "expansion", "unknown"]);
+export const MarketRegimeStructureStateSchema = z.enum(["trend", "range", "chop", "unknown"]);
+export const MarketRegimeCandidateSchema = z.object({
+  label: MarketRegimeLabelSchema,
+  score: z.number(),
+  confidence: z.number(),
+  detected: z.boolean(),
+  reason: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).default({})
+});
 
 const DEFAULT_LIQUIDITY_METRICS = {
   spread_percent: 0,
@@ -338,8 +372,21 @@ export const RadarSignalSchema = z.object({
     direction: z.enum(["bullish", "bearish", "range", "unknown"]),
     strength: z.enum(["weak", "normal", "strong", "unknown"]),
     alignment: z.enum(["aligned", "mixed", "against", "unknown"]),
+    regime_type: MarketRegimeTypeSchema.default("unknown"),
+    volatility_state: MarketRegimeVolatilityStateSchema.default("unknown"),
+    structure_state: MarketRegimeStructureStateSchema.default("unknown"),
+    compatibility: z.record(z.string(), z.unknown()).default({}),
     score_adjustment: z.number(),
-    checks: z.array(SignalLayerCheckSchema).default([])
+    checks: z.array(SignalLayerCheckSchema).default([]),
+    primary_label: MarketRegimeLabelSchema.default("unknown"),
+    labels: z.array(MarketRegimeLabelSchema).default([]),
+    base_label: MarketRegimeLabelSchema.default("unknown"),
+    volatility_label: MarketRegimeLabelSchema.default("unknown"),
+    event_labels: z.array(MarketRegimeLabelSchema).default([]),
+    confidence: z.number().default(0),
+    candidates: z.array(MarketRegimeCandidateSchema).default([]),
+    regime_key: z.string().nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).default({})
   }).nullable().optional(),
   setup: z.object({
     name: z.string(),

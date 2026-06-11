@@ -8,6 +8,7 @@ from app.core.clickhouse_client import get_clickhouse_client
 from app.core.redis_client import get_redis_client
 from app.schemas.candle import OHLCVCandle
 from app.schemas.market import Features, MarketData, OrderBookSnapshot
+from app.schemas.signal import MarketRegimeSnapshot
 
 PRICE_TTL_SECONDS = 30
 ORDERBOOK_TTL_SECONDS = 5
@@ -119,6 +120,23 @@ class MarketDataPersistenceService:
         "features_json",
         "calculated_at",
     ]
+    _regime_columns = [
+        "exchange",
+        "symbol",
+        "timeframe",
+        "ts",
+        "primary_label",
+        "base_label",
+        "volatility_label",
+        "event_labels",
+        "direction",
+        "strength",
+        "confidence",
+        "score_adjustment",
+        "regime_key",
+        "snapshot_json",
+        "calculated_at",
+    ]
 
     def __init__(
         self,
@@ -156,6 +174,21 @@ class MarketDataPersistenceService:
             "market.indicator_values",
             [self._feature_row(features)],
             column_names=self._indicator_columns,
+        )
+
+    def persist_regime_snapshot(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        timestamp: int,
+        snapshot: MarketRegimeSnapshot,
+    ) -> None:
+        self._clickhouse().insert(
+            "market.regime_snapshots",
+            [self._regime_row(exchange, symbol, timeframe, timestamp, snapshot)],
+            column_names=self._regime_columns,
         )
 
     def persist_orderbook_snapshot(
@@ -274,6 +307,32 @@ class MarketDataPersistenceService:
             _decimal(features.atr_14),
             _decimal(features.volume_ma_20),
             features.model_dump_json(),
+            _utc_now(),
+        ]
+
+    def _regime_row(
+        self,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        timestamp: int,
+        snapshot: MarketRegimeSnapshot,
+    ) -> list[Any]:
+        return [
+            exchange,
+            symbol,
+            timeframe,
+            _utc_from_ms(timestamp),
+            snapshot.primary_label,
+            snapshot.base_label,
+            snapshot.volatility_label,
+            list(snapshot.event_labels),
+            snapshot.direction,
+            snapshot.strength,
+            float(snapshot.confidence),
+            int(snapshot.score_adjustment),
+            snapshot.regime_key or "",
+            snapshot.model_dump_json(),
             _utc_now(),
         ]
 

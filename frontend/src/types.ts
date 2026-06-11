@@ -249,14 +249,64 @@ export interface SignalDecisionSnapshot {
   warnings: DecisionReason[];
 }
 
+export type MarketRegimeType =
+  | "trend_up"
+  | "trend_down"
+  | "range"
+  | "chop"
+  | "volatility_compression"
+  | "volatility_expansion"
+  | "post_impulse"
+  | "liquidity_sweep_zone"
+  | "unknown";
+
+export type MarketRegimeLabel =
+  | "trend_up"
+  | "trend_down"
+  | "range"
+  | "chop"
+  | "volatility_compression"
+  | "volatility_expansion"
+  | "post_impulse"
+  | "news_pump"
+  | "liquidity_vacuum"
+  | "market_wide_risk_off"
+  | "unknown";
+
+export type MarketRegimeVolatilityState = "compression" | "normal" | "expansion" | "unknown";
+
+export type MarketRegimeStructureState = "trend" | "range" | "chop" | "unknown";
+
+export interface MarketRegimeCandidate {
+  label: MarketRegimeLabel;
+  score: number;
+  confidence: number;
+  detected: boolean;
+  reason: string | null;
+  metadata: Record<string, unknown>;
+}
+
 export interface MarketRegimeSnapshot {
   signal_timeframe: string;
   context_timeframe: string | null;
   direction: "bullish" | "bearish" | "range" | "unknown";
   strength: "weak" | "normal" | "strong" | "unknown";
   alignment: "aligned" | "mixed" | "against" | "unknown";
+  regime_type: MarketRegimeType;
+  volatility_state: MarketRegimeVolatilityState;
+  structure_state: MarketRegimeStructureState;
+  compatibility: Record<string, unknown>;
   score_adjustment: number;
   checks: SignalLayerCheck[];
+  primary_label: MarketRegimeLabel;
+  labels: MarketRegimeLabel[];
+  base_label: MarketRegimeLabel;
+  volatility_label: MarketRegimeLabel;
+  event_labels: MarketRegimeLabel[];
+  confidence: number;
+  candidates: MarketRegimeCandidate[];
+  regime_key: string | null;
+  metadata: Record<string, unknown>;
 }
 
 export interface StrategySetupSnapshot {

@@ -60,7 +60,17 @@ class SignalExecutionGateService:
 
         trigger_reason = _trigger_failed_reason(signal, execution_candidate=execution_candidate)
         if trigger_reason is not None:
-            hard_blockers.append(trigger_reason)
+            if trigger_reason.severity == "blocker":
+                hard_blockers.append(trigger_reason)
+            else:
+                reasons.append(trigger_reason)
+
+        regime_reason = _regime_compatibility_reason(signal)
+        if regime_reason is not None:
+            if regime_reason.severity == "blocker":
+                hard_blockers.append(regime_reason)
+            else:
+                warnings.append(regime_reason)
 
         no_trade = signal.no_trade_filter
         if _no_trade_blocked(no_trade):
@@ -251,10 +261,10 @@ def _trigger_failed_reason(
     *,
     execution_candidate: bool,
 ) -> SignalExecutionGateReason | None:
-    if not execution_candidate:
-        return None
     trigger = getattr(signal, "trigger", None)
     if trigger is not None and getattr(trigger, "passed", False) is True:
+        return None
+    if trigger is None and not execution_candidate:
         return None
     message = "Execution requires a confirmed trigger."
     metadata: dict[str, Any] = {}
@@ -263,11 +273,37 @@ def _trigger_failed_reason(
         metadata = _model_metadata(trigger)
     return _reason(
         "trigger_not_confirmed",
-        "blocker",
+        "blocker" if execution_candidate else "info",
         "trigger",
         message,
         metadata,
     )
+
+
+def _regime_compatibility_reason(signal: SignalLike) -> SignalExecutionGateReason | None:
+    regime = getattr(signal, "regime", None)
+    checks = getattr(regime, "checks", None)
+    if not checks:
+        return None
+    for check in checks:
+        if getattr(check, "name", None) != "strategy_regime_compatibility":
+            continue
+        status = str(getattr(check, "status", "") or "").strip().lower()
+        if status not in {"failed", "warning"}:
+            return None
+        metadata = dict(getattr(check, "metadata", {}) or {})
+        code = str(
+            metadata.get("reason_code")
+            or ("strategy_regime_incompatible" if status == "failed" else "strategy_regime_watchlist")
+        )
+        return _reason(
+            code,
+            "blocker" if status == "failed" else "warning",
+            "market_regime",
+            getattr(check, "reason", None) or "Market regime is not compatible with this strategy.",
+            metadata,
+        )
+    return None
 
 
 def _rr_metadata_sources(signal: SignalLike) -> list[Mapping[str, Any]]:

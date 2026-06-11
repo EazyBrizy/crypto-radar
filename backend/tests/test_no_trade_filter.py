@@ -91,6 +91,52 @@ class NoTradeFilterServiceTest(unittest.TestCase):
         self.assertIn("overextended_entry", result.metadata["blocker_codes"])
         self.assertIn("2.80 ATR", result.blockers[0])
 
+    def test_liquidity_vacuum_regime_creates_no_trade_block(self) -> None:
+        signal = _strategy_signal().model_copy(
+            update={
+                "regime": MarketRegimeSnapshot(
+                    primary_label="liquidity_vacuum",
+                    labels=["liquidity_vacuum"],
+                    event_labels=["liquidity_vacuum"],
+                    regime_key="liquidity_vacuum:strong:unknown",
+                )
+            }
+        )
+
+        result = NoTradeFilterService().evaluate(
+            signal=signal,
+            features=_features(),
+            context={},
+            settings={"no_trade_filters_enabled": True},
+        )
+
+        self.assertTrue(result.blocked)
+        self.assertIn("liquidity_vacuum", result.metadata["blocker_codes"])
+
+    def test_market_wide_risk_off_blocks_long_but_not_short(self) -> None:
+        regime = MarketRegimeSnapshot(
+            primary_label="market_wide_risk_off",
+            labels=["market_wide_risk_off", "trend_down"],
+            base_label="trend_down",
+            event_labels=["market_wide_risk_off"],
+            regime_key="market_wide_risk_off:strong:against",
+        )
+        long_result = NoTradeFilterService().evaluate(
+            signal=_strategy_signal().model_copy(update={"regime": regime}),
+            features=_features(),
+            context={},
+            settings={"no_trade_filters_enabled": True},
+        )
+        short_result = NoTradeFilterService().evaluate(
+            signal=_strategy_signal().model_copy(update={"direction": "SHORT", "regime": regime}),
+            features=_features(),
+            context={},
+            settings={"no_trade_filters_enabled": True},
+        )
+
+        self.assertIn("market_wide_risk_off", long_result.metadata["blocker_codes"])
+        self.assertNotIn("market_wide_risk_off", short_result.metadata["blocker_codes"])
+
     def test_real_risk_gate_blocks_no_trade_signal(self) -> None:
         no_trade = NoTradeFilterResult(
             enabled=True,

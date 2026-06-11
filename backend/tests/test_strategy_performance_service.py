@@ -8,6 +8,7 @@ from app.services.strategy_performance_service import (
     StrategyPerformanceProfileQuery,
     StrategyPerformanceService,
     StrategyPerformanceSummary,
+    _market_regime,
     build_daily_performance,
     score_bucket_for,
 )
@@ -217,6 +218,40 @@ class StrategyPerformanceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile.source, "none")
         self.assertEqual(profile.confidence, "insufficient_sample")
         self.assertEqual(profile.sample_size, 0)
+
+    def test_market_regime_helper_prefers_regime_key_then_primary_label(self) -> None:
+        signal = type(
+            "SignalWithRegimeSnapshot",
+            (),
+            {
+                "features_snapshot": {
+                    "regime": {
+                        "regime_key": "trend_up:strong:aligned",
+                        "primary_label": "trend_down",
+                        "direction": "bearish",
+                        "strength": "weak",
+                        "alignment": "against",
+                    }
+                }
+            },
+        )()
+        primary_only = type(
+            "SignalWithPrimaryRegime",
+            (),
+            {
+                "features_snapshot": {
+                    "regime": {
+                        "primary_label": "chop",
+                        "direction": "range",
+                        "strength": "weak",
+                        "alignment": "mixed",
+                    }
+                }
+            },
+        )()
+
+        self.assertEqual(_market_regime(signal, {}), "trend_up:strong:aligned")
+        self.assertEqual(_market_regime(primary_only, {}), "chop:weak:mixed")
 
 
 def _outcome(

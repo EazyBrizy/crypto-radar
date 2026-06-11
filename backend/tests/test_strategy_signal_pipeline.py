@@ -14,6 +14,7 @@ from app.schemas.signal import (
 from app.schemas.trade_plan import TradePlan, TradePlanCompletenessResult, TradePlanEntry, TradePlanTarget
 from app.services.auto_entry_eligibility import AutoEntryEligibilityService
 from app.services.risk_reward_assessment import RiskRewardAssessmentService
+from app.services.market_regime import MarketWideRegimeContext
 from app.services.signal_status_resolver import SignalStatusResolver
 from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
@@ -999,7 +1000,8 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(signal)
-        self.assertEqual(signal.status, "actionable")
+        self.assertEqual(signal.status, "ready")
+        self.assertFalse(signal.trigger.passed if signal and signal.trigger else True)
         self.assertEqual(signal.selected_rr_target, "nearest")
         self.assertEqual(
             signal.trade_plan.risk_rules.selected_rr_target if signal.trade_plan else None,
@@ -1015,6 +1017,520 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(rr_check.status, "warning")
         self.assertIn("nearest target", rr_check.reason or "")
+
+    def test_liquidity_sweep_without_reclaim_not_actionable(self) -> None:
+        features = _breakout_features()
+        candidate = _with_trade_plan_metadata(
+            _liquidity_sweep_candidate(features),
+            entry_metadata={
+                "swept_level": features.close + 0.35,
+                "requires_reclaim": True,
+                "confirmation": False,
+                "reclaim_score": 0.0,
+                "absorption_score": 0.8,
+                "oi_flush_score": 0.8,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertIsNotNone(signal.trigger)
+        self.assertFalse(signal.trigger.passed if signal.trigger else True)
+        self.assertEqual(signal.trigger.trigger_type if signal.trigger else None, "liquidity_reclaim")
+        self.assertIn("reclaim", signal.trigger.reason if signal.trigger else "")
+        self.assertEqual(signal.status, "ready")
+
+    def test_liquidity_sweep_with_reclaim_trigger_passes(self) -> None:
+        features = _breakout_features()
+        candidate = _with_trade_plan_metadata(
+            _liquidity_sweep_candidate(features),
+            entry_metadata={
+                "swept_level": features.close - 0.35,
+                "requires_reclaim": True,
+                "confirmation": True,
+                "reclaim_score": 0.85,
+                "absorption_score": 0.8,
+                "oi_flush_score": 0.8,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertIsNotNone(signal.trigger)
+        self.assertTrue(signal.trigger.passed if signal.trigger else False)
+        self.assertEqual(signal.trigger.trigger_type if signal.trigger else None, "liquidity_reclaim")
+
+    def test_breakout_large_candle_requires_retest(self) -> None:
+        features = _breakout_features()
+        candidate = _with_trade_plan_metadata(
+            _quality_candidate(features),
+            entry_metadata={
+                "range_high": features.donchian_high_20,
+                "range_low": features.donchian_low_20,
+                "breakout_closed": True,
+                "large_candle": True,
+                "retest_required": True,
+            },
+            risk_metadata={
+                "post_breakout_hold_score": 0.2,
+                "retest_quality_score": 0.0,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertIsNotNone(signal.trigger)
+        self.assertFalse(signal.trigger.passed if signal.trigger else True)
+        self.assertEqual(signal.trigger.trigger_type if signal.trigger else None, "breakout_retest")
+        self.assertIn("breakout requires retest", signal.trigger.reason if signal.trigger else "")
+        self.assertEqual(signal.status, "ready")
+
+    def test_breakout_retest_trigger_passes(self) -> None:
+        features = _breakout_features()
+        candidate = _with_trade_plan_metadata(
+            _quality_candidate(features),
+            entry_metadata={
+                "range_high": features.donchian_high_20,
+                "range_low": features.donchian_low_20,
+                "breakout_closed": True,
+                "large_candle": True,
+                "retest_required": True,
+            },
+            risk_metadata={
+                "post_breakout_hold_score": 0.78,
+                "retest_quality_score": 0.8,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertIsNotNone(signal.trigger)
+        self.assertTrue(signal.trigger.passed if signal.trigger else False)
+        self.assertEqual(signal.trigger.trigger_type if signal.trigger else None, "breakout_retest")
+
+    def test_trend_pullback_without_structural_zone_not_actionable(self) -> None:
+        features = _breakout_features().model_copy(update={"history_length": 260})
+        candidate = _with_trade_plan_metadata(
+            _trend_pullback_candidate(features),
+            metadata={
+                "require_structural_zone": True,
+                "structural_zone_ok": False,
+                "structural_pullback_zone": None,
+                "reclaimed_pullback_zone": False,
+                "absorption_confirmed": False,
+                "continuation_score": 0.2,
+                "min_continuation_score": 0.45,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertIsNotNone(signal.trigger)
+        self.assertFalse(signal.trigger.passed if signal.trigger else True)
+        self.assertIn(signal.status, {"ready", "watchlist", "wait_for_pullback"})
+        self.assertIn("structural zone", signal.trigger.reason if signal.trigger else "")
+
+    def test_trend_pullback_required_htf_alignment_blocks_trigger(self) -> None:
+        features = _breakout_features().model_copy(update={"history_length": 260})
+        candidate = _with_trade_plan_metadata(
+            _trend_pullback_candidate(features),
+            metadata={
+                "require_structural_zone": True,
+                "structural_zone_ok": True,
+                "reclaimed_pullback_zone": True,
+                "absorption_confirmed": True,
+                "continuation_score": 0.8,
+                "min_continuation_score": 0.45,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bearish_context_features(),
+                strategy_params={"min_rr_ratio": 1.5, "require_htf_alignment": True},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal.regime.alignment if signal.regime else None, "against")
+        self.assertIsNotNone(signal.trigger)
+        self.assertFalse(signal.trigger.passed if signal.trigger else True)
+        self.assertIn("higher timeframe alignment", signal.trigger.reason if signal.trigger else "")
+        self.assertIn(signal.status, {"ready", "watchlist", "wait_for_pullback"})
+
+    def test_trend_pullback_blocked_in_chop(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "history_length": 260,
+                "close": 100.4,
+                "price": 100.4,
+                "open": 100.1,
+                "high": 100.7,
+                "low": 99.9,
+                "ema_20": 100.2,
+                "ema_50": 100.1,
+                "ema_200": 100.0,
+                "ema_200_chop_score": 58.0,
+                "ema_200_cross_count_50": 3,
+                "ema_200_near_ratio_50": 0.42,
+                "ema_200_slope_atr_20": 0.05,
+                "adx": 12.0,
+                "adx_rising": False,
+                "range_20_atr": 2.2,
+            }
+        )
+        candidate = _with_trade_plan_metadata(
+            _trend_pullback_candidate(features),
+            metadata={
+                "require_structural_zone": True,
+                "structural_zone_ok": True,
+                "reclaimed_pullback_zone": True,
+                "absorption_confirmed": True,
+                "continuation_score": 0.8,
+                "min_continuation_score": 0.45,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=features.model_copy(update={"timeframe": "1h"}),
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal.regime.regime_type if signal.regime else None, "chop")
+        self.assertFalse(signal.regime.compatibility.get("compatible") if signal.regime else True)
+        self.assertIn("strategy_regime_incompatible", signal.status_reason or "")
+
+    def test_liquidity_sweep_against_strong_trend_requires_absorption(self) -> None:
+        features = _breakout_features()
+        candidate = _with_trade_plan_metadata(
+            build_signal(
+                features=features,
+                strategy="liquidity_sweep_reversal",
+                direction="SHORT",
+                scoring=score_breakdown(
+                    trend_score=35,
+                    volume_score=20,
+                    liquidity_score=20,
+                    orderbook_score=10,
+                    risk_reward_score=15,
+                ),
+                reasons=["Liquidity sweep short setup"],
+                entry=features.close,
+                stop_loss=features.close + 1.0,
+                take_profit_1=features.close - 2.0,
+                take_profit_2=features.close - 3.0,
+            ),
+            entry_metadata={
+                "swept_level": features.close + 0.4,
+                "requires_reclaim": True,
+                "confirmation": True,
+                "reclaim_score": 0.85,
+            },
+            risk_metadata={
+                "absorption_score": 0.0,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal.regime.alignment if signal.regime else None, "against")
+        self.assertEqual(
+            signal.regime.compatibility.get("reason_code") if signal.regime else None,
+            "strategy_regime_incompatible",
+        )
+        self.assertFalse(signal.regime.compatibility.get("compatible") if signal.regime else True)
+
+    def test_breakout_requires_compression(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "bb_width_percentile": 62.0,
+                "atr_14": 1.4,
+                "atr_sma_50": 1.0,
+                "range_20": 7.2,
+                "range_50_average": 6.0,
+                "range_20_atr": 7.2,
+            }
+        )
+        candidate = _with_trade_plan_metadata(
+            _quality_candidate(features),
+            entry_metadata={
+                "range_high": features.donchian_high_20,
+                "range_low": features.donchian_low_20,
+                "breakout_closed": True,
+                "large_candle": False,
+                "retest_required": False,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal.regime.regime_type if signal.regime else None, "trend_up")
+        self.assertFalse(signal.regime.compatibility.get("compatible") if signal.regime else True)
+        self.assertIn("compression", signal.regime.compatibility.get("reason", "") if signal.regime else "")
+
+    def test_liquidity_vacuum_creates_no_trade_blocker(self) -> None:
+        features = _breakout_features()
+        alpha_context = AlphaMarketContext(
+            symbol=features.symbol,
+            timeframe=features.timeframe,
+            timestamp=features.timestamp,
+            orderbook_imbalance=0.92,
+            bid_depth_usd=12_000.0,
+            ask_depth_usd=9_000.0,
+            sweep_through_book=True,
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            _quality_candidate(features),
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                alpha_context=alpha_context,
+                market_quality=MarketQualityInput(volume_24h_quote=450_000.0, spread_bps=88.0),
+                strategy_params={"min_rr_ratio": 1.5, "no_trade_filters_enabled": True},
+                pipeline_settings={"no_trade_filters_enabled": True},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertIn("liquidity_vacuum", signal.regime.event_labels if signal.regime else [])
+        self.assertTrue(signal.no_trade_filter.blocked if signal.no_trade_filter else False)
+        self.assertIn("liquidity_vacuum", signal.no_trade_filter.metadata.get("blocker_codes", []) if signal.no_trade_filter else [])
+
+    def test_news_pump_signal_is_not_actionable(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "open": 100.0,
+                "high": 108.5,
+                "low": 99.6,
+                "close": 108.0,
+                "price": 108.0,
+                "volume_spike": 6.5,
+                "volume": 650.0,
+                "oi_change": 0.22,
+            }
+        )
+        alpha_context = AlphaMarketContext(
+            symbol=features.symbol,
+            timeframe=features.timeframe,
+            timestamp=features.timestamp,
+            aggressive_delta=0.78,
+            cvd_change=450_000.0,
+            oi_delta_5m=0.18,
+            funding_pressure=0.08,
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            _quality_candidate(features),
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                alpha_context=alpha_context,
+                market_quality=MarketQualityInput(volume_24h_quote=200_000_000.0, spread_bps=42.0),
+                strategy_params={"min_rr_ratio": 1.5, "no_trade_filters_enabled": True},
+                pipeline_settings={"no_trade_filters_enabled": True},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertIn("news_pump", signal.regime.event_labels if signal.regime else [])
+        self.assertFalse(signal.decision.signal_actionable if signal.decision else True)
+        self.assertTrue(any(reason.code == "news_pump_mode" for reason in (signal.decision.blockers if signal.decision else [])))
+
+    def test_compression_boosts_volatility_squeeze_breakout(self) -> None:
+        features = _breakout_features().model_copy(
+            update={
+                "price": 100.4,
+                "open": 100.2,
+                "high": 100.7,
+                "low": 99.9,
+                "close": 100.4,
+                "bb_width_percentile": 8.0,
+                "atr_14": 0.55,
+                "atr_sma_50": 1.0,
+                "range_20": 3.0,
+                "range_50_average": 6.0,
+                "volume_spike": 0.9,
+            }
+        )
+        candidate = _quality_candidate(features)
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertIn("volatility_compression", signal.regime.labels if signal.regime else [])
+        self.assertGreaterEqual(signal.score, candidate.score + 10)
+
+    def test_risk_off_blocks_long_but_not_automatically_short_if_liquidity_is_ok(self) -> None:
+        features = _breakout_features()
+        risk_off_context = MarketWideRegimeContext(
+            exchange="bybit",
+            timeframe=features.timeframe,
+            majors={
+                "BTCUSDT": _bearish_context_features().model_copy(update={"symbol": "BTCUSDT", "timeframe": features.timeframe}),
+                "ETHUSDT": _bearish_context_features().model_copy(update={"symbol": "ETHUSDT", "timeframe": features.timeframe}),
+            },
+        )
+        long_signal = StrategySignalPipeline().finalize(
+            _quality_candidate(features),
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                market_wide_context=risk_off_context,
+                market_quality=MarketQualityInput(volume_24h_quote=200_000_000.0, spread_bps=5.0),
+                strategy_params={"min_rr_ratio": 1.5, "no_trade_filters_enabled": True},
+                pipeline_settings={"no_trade_filters_enabled": True},
+            ),
+        )
+        short_candidate = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="SHORT",
+            scoring=score_breakdown(
+                trend_score=35,
+                volume_score=20,
+                volatility_score=20,
+                risk_reward_score=15,
+            ),
+            reasons=["Risk-off short setup"],
+            entry=features.close,
+            stop_loss=features.close + 1.0,
+            take_profit_1=features.close - 2.0,
+            take_profit_2=features.close - 3.0,
+        )
+        short_signal = StrategySignalPipeline().finalize(
+            short_candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bearish_context_features(),
+                market_wide_context=risk_off_context,
+                market_quality=MarketQualityInput(volume_24h_quote=200_000_000.0, spread_bps=5.0),
+                strategy_params={"min_rr_ratio": 1.5, "no_trade_filters_enabled": True},
+                pipeline_settings={"no_trade_filters_enabled": True},
+            ),
+        )
+
+        self.assertIsNotNone(long_signal)
+        self.assertIn(
+            "market_wide_risk_off",
+            long_signal.no_trade_filter.metadata.get("blocker_codes", []) if long_signal and long_signal.no_trade_filter else [],
+        )
+        self.assertIsNotNone(short_signal)
+        self.assertNotIn(
+            "market_wide_risk_off",
+            short_signal.no_trade_filter.metadata.get("blocker_codes", []) if short_signal and short_signal.no_trade_filter else [],
+        )
+
+    def test_score_90_without_trigger_not_execution_signal(self) -> None:
+        features = _breakout_features()
+        candidate = _with_trade_plan_metadata(
+            _liquidity_sweep_candidate(features),
+            entry_metadata={
+                "swept_level": features.close + 0.35,
+                "requires_reclaim": True,
+                "confirmation": False,
+                "reclaim_score": 0.0,
+                "absorption_score": 0.8,
+                "oi_flush_score": 0.8,
+            },
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                strategy_params={"min_rr_ratio": 1.5},
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertIsNotNone(signal.execution_gate)
+        self.assertFalse(signal.execution_gate.can_show_in_execution_feed if signal.execution_gate else True)
+        self.assertIn(
+            "trigger_not_confirmed",
+            {reason.code for reason in signal.execution_gate.reasons} if signal.execution_gate else set(),
+        )
 
     def test_sweep_ignores_nearest_target_that_is_behind_entry(self) -> None:
         features = _breakout_features().model_copy(
@@ -2657,6 +3173,71 @@ def _quality_candidate(features: Features):
         take_profit_1=features.close + 2.0,
         take_profit_2=features.close + 3.0,
     )
+
+
+def _liquidity_sweep_candidate(features: Features):
+    return build_signal(
+        features=features,
+        strategy="liquidity_sweep_reversal",
+        direction="LONG",
+        scoring=score_breakdown(
+            trend_score=35,
+            volume_score=20,
+            liquidity_score=20,
+            orderbook_score=10,
+            risk_reward_score=15,
+        ),
+        reasons=["Liquidity sweep setup"],
+        entry=features.close,
+        stop_loss=features.close - 1.0,
+        take_profit_1=features.close + 2.0,
+        take_profit_2=features.close + 3.0,
+    )
+
+
+def _trend_pullback_candidate(features: Features):
+    return build_signal(
+        features=features,
+        strategy="trend_pullback_continuation",
+        direction="LONG",
+        scoring=score_breakdown(
+            trend_score=45,
+            volume_score=20,
+            volatility_score=10,
+            risk_reward_score=15,
+        ),
+        reasons=["Trend pullback setup"],
+        entry=features.close,
+        stop_loss=features.close - 1.0,
+        take_profit_1=features.close + 2.0,
+        take_profit_2=features.close + 3.0,
+    )
+
+
+def _with_trade_plan_metadata(
+    candidate,
+    *,
+    entry_metadata: dict[str, object] | None = None,
+    metadata: dict[str, object] | None = None,
+    risk_metadata: dict[str, object] | None = None,
+):
+    trade_plan = candidate.trade_plan
+    assert trade_plan is not None
+    entry = trade_plan.entry.model_copy(
+        update={"metadata": {**trade_plan.entry.metadata, **(entry_metadata or {})}},
+    )
+    risk_rules = trade_plan.risk_rules.model_copy(
+        update={"metadata": {**trade_plan.risk_rules.metadata, **(risk_metadata or {})}},
+    )
+    trade_plan = trade_plan.model_copy(
+        update={
+            "entry": entry,
+            "metadata": {**trade_plan.metadata, **(metadata or {})},
+            "risk_rules": risk_rules,
+        },
+        deep=True,
+    )
+    return candidate.model_copy(update={"trade_plan": trade_plan})
 
 
 def _breakout_alpha_context(features: Features) -> AlphaMarketContext:

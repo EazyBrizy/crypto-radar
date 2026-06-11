@@ -14,6 +14,7 @@ from app.schemas.decision import (
 from app.schemas.risk import RiskDecision
 from app.schemas.signal import (
     MarketQualitySnapshot,
+    MarketRegimeSnapshot,
     NoTradeFilterResult,
     SignalConfirmationSnapshot,
     SignalLayerCheck,
@@ -40,6 +41,7 @@ class SignalDecisionService:
         production_mode: bool,
         status: str,
         rr_guard_context: str = "discovery",
+        regime: MarketRegimeSnapshot | None = None,
     ) -> SignalDecisionSnapshot:
         snapshot = SignalDecisionSnapshot(
             setup_valid=not is_terminal_signal_status(status),
@@ -54,6 +56,7 @@ class SignalDecisionService:
             execution_allowed_real=False if not completeness.execution_allowed_real else None,
         )
         snapshot = self.merge_market_quality(snapshot, quality)
+        snapshot = self.merge_market_regime(snapshot, regime)
         snapshot = self.merge_rr(snapshot, risk_reward, scope=_scope_from_context(rr_guard_context))
         snapshot = self.merge_no_trade(snapshot, no_trade_filter)
         snapshot = self.merge_trade_plan_completeness(
@@ -317,6 +320,73 @@ class SignalDecisionService:
                 warnings.append(reason)
         return self._finalize_snapshot(_snapshot_with_reasons(snapshot, blockers=blockers, warnings=warnings))
 
+    def merge_market_regime(
+        self,
+        snapshot: SignalDecisionSnapshot,
+        regime: MarketRegimeSnapshot | None,
+    ) -> SignalDecisionSnapshot:
+        if regime is None:
+            return snapshot
+        blockers: list[DecisionReason] = []
+        warnings: list[DecisionReason] = []
+        seen_codes: set[str] = set()
+        for check in regime.checks:
+            code = _market_regime_reason_code(check)
+            if code is None or check.status not in {"failed", "warning"}:
+                continue
+            reason = DecisionReason(
+                code=code,
+                message=check.reason or code.replace("_", " "),
+                source="data",
+                severity="blocker" if check.status == "failed" else "warning",
+                scope=_market_regime_scope(code, failed=check.status == "failed"),
+                metadata={
+                    **dict(check.metadata),
+                    "primary_label": regime.primary_label,
+                    "labels": list(regime.labels),
+                    "regime_key": regime.regime_key,
+                    "confidence": regime.confidence,
+                },
+            )
+            seen_codes.add(code)
+            if check.status == "failed":
+                blockers.append(reason)
+            else:
+                warnings.append(reason)
+
+        label_codes = {
+            "liquidity_vacuum": "liquidity_vacuum",
+            "news_pump": "news_pump_mode",
+            "market_wide_risk_off": "market_wide_risk_off",
+            "post_impulse": "post_impulse",
+            "chop": "chop_regime",
+        }
+        for label, code in label_codes.items():
+            if label not in regime.labels or code in seen_codes:
+                continue
+            severity: DecisionReasonSeverity = "warning"
+            scope: DecisionReasonScope = "discovery"
+            if label in {"liquidity_vacuum", "news_pump"}:
+                severity = "blocker"
+            reason = DecisionReason(
+                code=code,
+                message=f"{label.replace('_', ' ')} regime is active",
+                source="data",
+                severity=severity,
+                scope=scope,
+                metadata={
+                    "primary_label": regime.primary_label,
+                    "labels": list(regime.labels),
+                    "regime_key": regime.regime_key,
+                    "confidence": regime.confidence,
+                },
+            )
+            if severity == "blocker":
+                blockers.append(reason)
+            else:
+                warnings.append(reason)
+        return self._finalize_snapshot(_snapshot_with_reasons(snapshot, blockers=blockers, warnings=warnings))
+
     def merge_risk_decision(
         self,
         snapshot: SignalDecisionSnapshot,
@@ -444,6 +514,7 @@ def from_pipeline_outputs(
     production_mode: bool,
     status: str,
     rr_guard_context: str = "discovery",
+    regime: MarketRegimeSnapshot | None = None,
 ) -> SignalDecisionSnapshot:
     return SignalDecisionService().from_pipeline_outputs(
         signal=signal,
@@ -457,6 +528,7 @@ def from_pipeline_outputs(
         production_mode=production_mode,
         status=status,
         rr_guard_context=rr_guard_context,
+        regime=regime,
     )
 
 
@@ -472,6 +544,13 @@ def merge_no_trade(
     no_trade: NoTradeFilterResult,
 ) -> SignalDecisionSnapshot:
     return SignalDecisionService().merge_no_trade(snapshot, no_trade)
+
+
+def merge_market_regime(
+    snapshot: SignalDecisionSnapshot,
+    regime: MarketRegimeSnapshot | None,
+) -> SignalDecisionSnapshot:
+    return SignalDecisionService().merge_market_regime(snapshot, regime)
 
 
 def merge_rr(
@@ -588,6 +667,36 @@ def _reason_from_check(
         scope=scope,
         metadata=metadata,
     )
+
+
+def _market_regime_reason_code(check: SignalLayerCheck) -> str | None:
+    metadata_code = check.metadata.get("reason_code")
+    if isinstance(metadata_code, str) and metadata_code in {
+        "liquidity_vacuum",
+        "news_pump_mode",
+        "market_wide_risk_off",
+        "post_impulse",
+        "chop_regime",
+    }:
+        return metadata_code
+    return {
+        "liquidity_vacuum": "liquidity_vacuum",
+        "news_pump": "news_pump_mode",
+        "news_pump_mode": "news_pump_mode",
+        "market_wide_risk_off": "market_wide_risk_off",
+        "post_impulse": "post_impulse",
+        "post_impulse_entry": "post_impulse",
+        "chop": "chop_regime",
+        "chop_regime": "chop_regime",
+    }.get(check.name)
+
+
+def _market_regime_scope(code: str, *, failed: bool) -> DecisionReasonScope:
+    if not failed:
+        return "discovery"
+    if code in {"liquidity_vacuum", "news_pump_mode", "market_wide_risk_off"}:
+        return "discovery"
+    return "virtual"
 
 
 def _dedupe_reasons(reasons: Iterable[DecisionReason]) -> list[DecisionReason]:

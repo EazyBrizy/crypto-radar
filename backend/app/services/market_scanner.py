@@ -31,6 +31,7 @@ from app.services.market_persistence import (
     market_data_persistence_service,
 )
 from app.services.market_quality import MarketQualityData, MarketQualityService, market_quality_service
+from app.services.market_regime import MarketRegimeContextStore, market_regime_context_store
 from app.services.pending_entry_trigger import pending_entry_trigger_service
 from app.services.message_broker import realtime_event_broker
 from app.services.realtime_events import (
@@ -132,6 +133,7 @@ class MarketScanner:
         pending_entry_trigger: PendingEntryTriggerProcessor | None = pending_entry_trigger_service,
         derivative_market: DerivativeMarketSnapshotService | None = derivative_market_snapshot_service,
         alpha_market_context: AlphaMarketContextService | None = alpha_market_context_service,
+        market_regime_context_store: MarketRegimeContextStore | None = market_regime_context_store,
         scan_pairs: Iterable[tuple[str, str]] | None = None,
         universe_source: str = "default",
         universe_warning: str | None = None,
@@ -173,6 +175,7 @@ class MarketScanner:
         self._pending_entry_trigger = pending_entry_trigger
         self._derivative_market = derivative_market
         self._alpha_market_context = alpha_market_context
+        self._market_regime_context_store = market_regime_context_store
         self._feature_engine = FeatureEngine()
         self._strategy_engine = StrategyEngine()
         self._stats = ScannerRuntimeStats()
@@ -283,6 +286,10 @@ class MarketScanner:
             derivative_snapshot = await self._derivative_snapshot_for(features)
             features = _features_with_derivative_context(features, derivative_snapshot)
             context_features_by_timeframe = await self._context_features_for(candle)
+            self._update_market_regime_context(features)
+            for context_features_item in context_features_by_timeframe.values():
+                self._update_market_regime_context(context_features_item)
+            market_wide_context = self._market_wide_context_for(features)
             primary_context_timeframe = context_timeframe_for(candle.timeframe)
             context_features = (
                 context_features_by_timeframe.get(primary_context_timeframe)
@@ -315,6 +322,7 @@ class MarketScanner:
                     market_quality=quality,
                     strategy_configs=strategy_configs,
                     alpha_context=alpha_context,
+                    market_wide_context=market_wide_context,
                 )
             )
             evaluated_candles += 1
@@ -325,6 +333,7 @@ class MarketScanner:
             self._stats.signals_found += len(signals)
             self._stats.last_signal_at = data.timestamp
             for signal in signals:
+                await self._persist_regime_snapshot(signal)
                 logger.debug(
                     "Signal detected: %s %s %s %s %s score=%s",
                     signal.exchange,
@@ -399,6 +408,62 @@ class MarketScanner:
                 features.timeframe,
                 exc,
             )
+
+    async def _persist_regime_snapshot(self, signal: StrategySignal) -> None:
+        if self._market_persistence is None or signal.regime is None:
+            return
+        persister = getattr(self._market_persistence, "persist_regime_snapshot", None)
+        if persister is None:
+            return
+        try:
+            await asyncio.to_thread(
+                persister,
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                timeframe=signal.timeframe,
+                timestamp=signal.timestamp,
+                snapshot=signal.regime,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Market regime persistence failed for %s:%s:%s: %s",
+                signal.exchange,
+                signal.symbol,
+                signal.timeframe,
+                exc,
+            )
+
+    def _update_market_regime_context(self, features: Features) -> None:
+        if self._market_regime_context_store is None:
+            return
+        try:
+            self._market_regime_context_store.update_features(features)
+        except Exception as exc:
+            logger.warning(
+                "Market regime context update failed for %s:%s:%s: %s",
+                features.exchange,
+                features.symbol,
+                features.timeframe,
+                exc,
+            )
+
+    def _market_wide_context_for(self, features: Features):
+        if self._market_regime_context_store is None:
+            return None
+        try:
+            return self._market_regime_context_store.market_wide_context(
+                features.exchange,
+                features.timeframe,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Market-wide regime context failed for %s:%s:%s: %s",
+                features.exchange,
+                features.symbol,
+                features.timeframe,
+                exc,
+            )
+            return None
 
     async def _process_pending_entry_triggers(self, data: MarketData) -> None:
         if self._pending_entry_trigger is None:

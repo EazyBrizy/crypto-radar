@@ -39,6 +39,11 @@ from app.services.virtual_trading import (
     get_virtual_simulation_model_info,
     virtual_trading_service,
 )
+from app.services.virtual_trading.service import (
+    TEST_FALLBACK_VIRTUAL_MIN_RR,
+    TEST_FALLBACK_VIRTUAL_RISK_PER_TRADE_PERCENT,
+    TEST_FALLBACK_VIRTUAL_STARTING_BALANCE,
+)
 
 
 class VirtualTradingServiceBoundaryTest(unittest.TestCase):
@@ -63,6 +68,29 @@ class VirtualTradingServiceBoundaryTest(unittest.TestCase):
             capability.code == "orderbook_depth_simulation"
             for capability in model_info.active_capabilities
         ))
+
+    def test_virtual_account_uses_risk_settings_before_explicit_test_fallbacks(self) -> None:
+        configured = _service(
+            RiskManagementSettings(
+                risk_per_trade_percent=2.0,
+                min_rr_ratio=2.5,
+                virtual_starting_balance=2500.0,
+            )
+        )
+        fallback = VirtualTradingService(
+            repository=_EphemeralTradeRepository(),
+            risk_settings_provider=None,
+        )
+
+        configured_account = configured.get_virtual_account("user_settings")
+        fallback_account = fallback.get_virtual_account("isolated_test")
+
+        self.assertEqual(configured_account.starting_balance, 2500.0)
+        self.assertEqual(configured_account.risk_reward, 2.5)
+        self.assertEqual(configured_account.risk_per_trade, 50.0)
+        self.assertEqual(fallback_account.starting_balance, TEST_FALLBACK_VIRTUAL_STARTING_BALANCE)
+        self.assertEqual(fallback_account.risk_per_trade, TEST_FALLBACK_VIRTUAL_RISK_PER_TRADE_PERCENT)
+        self.assertEqual(fallback_account.risk_reward, TEST_FALLBACK_VIRTUAL_MIN_RR)
 
     def test_low_rr_virtual_confirm_and_open_continue_in_soft_mode_with_warning(self) -> None:
         service = _service(

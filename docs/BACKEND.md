@@ -79,8 +79,9 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
   - Trigger processing is in `backend/app/services/pending_entry_trigger.py`.
   - Realtime events are published through `backend/app/services/pending_entry_events.py`.
 
-- Virtual trading: `backend/app/services/virtual_trading/`, `backend/app/services/virtual_execution_engine.py`, `backend/app/services/trade_repository.py`
+- Virtual trading: `backend/app/services/virtual_trading/`, `backend/app/services/virtual_trading/execution_engine.py`, `backend/app/services/virtual_trading/simulation_model.py`, `backend/app/services/trade_repository.py`
   - Owns virtual account, positions, fills, status lifecycle, PnL, fees, slippage, partial fills, take-profit/stop handling, and trade journal persistence.
+  - Legacy `backend/app/services/virtual_execution_engine.py` and `backend/app/services/virtual_simulation_model.py` are import shims only; new code must use the package path.
 
 - Real execution: `backend/app/services/execution_service.py`
   - Builds execution plans only after backend risk checks and exchange readiness checks.

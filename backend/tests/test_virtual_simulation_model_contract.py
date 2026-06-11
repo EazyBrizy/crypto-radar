@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.virtual_simulation_model import get_virtual_simulation_model_info
+from app.services.virtual_trading.simulation_model import get_virtual_simulation_model_info
 
 
 class VirtualSimulationModelContractTest(unittest.TestCase):

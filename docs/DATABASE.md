@@ -46,6 +46,7 @@ Models live in `backend/app/models/`. Migrations live in `backend/alembic/versio
 - `portfolios`: user/mode portfolio root.
 - `portfolio_balances`: current balances by portfolio/asset.
 - `portfolio_balance_ledger`: balance changes.
+- Virtual account balance and risk display must resolve from persisted account/risk settings when available. `VirtualTradingService` has explicit test fallback constants only for isolated in-memory callers without a user risk profile.
 - `orders`: internal order records.
 - `order_fills`: fills linked to orders.
 - `positions`: virtual/real position lifecycle records.

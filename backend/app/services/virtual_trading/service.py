@@ -90,9 +90,9 @@ from app.services.virtual_execution_profile import (
 
 logger = logging.getLogger(__name__)
 MAX_STORED_TRADES = 500
-VIRTUAL_STARTING_BALANCE = 100.0
-VIRTUAL_RISK_PER_TRADE = 10.0
-VIRTUAL_RISK_REWARD = 3.0
+TEST_FALLBACK_VIRTUAL_STARTING_BALANCE = 100.0
+TEST_FALLBACK_VIRTUAL_RISK_PER_TRADE_PERCENT = 10.0
+TEST_FALLBACK_VIRTUAL_MIN_RR = 3.0
 
 
 @dataclass(frozen=True)
@@ -249,12 +249,7 @@ class VirtualTradingService:
         if repository_account is not None:
             return self._account_with_risk_settings(repository_account(user_id))
 
-        settings = self._risk_settings_for_user(user_id)
-        starting_balance = (
-            settings.virtual_starting_balance
-            if settings is not None
-            else VIRTUAL_STARTING_BALANCE
-        )
+        starting_balance = self._virtual_starting_balance_for_user(user_id)
         balance = self._account_balance_by_user.setdefault(
             user_id,
             starting_balance,
@@ -290,8 +285,8 @@ class VirtualTradingService:
             equity=balance + open_realized_pnl + unrealized_pnl,
             realized_pnl=realized_pnl + open_realized_pnl,
             unrealized_pnl=unrealized_pnl,
-            risk_per_trade=VIRTUAL_RISK_PER_TRADE,
-            risk_reward=VIRTUAL_RISK_REWARD,
+            risk_per_trade=TEST_FALLBACK_VIRTUAL_RISK_PER_TRADE_PERCENT,
+            risk_reward=TEST_FALLBACK_VIRTUAL_MIN_RR,
             open_positions=len(open_trades),
             closed_trades=stats["closed_trades"],
             wins=stats["wins"],
@@ -323,14 +318,21 @@ class VirtualTradingService:
             return None
         return self._risk_settings_provider(user_id)
 
+    def _virtual_starting_balance_for_user(self, user_id: str) -> float:
+        settings = self._risk_settings_for_user(user_id)
+        if settings is not None:
+            return settings.virtual_starting_balance
+        return TEST_FALLBACK_VIRTUAL_STARTING_BALANCE
+
     @staticmethod
     def _fallback_risk_settings(request: ManualConfirmRequest) -> RiskManagementSettings:
+        # Explicit isolated-test fallback for in-memory callers without a user risk profile.
         return RiskManagementSettings(
             risk_profile="custom",
-            risk_per_trade_percent=VIRTUAL_RISK_PER_TRADE,
-            spot_risk_per_trade_percent=VIRTUAL_RISK_PER_TRADE,
-            futures_risk_per_trade_percent=VIRTUAL_RISK_PER_TRADE,
-            min_rr_ratio=VIRTUAL_RISK_REWARD,
+            risk_per_trade_percent=TEST_FALLBACK_VIRTUAL_RISK_PER_TRADE_PERCENT,
+            spot_risk_per_trade_percent=TEST_FALLBACK_VIRTUAL_RISK_PER_TRADE_PERCENT,
+            futures_risk_per_trade_percent=TEST_FALLBACK_VIRTUAL_RISK_PER_TRADE_PERCENT,
+            min_rr_ratio=TEST_FALLBACK_VIRTUAL_MIN_RR,
             max_daily_loss_percent=50.0,
             max_account_drawdown_percent=90.0,
             max_open_risk_percent=100.0,
@@ -1354,7 +1356,7 @@ class VirtualTradingService:
         self._account_balance_by_user[user_id] = (
             self._account_balance_by_user.setdefault(
                 user_id,
-                VIRTUAL_STARTING_BALANCE,
+                self._virtual_starting_balance_for_user(user_id),
             )
             + pnl
         )

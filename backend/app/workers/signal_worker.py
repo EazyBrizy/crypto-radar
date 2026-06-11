@@ -1,12 +1,14 @@
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import logging
 import time
-from typing import Optional
+from typing import Awaitable, Optional, Protocol
 
 from app.core.config import settings
 from app.domain.signal_status import is_execution_candidate_status
+from app.schemas.signal import StrategySignal
 from app.services.market_scanner import MarketScanner
 from app.services.candle_service import candle_service
 from app.services.message_broker import realtime_event_broker
@@ -22,6 +24,11 @@ SIGNAL_EXPIRY_MAINTENANCE_INTERVAL_SEC = 30
 SIGNAL_EXPIRY_MAINTENANCE_LIMIT = 500
 
 
+class ForwardStrategySignalProcessor(Protocol):
+    def process_strategy_signal(self, signal: StrategySignal) -> Awaitable[object] | object:
+        ...
+
+
 class ScannerRunner:
     """Запускает MarketScanner в фоне и сохраняет реальные сигналы в SignalService."""
 
@@ -29,9 +36,11 @@ class ScannerRunner:
         self,
         scanner: Optional[MarketScanner] = None,
         store: SignalService = signal_service,
+        forward_strategy_tests: ForwardStrategySignalProcessor | None = None,
     ) -> None:
         self._scanner = scanner or self._build_configured_scanner()
         self._store = store
+        self._forward_strategy_tests = forward_strategy_tests
         self._task: Optional[asyncio.Task[None]] = None
         self._processed_signals = 0
         self._external_scanner = scanner is not None
@@ -141,6 +150,7 @@ class ScannerRunner:
                         radar_signal.direction,
                     )
                     continue
+                await self._process_forward_strategy_test_signal(signal)
                 if created:
                     self._processed_signals += 1
                     await realtime_event_broker.publish(signal_created_event(radar_signal))
@@ -170,6 +180,16 @@ class ScannerRunner:
         except Exception as exc:
             self._scanner.record_error(exc)
             logger.exception("Scanner runner failed: %s", exc)
+
+    async def _process_forward_strategy_test_signal(self, signal: StrategySignal) -> None:
+        if self._forward_strategy_tests is None:
+            return
+        try:
+            result = self._forward_strategy_tests.process_strategy_signal(signal)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:
+            logger.warning("Forward strategy test signal processing skipped: %s", exc)
 
     def _should_publish_update(self, signal_id: str) -> bool:
         now = time.monotonic()

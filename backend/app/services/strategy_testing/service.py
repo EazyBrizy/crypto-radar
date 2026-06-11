@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Protocol, Sequence
 from uuid import UUID
 
-from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
-from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
 from app.services.strategy_testing.eligibility_profiles import StrategyExecutionEligibilityProfileUpdater
+from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
+from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
 from app.services.strategy_testing.metrics import MetricResult
 from app.services.strategy_testing.report_builder import (
     StrategyTestReportBuilder,
@@ -29,6 +30,8 @@ from app.services.strategy_testing.stores import (
     PostgresStrategyTestRunStore,
     StrategyTestRunStore,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class StrategyTestTradeStore(Protocol):
@@ -95,6 +98,7 @@ class StrategyTestingService:
                 matrix_result.trades,
                 metric_set=request.metric_set,
             )
+            summary = matrix_result.summary(metrics=metric_results)
             self._trade_store.write_trades(matrix_result.trades)
             self._trade_store.write_metrics(
                 metric_results_to_rows(
@@ -104,12 +108,26 @@ class StrategyTestingService:
                     results=metric_results,
                 )
             )
-            self._eligibility_profile_updater.update_from_metric_results(
-                run_id=run_id,
-                request=request,
-                metrics=metric_results,
-            )
-            return self._run_store.mark_completed(run_id, summary=matrix_result.summary(metrics=metric_results)).run
+            try:
+                self._eligibility_profile_updater.update_from_metric_results(
+                    run_id=run_id,
+                    request=request,
+                    metrics=metric_results,
+                )
+            except Exception as exc:
+                message = f"Eligibility profile update failed: {exc}"
+                logger.warning(
+                    "Strategy test eligibility profile update failed for run_id=%s test_type=%s: %s",
+                    run_id,
+                    request.test_type,
+                    exc,
+                )
+                _append_summary_warning(
+                    summary,
+                    "eligibility_profile_update_failed",
+                    message,
+                )
+            return self._run_store.mark_completed(run_id, summary=summary).run
         except Exception as exc:
             return self._run_store.mark_failed(run_id, str(exc)).run
 
@@ -194,6 +212,14 @@ def _failure_message(matrix_result: StrategyTestMatrixResult) -> str:
     if matrix_result.errors:
         return f"All strategy test scenarios failed: {matrix_result.errors[0]['error']}"
     return "All strategy test scenarios failed"
+
+
+def _append_summary_warning(summary: dict[str, object], code: str, message: str) -> None:
+    warnings = summary.setdefault("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+        summary["warnings"] = warnings
+    warnings.append({"code": code, "message": message})
 
 
 STRATEGY_TEST_ACTIVE_STATUSES: tuple[StrategyTestRunStatus, ...] = ("queued", "running", "stopping")

@@ -200,6 +200,39 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         self.assertEqual(response.status, "failed")
         self.assertIn("historical data unavailable", response.error or "")
 
+    def test_service_completes_when_eligibility_profile_update_fails(self) -> None:
+        run_store = _EphemeralRunStore()
+        trade_store = _RecordingTradeStore()
+        updater = _FailingEligibilityProfileUpdater()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=trade_store,
+            matrix_runner=_StaticMatrixRunner(
+                StrategyTestMatrixResult(
+                    run_id=RUN_ID,
+                    scenario_count=1,
+                    completed_scenarios=1,
+                    failed_scenarios=0,
+                    scenario_summaries=[{"signals_seen": 2, "risk_rejections": 0, "execution_rejections": 0}],
+                    trades=[_trade()],
+                )
+            ),  # type: ignore[arg-type]
+            eligibility_profile_updater=updater,
+        )
+
+        with self.assertLogs("app.services.strategy_testing.service", level="WARNING") as logs:
+            response = service.create_run(_matrix_request())
+
+        self.assertEqual(response.status, "completed")
+        self.assertEqual(run_store.transitions, ["queued", "running", "completed"])
+        self.assertEqual(len(trade_store.trades), 1)
+        self.assertGreater(len(trade_store.metrics), 0)
+        self.assertEqual(len(updater.calls), 1)
+        warnings = response.summary["warnings"]
+        self.assertEqual(warnings[-1]["code"], "eligibility_profile_update_failed")
+        self.assertIn("eligibility profile store unavailable", warnings[-1]["message"])
+        self.assertIn("eligibility profile store unavailable", logs.output[0])
+
 
 @dataclass(frozen=True)
 class _BacktestCall:
@@ -293,6 +326,15 @@ class _RecordingTradeStore:
 
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         self.metrics.extend(rows)
+
+
+class _FailingEligibilityProfileUpdater:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def update_from_metric_results(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
+        raise RuntimeError("eligibility profile store unavailable")
 
 
 class _EphemeralRunStore:

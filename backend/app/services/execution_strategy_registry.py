@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -10,6 +11,8 @@ from app.repositories.strategy_execution_eligibility import (
     StrategyExecutionEligibilityProfileRepository,
 )
 from app.schemas.signal import SignalEdgeSnapshot
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -65,18 +68,31 @@ class ExecutionStrategyEligibilityService:
         *,
         profile_key: StrategyExecutionEligibilityProfileKey | None = None,
     ) -> ExecutionStrategyEligibility:
+        persisted: StrategyExecutionEligibilityProfileRecord | None = None
         if profile_key is not None:
-            persisted = self._profile_repository.get_profile(
-                strategy_code=profile_key.strategy_code,
-                exchange=profile_key.exchange,
-                symbol_scope=profile_key.symbol_scope,
-                timeframe=profile_key.timeframe,
-                market_regime=profile_key.market_regime,
-                score_bucket=profile_key.score_bucket,
-                direction=profile_key.direction,
-            )
-            if persisted is not None:
-                return _persisted_profile_eligibility(persisted)
+            try:
+                persisted = self._profile_repository.get_profile(
+                    strategy_code=profile_key.strategy_code,
+                    exchange=profile_key.exchange,
+                    symbol_scope=profile_key.symbol_scope,
+                    timeframe=profile_key.timeframe,
+                    market_regime=profile_key.market_regime,
+                    score_bucket=profile_key.score_bucket,
+                    direction=profile_key.direction,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Execution strategy eligibility profile lookup failed for "
+                    "profile_key strategy_code=%s exchange=%s symbol_scope=%s timeframe=%s: %s",
+                    profile_key.strategy_code,
+                    profile_key.exchange,
+                    profile_key.symbol_scope,
+                    profile_key.timeframe,
+                    exc,
+                )
+                persisted = None
+        if persisted is not None:
+            return _persisted_profile_eligibility(persisted)
 
         if edge is None or edge.source == "none" or edge.sample_size <= 0:
             return ExecutionStrategyEligibility(

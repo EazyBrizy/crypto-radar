@@ -96,6 +96,26 @@ class ExecutionStrategyEligibilityServiceTest(unittest.TestCase):
         self.assertEqual(eligibility.reason_code, "strategy_eligibility_passed")
         self.assertEqual(eligibility.source, "outcome")
 
+    def test_repository_lookup_failure_logs_warning_and_falls_back_to_edge(self) -> None:
+        service = ExecutionStrategyEligibilityService(
+            require_walk_forward_edge=False,
+            profile_repository=_FailingEligibilityProfileRepository(),
+        )
+
+        with self.assertLogs("app.services.execution_strategy_registry", level="WARNING") as logs:
+            eligibility = service.evaluate(
+                _edge(status="positive", sample_size=120, expectancy=0.4, profit_factor=2.0),
+                profile_key=_profile_key(),
+            )
+
+        self.assertTrue(eligibility.eligible)
+        self.assertEqual(eligibility.reason_code, "strategy_eligibility_passed")
+        self.assertIn("trend_pullback_continuation", logs.output[0])
+        self.assertIn("bybit", logs.output[0])
+        self.assertIn("BTCUSDT", logs.output[0])
+        self.assertIn("1h", logs.output[0])
+        self.assertIn("db unavailable", logs.output[0])
+
 
 def _edge(
     *,
@@ -189,6 +209,22 @@ class _FakeEligibilityProfileRepository:
         )
         self.lookups.append(key)
         return self._profile
+
+
+class _FailingEligibilityProfileRepository:
+    def get_profile(
+        self,
+        *,
+        strategy_code: str,
+        exchange: str,
+        symbol_scope: str,
+        timeframe: str,
+        market_regime: str,
+        score_bucket: str,
+        direction: str,
+    ) -> StrategyExecutionEligibilityProfileRecord | None:
+        _ = strategy_code, exchange, symbol_scope, timeframe, market_regime, score_bucket, direction
+        raise RuntimeError("db unavailable")
 
 
 if __name__ == "__main__":

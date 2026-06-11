@@ -123,6 +123,34 @@ describe("StrategyTestingPanel", () => {
     expect(mocks.cancelStrategyTest).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333");
   });
 
+  it("cancels a blocking active run through the backend action", async () => {
+    const user = userEvent.setup();
+    mocks.activeRun = activeRunState({
+      active_run: strategyTestRun({
+        run_id: "44444444-4444-4444-8444-444444444444",
+        status: "running"
+      }),
+      allowed_actions: ["refresh", "cancel"],
+      can_run: false,
+      disabled_reason: "Backend says the active run must be cancelled before starting another.",
+      disabled_reason_code: "active_strategy_test_run",
+      is_stale: false
+    });
+    mocks.cancelStrategyTest.mockResolvedValue(strategyTestRun({
+      run_id: "44444444-4444-4444-8444-444444444444",
+      status: "cancelled"
+    }));
+
+    renderPanel();
+
+    const notice = screen.getByLabelText("Active strategy test run");
+    expect(within(notice).getByText(/Backend says the active run/u)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
+    await user.click(within(notice).getByRole("button", { name: /Cancel run/u }));
+
+    expect(mocks.cancelStrategyTest).toHaveBeenCalledWith("44444444-4444-4444-8444-444444444444");
+  });
+
   it("enables Run when backend reports no active run and form is valid", async () => {
     mocks.activeRun = activeRunState({ active_run: null, can_run: true, is_stale: false });
 

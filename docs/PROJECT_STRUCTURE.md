@@ -35,12 +35,14 @@ Key docs:
 - Strategy engine and strategy modules: `backend/app/strategies/`
 - Execution gate and dedup: `backend/app/services/signal_execution_gate.py`, `backend/app/services/signal_deduplication.py`
 - Edge and strategy eligibility: `backend/app/services/edge_calibration.py`, `backend/app/services/execution_strategy_registry.py`
+- Strategy testing runtime: `backend/app/services/strategy_testing/`, `backend/app/workers/forward_strategy_test_worker.py`
 - Pending-entry reason codes: `backend/app/domain/pending_entry_reason.py`
 - Virtual trading canonical modules: `backend/app/services/virtual_trading/service.py`, `backend/app/services/virtual_trading/execution_engine.py`, `backend/app/services/virtual_trading/simulation_model.py`
 - Exchange adapters: `backend/app/exchanges/`
 - Background workers: `backend/app/workers/`
 - Migrations: `backend/alembic/versions/`
 - Backend tests: `backend/tests/`
+- Closed-loop smoke tests: `backend/tests/test_trading_e2e_virtual_flow.py`, `backend/tests/test_strategy_testing_e2e_flow.py`, `backend/tests/test_forward_strategy_test_runtime.py`
 
 ## Frontend Map
 
@@ -55,6 +57,7 @@ Key docs:
 - Signal status/display helpers: `frontend/src/domain/`
 - i18n: `frontend/src/i18n/`
 - Unit tests: colocated `*.test.ts` / `*.test.tsx`
+- Strategy testing UI smoke: `frontend/src/features/strategy-testing/StrategyTestingPanel.test.tsx`
 - E2E tests: `frontend/e2e/`
 
 ## Infra Map

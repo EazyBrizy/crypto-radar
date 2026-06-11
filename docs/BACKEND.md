@@ -50,6 +50,8 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - `forward_virtual` runs start as backend-owned runtime runs: `StrategyTestingService.execute_run` marks them `running`, initializes `runtime_state.status="listening"`, and leaves processing to `ForwardStrategyTestRuntime`.
 - `ForwardStrategyTestRuntime` consumes scanner ticks or `StrategySignal` objects, filters them by the requested strategy/pair/timeframe matrix, persists signals through `SignalService`, uses `SignalExecutionGateSnapshot` as the execution source of truth, and delegates virtual entries to `VirtualTradingService` or pending entries to `PendingEntryService`.
 - `forward_virtual` must never place real orders. It records virtual trades and lightweight forward metrics into the existing strategy-test stores and updates `runtime_state` counters such as `processed_ticks`, `processed_signals`, `opened_trades`, `pending_entries_armed`, `trades_written`, and `metrics_written`.
+- Closed-loop verification is split by ownership boundary: `backend/tests/test_trading_e2e_virtual_flow.py` covers signal pending-entry trigger to virtual trade lifecycle and PnL/journal state, `backend/tests/test_strategy_testing_e2e_flow.py` covers historical backtest trades/metrics to execution eligibility profiles, and `backend/tests/test_forward_strategy_test_runtime.py` covers forward virtual signal processing, heartbeat, runtime counters, and virtual trade writes.
+- Tests may use fake providers, stores, scanners, and virtual trading adapters for external infrastructure, but they must still call the real backend services that own trade lifecycle, runtime state, metrics, and eligibility decisions.
 
 ## Backtest Execution Policy
 

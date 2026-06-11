@@ -64,6 +64,8 @@ Open/forming candles are previews only when previews are enabled. They must not 
 
 The metadata is advisory by default and becomes a hard blocker only when `settings.execution_require_walk_forward_edge` is enabled.
 
+The feedback loop is: strategy pipeline emits backend-normalized signals, `SignalExecutionGateService` produces display-ready action state, historical backtests write trade and metric rows, eligibility profile updates consume those metric rows, and future signal gates read the persisted profile. Frontend components only render the resulting gate/action/eligibility fields.
+
 The gate checks backend thresholds for:
 
 - sample size;

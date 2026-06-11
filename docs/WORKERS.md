@@ -47,6 +47,8 @@ Strategy-test scenario execution delegates to `ProductionBacktestRunner`. `produ
 
 `backend/app/workers/forward_strategy_test_worker.py` is the minimal worker entrypoint. Its loop refreshes forward-run heartbeats and finalizes `stopping` runs as `cancelled`; market-data integrations can call `process_market_tick()` to feed scanner ticks into the runtime. `cancelled` runs are ignored by the runtime.
 
+Forward runtime tests use fake stores, scanners, signal writers, and virtual trading adapters instead of real exchange credentials. The behavior under test is still backend-owned: active-run filtering, gate-driven action selection, virtual trade creation, strategy-test row writes, heartbeat updates, and cancellation of `stopping` runs.
+
 ## Signal Outcome Workers
 
 - `backend/app/workers/signal_outcome_worker.py`: evaluates open signal outcomes against market movement and terminal pending-entry states.

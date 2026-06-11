@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from app.api.v1.strategy_tests import get_strategy_testing_service
 from app.api.v1.router import api_router
 from app.main import app
+from app.services.strategy_testing.metrics import MetricResult
 from app.services.strategy_testing.schemas import (
     StrategyTestMetricRow,
     StrategyTestPair,
@@ -168,6 +169,26 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(list_response.json()[0]["test_type"], "forward_virtual")
         self.assertEqual(list_response.json()[0]["runtime_state"]["status"], "listening")
         self.assertEqual(list_response.json()[0]["runtime_state"]["processed_signals"], 0)
+
+    def test_completed_historical_run_updates_execution_eligibility_profiles(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        updater = _RecordingEligibilityProfileUpdater()
+        service = StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_MetricStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            eligibility_profile_updater=updater,
+        )
+
+        created = store.create_run(_request())
+        completed = service.execute_run(created.run.run_id, _request())
+
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(len(updater.calls), 1)
+        call = updater.calls[0]
+        self.assertEqual(call["run_id"], created.run.run_id)
+        self.assertEqual(call["request"].test_type, "historical_backtest")
+        self.assertIn("expectancy_after_costs_r", {metric.code for metric in call["metrics"]})
 
     def test_active_run_endpoint_returns_backend_gate_state(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -444,6 +465,41 @@ class _NoopStrategyTestMatrixRunner:
         )
 
 
+class _MetricStrategyTestMatrixRunner:
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+    ) -> StrategyTestMatrixResult:
+        _ = request, user_uuid
+        group = {
+            "strategy": "trend_pullback_continuation",
+            "exchange": "bybit",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "regime": "trend",
+            "score_bucket": "80-89",
+            "direction": "long",
+        }
+        return StrategyTestMatrixResult(
+            run_id=run_id,
+            scenario_count=1,
+            completed_scenarios=1,
+            failed_scenarios=0,
+            scenario_summaries=[],
+            trades=[],
+            metrics=[
+                MetricResult("trades_count", "Trades Count", 80, 80, group),
+                MetricResult("expectancy_after_costs_r", "Expectancy After Costs R", 0.18, 80, group),
+                MetricResult("profit_factor", "Profit Factor", 1.7, 80, group),
+                MetricResult("entry_touch_rate", "Entry Touch Rate", 0.45, 80, group),
+                MetricResult("max_drawdown_r", "Max Drawdown R", 4.0, 80, group),
+            ],
+        )
+
+
 class _FailingStrategyTestMatrixRunner:
     def run_matrix(
         self,
@@ -454,6 +510,20 @@ class _FailingStrategyTestMatrixRunner:
     ) -> StrategyTestMatrixResult:
         _ = request, run_id, user_uuid
         raise AssertionError("forward_virtual must not use historical matrix runner")
+
+
+class _RecordingEligibilityProfileUpdater:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def update_from_metric_results(
+        self,
+        *,
+        run_id: UUID,
+        request: StrategyTestRunRequest,
+        metrics: Sequence[MetricResult],
+    ) -> None:
+        self.calls.append({"run_id": run_id, "request": request, "metrics": list(metrics)})
 
 
 def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:

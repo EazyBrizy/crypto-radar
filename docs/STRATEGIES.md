@@ -58,7 +58,11 @@ Open/forming candles are previews only when previews are enabled. They must not 
 
 `edge_calibration_service.evaluate_signal_edge()` attaches `SignalEdgeSnapshot` before gate evaluation.
 
-`ExecutionStrategyEligibilityService` converts edge metrics into eligibility metadata. The metadata is advisory by default and becomes a hard blocker only when `settings.execution_require_walk_forward_edge` is enabled.
+`strategy_execution_eligibility_profiles` is the persisted eligibility source for execution. Completed `historical_backtest` runs aggregate the existing strategy-test metric results by strategy, exchange, symbol scope, timeframe, market regime, score bucket, and direction, then upsert `sample_size`, `expectancy_after_costs_r`, `profit_factor`, `entry_touch_rate`, `no_entry_rate`, `max_drawdown_r`, `run_ids`, `eligible`, and reason fields. The updater consumes the strategy-test metric pipeline; do not add a second metric calculator for eligibility.
+
+`ExecutionStrategyEligibilityService` checks the persisted profile first. It falls back to the attached `SignalEdgeSnapshot` only when no persisted profile exists for that execution key. Persisted profile sources are `historical_backtest`, `forward_virtual`, or `mixed`.
+
+The metadata is advisory by default and becomes a hard blocker only when `settings.execution_require_walk_forward_edge` is enabled.
 
 The gate checks backend thresholds for:
 

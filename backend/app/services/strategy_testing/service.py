@@ -6,6 +6,8 @@ from uuid import UUID
 
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
 from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
+from app.services.strategy_testing.eligibility_profiles import StrategyExecutionEligibilityProfileUpdater
+from app.services.strategy_testing.metrics import MetricResult
 from app.services.strategy_testing.report_builder import (
     StrategyTestReportBuilder,
     build_matrix_metric_results,
@@ -40,6 +42,17 @@ class StrategyTestTradeStore(Protocol):
         ...
 
 
+class StrategyExecutionEligibilityProfileUpdateService(Protocol):
+    def update_from_metric_results(
+        self,
+        *,
+        run_id: UUID,
+        request: StrategyTestRunRequest,
+        metrics: Sequence[MetricResult],
+    ) -> None:
+        ...
+
+
 class StrategyTestingService:
     def __init__(
         self,
@@ -47,6 +60,7 @@ class StrategyTestingService:
         trade_store: StrategyTestTradeStore | None = None,
         matrix_runner: StrategyTestMatrixRunner | None = None,
         forward_runtime: ForwardStrategyTestRuntime | None = None,
+        eligibility_profile_updater: StrategyExecutionEligibilityProfileUpdateService | None = None,
     ) -> None:
         self._run_store = run_store or PostgresStrategyTestRunStore()
         self._trade_store = trade_store or ClickHouseStrategyTestStore()
@@ -55,6 +69,7 @@ class StrategyTestingService:
             run_store=self._run_store,
             trade_store=self._trade_store,
         )
+        self._eligibility_profile_updater = eligibility_profile_updater or StrategyExecutionEligibilityProfileUpdater()
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
         created = self._run_store.create_run(request)
@@ -88,6 +103,11 @@ class StrategyTestingService:
                     mode=request.mode,
                     results=metric_results,
                 )
+            )
+            self._eligibility_profile_updater.update_from_metric_results(
+                run_id=run_id,
+                request=request,
+                metrics=metric_results,
             )
             return self._run_store.mark_completed(run_id, summary=matrix_result.summary(metrics=metric_results)).run
         except Exception as exc:

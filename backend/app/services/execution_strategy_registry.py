@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from app.core.config import settings
+from app.repositories.strategy_execution_eligibility import (
+    StrategyExecutionEligibilityProfileKey,
+    StrategyExecutionEligibilityProfileRecord,
+    StrategyExecutionEligibilityProfileRepository,
+)
 from app.schemas.signal import SignalEdgeSnapshot
 
 
@@ -13,7 +18,7 @@ class ExecutionStrategyEligibility:
     reason_code: str
     reason: str
     source: str
-    metrics: dict[str, float | int | None]
+    metrics: dict[str, Any]
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -25,15 +30,54 @@ class ExecutionStrategyEligibility:
         }
 
 
+class StrategyExecutionEligibilityProfileReader(Protocol):
+    def get_profile(
+        self,
+        *,
+        strategy_code: str,
+        exchange: str,
+        symbol_scope: str,
+        timeframe: str,
+        market_regime: str,
+        score_bucket: str,
+        direction: str,
+    ) -> StrategyExecutionEligibilityProfileRecord | None:
+        ...
+
+
 class ExecutionStrategyEligibilityService:
-    def __init__(self, *, require_walk_forward_edge: bool | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        require_walk_forward_edge: bool | None = None,
+        profile_repository: StrategyExecutionEligibilityProfileReader | None = None,
+    ) -> None:
         self._require_walk_forward_edge = (
             bool(settings.execution_require_walk_forward_edge)
             if require_walk_forward_edge is None
             else bool(require_walk_forward_edge)
         )
+        self._profile_repository = profile_repository or StrategyExecutionEligibilityProfileRepository()
 
-    def evaluate(self, edge: SignalEdgeSnapshot | None) -> ExecutionStrategyEligibility:
+    def evaluate(
+        self,
+        edge: SignalEdgeSnapshot | None,
+        *,
+        profile_key: StrategyExecutionEligibilityProfileKey | None = None,
+    ) -> ExecutionStrategyEligibility:
+        if profile_key is not None:
+            persisted = self._profile_repository.get_profile(
+                strategy_code=profile_key.strategy_code,
+                exchange=profile_key.exchange,
+                symbol_scope=profile_key.symbol_scope,
+                timeframe=profile_key.timeframe,
+                market_regime=profile_key.market_regime,
+                score_bucket=profile_key.score_bucket,
+                direction=profile_key.direction,
+            )
+            if persisted is not None:
+                return _persisted_profile_eligibility(persisted)
+
         if edge is None or edge.source == "none" or edge.sample_size <= 0:
             return ExecutionStrategyEligibility(
                 eligible=False,
@@ -63,6 +107,28 @@ class ExecutionStrategyEligibilityService:
             source=str(edge.metadata.get("profile_source") or edge.source),
             metrics=metrics,
         )
+
+
+def _persisted_profile_eligibility(
+    profile: StrategyExecutionEligibilityProfileRecord,
+) -> ExecutionStrategyEligibility:
+    metrics = {
+        **dict(profile.metrics),
+        "sample_size": profile.sample_size,
+        "expectancy_after_costs_r": profile.expectancy_after_costs_r,
+        "profit_factor": profile.profit_factor,
+        "entry_touch_rate": profile.entry_touch_rate,
+        "no_entry_rate": profile.no_entry_rate,
+        "max_drawdown_r": profile.max_drawdown_r,
+        "run_ids": list(profile.run_ids),
+    }
+    return ExecutionStrategyEligibility(
+        eligible=profile.eligible,
+        reason_code=profile.reason_code,
+        reason=profile.reason,
+        source=profile.source,
+        metrics=metrics,
+    )
 
 
 def _metrics(edge: SignalEdgeSnapshot) -> dict[str, float | int | None]:

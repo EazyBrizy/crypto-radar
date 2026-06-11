@@ -101,7 +101,7 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - Execution readiness: `backend/app/services/signal_execution_gate.py`, `backend/app/services/signal_deduplication.py`, `backend/app/services/execution_strategy_registry.py`, `backend/app/services/edge_calibration.py`
   - `SignalExecutionGateSnapshot` is the canonical contract for whether a signal can notify, enter now, arm pending entry, and appear in the execution feed.
   - Write-side deduplication compares open signals by exchange, normalized symbol, and direction before notification. Suppressed/replaced decisions are stored in signal metadata.
-  - Edge and strategy eligibility are attached before gate evaluation. Strict walk-forward eligibility is controlled by backend settings.
+  - Edge and strategy eligibility are attached before gate evaluation. `ExecutionStrategyEligibilityService` reads `strategy_execution_eligibility_profiles` first and falls back to `SignalEdgeSnapshot` only when no persisted profile exists for the execution key. Strict walk-forward eligibility is controlled by backend settings.
 
 - Outcomes and diagnostics: `backend/app/services/signal_outcome_service.py`, `backend/app/domain/pending_entry_reason.py`
   - Pending-entry terminal outcomes preserve reason codes for no-entry, virtual rejection, temporary failure, and expiry-before-touch cases.
@@ -126,7 +126,7 @@ Important rules:
 - Execution candidates must have a passed trigger snapshot. Missing or failed triggers produce `trigger_not_confirmed`.
 - The execution gate owns all action booleans: `can_notify`, `can_enter_now`, `can_arm_pending`, and `can_show_in_execution_feed`.
 - Edge gates use backend thresholds for expectancy after costs, profit factor, entry-touch rate, and no-entry rate.
-- Strategy eligibility metadata is advisory unless `settings.execution_require_walk_forward_edge` is enabled, then it becomes a hard blocker.
+- Strategy eligibility metadata comes from persisted strategy-test eligibility profiles when available. It is advisory unless `settings.execution_require_walk_forward_edge` is enabled, then it becomes a hard blocker.
 - Pending-entry trigger automation is virtual-only. Real pending execution must remain disabled unless a separately tested real execution path is added.
 
 ## Background Workers

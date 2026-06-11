@@ -25,6 +25,7 @@ MATRIX_METRIC_GROUPINGS: tuple[tuple[str, ...], ...] = (
     ("strategy", "regime"),
     ("strategy", "score_bucket"),
     ("strategy", "direction"),
+    ("strategy", "exchange", "symbol", "timeframe", "regime", "score_bucket", "direction"),
 )
 
 REPORT_EXTRA_GROUPINGS: tuple[tuple[str, ...], ...] = (

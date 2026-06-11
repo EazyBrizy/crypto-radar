@@ -7,6 +7,7 @@ from uuid import UUID
 import unittest
 
 from app.services.strategy_testing.metrics import BASE_METRIC_CODES, MetricResult, build_base_metric_registry
+from app.services.strategy_testing.report_builder import build_matrix_metric_results
 from app.services.strategy_testing.schemas import StrategyTestTrade
 
 
@@ -38,6 +39,20 @@ class StrategyTestMetricsRegistryTest(unittest.TestCase):
         self.assertAlmostEqual(results["winrate"].value or 0, 2 / 3)
         self.assertAlmostEqual(results["expectancy_r"].value or 0, 0.5)
         self.assertAlmostEqual(results["profit_factor"].value or 0, 2.5)
+
+    def test_expectancy_after_costs_uses_strategy_test_net_realized_r(self) -> None:
+        registry = build_base_metric_registry()
+        trades = [
+            _trade("trade-1", realized_r=1.2),
+            _trade("trade-2", realized_r=-0.4),
+        ]
+
+        result = _results_by_code(registry.compute(trades, metric_set=["expectancy_after_costs_r"]))[
+            "expectancy_after_costs_r"
+        ]
+
+        self.assertAlmostEqual(result.value or 0, 0.4)
+        self.assertEqual(result.warnings, [])
 
     def test_group_by_strategy_symbol_works(self) -> None:
         registry = build_base_metric_registry()
@@ -100,6 +115,30 @@ class StrategyTestMetricsRegistryTest(unittest.TestCase):
 
         self.assertIsNone(result.value)
         self.assertIn("funding_not_modeled", result.warnings)
+
+    def test_matrix_metrics_include_full_eligibility_profile_grouping(self) -> None:
+        results = build_matrix_metric_results(
+            [
+                _trade("trade-1", realized_r=1.0),
+                _trade("trade-2", realized_r=-0.5),
+            ],
+            metric_set=["trades_count", "profit_factor"],
+        )
+
+        groups = {tuple(sorted(result.group.items())) for result in results}
+
+        self.assertIn(
+            (
+                ("direction", "long"),
+                ("exchange", "bybit"),
+                ("regime", "trend"),
+                ("score_bucket", "80-89"),
+                ("strategy", "trend_pullback_continuation"),
+                ("symbol", "BTCUSDT"),
+                ("timeframe", "1h"),
+            ),
+            groups,
+        )
 
 
 def _results_by_code(results: list[MetricResult]) -> dict[str, MetricResult]:

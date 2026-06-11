@@ -14,6 +14,7 @@ from app.schemas.trade import ManualConfirmRequest, VirtualTrade
 from app.services.pending_entry import pending_entry_service
 from app.services.signal_execution_gate import SignalExecutionGateService, signal_execution_gate_service
 from app.services.signal_service import signal_service
+from app.services.strategy_performance_service import score_bucket_for
 from app.services.strategy_testing.runner import strategy_test_user_uuid
 from app.services.strategy_testing.schemas import (
     StrategyTestMetricRow,
@@ -538,14 +539,7 @@ def _market_regime(signal: RadarSignal) -> str:
 
 
 def _score_bucket(score: int | float | None) -> str:
-    value = int(score or 0)
-    if value >= 80:
-        return "80_100"
-    if value >= 60:
-        return "60_79"
-    if value >= 40:
-        return "40_59"
-    return "0_39"
+    return score_bucket_for(score)
 
 
 def _counter(state: dict[str, Any], key: str) -> int:

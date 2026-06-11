@@ -14,6 +14,7 @@ MetricCompute = Callable[[Sequence[StrategyTestTrade]], MetricValue]
 
 SUPPORTED_GROUPINGS = (
     "strategy",
+    "exchange",
     "symbol",
     "timeframe",
     "regime",
@@ -53,6 +54,7 @@ BASE_METRIC_CODES = (
 
 _GROUP_FIELD_MAP = {
     "strategy": "strategy_code",
+    "exchange": "exchange",
     "symbol": "symbol",
     "timeframe": "timeframe",
     "regime": "market_regime",
@@ -219,10 +221,9 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
         MetricDefinition(
             code="expectancy_after_costs_r",
             label="Expectancy After Costs R",
-            description="Expectancy after costs in R. Requires cost-to-risk conversion metadata.",
+            description="Mean net realized R across realized trades after modeled costs.",
             groupings=groupings,
-            compute=_metric_unavailable,
-            min_sample_size=0,
+            compute=_metric_expectancy_after_costs_r,
         ),
         MetricDefinition(
             code="profit_factor",
@@ -485,6 +486,10 @@ def _metric_avg_loss_r(trades: Sequence[StrategyTestTrade]) -> float | None:
 
 def _metric_expectancy_r(trades: Sequence[StrategyTestTrade]) -> float | None:
     return _mean(_realized_r_values(trades))
+
+
+def _metric_expectancy_after_costs_r(trades: Sequence[StrategyTestTrade]) -> float | None:
+    return _metric_expectancy_r(trades)
 
 
 def _metric_profit_factor(trades: Sequence[StrategyTestTrade]) -> float | None:

@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Protocol
 
+from app.repositories.strategy_execution_eligibility import StrategyExecutionEligibilityProfileKey
 from app.schemas.signal import RadarSignal, SignalEdgeSnapshot, StrategySignal
 from app.schemas.strategy_performance import StrategyEdgeProfile
 from app.services.execution_strategy_registry import ExecutionStrategyEligibilityService
 from app.schemas.user import RiskManagementSettings
-from app.services.strategy_performance_service import strategy_performance_service
+from app.services.strategy_performance_service import score_bucket_for, strategy_performance_service
 
 logger = logging.getLogger(__name__)
 
@@ -92,17 +93,24 @@ class EdgeCalibrationService:
             expectancy_after_costs_r=expectancy_after_costs_r,
         )
         metrics_metadata = _profile_metrics_metadata(profile)
+        edge_for_eligibility = SignalEdgeSnapshot(
+            status=status,
+            sample_size=profile.sample_size,
+            min_sample_size=self._min_sample_size,
+            expectancy_after_costs_r=expectancy_after_costs_r,
+            profit_factor=profile.profit_factor,
+            confidence_score=0.0,
+            source="outcome",
+            metadata=metrics_metadata,
+        )
         eligibility = ExecutionStrategyEligibilityService().evaluate(
-            SignalEdgeSnapshot(
-                status=status,
-                sample_size=profile.sample_size,
-                min_sample_size=self._min_sample_size,
-                expectancy_after_costs_r=expectancy_after_costs_r,
-                profit_factor=profile.profit_factor,
-                confidence_score=0.0,
-                source="outcome",
-                metadata=metrics_metadata,
-            )
+            edge_for_eligibility,
+            profile_key=_eligibility_profile_key(
+                signal=signal,
+                market_regime=market_regime,
+                score_bucket=profile.score_bucket,
+                score=score,
+            ),
         )
 
         return SignalEdgeSnapshot(
@@ -274,6 +282,33 @@ def _entry_price(signal: RadarSignal | StrategySignal) -> float | None:
 
 def _normalize_symbol(symbol: str) -> str:
     return symbol.replace("/", "").replace(":PERP", "").upper()
+
+
+def _eligibility_profile_key(
+    *,
+    signal: RadarSignal | StrategySignal,
+    market_regime: str | None,
+    score_bucket: str | None,
+    score: float | None,
+) -> StrategyExecutionEligibilityProfileKey:
+    return StrategyExecutionEligibilityProfileKey(
+        strategy_code=signal.strategy,
+        exchange=signal.exchange,
+        symbol_scope=_normalize_symbol(signal.symbol),
+        timeframe=signal.timeframe,
+        market_regime=_normalize_dimension(market_regime),
+        score_bucket=score_bucket or (score_bucket_for(score) if score is not None else "unknown"),
+        direction=_direction(signal.direction),
+    )
+
+
+def _direction(value: object) -> str:
+    return "short" if str(value).strip().lower() == "short" else "long"
+
+
+def _normalize_dimension(value: object) -> str:
+    text = str(value or "unknown").strip()
+    return text or "unknown"
 
 
 edge_calibration_service = EdgeCalibrationService()

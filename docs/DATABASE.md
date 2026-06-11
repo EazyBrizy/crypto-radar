@@ -31,6 +31,7 @@ Models live in `backend/app/models/`. Migrations live in `backend/alembic/versio
 - `strategy_versions`: versioned strategy metadata.
 - `user_strategy_configs`: per-user strategy runtime settings, pairs, timeframes, and risk settings.
 - `strategy_test_runs`: strategy testing run metadata and report payloads. Runtime columns include `test_type`, `summary`, `runtime_state`, and `last_heartbeat_at`; valid statuses are `queued`, `running`, `completed`, `failed`, `cancelled`, and `stopping`. `runtime_state` is the backend-owned forward/front-test state bag for counters and display status, while `last_heartbeat_at` is the stale-run source for active-run gating.
+- `strategy_execution_eligibility_profiles`: backend-owned execution eligibility profiles keyed by strategy, exchange, symbol scope, timeframe, market regime, score bucket, and direction. Completed backtest/front-test metric results upsert source, sample size, expectancy after costs, profit factor, entry/no-entry rates, max drawdown, contributing run ids, and the backend eligibility reason used by the execution gate.
 
 ### Signals And Pending Entry
 

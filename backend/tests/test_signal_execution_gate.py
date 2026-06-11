@@ -183,6 +183,35 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertEqual(gate.feed_kind, "blocked")
         self.assertIn("strategy_eligibility_failed", _reason_codes(gate))
 
+    def test_strict_gate_uses_persisted_strategy_eligibility_metadata_for_entry_permissions(self) -> None:
+        previous = settings.execution_require_walk_forward_edge
+        settings.execution_require_walk_forward_edge = True
+        try:
+            signal = _signal(
+                edge=_edge(
+                    "positive",
+                    sample_size=80,
+                    expectancy=0.18,
+                    metadata={
+                        "strategy_eligibility": {
+                            "eligible": False,
+                            "reason_code": "strategy_eligibility_failed",
+                            "reason": "Historical profile failed expectancy threshold.",
+                            "source": "historical_backtest",
+                        }
+                    },
+                )
+            )
+
+            gate = SignalExecutionGateService().evaluate(signal)
+        finally:
+            settings.execution_require_walk_forward_edge = previous
+
+        self.assertFalse(gate.can_enter_now)
+        self.assertFalse(gate.can_arm_pending)
+        reason = next(item for item in gate.reasons if item.code == "strategy_eligibility_failed")
+        self.assertEqual(reason.metadata["source"], "historical_backtest")
+
 
 def _signal(**overrides) -> StrategySignal:
     trade_plan = build_trade_plan_from_legacy_fields(

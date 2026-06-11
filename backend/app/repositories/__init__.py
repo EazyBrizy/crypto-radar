@@ -2,6 +2,7 @@ from app.repositories.pending_entry_repository import PendingEntryIntentReposito
 from app.repositories.signal_repository import PostgresSignalRepository
 from app.repositories.signal_repository import SignalReferenceError, SignalRepository
 from app.repositories.signal_repository import SignalWriteResult
+from app.repositories.strategy_execution_eligibility import StrategyExecutionEligibilityProfileRepository
 from app.repositories.unit_of_work import SqlAlchemyUnitOfWork, UnitOfWork
 
 __all__ = [
@@ -10,6 +11,7 @@ __all__ = [
     "SignalReferenceError",
     "SignalRepository",
     "SignalWriteResult",
+    "StrategyExecutionEligibilityProfileRepository",
     "SqlAlchemyUnitOfWork",
     "UnitOfWork",
 ]

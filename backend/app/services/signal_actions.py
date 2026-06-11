@@ -60,7 +60,7 @@ class SignalActionUnavailable(ValueError):
     pass
 
 
-REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE = "REAL_PENDING_NOT_IMPLEMENTED"
+REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE = "real_trading_disabled"
 
 
 @dataclass(frozen=True)
@@ -161,9 +161,9 @@ class SignalActionService:
         if is_terminal_signal_status(signal.status):
             blockers.append(
                 _blocker(
-                    "signal_terminal",
+                    "status_not_execution_candidate",
                     f"Signal status {signal.status!r} is terminal.",
-                    display_label="Signal is terminal",
+                    display_label="Status does not allow execution",
                     metadata={"signal_status": signal.status},
                 )
             )
@@ -195,6 +195,8 @@ class SignalActionService:
             if signal.execution_gate is not None:
                 can_enter_now = can_enter_now and signal.execution_gate.can_enter_now
                 can_arm_pending = signal.execution_gate.can_arm_pending
+            if mode == "virtual" and not can_enter_now and can_arm_pending:
+                blockers.append(_status_not_execution_candidate_blocker(signal))
             if not can_enter_now and not can_arm_pending:
                 blockers.extend(_gate_action_blockers(signal) or _signal_action_blockers(signal, mode=mode))
 
@@ -203,8 +205,8 @@ class SignalActionService:
             blockers.append(
                 _blocker(
                     REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE,
-                    "Tick-driven real pending entry execution is not implemented.",
-                    display_label="Real pending is not implemented",
+                    "Real pending entry is disabled until tick-driven execution is available.",
+                    display_label="Real trading disabled",
                 )
             )
 
@@ -759,9 +761,9 @@ class SignalActionService:
         if is_terminal_signal_status(signal.status):
             blockers.append(
                 _blocker(
-                    "signal_terminal",
+                    "status_not_execution_candidate",
                     f"Signal status {signal.status!r} is terminal.",
-                    display_label="Signal is terminal",
+                    display_label="Status does not allow execution",
                 )
             )
         elif active_intent is not None:
@@ -785,6 +787,8 @@ class SignalActionService:
             if signal.execution_gate is not None:
                 can_enter_now = can_enter_now and signal.execution_gate.can_enter_now
                 can_arm_pending = signal.execution_gate.can_arm_pending
+            if mode == "virtual" and not can_enter_now and can_arm_pending:
+                blockers.append(_status_not_execution_candidate_blocker(signal))
             if not can_enter_now and not can_arm_pending:
                 blockers.extend(_gate_action_blockers(signal) or _signal_action_blockers(signal, mode=mode))
         if mode == "real" and can_arm_pending:
@@ -792,8 +796,8 @@ class SignalActionService:
             blockers.append(
                 _blocker(
                     REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE,
-                    "Tick-driven real pending entry execution is not implemented.",
-                    display_label="Real pending is not implemented",
+                    "Real pending entry is disabled until tick-driven execution is available.",
+                    display_label="Real trading disabled",
                 )
             )
         primary_action = _primary_action(
@@ -1111,13 +1115,22 @@ def _signal_action_blockers(signal: RadarSignal, *, mode: SignalActionMode) -> l
     if not blockers:
         blockers.append(
             _blocker(
-                "signal_not_actionable",
+                "status_not_execution_candidate",
                 f"Signal status {signal.status!r} is not available for this action.",
-                display_label="Signal is not actionable",
+                display_label="Status does not allow execution",
                 metadata={"signal_status": signal.status},
             )
         )
     return blockers
+
+
+def _status_not_execution_candidate_blocker(signal: RadarSignal) -> SignalActionBlocker:
+    return _blocker(
+        "status_not_execution_candidate",
+        f"Signal status {signal.status!r} can be watched or armed, but is not an enter-now candidate.",
+        display_label="Status does not allow enter-now",
+        metadata={"signal_status": signal.status},
+    )
 
 
 def _gate_action_blockers(signal: RadarSignal) -> list[SignalActionBlocker]:
@@ -1183,9 +1196,9 @@ def _real_environment_blockers(environment: str) -> list[SignalActionBlocker]:
         return []
     return [
         _blocker(
-            "mainnet_order_placement_disabled",
+            "real_trading_disabled",
             "Mainnet order placement is disabled by backend safety flags.",
-            display_label="Mainnet trading disabled",
+            display_label="Real trading disabled",
             metadata={
                 "enable_live_trading": settings.enable_live_trading,
                 "enable_bybit_live_order_placement": settings.enable_bybit_live_order_placement,
@@ -1239,7 +1252,7 @@ def _display_labels(
 def _pending_entry_blocker_code(intent: PendingEntryIntentRead) -> str:
     if intent.status == "requires_reconfirmation":
         return "pending_entry_requires_reconfirmation"
-    return "pending_entry_active"
+    return "pending_entry_exists"
 
 
 def _pending_entry_blocker_message(intent: PendingEntryIntentRead) -> str:

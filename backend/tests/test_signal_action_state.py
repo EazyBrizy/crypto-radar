@@ -24,6 +24,8 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertTrue(state.can_arm_pending)
         self.assertFalse(state.can_enter_now)
         self.assertEqual(state.primary_action, "arm_pending_entry")
+        self.assertEqual(state.disabled_reason_code, "status_not_execution_candidate")
+        self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
 
     def test_actionable_signal_can_enter_now(self) -> None:
         state = _service().state_for_signal(_signal(status="actionable"), mode="virtual", user_id=USER_ID)
@@ -41,7 +43,8 @@ class SignalActionStateTest(unittest.TestCase):
 
         self.assertTrue(state.can_cancel)
         self.assertFalse(state.can_enter_now)
-        self.assertEqual(state.disabled_reason_code, "pending_entry_active")
+        self.assertEqual(state.disabled_reason_code, "pending_entry_exists")
+        self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
 
     def test_requires_reconfirmation_can_reconfirm(self) -> None:
         state = _service(intent=_pending_intent(status="requires_reconfirmation")).state_for_signal(
@@ -62,7 +65,8 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertFalse(state.can_arm_pending)
         self.assertFalse(state.can_reconfirm)
         self.assertFalse(state.can_cancel)
-        self.assertEqual(state.disabled_reason_code, "signal_terminal")
+        self.assertEqual(state.disabled_reason_code, "status_not_execution_candidate")
+        self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
 
     def test_backend_owned_context_builds_confirm_request(self) -> None:
         request = _service().build_backend_confirm_request(
@@ -92,8 +96,9 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertFalse(state.can_arm_pending)
         self.assertFalse(state.can_enter_now)
         self.assertEqual(state.primary_action, None)
-        self.assertEqual(state.disabled_reason_code, REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE)
-        self.assertEqual(state.blockers[0].code, REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE)
+        self.assertEqual(REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE, "real_trading_disabled")
+        self.assertEqual(state.disabled_reason_code, "real_trading_disabled")
+        self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
 
 
 def _service(

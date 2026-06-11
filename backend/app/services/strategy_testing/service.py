@@ -250,11 +250,16 @@ def _latest_active_run(candidates: Sequence[StrategyTestRunResponse]) -> Strateg
 
 
 def _run_sort_time(run: StrategyTestRunResponse) -> datetime:
-    return run.started_at or run.created_at or datetime.min.replace(tzinfo=timezone.utc)
+    return (
+        run.last_heartbeat_at
+        or run.started_at
+        or run.created_at
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
 
 
 def _is_stale_run(run: StrategyTestRunResponse) -> bool:
-    if run.status != "running":
+    if run.status not in STRATEGY_TEST_ACTIVE_STATUSES:
         return False
     heartbeat_at = run.last_heartbeat_at or run.started_at or run.created_at
     if heartbeat_at is None:

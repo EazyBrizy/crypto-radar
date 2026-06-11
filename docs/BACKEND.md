@@ -148,7 +148,7 @@ Failure groups and likely root cause:
 - `backend/tests/test_pipeline_contract.py::PipelineContractTest::test_architecture_project_contains_contract_topics` fails because `docs/architectureproject.md` is missing.
 - Signal lifecycle realtime publishing fails in `backend/app/services/signal_views.py` because old or test-created signals can carry `confirmation` as a `dict`, while `_rr_metadata_sources` expects a typed object with `.checks`.
 - Virtual trading API realtime smoke fails because the test helper `_radar_signal()` does not accept `execution_gate`, while the strategy signal upsert path forwards `signal.execution_gate`.
-- Case-sensitive docs mismatch remains for the next docs stage: README and `docs/PROJECT_STRUCTURE.md` reference `docs/FRONTEND.md`, but the current file is `docs/frontend.md`.
+- Baseline found a case-sensitive docs mismatch: README and `docs/PROJECT_STRUCTURE.md` referenced `docs/FRONTEND.md`, while the frontend guide filename used lowercase casing.
 
 No runtime logic was changed for this baseline.
 

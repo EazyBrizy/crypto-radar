@@ -43,7 +43,7 @@ corepack pnpm openapi:generate
 
 - Radar: `frontend/src/app/dashboard/radar/page.tsx`, controller in `frontend/src/features/app-shell/RadarRoute.tsx`, view in `frontend/src/features/app-shell/RadarPage.tsx`.
 - Watchlist: `frontend/src/app/dashboard/watchlist/page.tsx`, `frontend/src/features/app-shell/WatchlistRoute.tsx`, `frontend/src/features/app-shell/WatchlistPage.tsx`.
-- Trades: `frontend/src/app/dashboard/trades/active/page.tsx`, `frontend/src/app/dashboard/trades/journal/page.tsx`, `frontend/src/app/dashboard/trades/analytics/page.tsx`, `frontend/src/features/app-shell/TradesRoute.tsx`, `frontend/src/features/app-shell/TradesPage.tsx`.
+- Trades: `frontend/src/app/dashboard/trades/page.tsx`, subroutes in `frontend/src/app/dashboard/trades/active/page.tsx`, `frontend/src/app/dashboard/trades/journal/page.tsx`, `frontend/src/app/dashboard/trades/analytics/page.tsx`, controller in `frontend/src/features/app-shell/TradesRoute.tsx`, view in `frontend/src/features/app-shell/TradesPage.tsx`.
 - Settings: `frontend/src/app/dashboard/settings/page.tsx`, `frontend/src/features/app-shell/SettingsRoute.tsx`, `frontend/src/features/app-shell/SettingsPage.tsx`.
 - Auth and billing: `frontend/src/app/auth/page.tsx`, `frontend/src/app/billing/page.tsx`.
 

@@ -23,9 +23,12 @@ describe("StrategyTestRunsTable", () => {
     render(<StrategyTestRunsTable runs={[forwardRun()]} />);
 
     expect(screen.getByText("forward_virtual")).toBeInTheDocument();
-    expect(screen.getByText("3 signals")).toBeInTheDocument();
-    expect(screen.getByText("1 open")).toBeInTheDocument();
-    expect(screen.getByText("PnL 12.5")).toBeInTheDocument();
+    expect(screen.getByText("Signals")).toBeInTheDocument();
+    expect(screen.getByText("Trades")).toBeInTheDocument();
+    expect(screen.getByText("PnL / Equity")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getAllByText("1").length).toBeGreaterThan(0);
+    expect(screen.getByText("12.5 / 1012.5")).toBeInTheDocument();
   });
 
   it("shows cancel action for running forward tests", async () => {

@@ -9,7 +9,12 @@ const mocks = vi.hoisted(() => ({
   report: null as unknown,
   reportError: null as Error | null,
   runStrategyTest: vi.fn(),
-  runs: [] as unknown[]
+  runs: [] as unknown[],
+  useStrategyTestStatus: vi.fn(() => ({
+    data: null,
+    error: null,
+    isLoading: false
+  }))
 }));
 
 vi.mock("@/hooks/use-radar-queries", () => ({
@@ -37,13 +42,19 @@ vi.mock("@/hooks/use-radar-queries", () => ({
     data: mocks.runs,
     error: null,
     isLoading: false
-  })
+  }),
+  useStrategyTestStatus: mocks.useStrategyTestStatus
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
     getTotalSize: () => 128,
-    getVirtualItems: () => [],
+    getVirtualItems: () => Array.from({ length: count }, (_, index) => ({
+      index,
+      key: index,
+      size: 70,
+      start: index * 70
+    })),
     measureElement: vi.fn()
   })
 }));
@@ -54,6 +65,12 @@ describe("StrategyTestingPanel", () => {
     mocks.reportError = null;
     mocks.runStrategyTest.mockReset();
     mocks.runs = [];
+    mocks.useStrategyTestStatus.mockReset();
+    mocks.useStrategyTestStatus.mockReturnValue({
+      data: null,
+      error: null,
+      isLoading: false
+    });
   });
 
   it("renders the mode selector", () => {
@@ -69,6 +86,19 @@ describe("StrategyTestingPanel", () => {
 
     expect(screen.getByRole("tab", { name: "Backtest" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Forward test" })).toBeInTheDocument();
+  });
+
+  it("shows forward-specific settings", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("tab", { name: "Forward test" }));
+
+    expect(screen.getByText("Forward test runs in background with isolated virtual account.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "4h" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "12h" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "24h" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Same candle policy")).toBeInTheDocument();
   });
 
   it("disables Run when the matrix is missing", () => {
@@ -126,6 +156,7 @@ describe("StrategyTestingPanel", () => {
       slippage_bps: 0,
       strategies: ["trend_pullback_continuation"],
       tags: ["backtest"],
+      test_type: "historical_backtest",
       timeframes: ["1m", "5m", "15m"]
     }));
   });
@@ -154,6 +185,21 @@ describe("StrategyTestingPanel", () => {
       tags: ["forward_test"],
       test_type: "forward_virtual"
     }));
+  });
+
+  it("polls selected active forward status every 2.5s", async () => {
+    const user = userEvent.setup();
+    mocks.runStrategyTest.mockResolvedValue(forwardRunResponse());
+
+    renderPanel();
+
+    await user.click(screen.getByRole("tab", { name: "Forward test" }));
+    await user.click(screen.getByRole("button", { name: /Start forward test/u }));
+
+    await waitFor(() => expect(mocks.useStrategyTestStatus).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({ enabled: true, refetchInterval: 2500 })
+    ));
   });
 
   it("includes new advanced params", async () => {
@@ -206,6 +252,19 @@ function renderPanel({
   strategyConfigs?: StrategyConfig[];
 } = {}) {
   render(<StrategyTestingPanel availablePairs={availablePairs} strategyConfigs={strategyConfigs} />);
+}
+
+function forwardRunResponse() {
+  return {
+    created_at: "2026-06-02T00:00:00.000Z",
+    error: null,
+    finished_at: null,
+    requested_matrix: { scenario_count: 3, test_type: "forward_virtual" as const },
+    run_id: "11111111-1111-4111-8111-111111111111",
+    started_at: "2026-06-02T00:00:00.000Z",
+    status: "running" as const,
+    summary: { signals_seen: 3 }
+  };
 }
 
 function marketPair(): MarketPairOption {

@@ -31,7 +31,11 @@ describe("StrategyTestReport", () => {
     render(<StrategyTestReport report={report()} run={null} />);
 
     expect(screen.getByText("Conversion funnel")).toBeInTheDocument();
-    expect(screen.getByText("entry_touched")).toBeInTheDocument();
+    expect(screen.getAllByText("Gate Passed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Pending/Entered").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Closed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Winners").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Losers").length).toBeGreaterThan(0);
     expect(screen.getByText("Signal list")).toBeInTheDocument();
     expect(screen.getByText("signal-2")).toBeInTheDocument();
     expect(screen.getAllByText("no_entry").length).toBeGreaterThan(0);
@@ -40,9 +44,15 @@ describe("StrategyTestReport", () => {
   it("renders live forward dashboard for running forward tests", () => {
     render(<StrategyTestReport report={null} run={forwardRun()} />);
 
-    expect(screen.getByText("Live forward test")).toBeInTheDocument();
+    expect(screen.getByText("Live report preview")).toBeInTheDocument();
+    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.getByText("running")).toBeInTheDocument();
     expect(screen.getByText("Signals found")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.getByText("Closed trades")).toBeInTheDocument();
+    expect(screen.getByText("PnL")).toBeInTheDocument();
+    expect(screen.getByText("Last tick")).toBeInTheDocument();
     expect(screen.getByText("Open positions")).toBeInTheDocument();
     expect(screen.getByText("Current equity")).toBeInTheDocument();
     expect(screen.getByText("1012.5")).toBeInTheDocument();
@@ -117,14 +127,23 @@ function report(overrides: Partial<StrategyTestReportData> = {}): StrategyTestRe
         name: "Conversion funnel",
         rows: [
           { count: 2, rate: 1, stage: "signals" },
-          { count: 1, rate: 0.5, stage: "entry_touched" },
+          { count: 2, rate: 1, stage: "gate_passed" },
+          { count: 1, rate: 0.5, stage: "pending_entered" },
           { count: 1, rate: 0.5, stage: "filled" },
+          { count: 1, rate: 0.5, stage: "closed" },
+          { count: 1, rate: 0.5, stage: "winners" },
+          { count: 0, rate: 0, stage: "losers" },
           { count: 1, rate: 0.5, stage: "no_entry" }
         ],
         summary: {
+          closed_count: 1,
           entry_touched_count: 1,
           filled_count: 1,
+          gate_passed_count: 2,
+          losers_count: 0,
           no_entry_count: 1,
+          pending_entered_count: 1,
+          winners_count: 1,
           signals_count: 2
         },
         warnings: []
@@ -182,6 +201,7 @@ function forwardRun(): StrategyTestRunResponse {
       filled_trades: 1,
       last_tick_at: "2026-06-06T10:02:00.000Z",
       open_positions: 1,
+      pending_entries: 1,
       realized_pnl: 12.5,
       signals_seen: 3,
       unrealized_pnl: 2.5

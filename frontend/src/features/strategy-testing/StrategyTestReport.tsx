@@ -147,8 +147,9 @@ export function StrategyTestReport({
 function LiveForwardDashboard({ run }: { run: StrategyTestRunResponse | null }) {
   const summary = run?.summary ?? {};
   return (
-    <ReportSection name="Live forward test">
+    <ReportSection name="Live report preview">
       <div className="strategy-test-summary-grid">
+        {liveSummaryItem("Status", run?.status)}
         {liveSummaryItem("Signals found", summary.signals_seen)}
         {liveSummaryItem("Execution candidates", summary.execution_candidates)}
         {liveSummaryItem("Blocked", summary.blocked_signals)}
@@ -157,7 +158,7 @@ function LiveForwardDashboard({ run }: { run: StrategyTestRunResponse | null }) 
         {liveSummaryItem("Open positions", summary.open_positions)}
         {liveSummaryItem("Closed trades", summary.closed_trades)}
         {liveSummaryItem("Current equity", summary.current_equity)}
-        {liveSummaryItem("Realized PnL", summary.realized_pnl)}
+        {liveSummaryItem("PnL", summary.realized_pnl ?? summary.pnl)}
         {liveSummaryItem("Unrealized PnL", summary.unrealized_pnl)}
         {liveSummaryItem("Last tick", summary.last_tick_at)}
       </div>
@@ -228,15 +229,23 @@ function RejectionSection({ report }: { report: StrategyTestReportData }) {
 function ConversionFunnelSection({ report }: { report: StrategyTestReportData }) {
   const section = findSection(report, "conversion_funnel");
   if (!section) return null;
+  const rows = section.rows.map((row) => ({
+    ...row,
+    stage: funnelStageLabel(row.stage)
+  }));
   return (
     <ReportSection name={section.name}>
       <div className="strategy-test-summary-grid">
         {summaryItem("Signals", section.summary.signals_count)}
-        {summaryItem("Entry touched", section.summary.entry_touched_count)}
+        {summaryItem("Gate Passed", section.summary.gate_passed_count ?? section.summary.execution_candidates)}
+        {summaryItem("Pending/Entered", section.summary.pending_entered_count ?? section.summary.entry_touched_count)}
         {summaryItem("Filled", section.summary.filled_count)}
+        {summaryItem("Closed", section.summary.closed_count ?? section.summary.closed_trades)}
+        {summaryItem("Winners", section.summary.winners_count)}
+        {summaryItem("Losers", section.summary.losers_count)}
         {summaryItem("No entry", section.summary.no_entry_count)}
       </div>
-      <SectionRowsTable columns={SECTION_TABLE_COLUMNS.conversion_funnel} rows={section.rows} />
+      <SectionRowsTable columns={SECTION_TABLE_COLUMNS.conversion_funnel} rows={rows} />
     </ReportSection>
   );
 }
@@ -378,6 +387,21 @@ function formatCell(value: unknown): string {
   if (Array.isArray(value)) return value.length ? `${value.length}` : "-";
   if (isRecord(value)) return Object.keys(value).length ? JSON.stringify(value) : "-";
   return "-";
+}
+
+function funnelStageLabel(value: unknown): string {
+  if (typeof value !== "string") return "-";
+  const labels: Record<string, string> = {
+    closed: "Closed",
+    filled: "Filled",
+    gate_passed: "Gate Passed",
+    losers: "Losers",
+    no_entry: "No-entry",
+    pending_entered: "Pending/Entered",
+    signals: "Signals",
+    winners: "Winners"
+  };
+  return labels[value] ?? columnLabel(value);
 }
 
 function evidenceLabel(evidence: Record<string, unknown>): string {

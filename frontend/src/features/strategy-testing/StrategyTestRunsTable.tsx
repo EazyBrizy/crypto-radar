@@ -54,8 +54,18 @@ export function StrategyTestRunsTable({
       },
       {
         id: "summary",
-        header: "Summary",
-        cell: ({ row }) => summaryLabel(row.original)
+        header: "Signals",
+        cell: ({ row }) => formatCount(signalCount(row.original))
+      },
+      {
+        id: "trades",
+        header: "Trades",
+        cell: ({ row }) => formatCount(tradeCount(row.original))
+      },
+      {
+        id: "pnl_equity",
+        header: "PnL / Equity",
+        cell: ({ row }) => pnlEquityLabel(row.original)
       },
       {
         accessorKey: "created_at",
@@ -146,26 +156,25 @@ function testType(run: StrategyTestRunResponse): string {
   return run.requested_matrix.test_type ?? "historical_backtest";
 }
 
-function summaryLabel(run: StrategyTestRunResponse): ReactNode {
+function signalCount(run: StrategyTestRunResponse): number | null {
+  return numericSummary(run, "signals_seen")
+    ?? numericSummary(run, "signals_count")
+    ?? null;
+}
+
+function tradeCount(run: StrategyTestRunResponse): number | null {
+  return numericSummary(run, "closed_trades")
+    ?? numericSummary(run, "filled_trades")
+    ?? numericSummary(run, "trades_count")
+    ?? null;
+}
+
+function pnlEquityLabel(run: StrategyTestRunResponse): ReactNode {
   if (run.error) return run.error;
-  if (testType(run) === "forward_virtual") {
-    const signals = numericSummary(run, "signals_seen") ?? 0;
-    const open = numericSummary(run, "open_positions") ?? 0;
-    const pnl = numericSummary(run, "realized_pnl");
-    return (
-      <div className="strategy-test-run-counters">
-        <span>{signals} signals</span>
-        <span>{open} open</span>
-        <span>PnL {pnl ?? 0}</span>
-      </div>
-    );
-  }
-  const completed = numericSummary(run, "completed_scenarios");
-  const failed = numericSummary(run, "failed_scenarios");
-  const trades = numericSummary(run, "trades_count");
-  if (completed != null || failed != null) return `${completed ?? 0} done / ${failed ?? 0} failed`;
-  if (trades != null) return `${trades} trades`;
-  return "-";
+  const pnl = numericSummary(run, "realized_pnl");
+  const equity = numericSummary(run, "current_equity");
+  if (pnl == null && equity == null) return "-";
+  return `${formatCount(pnl)} / ${formatCount(equity)}`;
 }
 
 function isRunningForwardRun(run: StrategyTestRunResponse): boolean {
@@ -175,6 +184,10 @@ function isRunningForwardRun(run: StrategyTestRunResponse): boolean {
 function numericSummary(run: StrategyTestRunResponse, key: keyof StrategyTestRunResponse["summary"]): number | null {
   const value = run.summary[key];
   return typeof value === "number" ? value : null;
+}
+
+function formatCount(value: number | null): string {
+  return value == null ? "-" : String(value);
 }
 
 function formatDate(value: string | null): string {

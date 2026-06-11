@@ -10,7 +10,8 @@ import {
   usePublishStrategyTestCalibration,
   useRunStrategyTest,
   useStrategyTestReport,
-  useStrategyTestRuns
+  useStrategyTestRuns,
+  useStrategyTestStatus
 } from "@/hooks/use-radar-queries";
 import { StrategyTestReport } from "./StrategyTestReport";
 import { StrategyTestRunsTable } from "./StrategyTestRunsTable";
@@ -18,6 +19,7 @@ import type {
   StrategyTestMode,
   StrategyTestPair,
   StrategyTestRunRequest,
+  StrategyTestRunResponse,
   StrategyTestRunStatus,
   StrategyTestSameCandlePolicy,
   StrategyTestType,
@@ -36,6 +38,12 @@ const DEFAULT_TEST_TYPE: StrategyTestType = "historical_backtest";
 const DEFAULT_SAME_CANDLE_POLICY: StrategyTestSameCandlePolicy = "stop_first";
 const DEFAULT_SIGNAL_SELECTION_POLICY: StrategyTestSignalSelectionPolicy = "all_non_overlapping";
 const HISTORICAL_BACKTEST_TOOLTIP = "Historical backtest uses closed candles and does not affect live radar/trades.";
+const FORWARD_TEST_WARNING = "Forward test runs in background with isolated virtual account.";
+const FORWARD_DURATION_PRESETS = [
+  { label: "4h", hours: 4 },
+  { label: "12h", hours: 12 },
+  { label: "24h", hours: 24 }
+];
 
 const MODE_LABELS: Record<StrategyTestMode, string> = {
   discovery: "Исследование идей",
@@ -88,6 +96,7 @@ export function StrategyTestingPanel({
   const [maxBarsInTrade, setMaxBarsInTrade] = useState("48");
   const [formError, setFormError] = useState<string | null>(null);
   const [selectedReportRunId, setSelectedReportRunId] = useState<string | null>(null);
+  const [latestStartedRun, setLatestStartedRun] = useState<StrategyTestRunResponse | null>(null);
   const defaultStrategySelection = useMemo(() => defaultStrategyCodes(strategyOptions), [strategyOptions]);
   const defaultPairSelection = useMemo(() => defaultPairIds(pairOptions), [pairOptions]);
   const defaultTimeframeSelection = useMemo(() => defaultTimeframes(timeframeOptions), [timeframeOptions]);
@@ -107,7 +116,15 @@ export function StrategyTestingPanel({
   const runs = runsQuery.data ?? [];
   const selectedRun = runs.find((run) => run.run_id === selectedReportRunId) ?? null;
   const mutationSelectedRun = runMutation.data?.run_id === selectedReportRunId ? runMutation.data : null;
-  const selectedRunForReport = selectedRun ?? mutationSelectedRun;
+  const latestSelectedRun = latestStartedRun?.run_id === selectedReportRunId ? latestStartedRun : null;
+  const selectedRunBase = selectedRun ?? mutationSelectedRun ?? latestSelectedRun;
+  const selectedRunBaseIsActive = isActiveStrategyTestRun(selectedRunBase?.status);
+  const selectedRunBaseIsActiveForward = selectedRunBase?.requested_matrix.test_type === "forward_virtual" && selectedRunBaseIsActive;
+  const statusQuery = useStrategyTestStatus(selectedReportRunId, {
+    enabled: Boolean(selectedReportRunId && selectedRunBaseIsActiveForward),
+    refetchInterval: selectedRunBaseIsActiveForward ? STRATEGY_TEST_RUN_POLL_MS : false
+  });
+  const selectedRunForReport = statusQuery.data ?? selectedRunBase;
   const selectedRunStatus = selectedRunForReport?.status ?? null;
   const selectedRunIsActive = isActiveStrategyTestRun(selectedRunStatus);
   const mutationRunIsMissingFromList = Boolean(
@@ -158,6 +175,7 @@ export function StrategyTestingPanel({
         startAt,
         testType
       }));
+      setLatestStartedRun(response);
       setSelectedReportRunId(response.run_id);
     } catch (error) {
       setFormError(errorMessage(error) ?? "Unable to start strategy test.");
@@ -201,6 +219,9 @@ export function StrategyTestingPanel({
         {hasActiveRun ? <Badge tone="yellow">Run in progress</Badge> : null}
         {testType === "forward_virtual" ? <Badge tone="purple">Isolated virtual account</Badge> : null}
       </div>
+      {testType === "forward_virtual" ? (
+        <p className="compact-action-note strategy-test-forward-warning">{FORWARD_TEST_WARNING}</p>
+      ) : null}
 
       <div className="strategy-test-grid">
         <SelectionGroup title="Strategies">
@@ -258,6 +279,18 @@ export function StrategyTestingPanel({
       </div>
 
       <div className="strategy-test-controls">
+        {testType === "forward_virtual" ? (
+          <div className="strategy-test-field strategy-test-duration-presets">
+            <span>Duration</span>
+            <div className="strategy-test-duration-buttons">
+              {FORWARD_DURATION_PRESETS.map((preset) => (
+                <button key={preset.label} onClick={() => applyForwardDurationPreset(startAt, preset.hours, setEndAt)} type="button">
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <label className="strategy-test-field">
           <span>Start</span>
           <input onChange={(event) => setStartAt(event.target.value)} type="datetime-local" value={startAt} />
@@ -278,20 +311,23 @@ export function StrategyTestingPanel({
           <span>Slippage bps</span>
           <input inputMode="decimal" min="0" onChange={(event) => setSlippageBps(event.target.value)} step="0.1" type="number" value={slippageBps} />
         </label>
-        <label className="strategy-test-field">
-          <span>Same candle</span>
-          <select
-            onChange={(event) => setSameCandlePolicy(event.target.value as StrategyTestSameCandlePolicy)}
-            value={sameCandlePolicy}
-          >
-            {Object.entries(POLICY_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>{label}</option>
-            ))}
-          </select>
-        </label>
+        {testType === "historical_backtest" ? (
+          <SameCandlePolicyField
+            label="Same candle"
+            sameCandlePolicy={sameCandlePolicy}
+            setSameCandlePolicy={setSameCandlePolicy}
+          />
+        ) : null}
       </div>
 
       <div className="strategy-test-controls strategy-test-advanced-controls">
+        {testType === "forward_virtual" ? (
+          <SameCandlePolicyField
+            label="Same candle policy"
+            sameCandlePolicy={sameCandlePolicy}
+            setSameCandlePolicy={setSameCandlePolicy}
+          />
+        ) : null}
         <label className="strategy-test-field">
           <span>Signal selection</span>
           <select
@@ -330,7 +366,7 @@ export function StrategyTestingPanel({
       </div>
 
       <div className="strategy-test-mode-row" aria-label="Strategy test mode">
-        {(Object.keys(MODE_LABELS) as StrategyTestMode[]).map((option) => (
+        {modeOptionsForTestType(testType).map((option) => (
           <button
             className={mode === option ? "active" : ""}
             key={option}
@@ -384,6 +420,30 @@ function SelectionGroup({ children, title }: { children: ReactNode; title: strin
   );
 }
 
+function SameCandlePolicyField({
+  label,
+  sameCandlePolicy,
+  setSameCandlePolicy
+}: {
+  label: string;
+  sameCandlePolicy: StrategyTestSameCandlePolicy;
+  setSameCandlePolicy: (value: StrategyTestSameCandlePolicy) => void;
+}) {
+  return (
+    <label className="strategy-test-field">
+      <span>{label}</span>
+      <select
+        onChange={(event) => setSameCandlePolicy(event.target.value as StrategyTestSameCandlePolicy)}
+        value={sameCandlePolicy}
+      >
+        {Object.entries(POLICY_LABELS).map(([value, policyLabel]) => (
+          <option key={value} value={value}>{policyLabel}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function enabledStrategyOptions(strategyConfigs: StrategyConfig[]): StrategyConfig[] {
   const seen = new Set<string>();
   return strategyConfigs.filter((strategy) => {
@@ -424,6 +484,11 @@ function toggleValue(values: string[], value: string): string[] {
 
 function isActiveStrategyTestRun(status: StrategyTestRunStatus | null | undefined): boolean {
   return status != null && ACTIVE_RUN_STATUSES.has(status);
+}
+
+function modeOptionsForTestType(testType: StrategyTestType): StrategyTestMode[] {
+  if (testType === "forward_virtual") return ["research_virtual", "production_like"];
+  return Object.keys(MODE_LABELS) as StrategyTestMode[];
 }
 
 function validateDateRange(startAt: string, endAt: string): string | null {
@@ -495,6 +560,14 @@ function defaultForwardDateRange(): { startAt: string; endAt: string } {
     endAt: toDateTimeLocal(end),
     startAt: toDateTimeLocal(start)
   };
+}
+
+function applyForwardDurationPreset(startAt: string, hours: number, setEndAt: (value: string) => void) {
+  const parsedStart = new Date(startAt);
+  const start = Number.isNaN(parsedStart.getTime()) ? new Date() : parsedStart;
+  const end = new Date(start);
+  end.setHours(end.getHours() + hours);
+  setEndAt(toDateTimeLocal(end));
 }
 
 function toDateTimeLocal(date: Date): string {

@@ -1412,6 +1412,13 @@ const reasonCodeAliases: Record<string, ReasonCode> = {
 };
 
 const phrases: Record<string, TranslationMap> = Object.assign({
+  "Auto entries": { ru: "Авто-входы", zh: "自动入场" },
+  "Calibration ready": { ru: "Калибровка готова", zh: "校准就绪" },
+  "Execution rejections": { ru: "Отклонения исполнения", zh: "执行拒绝" },
+  "Forward test": { ru: "Форвард-тест", zh: "前向测试" },
+  "Historical backtest": { ru: "Исторический бэктест", zh: "历史回测" },
+  "Isolated virtual account": { ru: "Изолированный виртуальный аккаунт", zh: "隔离虚拟账户" },
+  "No-entry": { ru: "Без входа", zh: "未入场" },
   "Account access": { ru: "Доступ к аккаунту", zh: "账户访问" },
   "Account drawdown": { ru: "Просадка аккаунта", zh: "账户回撤" },
   "Actions": { ru: "Действия", zh: "操作" },

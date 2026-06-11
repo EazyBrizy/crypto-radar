@@ -32,6 +32,8 @@ cd frontend
 corepack pnpm openapi:generate
 ```
 
+Strategy Testing request/response unions in `frontend/src/features/strategy-testing/types.ts` should derive from `frontend/src/api/generated/openapi-types.ts` where possible. Keep local types as UI-facing adapters only; do not redefine backend status, test type, active-run, or same-candle-policy contracts by hand.
+
 ## Runtime Env
 
 - `NEXT_PUBLIC_FASTAPI_HTTP_URL`: FastAPI HTTP origin.

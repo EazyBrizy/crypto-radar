@@ -41,7 +41,9 @@ const MODE_LABELS: Record<StrategyTestMode, string> = {
 };
 
 const POLICY_LABELS: Record<StrategyTestSameCandlePolicy, string> = {
+  conservative_stop_first: "Conservative stop first",
   ignore_ambiguous: "Ignore ambiguous",
+  intrabar_unknown: "Intrabar unknown",
   stop_first: "Stop first",
   target_first: "Target first"
 };

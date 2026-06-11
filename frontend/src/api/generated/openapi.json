@@ -3557,7 +3557,8 @@
                     "running",
                     "completed",
                     "failed",
-                    "cancelled"
+                    "cancelled",
+                    "stopping"
                   ],
                   "type": "string"
                 },
@@ -3609,6 +3610,49 @@
         }
       }
     },
+    "/api/v1/strategy-tests/runs/active": {
+      "get": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "Get Active Strategy Test Run",
+        "operationId": "get_active_strategy_test_run_api_v1_strategy_tests_runs_active_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "demo_user",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyTestActiveRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/strategy-tests/runs/{run_id}": {
       "get": {
         "tags": [
@@ -3635,6 +3679,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StrategyTestRunDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy-tests/runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "Cancel Strategy Test Run",
+        "operationId": "cancel_strategy_test_run_api_v1_strategy_tests_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyTestRunResponse"
                 }
               }
             }
@@ -8262,6 +8349,17 @@
               }
             ],
             "title": "Message"
+          },
+          "technical_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Message"
           }
         },
         "type": "object",
@@ -9404,6 +9502,67 @@
         "type": "object",
         "title": "MarketQualitySnapshot"
       },
+      "MarketRegimeCandidate": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "enum": [
+              "trend_up",
+              "trend_down",
+              "range",
+              "chop",
+              "volatility_compression",
+              "volatility_expansion",
+              "post_impulse",
+              "news_pump",
+              "liquidity_vacuum",
+              "market_wide_risk_off",
+              "unknown"
+            ],
+            "title": "Label"
+          },
+          "score": {
+            "type": "number",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Score",
+            "default": 0
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Confidence",
+            "default": 0
+          },
+          "detected": {
+            "type": "boolean",
+            "title": "Detected",
+            "default": false
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "MarketRegimeCandidate"
+      },
       "MarketRegimeSnapshot": {
         "properties": {
           "signal_timeframe": {
@@ -9455,6 +9614,49 @@
             "title": "Alignment",
             "default": "unknown"
           },
+          "regime_type": {
+            "type": "string",
+            "enum": [
+              "trend_up",
+              "trend_down",
+              "range",
+              "chop",
+              "volatility_compression",
+              "volatility_expansion",
+              "post_impulse",
+              "liquidity_sweep_zone",
+              "unknown"
+            ],
+            "title": "Regime Type",
+            "default": "unknown"
+          },
+          "volatility_state": {
+            "type": "string",
+            "enum": [
+              "compression",
+              "normal",
+              "expansion",
+              "unknown"
+            ],
+            "title": "Volatility State",
+            "default": "unknown"
+          },
+          "structure_state": {
+            "type": "string",
+            "enum": [
+              "trend",
+              "range",
+              "chop",
+              "unknown"
+            ],
+            "title": "Structure State",
+            "default": "unknown"
+          },
+          "compatibility": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Compatibility"
+          },
           "score_adjustment": {
             "type": "integer",
             "title": "Score Adjustment",
@@ -9466,6 +9668,130 @@
             },
             "type": "array",
             "title": "Checks"
+          },
+          "primary_label": {
+            "type": "string",
+            "enum": [
+              "trend_up",
+              "trend_down",
+              "range",
+              "chop",
+              "volatility_compression",
+              "volatility_expansion",
+              "post_impulse",
+              "news_pump",
+              "liquidity_vacuum",
+              "market_wide_risk_off",
+              "unknown"
+            ],
+            "title": "Primary Label",
+            "default": "unknown"
+          },
+          "labels": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "trend_up",
+                "trend_down",
+                "range",
+                "chop",
+                "volatility_compression",
+                "volatility_expansion",
+                "post_impulse",
+                "news_pump",
+                "liquidity_vacuum",
+                "market_wide_risk_off",
+                "unknown"
+              ]
+            },
+            "type": "array",
+            "title": "Labels"
+          },
+          "base_label": {
+            "type": "string",
+            "enum": [
+              "trend_up",
+              "trend_down",
+              "range",
+              "chop",
+              "volatility_compression",
+              "volatility_expansion",
+              "post_impulse",
+              "news_pump",
+              "liquidity_vacuum",
+              "market_wide_risk_off",
+              "unknown"
+            ],
+            "title": "Base Label",
+            "default": "unknown"
+          },
+          "volatility_label": {
+            "type": "string",
+            "enum": [
+              "trend_up",
+              "trend_down",
+              "range",
+              "chop",
+              "volatility_compression",
+              "volatility_expansion",
+              "post_impulse",
+              "news_pump",
+              "liquidity_vacuum",
+              "market_wide_risk_off",
+              "unknown"
+            ],
+            "title": "Volatility Label",
+            "default": "unknown"
+          },
+          "event_labels": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "trend_up",
+                "trend_down",
+                "range",
+                "chop",
+                "volatility_compression",
+                "volatility_expansion",
+                "post_impulse",
+                "news_pump",
+                "liquidity_vacuum",
+                "market_wide_risk_off",
+                "unknown"
+              ]
+            },
+            "type": "array",
+            "title": "Event Labels"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Confidence",
+            "default": 0
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/MarketRegimeCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "regime_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regime Key"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
           }
         },
         "type": "object",
@@ -10410,6 +10736,28 @@
             ],
             "title": "Failure Reason"
           },
+          "technical_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Message"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
           "view": {
             "anyOf": [
               {
@@ -10475,6 +10823,17 @@
           "reason": {
             "type": "string",
             "title": "Reason"
+          },
+          "technical_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Message"
           },
           "entry_zone": {
             "type": "string",
@@ -11279,6 +11638,16 @@
               }
             ]
           },
+          "trigger": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalTriggerSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "invalidation": {
             "anyOf": [
               {
@@ -11317,7 +11686,9 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Deprecated legacy signal.auto_entry; use PendingEntryIntentRead instead.",
+            "deprecated": true
           },
           "edge": {
             "anyOf": [
@@ -11343,6 +11714,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/SignalDecisionSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution_gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalExecutionGateSnapshot"
               },
               {
                 "type": "null"
@@ -11535,6 +11916,16 @@
           "execution_ready_signals": {
             "type": "integer",
             "title": "Execution Ready Signals",
+            "default": 0
+          },
+          "watchlist_signals": {
+            "type": "integer",
+            "title": "Watchlist Signals",
+            "default": 0
+          },
+          "market_ideas": {
+            "type": "integer",
+            "title": "Market Ideas",
             "default": 0
           },
           "high_confidence_signals": {
@@ -11947,6 +12338,17 @@
           "message": {
             "type": "string",
             "title": "Message"
+          },
+          "technical_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Message"
           },
           "risk_decision": {
             "anyOf": [
@@ -12496,6 +12898,42 @@
             },
             "type": "array",
             "title": "Warnings"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          },
+          "technical_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Message"
+          },
+          "technical_messages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Technical Messages"
           },
           "rr": {
             "anyOf": [
@@ -13124,6 +13562,42 @@
             },
             "type": "array",
             "title": "Warnings"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          },
+          "technical_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Message"
+          },
+          "technical_messages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Technical Messages"
           },
           "exchange": {
             "type": "string",
@@ -15844,6 +16318,112 @@
         ],
         "title": "SignalEdgeSnapshot"
       },
+      "SignalExecutionGateReason": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "warning",
+              "info"
+            ],
+            "title": "Severity"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "severity",
+          "source",
+          "message"
+        ],
+        "title": "SignalExecutionGateReason"
+      },
+      "SignalExecutionGateSnapshot": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "warning",
+              "blocked"
+            ],
+            "title": "Status"
+          },
+          "feed_kind": {
+            "type": "string",
+            "enum": [
+              "market_idea",
+              "watchlist",
+              "execution_signal",
+              "blocked"
+            ],
+            "title": "Feed Kind"
+          },
+          "can_notify": {
+            "type": "boolean",
+            "title": "Can Notify",
+            "default": false
+          },
+          "can_enter_now": {
+            "type": "boolean",
+            "title": "Can Enter Now",
+            "default": false
+          },
+          "can_arm_pending": {
+            "type": "boolean",
+            "title": "Can Arm Pending",
+            "default": false
+          },
+          "can_show_in_execution_feed": {
+            "type": "boolean",
+            "title": "Can Show In Execution Feed",
+            "default": false
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/SignalExecutionGateReason"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/SignalExecutionGateReason"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "feed_kind"
+        ],
+        "title": "SignalExecutionGateSnapshot"
+      },
       "SignalExitPlanSnapshot": {
         "properties": {
           "targets": {
@@ -16178,6 +16758,86 @@
           "entry_zone"
         ],
         "title": "SignalTradePlanView"
+      },
+      "SignalTriggerSnapshot": {
+        "properties": {
+          "trigger_type": {
+            "type": "string",
+            "enum": [
+              "closed_candle",
+              "reclaim",
+              "breakdown",
+              "pullback_touch",
+              "liquidity_reclaim",
+              "breakout_retest",
+              "none"
+            ],
+            "title": "Trigger Type",
+            "default": "none"
+          },
+          "passed": {
+            "type": "boolean",
+            "title": "Passed",
+            "default": false
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "candle_state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ],
+            "title": "Candle State",
+            "default": "closed"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/SignalLayerCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "title": "SignalTriggerSnapshot"
       },
       "StopLossPlan": {
         "properties": {
@@ -16569,10 +17229,52 @@
             "minimum": 0,
             "title": "Losses Count"
           },
+          "pending_armed_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Pending Armed Count",
+            "default": 0
+          },
+          "filled_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Filled Count",
+            "default": 0
+          },
+          "no_entry_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "No Entry Count",
+            "default": 0
+          },
+          "execution_rejected_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Execution Rejected Count",
+            "default": 0
+          },
           "entry_touch_rate": {
             "type": "number",
             "minimum": 0,
             "title": "Entry Touch Rate"
+          },
+          "fill_rate": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Fill Rate",
+            "default": 0
+          },
+          "no_entry_rate": {
+            "type": "number",
+            "minimum": 0,
+            "title": "No Entry Rate",
+            "default": 0
+          },
+          "execution_rejected_rate": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Execution Rejected Rate",
+            "default": 0
           },
           "winrate": {
             "type": "number",
@@ -17911,6 +18613,68 @@
         ],
         "title": "StrategySetupSnapshot"
       },
+      "StrategyTestActiveRunResponse": {
+        "properties": {
+          "active_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StrategyTestRunResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "can_run": {
+            "type": "boolean",
+            "title": "Can Run"
+          },
+          "disabled_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason Code"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "is_stale": {
+            "type": "boolean",
+            "title": "Is Stale",
+            "default": false
+          },
+          "stale_threshold_seconds": {
+            "type": "integer",
+            "title": "Stale Threshold Seconds"
+          },
+          "allowed_actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Actions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "can_run",
+          "stale_threshold_seconds"
+        ],
+        "title": "StrategyTestActiveRunResponse"
+      },
       "StrategyTestCandidateAdjustment": {
         "properties": {
           "strategy_code": {
@@ -17986,7 +18750,8 @@
               "running",
               "completed",
               "failed",
-              "cancelled"
+              "cancelled",
+              "stopping"
             ],
             "title": "Status"
           },
@@ -18175,6 +18940,15 @@
             "title": "User Id",
             "default": "demo_user"
           },
+          "test_type": {
+            "type": "string",
+            "enum": [
+              "historical_backtest",
+              "forward_virtual"
+            ],
+            "title": "Test Type",
+            "default": "historical_backtest"
+          },
           "strategies": {
             "items": {
               "type": "string"
@@ -18314,9 +19088,19 @@
               "running",
               "completed",
               "failed",
-              "cancelled"
+              "cancelled",
+              "stopping"
             ],
             "title": "Status"
+          },
+          "test_type": {
+            "type": "string",
+            "enum": [
+              "historical_backtest",
+              "forward_virtual"
+            ],
+            "title": "Test Type",
+            "default": "historical_backtest"
           },
           "requested_matrix": {
             "additionalProperties": true,
@@ -18327,6 +19111,11 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Summary"
+          },
+          "runtime_state": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Runtime State"
           },
           "created_at": {
             "anyOf": [
@@ -18363,6 +19152,18 @@
               }
             ],
             "title": "Finished At"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
           },
           "error": {
             "anyOf": [
@@ -20857,6 +21658,24 @@
             ],
             "title": "Rejected Reason"
           },
+          "technical_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Message"
+          },
+          "technical_messages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Technical Messages"
+          },
           "warnings": {
             "items": {
               "type": "string"
@@ -20964,6 +21783,28 @@
               }
             ],
             "title": "Reason"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "technical_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technical Message"
           },
           "warnings": {
             "items": {

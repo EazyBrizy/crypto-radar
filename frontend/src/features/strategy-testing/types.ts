@@ -1,19 +1,24 @@
-export type StrategyTestMode = "discovery" | "research_virtual" | "production_like";
-export type StrategyTestType = "historical_backtest" | "forward_virtual";
-export type StrategyTestRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopping";
-export type StrategyTestSameCandlePolicy = "stop_first" | "target_first" | "ignore_ambiguous";
+import type { components } from "@/api/generated/openapi-types";
+
+type StrategyTestRunRequestDto = components["schemas"]["StrategyTestRunRequest"];
+type StrategyTestRunResponseDto = components["schemas"]["StrategyTestRunResponse"];
+type StrategyTestActiveRunResponseDto = components["schemas"]["StrategyTestActiveRunResponse"];
+
+export type StrategyTestMode = StrategyTestRunRequestDto["mode"];
+export type StrategyTestType = StrategyTestRunResponseDto["test_type"];
+export type StrategyTestRunStatus = StrategyTestRunResponseDto["status"];
+export type StrategyTestSameCandlePolicy = StrategyTestRunRequestDto["same_candle_policy"];
 
 export const STRATEGY_TEST_MODES: StrategyTestMode[] = ["discovery", "research_virtual", "production_like"];
 export const STRATEGY_TEST_SAME_CANDLE_POLICIES: StrategyTestSameCandlePolicy[] = [
+  "conservative_stop_first",
+  "intrabar_unknown",
   "stop_first",
   "target_first",
   "ignore_ambiguous"
 ];
 
-export interface StrategyTestPair {
-  exchange: string;
-  symbol: string;
-}
+export type StrategyTestPair = components["schemas"]["StrategyTestPair"];
 
 export interface StrategyTestRunRequest {
   user_id?: string;
@@ -24,9 +29,9 @@ export interface StrategyTestRunRequest {
   start_at: string;
   end_at: string;
   mode: StrategyTestMode;
-  initial_capital: number;
-  fee_rate: number;
-  slippage_bps: number;
+  initial_capital: StrategyTestRunRequestDto["initial_capital"];
+  fee_rate: StrategyTestRunRequestDto["fee_rate"];
+  slippage_bps: StrategyTestRunRequestDto["slippage_bps"];
   same_candle_policy: StrategyTestSameCandlePolicy;
   params?: Record<string, unknown>;
   metric_set?: string[];
@@ -70,12 +75,12 @@ export interface StrategyTestRunResponse {
 
 export interface StrategyTestActiveRunResponse {
   active_run: StrategyTestRunResponse | null;
-  can_run: boolean;
-  disabled_reason_code: string | null;
-  disabled_reason: string | null;
-  is_stale: boolean;
-  stale_threshold_seconds: number;
-  allowed_actions: string[];
+  can_run: StrategyTestActiveRunResponseDto["can_run"];
+  disabled_reason_code: StrategyTestActiveRunResponseDto["disabled_reason_code"];
+  disabled_reason: StrategyTestActiveRunResponseDto["disabled_reason"];
+  is_stale: StrategyTestActiveRunResponseDto["is_stale"];
+  stale_threshold_seconds: StrategyTestActiveRunResponseDto["stale_threshold_seconds"];
+  allowed_actions: NonNullable<StrategyTestActiveRunResponseDto["allowed_actions"]>;
 }
 
 export interface StrategyTestRunDetailResponse {

@@ -131,6 +131,20 @@ class ScannerRunnerForwardStrategyTestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(forward.calls, [])
         self.assertEqual(runner.processed_signals, 0)
 
+    async def test_suppressed_terminal_scanner_signal_does_not_publish_realtime(self) -> None:
+        strategy_signal = _strategy_signal()
+        broker = _RecordingBroker()
+        runner = ScannerRunner(
+            scanner=_Scanner([strategy_signal]),  # type: ignore[arg-type]
+            store=_Store(_signal(status="rejected")),  # type: ignore[arg-type]
+        )
+
+        with patch.object(signal_worker, "realtime_event_broker", broker):
+            await runner._run()
+
+        self.assertEqual(runner.processed_signals, 0)
+        self.assertEqual(broker.events, [])
+
     async def test_forward_strategy_test_error_is_logged_and_does_not_stop_scanner(self) -> None:
         strategy_signal = _strategy_signal()
         forward = _FailingForwardStrategyTests()

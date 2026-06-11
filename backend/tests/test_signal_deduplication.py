@@ -85,10 +85,29 @@ class SignalServiceWriteSideDedupTest(unittest.TestCase):
 
         self.assertTrue(created)
         self.assertEqual(radar_signal.id, "candidate")
-        self.assertEqual(radar_signal.status, "invalidated")
+        self.assertEqual(radar_signal.status, "rejected")
         self.assertEqual(radar_signal.status_reason, "dedup_suppressed_by_better_signal")
         self.assertEqual(repository.dedup_metadata["candidate"]["action"], "suppress")
         self.assertEqual(repository.dedup_metadata["candidate"]["suppressed_by_signal_id"], "existing")
+
+    def test_suppressed_candidate_fans_out_only_final_terminal_state(self) -> None:
+        existing = _signal(signal_id="existing", score=95)
+        repository = _DedupRepository(seed=[existing], next_id="candidate")
+        analytics = _SpyAnalyticsWriter()
+        hot_store = _SpyHotStore()
+        service = SignalService(
+            repository=repository,
+            analytics_writer=analytics,
+            hot_store=hot_store,
+        )
+
+        radar_signal, created = service.upsert_strategy_signal(_strategy_signal(score=82))
+
+        self.assertTrue(created)
+        self.assertEqual(radar_signal.status, "rejected")
+        self.assertEqual([result.signal.status for result in hot_store.results], ["rejected"])
+        self.assertEqual([event["event_type"] for event in analytics.events], ["signal.rejected"])
+        self.assertNotIn("actionable", [result.signal.status for result in hot_store.results])
 
     def test_stronger_candidate_invalidates_replaced_open_signal(self) -> None:
         existing = _signal(signal_id="existing", score=78, strategy="liquidity_sweep_reversal")
@@ -103,10 +122,30 @@ class SignalServiceWriteSideDedupTest(unittest.TestCase):
 
         self.assertTrue(created)
         self.assertEqual(radar_signal.status, "actionable")
-        self.assertEqual(repository.signals["existing"].status, "invalidated")
+        self.assertEqual(repository.signals["existing"].status, "rejected")
         self.assertEqual(repository.signals["existing"].status_reason, "dedup_replaced_by_better_signal")
         self.assertEqual(repository.dedup_metadata["candidate"]["action"], "replace")
         self.assertEqual(repository.dedup_metadata["candidate"]["replaced_signal_ids"], ["existing"])
+
+    def test_replaced_signal_fans_out_before_final_candidate(self) -> None:
+        existing = _signal(signal_id="existing", score=78, strategy="liquidity_sweep_reversal")
+        repository = _DedupRepository(seed=[existing], next_id="candidate")
+        hot_store = _SpyHotStore()
+        service = SignalService(
+            repository=repository,
+            analytics_writer=NullSignalAnalyticsWriter(),
+            hot_store=hot_store,
+        )
+
+        service.upsert_strategy_signal(_strategy_signal(score=92))
+
+        self.assertEqual(
+            [(result.signal.id, result.signal.status, result.event_type) for result in hot_store.results],
+            [
+                ("existing", "rejected", "signal.rejected"),
+                ("candidate", "actionable", "signal.updated"),
+            ],
+        )
 
 
 def _signal(
@@ -297,6 +336,22 @@ def _write_result(signal: RadarSignal, *, created: bool, event_type: str) -> Sig
             "signal_key": signal.id,
         },
     )
+
+
+class _SpyAnalyticsWriter:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def write_event(self, event: dict[str, object]) -> None:
+        self.events.append(event)
+
+
+class _SpyHotStore:
+    def __init__(self) -> None:
+        self.results: list[SignalWriteResult] = []
+
+    def write_signal(self, result: SignalWriteResult) -> None:
+        self.results.append(result)
 
 
 if __name__ == "__main__":

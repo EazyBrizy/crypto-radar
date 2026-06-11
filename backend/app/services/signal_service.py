@@ -11,7 +11,7 @@ from app.domain.signal_status import is_market_opportunity_status
 from app.repositories.signal_repository import (
     MAX_STORED_SIGNALS,
     PostgresSignalRepository,
-    SIGNAL_INVALIDATED_EVENT,
+    SIGNAL_REJECTED_EVENT,
     SignalRepository,
     SignalWriteResult,
 )
@@ -119,6 +119,12 @@ class NullSignalHotStore:
 class SignalAutoEntryArmResult:
     signal: RadarSignal
     pending_entry_intent: PendingEntryIntentRead
+
+
+@dataclass(frozen=True)
+class SignalWriteDedupResult:
+    final_result: SignalWriteResult
+    side_effect_results: tuple[SignalWriteResult, ...] = ()
 
 
 class SignalService:
@@ -242,10 +248,11 @@ class SignalService:
             exchange=exchange,
             explanation=explanation,
         )
-        self._after_write(result)
-        final_result = self._apply_write_side_dedup(result)
-        if final_result is not result:
-            self._after_write(final_result)
+        dedup_result = self._apply_write_side_dedup(result)
+        for side_effect_result in dedup_result.side_effect_results:
+            self._after_write(side_effect_result)
+        final_result = dedup_result.final_result
+        self._after_write(final_result)
         self._reconcile_pending_entry_trade_plan(final_result)
         return final_result.signal, result.created
 
@@ -403,7 +410,7 @@ class SignalService:
         except Exception as exc:
             logger.warning("Redis signal hot write failed: %s", exc)
 
-    def _apply_write_side_dedup(self, result: SignalWriteResult) -> SignalWriteResult:
+    def _apply_write_side_dedup(self, result: SignalWriteResult) -> SignalWriteDedupResult:
         signal = result.signal
         since = datetime.now(timezone.utc) - timedelta(
             seconds=max(0, int(settings.execution_dedup_window_seconds))
@@ -417,24 +424,26 @@ class SignalService:
             )
         except Exception as exc:
             logger.warning("Signal dedup lookup failed: %s", exc)
-            return result
+            return SignalWriteDedupResult(final_result=result)
 
         decision = signal_deduplication_service.decide(signal, open_signals)
         metadata = _dedup_metadata(decision)
         if decision.action == "suppress":
             suppressed = self._transition_signal_for_dedup(
                 signal.id,
-                new_status="invalidated",
+                new_status="rejected",
                 reason="dedup_suppressed_by_better_signal",
                 dedup=metadata,
             )
-            return suppressed or self._update_signal_dedup_metadata(signal.id, metadata) or result
+            final_result = suppressed or self._update_signal_dedup_metadata(signal.id, metadata) or result
+            return SignalWriteDedupResult(final_result=final_result)
 
+        side_effect_results: list[SignalWriteResult] = []
         if decision.action == "replace":
             for replaced_signal_id in decision.replaced_signal_ids:
                 replaced = self._transition_signal_for_dedup(
                     replaced_signal_id,
-                    new_status="invalidated",
+                    new_status="rejected",
                     reason="dedup_replaced_by_better_signal",
                     dedup={
                         **metadata,
@@ -443,9 +452,13 @@ class SignalService:
                     },
                 )
                 if replaced is not None:
-                    self._after_write(replaced)
+                    side_effect_results.append(replaced)
 
-        return self._update_signal_dedup_metadata(signal.id, metadata) or result
+        final_result = self._update_signal_dedup_metadata(signal.id, metadata) or result
+        return SignalWriteDedupResult(
+            final_result=final_result,
+            side_effect_results=tuple(side_effect_results),
+        )
 
     def _transition_signal_for_dedup(
         self,
@@ -461,7 +474,7 @@ class SignalService:
         return transition(
             signal_id,
             new_status=new_status,
-            event_type=SIGNAL_INVALIDATED_EVENT,
+            event_type=SIGNAL_REJECTED_EVENT,
             reason=reason,
             signal_updates={"dedup": dedup},
         )

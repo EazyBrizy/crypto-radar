@@ -7,7 +7,7 @@ import time
 from typing import Awaitable, Optional, Protocol
 
 from app.core.config import settings
-from app.domain.signal_status import is_execution_candidate_status
+from app.domain.signal_status import is_execution_candidate_status, is_market_opportunity_status
 from app.schemas.signal import StrategySignal
 from app.services.market_scanner import MarketScanner
 from app.services.candle_service import candle_service
@@ -151,6 +151,15 @@ class ScannerRunner:
                     )
                     continue
                 await self._process_forward_strategy_test_signal(signal)
+                if not _should_publish_realtime_signal(radar_signal):
+                    logger.debug(
+                        "Radar signal skipped for realtime fanout: %s %s %s status=%s",
+                        radar_signal.id,
+                        radar_signal.symbol,
+                        radar_signal.direction,
+                        radar_signal.status,
+                    )
+                    continue
                 if created:
                     self._processed_signals += 1
                     await realtime_event_broker.publish(signal_created_event(radar_signal))
@@ -371,6 +380,11 @@ def _should_notify_signal(
         return False
     notified_execution_keys.add(key)
     return True
+
+
+def _should_publish_realtime_signal(signal: object) -> bool:
+    status = getattr(signal, "status", None)
+    return isinstance(status, str) and is_market_opportunity_status(status)
 
 
 def _legacy_signal_is_notification_eligible(signal: object) -> bool:

@@ -1252,6 +1252,13 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         assert signal is not None
         self.assertEqual(signal.regime.regime_type if signal.regime else None, "chop")
         self.assertFalse(signal.regime.compatibility.get("compatible") if signal.regime else True)
+        _assert_strategy_regime_compatibility(
+            signal,
+            "trend_pullback_continuation",
+            allowed=False,
+            severity="blocker",
+            reason_code="strategy_regime_incompatible",
+        )
         self.assertIn("strategy_regime_incompatible", signal.status_reason or "")
 
     def test_liquidity_sweep_against_strong_trend_requires_absorption(self) -> None:
@@ -1302,6 +1309,13 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             "strategy_regime_incompatible",
         )
         self.assertFalse(signal.regime.compatibility.get("compatible") if signal.regime else True)
+        _assert_strategy_regime_compatibility(
+            signal,
+            "liquidity_sweep_reversal",
+            allowed=False,
+            severity="blocker",
+            reason_code="strategy_regime_incompatible",
+        )
 
     def test_breakout_requires_compression(self) -> None:
         features = _breakout_features().model_copy(
@@ -1338,6 +1352,13 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         assert signal is not None
         self.assertEqual(signal.regime.regime_type if signal.regime else None, "trend_up")
         self.assertFalse(signal.regime.compatibility.get("compatible") if signal.regime else True)
+        _assert_strategy_regime_compatibility(
+            signal,
+            "volatility_squeeze_breakout",
+            allowed=False,
+            severity="blocker",
+            reason_code="strategy_regime_incompatible",
+        )
         self.assertIn("compression", signal.regime.compatibility.get("reason", "") if signal.regime else "")
 
     def test_liquidity_vacuum_creates_no_trade_blocker(self) -> None:
@@ -3259,6 +3280,23 @@ def _assert_trigger_reason_propagates(signal, reason_code: str) -> None:
     assert signal.trade_plan.metadata.get("trigger_reason_code") == reason_code
     gate_reason = next(reason for reason in signal.execution_gate.reasons if reason.code == "trigger_not_confirmed")
     assert gate_reason.metadata.get("reason_code") == reason_code
+
+
+def _assert_strategy_regime_compatibility(
+    signal,
+    strategy: str,
+    *,
+    allowed: bool,
+    severity: str,
+    reason_code: str,
+) -> None:
+    assert signal.regime is not None
+    strategy_compatibility = signal.regime.compatibility.get(strategy)
+    assert isinstance(strategy_compatibility, dict)
+    assert strategy_compatibility.get("allowed") is allowed
+    assert strategy_compatibility.get("severity") == severity
+    assert strategy_compatibility.get("reason_code") == reason_code
+    assert isinstance(strategy_compatibility.get("reason"), str)
 
 
 def _breakout_alpha_context(features: Features) -> AlphaMarketContext:

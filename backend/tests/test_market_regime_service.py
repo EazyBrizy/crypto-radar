@@ -1,6 +1,6 @@
 import unittest
 
-from app.schemas.market import AlphaMarketContext, Features
+from app.schemas.market import AlphaMarketContext, Features, LiquidityPoolFeatures
 from app.services.market_regime import (
     MarketQualityInput,
     MarketRegimeContextStore,
@@ -18,7 +18,7 @@ class MarketRegimeServiceTest(unittest.TestCase):
         self.assertIn("trend_up", snapshot.labels)
         self.assertEqual(snapshot.direction, "bullish")
         self.assertGreaterEqual(snapshot.confidence, 0.6)
-        self.assertEqual(len(snapshot.candidates), 11)
+        self.assertEqual(len(snapshot.candidates), 12)
         self.assertEqual(snapshot.regime_key, "trend_up:strong:unknown")
 
     def test_trend_down_detected_from_ema_stack_and_adx(self) -> None:
@@ -129,6 +129,39 @@ class MarketRegimeServiceTest(unittest.TestCase):
         self.assertEqual(snapshot.primary_label, "post_impulse")
         self.assertEqual(snapshot.volatility_label, "post_impulse")
         self.assertEqual(snapshot.metadata.get("impulse_direction"), "up")
+
+    def test_liquidity_sweep_zone_detected_from_alpha_context(self) -> None:
+        snapshot = MarketRegimeService().classify(
+            features=_features(
+                close=100.2,
+                adx=16.0,
+                donchian_high_20=101.0,
+                donchian_low_20=99.0,
+                range_20_atr=2.0,
+            ),
+            alpha_context=AlphaMarketContext(
+                symbol="BTCUSDT",
+                timeframe="15m",
+                timestamp=1_779_796_800_000,
+                sweep_through_book=True,
+                liquidation_proximity=0.24,
+                session_liquidity_pools=[
+                    LiquidityPoolFeatures(
+                        name="range_high",
+                        price=101.0,
+                        side="above",
+                        source="session",
+                        distance_pct=0.008,
+                        strength=0.82,
+                    )
+                ],
+            ),
+        )
+
+        self.assertEqual(snapshot.primary_label, "liquidity_sweep_zone")
+        self.assertEqual(snapshot.regime_type, "liquidity_sweep_zone")
+        self.assertIn("liquidity_sweep_zone", snapshot.labels)
+        self.assertIn("liquidity_sweep_zone", snapshot.event_labels)
 
     def test_news_pump_detected_from_extreme_volume_body_oi(self) -> None:
         snapshot = MarketRegimeService().classify(

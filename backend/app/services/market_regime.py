@@ -23,6 +23,7 @@ VOLATILITY_LABELS: tuple[MarketRegimeLabel, ...] = (
     "post_impulse",
 )
 EVENT_LABELS: tuple[MarketRegimeLabel, ...] = (
+    "liquidity_sweep_zone",
     "news_pump",
     "liquidity_vacuum",
     "market_wide_risk_off",
@@ -35,6 +36,7 @@ ALL_LABELS: tuple[MarketRegimeLabel, ...] = (
     "volatility_compression",
     "volatility_expansion",
     "post_impulse",
+    "liquidity_sweep_zone",
     "news_pump",
     "liquidity_vacuum",
     "market_wide_risk_off",
@@ -45,6 +47,7 @@ PRIMARY_PRIORITY: tuple[MarketRegimeLabel, ...] = (
     "liquidity_vacuum",
     "news_pump",
     "post_impulse",
+    "liquidity_sweep_zone",
     "volatility_expansion",
     "volatility_compression",
     "chop",
@@ -282,6 +285,7 @@ class MarketRegimeService:
             "volatility_compression": _score_volatility_compression(features, settings),
             "volatility_expansion": _score_volatility_expansion(features, alpha_context, settings),
             "post_impulse": _score_post_impulse(features, settings),
+            "liquidity_sweep_zone": _score_liquidity_sweep_zone(features, alpha_context, settings),
             "news_pump": _score_news_pump(features, alpha_context, market_quality, settings),
             "liquidity_vacuum": _score_liquidity_vacuum(features, alpha_context, market_quality, settings),
             "market_wide_risk_off": _score_market_wide_risk_off(market_wide_context, settings),
@@ -565,6 +569,76 @@ def _score_post_impulse(features: Features, settings: Mapping[str, Any]) -> tupl
     }
     return score, "Post-impulse evidence from current or previous large directional candle and retest behavior", metadata, float(
         _setting(settings, "post_impulse_detect_score", 60.0)
+    )
+
+
+def _score_liquidity_sweep_zone(
+    features: Features,
+    alpha_context: AlphaMarketContext | None,
+    settings: Mapping[str, Any],
+) -> tuple[float, str, dict[str, Any], float]:
+    if alpha_context is None:
+        return (
+            0.0,
+            "Alpha context is unavailable for liquidity-sweep-zone classification",
+            {"alpha_context_available": False},
+            float(_setting(settings, "liquidity_sweep_zone_detect_score", 60.0)),
+        )
+
+    max_pool_distance_pct = float(_setting(settings, "liquidity_sweep_zone_max_pool_distance_pct", 0.012))
+    min_pool_strength = float(_setting(settings, "liquidity_sweep_zone_min_pool_strength", 0.65))
+    max_liquidation_proximity = float(_setting(settings, "liquidity_sweep_zone_max_liquidation_proximity", 0.35))
+    range_edge_atr = float(_setting(settings, "liquidity_sweep_zone_range_edge_atr", 0.6))
+    pools = list(alpha_context.session_liquidity_pools or [])
+    near_pool = any(
+        pool.distance_pct is not None and abs(pool.distance_pct) <= max_pool_distance_pct
+        for pool in pools
+    )
+    strong_pool = any((pool.strength or 0.0) >= min_pool_strength for pool in pools)
+    sweep_through_book = alpha_context.sweep_through_book is True
+    liquidation_near = (
+        alpha_context.liquidation_proximity is not None
+        and alpha_context.liquidation_proximity <= max_liquidation_proximity
+    )
+    liquidation_clusters = bool(alpha_context.liquidation_clusters)
+    atr = features.atr_14 or 0.0
+    range_edge_distance = min(
+        (
+            abs(features.close - level)
+            for level in (features.donchian_high_20, features.donchian_low_20)
+            if level is not None
+        ),
+        default=None,
+    )
+    near_range_edge = (
+        range_edge_distance is not None
+        and atr > 0
+        and range_edge_distance <= atr * range_edge_atr
+    )
+    score = (
+        (35 if sweep_through_book else 0)
+        + (25 if near_pool else 0)
+        + (15 if strong_pool else 0)
+        + (15 if liquidation_near else 0)
+        + (10 if liquidation_clusters else 0)
+        + (10 if near_range_edge else 0)
+    )
+    metadata = {
+        "alpha_context_available": True,
+        "sweep_through_book": sweep_through_book,
+        "near_liquidity_pool": near_pool,
+        "strong_liquidity_pool": strong_pool,
+        "liquidity_pool_count": len(pools),
+        "liquidation_near": liquidation_near,
+        "liquidation_clusters": liquidation_clusters,
+        "near_range_edge": near_range_edge,
+        "range_edge_distance": range_edge_distance,
+        "max_pool_distance_pct": max_pool_distance_pct,
+        "min_pool_strength": min_pool_strength,
+        "max_liquidation_proximity": max_liquidation_proximity,
+    }
+    return score, "Liquidity-sweep-zone evidence from nearby pools, book sweep, and liquidation context", metadata, float(
+        _setting(settings, "liquidity_sweep_zone_detect_score", 60.0)
     )
 
 
@@ -912,6 +986,15 @@ def _strategy_regime_compatibility_check(
         "trend_direction": snapshot.direction,
         "trend_strength": snapshot.strength,
         "alignment": alignment,
+    }
+    metadata[signal.strategy] = {
+        "allowed": status != "failed",
+        "compatible": compatible,
+        "severity": "blocker" if status == "failed" else "warning" if status == "warning" else "info",
+        "reason_code": reason_code,
+        "reason": reason,
+        "status": status,
+        "strategy": signal.strategy,
     }
     return SignalLayerCheck(
         name="strategy_regime_compatibility",

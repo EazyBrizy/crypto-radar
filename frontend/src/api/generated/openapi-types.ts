@@ -2959,7 +2959,7 @@ export interface components {
              * Label
              * @enum {string}
              */
-            label: "trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown";
+            label: "trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "liquidity_sweep_zone" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown";
             /**
              * Score
              * @default 0
@@ -3043,23 +3043,23 @@ export interface components {
              * @default unknown
              * @enum {string}
              */
-            primary_label: "trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown";
+            primary_label: "trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "liquidity_sweep_zone" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown";
             /** Labels */
-            labels?: ("trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown")[];
+            labels?: ("trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "liquidity_sweep_zone" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown")[];
             /**
              * Base Label
              * @default unknown
              * @enum {string}
              */
-            base_label: "trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown";
+            base_label: "trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "liquidity_sweep_zone" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown";
             /**
              * Volatility Label
              * @default unknown
              * @enum {string}
              */
-            volatility_label: "trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown";
+            volatility_label: "trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "liquidity_sweep_zone" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown";
             /** Event Labels */
-            event_labels?: ("trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown")[];
+            event_labels?: ("trend_up" | "trend_down" | "range" | "chop" | "volatility_compression" | "volatility_expansion" | "post_impulse" | "liquidity_sweep_zone" | "news_pump" | "liquidity_vacuum" | "market_wide_risk_off" | "unknown")[];
             /**
              * Confidence
              * @default 0

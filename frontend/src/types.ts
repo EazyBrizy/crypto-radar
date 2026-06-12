@@ -268,6 +268,7 @@ export type MarketRegimeLabel =
   | "volatility_compression"
   | "volatility_expansion"
   | "post_impulse"
+  | "liquidity_sweep_zone"
   | "news_pump"
   | "liquidity_vacuum"
   | "market_wide_risk_off"

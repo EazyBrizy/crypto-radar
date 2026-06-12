@@ -3102,6 +3102,13 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   gap: 12px;
 }
 
+.strategy-test-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .strategy-test-metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3155,6 +3162,22 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .strategy-test-report-section h5 {
   color: #e5e7eb;
   font-size: 13px;
+}
+
+.strategy-test-calibration-result {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.strategy-test-calibration-result p {
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .strategy-test-summary-grid,

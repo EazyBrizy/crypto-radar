@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status as http_status
 
 from app.services.strategy_testing.schemas import (
+    StrategyTestCalibrationResponse,
     StrategyTestActiveRunResponse,
     StrategyTestFunnelResponse,
     StrategyTestReport,
@@ -85,6 +86,19 @@ async def cancel_strategy_test_run(
 ) -> StrategyTestRunResponse:
     try:
         return service.cancel_run(run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/calibration", response_model=StrategyTestCalibrationResponse)
+async def publish_strategy_test_calibration(
+    run_id: UUID,
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> StrategyTestCalibrationResponse:
+    try:
+        return service.publish_calibration(run_id)
     except LookupError as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:

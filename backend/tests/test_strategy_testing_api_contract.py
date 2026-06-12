@@ -15,6 +15,7 @@ from app.main import app
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult
 from app.services.strategy_testing.metrics import MetricResult
 from app.services.strategy_testing.schemas import (
+    StrategyTestCalibrationResponse,
     StrategyTestMetricRow,
     StrategyTestPair,
     StrategyTestRunDetailResponse,
@@ -25,6 +26,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestTrade,
 )
 from app.services.strategy_testing.service import StrategyTestingService
+from app.services.strategy_testing.eligibility_profiles import build_profile_upserts_from_metric_results
 
 
 class StrategyTestingApiContractTest(unittest.TestCase):
@@ -171,7 +173,7 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(list_response.json()[0]["runtime_state"]["status"], "listening")
         self.assertEqual(list_response.json()[0]["runtime_state"]["processed_signals"], 0)
 
-    def test_completed_historical_run_updates_execution_eligibility_profiles(self) -> None:
+    def test_completed_historical_run_does_not_publish_execution_calibration_by_default(self) -> None:
         store = _EphemeralStrategyTestRunStore()
         updater = _RecordingEligibilityProfileUpdater()
         service = StrategyTestingService(
@@ -185,11 +187,110 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         completed = service.execute_run(created.run.run_id, _request())
 
         self.assertEqual(completed.status, "completed")
+        self.assertEqual(updater.calls, [])
+
+    def test_completed_historical_run_auto_publishes_calibration_only_with_flag(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        updater = _RecordingEligibilityProfileUpdater()
+        service = StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_MetricStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            eligibility_profile_updater=updater,
+        )
+        request = _request(params={"auto_publish_calibration": True})
+
+        created = store.create_run(request)
+        completed = service.execute_run(created.run.run_id, request)
+
+        self.assertEqual(completed.status, "completed")
         self.assertEqual(len(updater.calls), 1)
         call = updater.calls[0]
         self.assertEqual(call["run_id"], created.run.run_id)
         self.assertEqual(call["request"].test_type, "historical_backtest")
         self.assertIn("expectancy_after_costs_r", {metric.code for metric in call["metrics"]})
+
+    def test_calibration_endpoint_publishes_completed_run_profiles(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        updater = _RecordingEligibilityProfileUpdater()
+        service = StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_MetricStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            eligibility_profile_updater=updater,
+        )
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+        created = store.create_run(_request())
+        completed = service.execute_run(created.run.run_id, _request())
+
+        try:
+            response = client.post(f"/api/v1/strategy-tests/runs/{completed.run_id}/calibration")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        parsed = StrategyTestCalibrationResponse(**data)
+        self.assertEqual(parsed.run_id, completed.run_id)
+        self.assertEqual(parsed.decision, "positive")
+        self.assertEqual(parsed.profiles_count, 1)
+        self.assertEqual(len(updater.calls), 1)
+        profile = parsed.profiles[0]
+        self.assertEqual(profile.strategy_code, "trend_pullback_continuation")
+        self.assertEqual(profile.exchange, "bybit")
+        self.assertEqual(profile.symbol_scope, "BTCUSDT")
+        self.assertEqual(profile.sample_size, 80)
+        self.assertEqual(profile.decision, "positive")
+        self.assertTrue(profile.eligible)
+        self.assertEqual(profile.source_run_id, completed.run_id)
+        self.assertIn(str(completed.run_id), profile.run_ids)
+
+    def test_calibration_endpoint_rejects_unfinished_run(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        service = StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_MetricStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            eligibility_profile_updater=_RecordingEligibilityProfileUpdater(),
+        )
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+        created = store.create_run(_request())
+
+        try:
+            response = client.post(f"/api/v1/strategy-tests/runs/{created.run.run_id}/calibration")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("completed", response.json()["detail"])
+
+    def test_calibration_endpoint_marks_insufficient_sample_profiles(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        updater = _RecordingEligibilityProfileUpdater()
+        service = StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_InsufficientSampleStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            eligibility_profile_updater=updater,
+        )
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+        created = store.create_run(_request())
+        completed = service.execute_run(created.run.run_id, _request())
+
+        try:
+            response = client.post(f"/api/v1/strategy-tests/runs/{completed.run_id}/calibration")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["decision"], "insufficient_sample")
+        self.assertEqual(data["profiles"][0]["decision"], "insufficient_sample")
+        self.assertFalse(data["profiles"][0]["eligible"])
+        self.assertEqual(data["profiles"][0]["reason_code"], "strategy_eligibility_insufficient_sample")
 
     def test_active_run_endpoint_returns_backend_gate_state(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -480,7 +581,11 @@ def _now() -> datetime:
     return datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def _request(tags: list[str] | None = None, test_type: str = "historical_backtest") -> StrategyTestRunRequest:
+def _request(
+    tags: list[str] | None = None,
+    test_type: str = "historical_backtest",
+    params: dict[str, Any] | None = None,
+) -> StrategyTestRunRequest:
     now = _now()
     request_kwargs = {
         "test_type": test_type,
@@ -498,6 +603,8 @@ def _request(tags: list[str] | None = None, test_type: str = "historical_backtes
         "end_at": now + timedelta(days=30),
         "initial_capital": Decimal("1000"),
     }
+    if params is not None:
+        request_kwargs["params"] = params
     if tags is not None:
         request_kwargs["tags"] = tags
     return StrategyTestRunRequest(**request_kwargs)
@@ -687,7 +794,43 @@ class _MetricStrategyTestMatrixRunner:
                 MetricResult("expectancy_after_costs_r", "Expectancy After Costs R", 0.18, 80, group),
                 MetricResult("profit_factor", "Profit Factor", 1.7, 80, group),
                 MetricResult("entry_touch_rate", "Entry Touch Rate", 0.45, 80, group),
+                MetricResult("no_entry_rate", "No Entry Rate", 0.20, 80, group),
                 MetricResult("max_drawdown_r", "Max Drawdown R", 4.0, 80, group),
+            ],
+        )
+
+
+class _InsufficientSampleStrategyTestMatrixRunner:
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+    ) -> StrategyTestMatrixResult:
+        _ = request, user_uuid
+        group = {
+            "strategy": "trend_pullback_continuation",
+            "exchange": "bybit",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "regime": "trend",
+            "score_bucket": "80-89",
+            "direction": "long",
+        }
+        return StrategyTestMatrixResult(
+            run_id=run_id,
+            scenario_count=1,
+            completed_scenarios=1,
+            failed_scenarios=0,
+            scenario_summaries=[],
+            trades=[],
+            metrics=[
+                MetricResult("trades_count", "Trades Count", 12, 12, group),
+                MetricResult("expectancy_after_costs_r", "Expectancy After Costs R", 0.18, 12, group),
+                MetricResult("profit_factor", "Profit Factor", 1.7, 12, group),
+                MetricResult("entry_touch_rate", "Entry Touch Rate", 0.45, 12, group),
+                MetricResult("no_entry_rate", "No Entry Rate", 0.20, 12, group),
             ],
         )
 
@@ -714,8 +857,9 @@ class _RecordingEligibilityProfileUpdater:
         run_id: UUID,
         request: StrategyTestRunRequest,
         metrics: Sequence[MetricResult],
-    ) -> None:
+    ) -> list[Any]:
         self.calls.append({"run_id": run_id, "request": request, "metrics": list(metrics)})
+        return build_profile_upserts_from_metric_results(run_id=run_id, request=request, metrics=metrics)
 
 
 def _signal_event(

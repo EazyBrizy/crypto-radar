@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.repositories.strategy_execution_eligibility import (
+    StrategyExecutionEligibilityProfileRecord,
     StrategyExecutionEligibilityProfileRepository,
     StrategyExecutionEligibilityProfileUpsert,
 )
@@ -45,13 +46,15 @@ class StrategyExecutionEligibilityProfileUpdater:
         run_id: UUID,
         request: StrategyTestRunRequest,
         metrics: Sequence[MetricResult],
-    ) -> None:
+    ) -> list[StrategyExecutionEligibilityProfileRecord]:
+        published: list[StrategyExecutionEligibilityProfileRecord] = []
         for profile in build_profile_upserts_from_metric_results(
             run_id=run_id,
             request=request,
             metrics=metrics,
         ):
-            self._repository.upsert_profile(profile)
+            published.append(self._repository.upsert_profile(profile))
+        return published
 
 
 def build_profile_upserts_from_metric_results(
@@ -148,7 +151,11 @@ def _eligibility_decision(
 ) -> tuple[bool, str, str]:
     blockers: list[str] = []
     if sample_size < settings.execution_edge_min_sample_size:
-        blockers.append("Strategy edge sample size is below the execution threshold.")
+        return (
+            False,
+            "strategy_eligibility_insufficient_sample",
+            "Strategy edge sample size is below the execution threshold.",
+        )
     if (
         expectancy_after_costs_r is None
         or expectancy_after_costs_r < settings.execution_edge_min_expectancy_after_costs_r

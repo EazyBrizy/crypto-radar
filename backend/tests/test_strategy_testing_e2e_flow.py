@@ -29,7 +29,7 @@ NOW = datetime(2026, 6, 11, 12, 0, tzinfo=timezone.utc)
 
 class StrategyTestingE2EFlowTest(unittest.TestCase):
     def test_historical_backtest_writes_trades_metrics_and_updates_execution_profile(self) -> None:
-        request = _request()
+        request = _request(params={"auto_publish_calibration": True})
         run_store = _E2ERunStore(run_id=RUN_ID)
         trade_store = _RecordingStrategyTestTradeStore()
         profile_repository = _RecordingEligibilityProfileRepository()
@@ -253,7 +253,7 @@ class _DeterministicBacktestMatrixRunner:
         )
 
 
-def _request() -> StrategyTestRunRequest:
+def _request(params: dict[str, Any] | None = None) -> StrategyTestRunRequest:
     return StrategyTestRunRequest(
         user_id="e2e_user",
         test_type="historical_backtest",
@@ -266,6 +266,7 @@ def _request() -> StrategyTestRunRequest:
         initial_capital=Decimal("1000"),
         fee_rate=Decimal("0.001"),
         slippage_bps=Decimal("0"),
+        params=params or {},
         tags=["backtest", "e2e"],
     )
 

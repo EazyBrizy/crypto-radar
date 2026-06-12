@@ -2,6 +2,7 @@ import { requestJson } from "./client";
 import { currentUserId } from "./user-identity";
 import type {
   StrategyTestActiveRunResponse,
+  StrategyTestCalibrationResponse,
   StrategyTestFunnelResponse,
   StrategyTestReport,
   StrategyTestRunDetailResponse,
@@ -59,6 +60,11 @@ export const strategyTestsApi = {
   },
   async cancelRun(runId: string): Promise<StrategyTestRunResponse> {
     return rawJson<StrategyTestRunResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: "POST"
+    });
+  },
+  async publishCalibration(runId: string): Promise<StrategyTestCalibrationResponse> {
+    return rawJson<StrategyTestCalibrationResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/calibration`, {
       method: "POST"
     });
   },

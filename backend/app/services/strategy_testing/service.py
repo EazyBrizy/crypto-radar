@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 from uuid import UUID
 
+from app.core.config import settings
 from app.services.strategy_testing.eligibility_profiles import StrategyExecutionEligibilityProfileUpdater
 from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
@@ -17,6 +18,9 @@ from app.services.strategy_testing.report_builder import (
 )
 from app.services.strategy_testing.runner import strategy_test_user_uuid
 from app.services.strategy_testing.schemas import (
+    StrategyTestCalibrationDecision,
+    StrategyTestCalibrationProfile,
+    StrategyTestCalibrationResponse,
     StrategyTestActiveRunResponse,
     StrategyTestFunnelResponse,
     StrategyTestMetricRow,
@@ -61,7 +65,7 @@ class StrategyExecutionEligibilityProfileUpdateService(Protocol):
         run_id: UUID,
         request: StrategyTestRunRequest,
         metrics: Sequence[MetricResult],
-    ) -> None:
+    ) -> Sequence[Any] | None:
         ...
 
 
@@ -119,25 +123,26 @@ class StrategyTestingService:
                     results=metric_results,
                 )
             )
-            try:
-                self._eligibility_profile_updater.update_from_metric_results(
-                    run_id=run_id,
-                    request=request,
-                    metrics=metric_results,
-                )
-            except Exception as exc:
-                message = f"Eligibility profile update failed: {exc}"
-                logger.warning(
-                    "Strategy test eligibility profile update failed for run_id=%s test_type=%s: %s",
-                    run_id,
-                    request.test_type,
-                    exc,
-                )
-                _append_summary_warning(
-                    summary,
-                    "eligibility_profile_update_failed",
-                    message,
-                )
+            if _auto_publish_calibration(request):
+                try:
+                    self._eligibility_profile_updater.update_from_metric_results(
+                        run_id=run_id,
+                        request=request,
+                        metrics=metric_results,
+                    )
+                except Exception as exc:
+                    message = f"Eligibility profile update failed: {exc}"
+                    logger.warning(
+                        "Strategy test eligibility profile update failed for run_id=%s test_type=%s: %s",
+                        run_id,
+                        request.test_type,
+                        exc,
+                    )
+                    _append_summary_warning(
+                        summary,
+                        "eligibility_profile_update_failed",
+                        message,
+                    )
             return self._run_store.mark_completed(run_id, summary=summary).run
         except Exception as exc:
             return self._run_store.mark_failed(run_id, str(exc)).run
@@ -200,6 +205,29 @@ class StrategyTestingService:
         if detail.run.status not in {"queued", "running", "stopping"}:
             raise ValueError(f"Strategy test run cannot be cancelled from status {detail.run.status}")
         return self._run_store.mark_cancelled(run_id).run
+
+    def publish_calibration(self, run_id: UUID) -> StrategyTestCalibrationResponse:
+        detail = self._run_store.get_run(run_id)
+        if detail is None:
+            raise LookupError(f"Strategy test run is not found: {run_id}")
+        run = detail.run
+        if run.status != "completed":
+            raise ValueError("Strategy test run must be completed before calibration can be published.")
+
+        request = _request_from_completed_run(run)
+        metrics = _metric_results_from_run_summary(run.summary)
+        if not metrics:
+            raise ValueError("Strategy test run has no grouped metrics suitable for calibration.")
+
+        published = self._eligibility_profile_updater.update_from_metric_results(
+            run_id=run_id,
+            request=request,
+            metrics=metrics,
+        )
+        profiles = list(published or [])
+        if not profiles:
+            raise ValueError("Strategy test run has no eligibility profiles suitable for calibration.")
+        return _calibration_response(run_id=run_id, profiles=profiles)
 
     def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
         if self._run_store.get_run(run_id) is None:
@@ -264,6 +292,163 @@ def _append_summary_warning(summary: dict[str, object], code: str, message: str)
         warnings = []
         summary["warnings"] = warnings
     warnings.append({"code": code, "message": message})
+
+
+def _auto_publish_calibration(request: StrategyTestRunRequest) -> bool:
+    return request.params.get("auto_publish_calibration") is True
+
+
+def _request_from_completed_run(run: StrategyTestRunResponse) -> StrategyTestRunRequest:
+    return StrategyTestRunRequest(**dict(run.requested_matrix))
+
+
+def _metric_results_from_run_summary(summary: dict[str, Any]) -> list[MetricResult]:
+    grouped_metrics = summary.get("grouped_metrics")
+    if not isinstance(grouped_metrics, list):
+        return []
+    results: list[MetricResult] = []
+    for item in grouped_metrics:
+        if not isinstance(item, dict):
+            continue
+        code = _text(item.get("code"))
+        if not code:
+            continue
+        group = item.get("group")
+        if not isinstance(group, dict):
+            continue
+        results.append(
+            MetricResult(
+                code=code,
+                label=_text(item.get("label")) or code,
+                value=_metric_value(item.get("value")),
+                sample_size=_sample_size(item.get("sample_size")),
+                group={str(key): str(value) for key, value in group.items()},
+                warnings=[str(warning) for warning in item.get("warnings", []) if warning is not None]
+                if isinstance(item.get("warnings"), list)
+                else [],
+            )
+        )
+    return results
+
+
+def _calibration_response(
+    *,
+    run_id: UUID,
+    profiles: Sequence[Any],
+) -> StrategyTestCalibrationResponse:
+    profile_responses = [_calibration_profile(run_id=run_id, profile=profile) for profile in profiles]
+    decision = _aggregate_calibration_decision(profile_responses)
+    return StrategyTestCalibrationResponse(
+        run_id=run_id,
+        decision=decision,
+        profiles_count=len(profile_responses),
+        profiles=profile_responses,
+        reason=_calibration_reason(profile_responses),
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+def _calibration_profile(
+    *,
+    run_id: UUID,
+    profile: Any,
+) -> StrategyTestCalibrationProfile:
+    decision = _profile_decision(profile)
+    run_ids = [str(item) for item in (_profile_attr(profile, "run_ids", []) or []) if str(item)]
+    return StrategyTestCalibrationProfile(
+        strategy_code=str(_profile_attr(profile, "strategy_code", "unknown")),
+        exchange=str(_profile_attr(profile, "exchange", "unknown")),
+        symbol_scope=str(_profile_attr(profile, "symbol_scope", "unknown")),
+        timeframe=str(_profile_attr(profile, "timeframe", "unknown")),
+        market_regime=str(_profile_attr(profile, "market_regime", "unknown")),
+        score_bucket=str(_profile_attr(profile, "score_bucket", "unknown")),
+        direction=str(_profile_attr(profile, "direction", "long")),
+        decision=decision,
+        eligible=bool(_profile_attr(profile, "eligible", False)),
+        source=str(_profile_attr(profile, "source", "historical_backtest")),
+        source_run_id=run_id,
+        sample_size=_sample_size(_profile_attr(profile, "sample_size", 0)),
+        expectancy_after_costs_r=_optional_float(_profile_attr(profile, "expectancy_after_costs_r", None)),
+        profit_factor=_optional_float(_profile_attr(profile, "profit_factor", None)),
+        entry_touch_rate=_optional_float(_profile_attr(profile, "entry_touch_rate", None)),
+        no_entry_rate=_optional_float(_profile_attr(profile, "no_entry_rate", None)),
+        max_drawdown_r=_optional_float(_profile_attr(profile, "max_drawdown_r", None)),
+        run_ids=run_ids,
+        reason_code=str(_profile_attr(profile, "reason_code", "strategy_eligibility_missing")),
+        reason=str(_profile_attr(profile, "reason", "No execution edge profile is available for this strategy.")),
+        metrics=dict(_profile_attr(profile, "metrics", {}) or {}),
+    )
+
+
+def _aggregate_calibration_decision(
+    profiles: Sequence[StrategyTestCalibrationProfile],
+) -> StrategyTestCalibrationDecision:
+    decisions = {profile.decision for profile in profiles}
+    if "negative" in decisions:
+        return "negative"
+    if "insufficient_sample" in decisions:
+        return "insufficient_sample"
+    return "positive"
+
+
+def _profile_decision(profile: Any) -> StrategyTestCalibrationDecision:
+    if bool(_profile_attr(profile, "eligible", False)):
+        return "positive"
+    reason_code = str(_profile_attr(profile, "reason_code", ""))
+    sample_size = _sample_size(_profile_attr(profile, "sample_size", 0))
+    if reason_code == "strategy_eligibility_insufficient_sample" or sample_size < settings.execution_edge_min_sample_size:
+        return "insufficient_sample"
+    return "negative"
+
+
+def _calibration_reason(profiles: Sequence[StrategyTestCalibrationProfile]) -> str:
+    if not profiles:
+        return "No profiles were published."
+    negative = sum(1 for profile in profiles if profile.decision == "negative")
+    insufficient = sum(1 for profile in profiles if profile.decision == "insufficient_sample")
+    if negative:
+        return f"{negative} profile{'s' if negative != 1 else ''} failed edge thresholds."
+    if insufficient:
+        return f"{insufficient} profile{'s' if insufficient != 1 else ''} needs more samples."
+    count = len(profiles)
+    return f"{count} profile{'s' if count != 1 else ''} published for execution calibration."
+
+
+def _profile_attr(profile: Any, name: str, default: Any) -> Any:
+    if isinstance(profile, dict):
+        return profile.get(name, default)
+    return getattr(profile, name, default)
+
+
+def _sample_size(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _metric_value(value: object) -> float | int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (float, int)):
+        return value
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _text(value: object) -> str:
+    return str(value or "").strip()
 
 
 STRATEGY_TEST_ACTIVE_STATUSES: tuple[StrategyTestRunStatus, ...] = ("queued", "running", "stopping")

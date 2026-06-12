@@ -7,6 +7,7 @@ import { Badge } from "@/components/Badge";
 import type { MarketPairOption, StrategyConfig } from "@/features/server-state/types";
 import {
   useCancelStrategyTestRun,
+  usePublishStrategyTestCalibration,
   useRunStrategyTest,
   useStrategyTestActiveRun,
   useStrategyTestReport,
@@ -69,6 +70,7 @@ export function StrategyTestingPanel({
   const runsQuery = useStrategyTestRuns({ limit: 25 }, { refetchInterval: STRATEGY_TEST_RUN_POLL_MS });
   const runMutation = useRunStrategyTest();
   const cancelRunMutation = useCancelStrategyTestRun();
+  const calibrationMutation = usePublishStrategyTestCalibration();
   const [selectedStrategyCodes, setSelectedStrategyCodes] = useState<string[] | null>(null);
   const [selectedPairIds, setSelectedPairIds] = useState<string[] | null>(null);
   const [selectedTimeframes, setSelectedTimeframes] = useState<string[] | null>(null);
@@ -168,6 +170,15 @@ export function StrategyTestingPanel({
       setSelectedReportRunId(response.run_id);
     } catch (error) {
       setFormError(errorMessage(error) ?? "Unable to cancel strategy test run.");
+    }
+  }
+
+  async function handlePublishCalibration(runId: string) {
+    setFormError(null);
+    try {
+      await calibrationMutation.mutateAsync(runId);
+    } catch {
+      return;
     }
   }
 
@@ -329,9 +340,13 @@ export function StrategyTestingPanel({
 
       {selectedReportRunId ? (
         <StrategyTestReport
+          calibrationError={calibrationMutation.error instanceof Error ? calibrationMutation.error : null}
+          calibrationPending={calibrationMutation.isPending}
+          calibrationResult={calibrationMutation.data?.run_id === selectedReportRunId ? calibrationMutation.data : null}
           error={reportQuery.error instanceof Error ? reportQuery.error : null}
           loading={reportQuery.isLoading}
           onClose={() => setSelectedReportRunId(null)}
+          onPublishCalibration={handlePublishCalibration}
           report={reportQuery.data ?? null}
           run={selectedRunForReport}
         />

@@ -8,6 +8,7 @@ import { StrategyTestingPanel } from "./StrategyTestingPanel";
 const mocks = vi.hoisted(() => ({
   activeRun: null as unknown,
   cancelStrategyTest: vi.fn(),
+  publishCalibration: vi.fn(),
   report: null as unknown,
   reportError: null as Error | null,
   runStrategyTest: vi.fn(),
@@ -19,6 +20,12 @@ vi.mock("@/hooks/use-radar-queries", () => ({
     error: null,
     isPending: false,
     mutateAsync: mocks.cancelStrategyTest
+  }),
+  usePublishStrategyTestCalibration: () => ({
+    data: null,
+    error: null,
+    isPending: false,
+    mutateAsync: mocks.publishCalibration
   }),
   useRunStrategyTest: () => ({
     error: null,
@@ -56,6 +63,7 @@ describe("StrategyTestingPanel", () => {
   afterEach(() => {
     mocks.activeRun = null;
     mocks.cancelStrategyTest.mockReset();
+    mocks.publishCalibration.mockReset();
     mocks.report = null;
     mocks.reportError = null;
     mocks.runStrategyTest.mockReset();

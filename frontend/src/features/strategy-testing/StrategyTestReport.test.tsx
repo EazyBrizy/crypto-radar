@@ -1,8 +1,8 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { StrategyTestReport } from "./StrategyTestReport";
-import type { StrategyTestReport as StrategyTestReportData } from "./types";
+import type { StrategyTestReport as StrategyTestReportData, StrategyTestRunResponse } from "./types";
 
 describe("StrategyTestReport", () => {
   it("renders Strategy Test Report", () => {
@@ -34,7 +34,87 @@ describe("StrategyTestReport", () => {
     expect(screen.getByText("signal-1")).toBeInTheDocument();
     expect(screen.getByText("not_selected")).toBeInTheDocument();
   });
+
+  it("publishes a completed run for calibration", () => {
+    const onPublishCalibration = vi.fn();
+
+    render(
+      <StrategyTestReport
+        onPublishCalibration={onPublishCalibration}
+        report={report()}
+        run={run()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this run for calibration" }));
+
+    expect(onPublishCalibration).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("shows calibration publication result", () => {
+    render(
+      <StrategyTestReport
+        calibrationResult={{
+          decision: "insufficient_sample",
+          generated_at: "2026-06-02T00:00:00.000Z",
+          profiles: [
+            {
+              decision: "insufficient_sample",
+              direction: "long",
+              eligible: false,
+              entry_touch_rate: 0.45,
+              exchange: "bybit",
+              expectancy_after_costs_r: 0.18,
+              market_regime: "trend",
+              no_entry_rate: 0.2,
+              profit_factor: 1.7,
+              reason: "Strategy edge sample size is below the execution threshold.",
+              reason_code: "strategy_eligibility_insufficient_sample",
+              run_ids: ["11111111-1111-4111-8111-111111111111"],
+              sample_size: 12,
+              score_bucket: "80-89",
+              source: "historical_backtest",
+              source_run_id: "11111111-1111-4111-8111-111111111111",
+              strategy_code: "trend_pullback_continuation",
+              symbol_scope: "BTCUSDT",
+              timeframe: "1h"
+            }
+          ],
+          profiles_count: 1,
+          reason: "1 profile needs more samples.",
+          run_id: "11111111-1111-4111-8111-111111111111"
+        }}
+        report={report()}
+        run={run()}
+      />
+    );
+
+    expect(screen.getByText("insufficient sample")).toBeInTheDocument();
+    expect(screen.getByText("1 profile needs more samples.")).toBeInTheDocument();
+  });
 });
+
+function run(overrides: Partial<StrategyTestRunResponse> = {}): StrategyTestRunResponse {
+  return {
+    created_at: "2026-06-02T00:00:00.000Z",
+    error: null,
+    finished_at: "2026-06-02T00:01:00.000Z",
+    last_heartbeat_at: null,
+    requested_matrix: {
+      pairs: [{ exchange: "bybit", symbol: "BTCUSDT" }],
+      scenario_count: 1,
+      strategies: ["trend_pullback_continuation"],
+      timeframes: ["1h"]
+    },
+    run_id: "11111111-1111-4111-8111-111111111111",
+    runtime_state: {},
+    started_at: "2026-06-02T00:00:00.000Z",
+    status: "completed",
+    summary: { scenario_count: 1, trades_count: 1 },
+    test_type: "historical_backtest",
+    ...overrides
+  };
+}
 
 function report(overrides: Partial<StrategyTestReportData> = {}): StrategyTestReportData {
   const base: StrategyTestReportData = {

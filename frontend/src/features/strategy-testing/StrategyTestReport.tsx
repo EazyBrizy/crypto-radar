@@ -1,6 +1,6 @@
 "use client";
 
-import { X } from "lucide-react";
+import { LoaderCircle, ShieldCheck, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/Badge";
@@ -8,6 +8,8 @@ import { StrategyTestMetricGrid, formatMetricValue } from "./StrategyTestMetricG
 import { StrategyTestTradeList } from "./StrategyTestTradeList";
 import type {
   StrategyTestCandidateAdjustment,
+  StrategyTestCalibrationDecision,
+  StrategyTestCalibrationResponse,
   StrategyTestMetric,
   StrategyTestMetricValue,
   StrategyTestReport as StrategyTestReportData,
@@ -16,9 +18,13 @@ import type {
 } from "./types";
 
 interface StrategyTestReportProps {
+  calibrationError?: Error | null;
+  calibrationPending?: boolean;
+  calibrationResult?: StrategyTestCalibrationResponse | null;
   error?: Error | null;
   loading?: boolean;
   onClose?: () => void;
+  onPublishCalibration?: (runId: string) => void;
   report: StrategyTestReportData | null;
   run: StrategyTestRunResponse | null;
 }
@@ -34,14 +40,21 @@ const SECTION_TABLE_COLUMNS: Record<string, string[]> = {
 };
 
 export function StrategyTestReport({
+  calibrationError,
+  calibrationPending = false,
+  calibrationResult,
   error,
   loading = false,
   onClose,
+  onPublishCalibration,
   report,
   run
 }: StrategyTestReportProps) {
   const summaryMetrics = report?.summary_metrics ?? summaryMetricsFromRun(run);
   const adjustments = report?.candidate_adjustments ?? [];
+  const calibrationRunId = report?.run_id ?? run?.run_id ?? null;
+  const calibrationStatus = report?.status ?? run?.status ?? null;
+  const canPublishCalibration = Boolean(onPublishCalibration && calibrationRunId && calibrationStatus === "completed");
 
   return (
     <section className="strategy-test-report-panel strategy-test-report-full" aria-live="polite">
@@ -50,11 +63,24 @@ export function StrategyTestReport({
           <h4>Strategy Test Report</h4>
           <span>{report ? `${shortRunId(report.run_id)} / ${report.status} / ${report.mode}` : reportFallbackLabel(run)}</span>
         </div>
-        {onClose ? (
-          <button className="icon-button compact" onClick={onClose} title="Close report" type="button">
-            <X size={16} />
-          </button>
-        ) : null}
+        <div className="strategy-test-panel-actions">
+          {canPublishCalibration ? (
+            <button
+              className="secondary-action compact-action"
+              disabled={calibrationPending}
+              onClick={() => onPublishCalibration?.(calibrationRunId as string)}
+              type="button"
+            >
+              {calibrationPending ? <LoaderCircle size={16} /> : <ShieldCheck size={16} />}
+              Use this run for calibration
+            </button>
+          ) : null}
+          {onClose ? (
+            <button className="icon-button compact" onClick={onClose} title="Close report" type="button">
+              <X size={16} />
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {loading ? <div className="empty-state compact-empty">Loading report</div> : null}
@@ -69,6 +95,9 @@ export function StrategyTestReport({
             <Badge tone={report?.rejections?.length ? "red" : "neutral"}>{report?.rejections?.length ?? 0} rejections</Badge>
             {report ? <Badge tone="purple">{report.sections.length} sections</Badge> : null}
           </div>
+
+          {calibrationError ? <p className="form-error">{calibrationError.message}</p> : null}
+          {calibrationResult ? <CalibrationPublicationResult result={calibrationResult} /> : null}
 
           <StrategyTestMetricGrid emptyLabel="No summary metrics" limit={9} metrics={summaryMetrics} />
 
@@ -115,6 +144,24 @@ function ReportSummarySection({ report }: { report: StrategyTestReportData }) {
         {summaryItem("Max DD R", summary.max_drawdown_r)}
       </div>
     </ReportSection>
+  );
+}
+
+function CalibrationPublicationResult({ result }: { result: StrategyTestCalibrationResponse }) {
+  return (
+    <section aria-label="Calibration publication result" className="strategy-test-calibration-result">
+      <div className="strategy-test-adjustment-head">
+        <strong>Calibration publication</strong>
+        <Badge tone={calibrationTone(result.decision)}>{decisionLabel(result.decision)}</Badge>
+      </div>
+      <p>{result.reason}</p>
+      <div className="strategy-test-report-strip">
+        <Badge tone="blue">{result.profiles_count} profiles</Badge>
+        <Badge tone="green">{countDecision(result, "positive")} positive</Badge>
+        <Badge tone="yellow">{countDecision(result, "insufficient_sample")} insufficient</Badge>
+        <Badge tone="red">{countDecision(result, "negative")} negative</Badge>
+      </div>
+    </section>
   );
 }
 
@@ -334,6 +381,20 @@ function confidenceTone(confidence: StrategyTestCandidateAdjustment["confidence"
   if (confidence === "high") return "green";
   if (confidence === "medium") return "blue";
   return "yellow";
+}
+
+function calibrationTone(decision: StrategyTestCalibrationDecision): "green" | "yellow" | "red" {
+  if (decision === "positive") return "green";
+  if (decision === "insufficient_sample") return "yellow";
+  return "red";
+}
+
+function decisionLabel(decision: StrategyTestCalibrationDecision): string {
+  return decision.replaceAll("_", " ");
+}
+
+function countDecision(result: StrategyTestCalibrationResponse, decision: StrategyTestCalibrationDecision): number {
+  return (result.profiles ?? []).filter((profile) => profile.decision === decision).length;
 }
 
 function metricNumber(value: unknown): number {

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
 StrategyTestType = Literal["historical_backtest", "forward_virtual"]
 StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "stopping"]
+StrategyTestCalibrationDecision = Literal["positive", "negative", "insufficient_sample"]
 StrategyTestSameCandlePolicy = Literal[
     "conservative_stop_first",
     "target_first",
@@ -146,6 +147,39 @@ class StrategyTestActiveRunResponse(BaseModel):
     is_stale: bool = False
     stale_threshold_seconds: int
     allowed_actions: list[str] = Field(default_factory=list)
+
+
+class StrategyTestCalibrationProfile(BaseModel):
+    strategy_code: str
+    exchange: str
+    symbol_scope: str
+    timeframe: str
+    market_regime: str
+    score_bucket: str
+    direction: str
+    decision: StrategyTestCalibrationDecision
+    eligible: bool
+    source: str
+    source_run_id: UUID | None = None
+    sample_size: int = Field(ge=0)
+    expectancy_after_costs_r: float | None = None
+    profit_factor: float | None = None
+    entry_touch_rate: float | None = None
+    no_entry_rate: float | None = None
+    max_drawdown_r: float | None = None
+    run_ids: list[str] = Field(default_factory=list)
+    reason_code: str
+    reason: str
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyTestCalibrationResponse(BaseModel):
+    run_id: UUID
+    decision: StrategyTestCalibrationDecision
+    profiles_count: int = Field(ge=0)
+    profiles: list[StrategyTestCalibrationProfile] = Field(default_factory=list)
+    reason: str
+    generated_at: datetime
 
 
 class StrategyTestRunListResponse(BaseModel):

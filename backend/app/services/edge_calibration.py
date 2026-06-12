@@ -78,6 +78,25 @@ class EdgeCalibrationService:
             )
 
         if profile.source == "none" or profile.signals_count == 0:
+            eligibility = self._eligibility_service.evaluate(
+                None,
+                profile_key=_eligibility_profile_key(
+                    signal=signal,
+                    market_regime=market_regime,
+                    score_bucket=profile.score_bucket,
+                    score=score,
+                ),
+            )
+            if _is_published_eligibility(eligibility):
+                return _snapshot_from_published_eligibility(
+                    eligibility=eligibility,
+                    min_sample_size=self._min_sample_size,
+                    score=score,
+                    market_regime=market_regime,
+                    score_bucket=profile.score_bucket,
+                    profile_source=profile.source,
+                    profile_confidence=profile.confidence,
+                )
             return _unknown_snapshot(
                 min_sample_size=self._min_sample_size,
                 score=score,
@@ -117,6 +136,16 @@ class EdgeCalibrationService:
                 score=score,
             ),
         )
+        if _is_published_eligibility(eligibility):
+            return _snapshot_from_published_eligibility(
+                eligibility=eligibility,
+                min_sample_size=self._min_sample_size,
+                score=score,
+                market_regime=market_regime,
+                score_bucket=profile.score_bucket,
+                profile_source=profile.source,
+                profile_confidence=profile.confidence,
+            )
 
         return SignalEdgeSnapshot(
             status=status,
@@ -146,6 +175,96 @@ class EdgeCalibrationService:
                 **costs_metadata,
             },
         )
+
+
+def _snapshot_from_published_eligibility(
+    *,
+    eligibility: Any,
+    min_sample_size: int,
+    score: float | None,
+    market_regime: str | None,
+    score_bucket: str | None,
+    profile_source: str,
+    profile_confidence: str,
+) -> SignalEdgeSnapshot:
+    metrics = dict(getattr(eligibility, "metrics", {}) or {})
+    sample_size = _int_metric(metrics, "sample_size")
+    status = _published_edge_status(
+        eligible=bool(getattr(eligibility, "eligible", False)),
+        reason_code=str(getattr(eligibility, "reason_code", "")),
+        sample_size=sample_size,
+        min_sample_size=min_sample_size,
+    )
+    return SignalEdgeSnapshot(
+        status=status,
+        sample_size=sample_size,
+        min_sample_size=min_sample_size,
+        expectancy_r=_float_metric(metrics, "expectancy_r"),
+        expectancy_after_costs_r=_float_metric(metrics, "expectancy_after_costs_r"),
+        profit_factor=_float_metric(metrics, "profit_factor"),
+        confidence_score=1.0 if status == "positive" else _sample_confidence(sample_size, min_sample_size),
+        source=_published_edge_source(str(getattr(eligibility, "source", "none"))),
+        score_bucket=score_bucket,
+        metadata={
+            "profile_source": profile_source,
+            "profile_confidence": profile_confidence,
+            "heuristic_score": score,
+            "expected_value_r": _float_metric(metrics, "expectancy_after_costs_r"),
+            "market_regime": market_regime,
+            "entry_touch_rate": _float_metric(metrics, "entry_touch_rate"),
+            "no_entry_rate": _float_metric(metrics, "no_entry_rate"),
+            "strategy_eligibility": eligibility.to_metadata(),
+        },
+    )
+
+
+def _published_edge_status(
+    *,
+    eligible: bool,
+    reason_code: str,
+    sample_size: int,
+    min_sample_size: int,
+) -> str:
+    if eligible:
+        return "positive"
+    if reason_code == "strategy_eligibility_insufficient_sample" or sample_size < min_sample_size:
+        return "insufficient_sample"
+    return "negative"
+
+
+def _is_published_eligibility(eligibility: Any) -> bool:
+    return str(getattr(eligibility, "source", "none")) in {"historical_backtest", "forward_virtual", "mixed"}
+
+
+def _published_edge_source(source: str) -> str:
+    if source == "mixed":
+        return "mixed"
+    if source in {"historical_backtest", "forward_virtual"}:
+        return "backtest"
+    return "none"
+
+
+def _sample_confidence(sample_size: int, min_sample_size: int) -> float:
+    if min_sample_size <= 0:
+        return 1.0
+    return round(max(0.0, min(1.0, sample_size / min_sample_size)), 4)
+
+
+def _int_metric(metrics: dict[str, Any], key: str) -> int:
+    try:
+        return max(0, int(metrics.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float_metric(metrics: dict[str, Any], key: str) -> float | None:
+    value = metrics.get(key)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _unknown_snapshot(

@@ -5,10 +5,12 @@ type StrategyTestRunResponseDto = components["schemas"]["StrategyTestRunResponse
 type StrategyTestActiveRunResponseDto = components["schemas"]["StrategyTestActiveRunResponse"];
 type StrategyTestSignalEventDto = components["schemas"]["StrategyTestSignalEvent"];
 type StrategyTestFunnelResponseDto = components["schemas"]["StrategyTestFunnelResponse"];
+type StrategyTestCalibrationResponseDto = components["schemas"]["StrategyTestCalibrationResponse"];
 
 export type StrategyTestMode = StrategyTestRunRequestDto["mode"];
 export type StrategyTestType = StrategyTestRunResponseDto["test_type"];
 export type StrategyTestRunStatus = StrategyTestRunResponseDto["status"];
+export type StrategyTestCalibrationDecision = StrategyTestCalibrationResponseDto["decision"];
 export type StrategyTestSameCandlePolicy = StrategyTestRunRequestDto["same_candle_policy"];
 
 export const STRATEGY_TEST_MODES: StrategyTestMode[] = ["discovery", "research_virtual", "production_like"];
@@ -103,6 +105,9 @@ export interface StrategyTestRunDetailResponse {
   warnings: string[];
   rejections: string[];
 }
+
+export type StrategyTestCalibrationProfile = components["schemas"]["StrategyTestCalibrationProfile"];
+export type StrategyTestCalibrationResponse = StrategyTestCalibrationResponseDto;
 
 type DecimalJson = number | string;
 

@@ -3739,6 +3739,49 @@
         }
       }
     },
+    "/api/v1/strategy-tests/runs/{run_id}/calibration": {
+      "post": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "Publish Strategy Test Calibration",
+        "operationId": "publish_strategy_test_calibration_api_v1_strategy_tests_runs__run_id__calibration_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyTestCalibrationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/strategy-tests/runs/{run_id}/trades": {
       "get": {
         "tags": [
@@ -18793,6 +18836,212 @@
           "stale_threshold_seconds"
         ],
         "title": "StrategyTestActiveRunResponse"
+      },
+      "StrategyTestCalibrationProfile": {
+        "properties": {
+          "strategy_code": {
+            "type": "string",
+            "title": "Strategy Code"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol_scope": {
+            "type": "string",
+            "title": "Symbol Scope"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "market_regime": {
+            "type": "string",
+            "title": "Market Regime"
+          },
+          "score_bucket": {
+            "type": "string",
+            "title": "Score Bucket"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "positive",
+              "negative",
+              "insufficient_sample"
+            ],
+            "title": "Decision"
+          },
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "sample_size": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Sample Size"
+          },
+          "expectancy_after_costs_r": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectancy After Costs R"
+          },
+          "profit_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Factor"
+          },
+          "entry_touch_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Touch Rate"
+          },
+          "no_entry_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Entry Rate"
+          },
+          "max_drawdown_r": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown R"
+          },
+          "run_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Run Ids"
+          },
+          "reason_code": {
+            "type": "string",
+            "title": "Reason Code"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy_code",
+          "exchange",
+          "symbol_scope",
+          "timeframe",
+          "market_regime",
+          "score_bucket",
+          "direction",
+          "decision",
+          "eligible",
+          "source",
+          "sample_size",
+          "reason_code",
+          "reason"
+        ],
+        "title": "StrategyTestCalibrationProfile"
+      },
+      "StrategyTestCalibrationResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "positive",
+              "negative",
+              "insufficient_sample"
+            ],
+            "title": "Decision"
+          },
+          "profiles_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Profiles Count"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyTestCalibrationProfile"
+            },
+            "type": "array",
+            "title": "Profiles"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "decision",
+          "profiles_count",
+          "reason",
+          "generated_at"
+        ],
+        "title": "StrategyTestCalibrationResponse"
       },
       "StrategyTestCandidateAdjustment": {
         "properties": {

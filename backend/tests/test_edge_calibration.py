@@ -38,6 +38,16 @@ class FakeEligibilityService:
         )
 
 
+class PublishedProfileEligibilityService:
+    def __init__(self, eligibility: ExecutionStrategyEligibility) -> None:
+        self.eligibility = eligibility
+        self.calls: list[dict[str, Any]] = []
+
+    def evaluate(self, edge: Any, **kwargs: Any) -> ExecutionStrategyEligibility:
+        self.calls.append({"edge": edge, **kwargs})
+        return self.eligibility
+
+
 class EdgeCalibrationServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_positive_edge_uses_profile_expectancy_after_costs(self) -> None:
         provider = FakeEdgeProfileProvider(
@@ -159,6 +169,117 @@ class EdgeCalibrationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.status, "unknown")
         self.assertEqual(snapshot.sample_size, 0)
         self.assertEqual(snapshot.source, "none")
+
+    async def test_published_eligibility_profile_replaces_unknown_edge(self) -> None:
+        provider = FakeEdgeProfileProvider(
+            _profile(source="none", confidence="insufficient_sample", sample_size=0, signals_count=0)
+        )
+        eligibility_service = PublishedProfileEligibilityService(
+            ExecutionStrategyEligibility(
+                eligible=True,
+                reason_code="strategy_eligibility_passed",
+                reason="Strategy edge metrics pass execution eligibility thresholds.",
+                source="historical_backtest",
+                metrics={
+                    "sample_size": 80,
+                    "expectancy_after_costs_r": 0.18,
+                    "profit_factor": 1.7,
+                    "entry_touch_rate": 0.45,
+                    "no_entry_rate": 0.2,
+                    "run_ids": ["run-1"],
+                },
+            )
+        )
+        service = EdgeCalibrationService(
+            performance_service=provider,
+            min_sample_size=50,
+            eligibility_service=eligibility_service,
+        )
+
+        snapshot = await service.evaluate_signal_edge(_signal())
+
+        self.assertEqual(snapshot.status, "positive")
+        self.assertEqual(snapshot.source, "backtest")
+        self.assertEqual(snapshot.sample_size, 80)
+        self.assertAlmostEqual(snapshot.expectancy_after_costs_r or 0, 0.18)
+        self.assertEqual(snapshot.profit_factor, 1.7)
+        self.assertEqual(snapshot.metadata["entry_touch_rate"], 0.45)
+        self.assertEqual(snapshot.metadata["no_entry_rate"], 0.2)
+        self.assertEqual(snapshot.metadata["strategy_eligibility"]["source"], "historical_backtest")
+        self.assertEqual(snapshot.metadata["strategy_eligibility"]["metrics"]["run_ids"], ["run-1"])
+        self.assertIsNone(eligibility_service.calls[0]["edge"])
+
+    async def test_published_insufficient_sample_profile_stays_blocking(self) -> None:
+        provider = FakeEdgeProfileProvider(
+            _profile(source="none", confidence="insufficient_sample", sample_size=0, signals_count=0)
+        )
+        eligibility_service = PublishedProfileEligibilityService(
+            ExecutionStrategyEligibility(
+                eligible=False,
+                reason_code="strategy_eligibility_insufficient_sample",
+                reason="Strategy edge sample size is below the execution threshold.",
+                source="historical_backtest",
+                metrics={
+                    "sample_size": 12,
+                    "expectancy_after_costs_r": 0.18,
+                    "profit_factor": 1.7,
+                    "entry_touch_rate": 0.45,
+                    "no_entry_rate": 0.2,
+                    "run_ids": ["run-2"],
+                },
+            )
+        )
+        service = EdgeCalibrationService(
+            performance_service=provider,
+            min_sample_size=50,
+            eligibility_service=eligibility_service,
+        )
+
+        snapshot = await service.evaluate_signal_edge(_signal())
+
+        self.assertEqual(snapshot.status, "insufficient_sample")
+        self.assertEqual(snapshot.sample_size, 12)
+        self.assertEqual(snapshot.metadata["strategy_eligibility"]["reason_code"], "strategy_eligibility_insufficient_sample")
+
+    async def test_published_negative_profile_overrides_positive_legacy_profile(self) -> None:
+        provider = FakeEdgeProfileProvider(
+            _profile(
+                source="exact",
+                confidence="high",
+                sample_size=80,
+                signals_count=90,
+                winrate=0.6,
+                avg_win_r=1.5,
+                avg_loss_r=-1.0,
+            )
+        )
+        eligibility_service = PublishedProfileEligibilityService(
+            ExecutionStrategyEligibility(
+                eligible=False,
+                reason_code="strategy_eligibility_failed",
+                reason="Strategy expectancy after costs is below the execution threshold.",
+                source="historical_backtest",
+                metrics={
+                    "sample_size": 80,
+                    "expectancy_after_costs_r": -0.08,
+                    "profit_factor": 0.9,
+                    "entry_touch_rate": 0.45,
+                    "no_entry_rate": 0.2,
+                    "run_ids": ["bad-run"],
+                },
+            )
+        )
+        service = EdgeCalibrationService(
+            performance_service=provider,
+            min_sample_size=50,
+            eligibility_service=eligibility_service,
+        )
+
+        snapshot = await service.evaluate_signal_edge(_signal())
+
+        self.assertEqual(snapshot.status, "negative")
+        self.assertAlmostEqual(snapshot.expectancy_after_costs_r or 0, -0.08)
+        self.assertEqual(snapshot.metadata["strategy_eligibility"]["metrics"]["run_ids"], ["bad-run"])
 
     async def test_regime_key_wins_over_legacy_direction_strength_alignment(self) -> None:
         provider = FakeEdgeProfileProvider(

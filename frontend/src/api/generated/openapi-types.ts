@@ -1036,6 +1036,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/strategy-tests/runs/{run_id}/calibration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Strategy Test Calibration */
+        post: operations["publish_strategy_test_calibration_api_v1_strategy_tests_runs__run_id__calibration_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/strategy-tests/runs/{run_id}/trades": {
         parameters: {
             query?: never;
@@ -6139,6 +6156,80 @@ export interface components {
             /** Allowed Actions */
             allowed_actions?: string[];
         };
+        /** StrategyTestCalibrationProfile */
+        StrategyTestCalibrationProfile: {
+            /** Strategy Code */
+            strategy_code: string;
+            /** Exchange */
+            exchange: string;
+            /** Symbol Scope */
+            symbol_scope: string;
+            /** Timeframe */
+            timeframe: string;
+            /** Market Regime */
+            market_regime: string;
+            /** Score Bucket */
+            score_bucket: string;
+            /** Direction */
+            direction: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "positive" | "negative" | "insufficient_sample";
+            /** Eligible */
+            eligible: boolean;
+            /** Source */
+            source: string;
+            /** Source Run Id */
+            source_run_id?: string | null;
+            /** Sample Size */
+            sample_size: number;
+            /** Expectancy After Costs R */
+            expectancy_after_costs_r?: number | null;
+            /** Profit Factor */
+            profit_factor?: number | null;
+            /** Entry Touch Rate */
+            entry_touch_rate?: number | null;
+            /** No Entry Rate */
+            no_entry_rate?: number | null;
+            /** Max Drawdown R */
+            max_drawdown_r?: number | null;
+            /** Run Ids */
+            run_ids?: string[];
+            /** Reason Code */
+            reason_code: string;
+            /** Reason */
+            reason: string;
+            /** Metrics */
+            metrics?: {
+                [key: string]: unknown;
+            };
+        };
+        /** StrategyTestCalibrationResponse */
+        StrategyTestCalibrationResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "positive" | "negative" | "insufficient_sample";
+            /** Profiles Count */
+            profiles_count: number;
+            /** Profiles */
+            profiles?: components["schemas"]["StrategyTestCalibrationProfile"][];
+            /** Reason */
+            reason: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+        };
         /** StrategyTestCandidateAdjustment */
         StrategyTestCandidateAdjustment: {
             /** Strategy Code */
@@ -10240,6 +10331,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StrategyTestRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_strategy_test_calibration_api_v1_strategy_tests_runs__run_id__calibration_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestCalibrationResponse"];
                 };
             };
             /** @description Validation Error */

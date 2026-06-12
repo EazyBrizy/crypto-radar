@@ -19,6 +19,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignalEvent,
     StrategyTestTrade,
 )
 from app.services.strategy_testing.service import StrategyTestingService
@@ -73,6 +74,24 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         self.assertTrue(result.all_failed)
         self.assertEqual(result.completed_scenarios, 0)
         self.assertEqual(result.failed_scenarios, 2)
+
+    def test_matrix_collects_signal_events_and_builds_funnel_metrics(self) -> None:
+        request = _matrix_request(strategies=["s1"], pairs=[StrategyTestPair(exchange="bybit", symbol="BTCUSDT")])
+        scenario_runner = _RecordingScenarioRunner(
+            signal_events=[
+                _signal_event("signal-1", entry_touched=True, filled=True, closed=True, outcome="win"),
+                _signal_event("signal-2", no_entry=True, outcome="no_entry", funnel_stage="no_entry"),
+            ]
+        )
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+
+        result = matrix_runner.run_matrix(request=request, run_id=RUN_ID, user_uuid=USER_ID)
+
+        self.assertEqual(len(result.signal_events), 2)
+        self.assertEqual(result.summary()["signals_count"], 2)
+        summary_metrics = {metric["code"]: metric for metric in result.summary()["summary_metrics"]}
+        self.assertEqual(summary_metrics["signals_count"]["value"], 2)
+        self.assertAlmostEqual(summary_metrics["entry_touch_rate"]["value"], 0.5)
 
 
 class StrategyTestAssumptionsTest(unittest.TestCase):
@@ -141,6 +160,7 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
                 failed_scenarios=0,
                 scenario_summaries=[{"signals_seen": 2, "risk_rejections": 0, "execution_rejections": 0}],
                 trades=[_trade()],
+                signal_events=[_signal_event("signal-1", entry_touched=True, filled=True)],
             )
         )
         service = StrategyTestingService(
@@ -154,8 +174,10 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         self.assertEqual(response.status, "completed")
         self.assertEqual(run_store.transitions, ["queued", "running", "completed"])
         self.assertEqual(len(trade_store.trades), 1)
+        self.assertEqual(len(trade_store.signal_events), 1)
         self.assertGreater(len(trade_store.metrics), 0)
         self.assertIn("summary_metrics", response.summary)
+        self.assertIn("signals_count", {metric["code"] for metric in response.summary["summary_metrics"]})
         self.assertIn("trades_count", {metric["code"] for metric in response.summary["summary_metrics"]})
         self.assertEqual(response.summary["scenario_count"], 1)
 
@@ -264,9 +286,14 @@ class _FakeBacktestRunner:
 
 
 class _RecordingScenarioRunner:
-    def __init__(self, fail_on: set[int] | None = None) -> None:
+    def __init__(
+        self,
+        fail_on: set[int] | None = None,
+        signal_events: list[StrategyTestSignalEvent] | None = None,
+    ) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
         self._fail_on = fail_on or set()
+        self._signal_events = signal_events or []
 
     def run_scenario(
         self,
@@ -298,6 +325,7 @@ class _RecordingScenarioRunner:
                 "execution_rejections": 0,
             },
             trades=[],
+            signal_events=list(self._signal_events),
         )
 
 
@@ -319,10 +347,14 @@ class _StaticMatrixRunner:
 class _RecordingTradeStore:
     def __init__(self) -> None:
         self.trades: list[StrategyTestTrade] = []
+        self.signal_events: list[StrategyTestSignalEvent] = []
         self.metrics: list[StrategyTestMetricRow] = []
 
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         self.trades.extend(trades)
+
+    def write_signal_events(self, signal_events: Sequence[StrategyTestSignalEvent]) -> None:
+        self.signal_events.extend(signal_events)
 
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         self.metrics.extend(rows)
@@ -473,6 +505,64 @@ def _trade() -> StrategyTestTrade:
         slippage=Decimal("0"),
         close_reason="take_profit",
         outcome="win",
+        tags=["backtest"],
+        created_at=now,
+    )
+
+
+def _signal_event(
+    synthetic_signal_id: str,
+    *,
+    entry_touched: bool = False,
+    filled: bool = False,
+    closed: bool = False,
+    outcome: str | None = None,
+    funnel_stage: str = "signal",
+    no_entry: bool = False,
+) -> StrategyTestSignalEvent:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return StrategyTestSignalEvent(
+        run_id=RUN_ID,
+        user_id=USER_ID,
+        mode="research_virtual",
+        test_type="historical_backtest",
+        strategy_code="trend_pullback_continuation",
+        strategy_version="v1",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        direction="long",
+        signal_id=None,
+        synthetic_signal_id=synthetic_signal_id,
+        signal_key=f"trend_pullback_continuation:BTCUSDT:{synthetic_signal_id}",
+        event_time=now,
+        candle_time=now,
+        signal_score=80.0,
+        market_regime="trend",
+        score_bucket="80-89",
+        status="actionable",
+        gate_status="passed",
+        feed_kind="execution_signal",
+        trigger_passed=True,
+        trigger_reason_code=None,
+        execution_candidate=True,
+        entry_touched=entry_touched,
+        filled=filled,
+        closed=closed,
+        outcome=outcome,
+        funnel_stage=funnel_stage,
+        risk_rejected=False,
+        execution_rejected=False,
+        no_entry=no_entry,
+        rejection_reason_code=None,
+        blocked_reason_code=None,
+        selected_rr=2.0,
+        entry_min=Decimal("100"),
+        entry_max=Decimal("100"),
+        stop_loss=Decimal("99"),
+        features_snapshot={"source": "test"},
+        trade_plan={"entry": {"price": "100"}},
+        metadata={},
         tags=["backtest"],
         created_at=now,
     )

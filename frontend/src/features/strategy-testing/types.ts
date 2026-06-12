@@ -3,6 +3,8 @@ import type { components } from "@/api/generated/openapi-types";
 type StrategyTestRunRequestDto = components["schemas"]["StrategyTestRunRequest"];
 type StrategyTestRunResponseDto = components["schemas"]["StrategyTestRunResponse"];
 type StrategyTestActiveRunResponseDto = components["schemas"]["StrategyTestActiveRunResponse"];
+type StrategyTestSignalEventDto = components["schemas"]["StrategyTestSignalEvent"];
+type StrategyTestFunnelResponseDto = components["schemas"]["StrategyTestFunnelResponse"];
 
 export type StrategyTestMode = StrategyTestRunRequestDto["mode"];
 export type StrategyTestType = StrategyTestRunResponseDto["test_type"];
@@ -54,8 +56,20 @@ export interface StrategyTestRunSummary {
   failed_scenarios?: number;
   trades_count?: number;
   signals_seen?: number;
+  signals_count?: number;
+  execution_candidates?: number;
+  entry_touched?: number;
+  filled?: number;
+  closed?: number;
+  wins?: number;
+  losses?: number;
+  no_entry?: number;
+  entry_touch_rate?: number | null;
+  no_entry_rate?: number | null;
+  false_signal_rate?: number | null;
   risk_rejections?: number;
   execution_rejections?: number;
+  signal_funnel?: StrategyTestFunnelResponseDto;
   [key: string]: unknown;
 }
 
@@ -133,6 +147,9 @@ export interface StrategyTestTrade {
   tags?: string[];
   created_at?: string;
 }
+
+export type StrategyTestSignalEvent = StrategyTestSignalEventDto;
+export type StrategyTestFunnelResponse = StrategyTestFunnelResponseDto;
 
 export type StrategyTestMetricValue = number | string | boolean | null;
 export type StrategyTestMetricConfidence = "high" | "medium" | "low" | "insufficient_sample";

@@ -63,6 +63,7 @@ export function StrategyTestReport({
       {!loading && !error ? (
         <>
           <div className="strategy-test-report-strip">
+            <Badge tone="blue">{metricNumber(report?.summary.signals_count ?? run?.summary.signals_count)} signals</Badge>
             <Badge tone="blue">{report?.trades_count ?? metricNumber(run?.summary.trades_count)} trades</Badge>
             <Badge tone={report?.warnings?.length ? "yellow" : "green"}>{report?.warnings?.length ?? 0} warnings</Badge>
             <Badge tone={report?.rejections?.length ? "red" : "neutral"}>{report?.rejections?.length ?? 0} rejections</Badge>
@@ -74,6 +75,7 @@ export function StrategyTestReport({
           {report ? (
             <div className="strategy-test-report-sections">
               <ReportSummarySection report={report} />
+              <SignalFunnelSection report={report} />
               <MetricSection report={report} sectionCode="strategy_comparison" />
               <MetricSection report={report} sectionCode="pair_timeframe_breakdown" />
               <MetricSection report={report} sectionCode="regime_breakdown" />
@@ -101,6 +103,9 @@ function ReportSummarySection({ report }: { report: StrategyTestReportData }) {
     <ReportSection name="Summary">
       <div className="strategy-test-summary-grid">
         {summaryItem("Scenarios", summary.scenario_count)}
+        {summaryItem("Signals", summary.signals_count)}
+        {summaryItem("Entry touch rate", summary.entry_touch_rate)}
+        {summaryItem("No-entry rate", summary.no_entry_rate)}
         {summaryItem("Mode", summary.mode)}
         {summaryItem("Start", summary.start_at)}
         {summaryItem("End", summary.end_at)}
@@ -109,6 +114,43 @@ function ReportSummarySection({ report }: { report: StrategyTestReportData }) {
         {summaryItem("After Costs R", summary.expectancy_after_costs_r)}
         {summaryItem("Max DD R", summary.max_drawdown_r)}
       </div>
+    </ReportSection>
+  );
+}
+
+function SignalFunnelSection({ report }: { report: StrategyTestReportData }) {
+  const section = findSection(report, "signal_funnel");
+  if (!section) return null;
+  const summary = section.summary;
+  const stages = arrayRows(summary.stages ?? section.metadata.stages);
+  return (
+    <ReportSection name={section.name}>
+      <div className="strategy-test-summary-grid">
+        {summaryItem("Signals", summary.signals_count)}
+        {summaryItem("Execution candidates", summary.execution_candidates)}
+        {summaryItem("Entry touched", summary.entry_touched)}
+        {summaryItem("Filled", summary.filled)}
+        {summaryItem("Closed", summary.closed)}
+        {summaryItem("Wins", summary.wins)}
+        {summaryItem("Losses", summary.losses)}
+        {summaryItem("No entry", summary.no_entry)}
+      </div>
+      <StrategyTestMetricGrid limit={6} metrics={section.metrics} />
+      <SectionRowsTable columns={["stage", "count", "rate"]} emptyLabel="No funnel stages" rows={stages} />
+      <SectionRowsTable
+        columns={[
+          "synthetic_signal_id",
+          "strategy_code",
+          "symbol",
+          "timeframe",
+          "direction",
+          "signal_score",
+          "funnel_stage",
+          "blocked_reason_code"
+        ]}
+        emptyLabel="No no-entry signals"
+        rows={section.rows}
+      />
     </ReportSection>
   );
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Awaitable, Callable, Mapping, Sequence, TypeVar
@@ -161,6 +161,7 @@ class _BacktestState:
     trade_plan_completion_warnings: list[str] = field(default_factory=list)
     risk_gate_blockers: list[str] = field(default_factory=list)
     backtest_trade_plan_assumptions: list[str] = field(default_factory=list)
+    signal_events: list[BacktestSignalEvent] = field(default_factory=list)
 
     @property
     def open_position(self) -> _SimulatedPosition | None:
@@ -227,6 +228,49 @@ class BacktestSimulatedTrade:
 
 
 @dataclass(frozen=True)
+class BacktestSignalEvent:
+    strategy_code: str
+    strategy_version: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    direction: str
+    signal_id: str | None
+    synthetic_signal_id: str
+    signal_key: str
+    event_time: datetime
+    candle_time: datetime
+    signal_score: float | None
+    market_regime: str
+    score_bucket: str
+    status: str
+    gate_status: str
+    feed_kind: str
+    trigger_passed: bool
+    trigger_reason_code: str | None
+    execution_candidate: bool
+    entry_touched: bool
+    filled: bool
+    closed: bool
+    outcome: str | None
+    funnel_stage: str
+    risk_rejected: bool
+    execution_rejected: bool
+    no_entry: bool
+    rejection_reason_code: str | None
+    blocked_reason_code: str | None
+    selected_rr: float | None
+    entry_min: Decimal | None
+    entry_max: Decimal | None
+    stop_loss: Decimal | None
+    features_snapshot: dict[str, Any]
+    trade_plan: dict[str, Any]
+    metadata: dict[str, Any]
+    tags: list[str]
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class BacktestDetailedRunResult:
     run_result: BacktestRunResult
     trades: list[BacktestSimulatedTrade]
@@ -234,6 +278,7 @@ class BacktestDetailedRunResult:
     risk_rejections: int
     execution_rejections: int
     assumptions: dict[str, Any]
+    signal_events: list[BacktestSignalEvent] = field(default_factory=list)
 
 
 class BacktestExecutionSimulator:
@@ -408,6 +453,15 @@ class ProductionBacktestRunner:
             if features is not None and len(state.open_positions) < constraints.max_concurrent_positions:
                 signals = await self._generate_signals(request, features)
                 state.signals_seen += len(signals)
+                base_signal_events = {
+                    _strategy_signal_key(request, signal): _backtest_signal_event_from_strategy_signal(
+                        request=request,
+                        features=features,
+                        signal=signal,
+                        candle=candle,
+                    )
+                    for signal in signals
+                }
                 selected_signals = _select_signals(
                     signals,
                     policy=constraints.signal_selection_policy,
@@ -418,9 +472,17 @@ class ProductionBacktestRunner:
                     cooldown_bars_after_close=constraints.cooldown_bars_after_close,
                     current_index=index,
                 )
+                attempted_signal_keys: set[str] = set()
                 for signal in selected_signals:
                     if len(state.open_positions) >= constraints.max_concurrent_positions:
                         break
+                    signal_key = _strategy_signal_key(request, signal)
+                    attempted_signal_keys.add(signal_key)
+                    signal_event = replace(
+                        base_signal_events[signal_key],
+                        execution_candidate=True,
+                        funnel_stage="execution_candidate",
+                    )
                     if not _can_open_position_for_signal(
                         signal,
                         policy=constraints.signal_selection_policy,
@@ -432,7 +494,16 @@ class ProductionBacktestRunner:
                         current_index=index,
                     ):
                         state.risk_rejections += 1
+                        state.signal_events.append(
+                            _mark_signal_event_rejected(
+                                signal_event,
+                                risk_rejected=True,
+                                reason_code="position_constraints_blocked",
+                            )
+                        )
                         continue
+                    previous_risk_rejections = state.risk_rejections
+                    previous_execution_rejections = state.execution_rejections
                     position = self._try_open_position(
                         request=request,
                         risk_settings=risk_settings,
@@ -445,6 +516,32 @@ class ProductionBacktestRunner:
                     )
                     if position is not None:
                         state.open_positions.append(position)
+                        state.signal_events.append(_mark_signal_event_filled(signal_event, position))
+                    elif state.risk_rejections > previous_risk_rejections:
+                        state.signal_events.append(
+                            _mark_signal_event_rejected(
+                                signal_event,
+                                risk_rejected=True,
+                                reason_code=_last_reason_code(state.risk_gate_blockers, "risk_gate_rejected"),
+                            )
+                        )
+                    elif state.execution_rejections > previous_execution_rejections:
+                        state.signal_events.append(
+                            _mark_signal_event_rejected(
+                                signal_event,
+                                execution_rejected=True,
+                                reason_code="virtual_execution_rejected",
+                            )
+                        )
+                    else:
+                        state.signal_events.append(_mark_signal_event_no_entry(signal_event, "not_filled"))
+                for signal in signals:
+                    signal_key = _strategy_signal_key(request, signal)
+                    if signal_key in attempted_signal_keys:
+                        continue
+                    state.signal_events.append(
+                        _mark_signal_event_not_selected(base_signal_events[signal_key])
+                    )
 
             state.equity_curve.append(_equity_point(candle, _current_equity(state), float(request.initial_capital)))
 
@@ -461,6 +558,7 @@ class ProductionBacktestRunner:
                 _equity_point(candles[-1], state.cash_equity, float(request.initial_capital))
             )
 
+        state.signal_events = _closed_signal_events(state.signal_events, state.closed_positions)
         metrics = _metrics_from_state(state)
         assumptions = _assumptions_with_runtime_diagnostics(assumptions, state)
         final_equity = state.cash_equity
@@ -495,6 +593,7 @@ class ProductionBacktestRunner:
             risk_rejections=state.risk_rejections,
             execution_rejections=state.execution_rejections,
             assumptions=assumptions,
+            signal_events=state.signal_events,
         )
 
     async def _generate_signals(
@@ -1111,6 +1210,176 @@ def _decision_for_mode(decision: RiskDecision, mode: str) -> RiskDecision:
     )
 
 
+def _backtest_signal_event_from_strategy_signal(
+    *,
+    request: BacktestRunRequest,
+    features: Features,
+    signal: StrategySignal,
+    candle: OHLCVCandle,
+) -> BacktestSignalEvent:
+    candle_time = _datetime_from_ms(candle.close_time)
+    signal_key = _strategy_signal_key(request, signal)
+    synthetic_signal_id = f"bt_sig_{uuid5(NAMESPACE_DNS, signal_key).hex}"
+    radar_signal = _radar_signal_from_strategy_signal(signal, candle)
+    feed_kind = _signal_feed_kind(signal)
+    rejection_reason_code = _signal_rejection_reason_code(signal)
+    return BacktestSignalEvent(
+        strategy_code=signal.strategy,
+        strategy_version=request.strategy_version or "v1",
+        exchange=signal.exchange or request.exchange,
+        symbol=signal.symbol,
+        timeframe=signal.timeframe or request.timeframe,
+        direction=_normalized_direction(signal.direction),
+        signal_id=None,
+        synthetic_signal_id=synthetic_signal_id,
+        signal_key=signal_key,
+        event_time=candle_time,
+        candle_time=candle_time,
+        signal_score=float(signal.score) if signal.score is not None else None,
+        market_regime=_regime_key(radar_signal),
+        score_bucket=_score_bucket(signal.score),
+        status=str(signal.status),
+        gate_status=_signal_gate_status(signal),
+        feed_kind=feed_kind,
+        trigger_passed=_signal_trigger_passed(signal),
+        trigger_reason_code=_signal_trigger_reason_code(signal),
+        execution_candidate=False,
+        entry_touched=False,
+        filled=False,
+        closed=False,
+        outcome=None,
+        funnel_stage="signal",
+        risk_rejected=False,
+        execution_rejected=False,
+        no_entry=False,
+        rejection_reason_code=rejection_reason_code,
+        blocked_reason_code=rejection_reason_code if feed_kind == "blocked" else None,
+        selected_rr=signal.selected_rr or signal.risk_reward,
+        entry_min=_optional_decimal(signal.entry_min),
+        entry_max=_optional_decimal(signal.entry_max),
+        stop_loss=_optional_decimal(signal.stop_loss),
+        features_snapshot=_features_snapshot(features, radar_signal, request=request),
+        trade_plan=_trade_plan_snapshot(radar_signal),
+        metadata={
+            "source": "backtest_runner",
+            "status_reason": signal.status_reason,
+            "selection_policy": _normalize_signal_selection_policy(
+                request.params.get("signal_selection_policy"),
+                default="first_actionable",
+            ),
+            "candle_close_time": candle.close_time,
+            "execution_gate": signal.execution_gate.model_dump(mode="json") if signal.execution_gate else None,
+        },
+        tags=["backtest", "signal_event", "candle_state=closed"],
+        created_at=candle_time,
+    )
+
+
+def _mark_signal_event_filled(
+    event: BacktestSignalEvent,
+    position: _SimulatedPosition,
+) -> BacktestSignalEvent:
+    execution = position.trade.execution
+    metadata = {
+        **event.metadata,
+        "trade_id": position.trade.id,
+        "signal_id": position.signal.id,
+        "execution_status": execution.status if execution is not None else position.trade.execution_status,
+    }
+    return replace(
+        event,
+        signal_id=position.signal.id,
+        entry_touched=True,
+        filled=True,
+        outcome="open",
+        funnel_stage="filled",
+        features_snapshot=dict(position.features_snapshot),
+        trade_plan=_trade_plan_snapshot(position.signal),
+        metadata=metadata,
+    )
+
+
+def _mark_signal_event_rejected(
+    event: BacktestSignalEvent,
+    *,
+    risk_rejected: bool = False,
+    execution_rejected: bool = False,
+    reason_code: str,
+) -> BacktestSignalEvent:
+    stage = "risk_rejected" if risk_rejected else "execution_rejected" if execution_rejected else "rejected"
+    return replace(
+        event,
+        risk_rejected=risk_rejected,
+        execution_rejected=execution_rejected,
+        rejection_reason_code=reason_code,
+        blocked_reason_code=reason_code,
+        outcome="rejected",
+        funnel_stage=stage,
+    )
+
+
+def _mark_signal_event_no_entry(event: BacktestSignalEvent, reason_code: str) -> BacktestSignalEvent:
+    return replace(
+        event,
+        no_entry=True,
+        outcome="no_entry",
+        funnel_stage="no_entry",
+        blocked_reason_code=reason_code,
+    )
+
+
+def _mark_signal_event_not_selected(event: BacktestSignalEvent) -> BacktestSignalEvent:
+    status = str(event.status).strip().lower()
+    if status == "rejected":
+        reason_code = event.rejection_reason_code or event.blocked_reason_code or "signal_rejected"
+        return replace(
+            event,
+            outcome="rejected",
+            funnel_stage="rejected",
+            rejection_reason_code=reason_code,
+            blocked_reason_code=reason_code,
+        )
+    if status == "invalidated":
+        reason_code = event.blocked_reason_code or event.rejection_reason_code or "signal_invalidated"
+        return replace(
+            event,
+            outcome="invalidated",
+            funnel_stage="invalidated",
+            blocked_reason_code=reason_code,
+        )
+    return _mark_signal_event_no_entry(event, "not_selected")
+
+
+def _closed_signal_events(
+    signal_events: Sequence[BacktestSignalEvent],
+    closed_positions: Sequence[_SimulatedPosition],
+) -> list[BacktestSignalEvent]:
+    positions_by_trade_id = {position.trade.id: position for position in closed_positions}
+    closed_events: list[BacktestSignalEvent] = []
+    for event in signal_events:
+        trade_id = event.metadata.get("trade_id")
+        position = positions_by_trade_id.get(str(trade_id)) if trade_id is not None else None
+        if position is None:
+            closed_events.append(event)
+            continue
+        pnl = _net_pnl(position)
+        metadata = {
+            **event.metadata,
+            "close_reason": position.trade.close_reason,
+            "exit_time": position.trade.closed_at.isoformat() if position.trade.closed_at else None,
+        }
+        closed_events.append(
+            replace(
+                event,
+                closed=True,
+                outcome=_trade_outcome(position.trade, pnl),
+                funnel_stage="closed",
+                metadata=metadata,
+            )
+        )
+    return closed_events
+
+
 def _simulated_trades_from_state(
     state: _BacktestState,
     *,
@@ -1496,6 +1765,92 @@ def _normalized_direction(value: str) -> str:
     if normalized == "sell":
         return "short"
     return normalized
+
+
+def _strategy_signal_key(request: BacktestRunRequest, signal: StrategySignal) -> str:
+    parts = [
+        signal.exchange or request.exchange,
+        signal.symbol,
+        signal.timeframe or request.timeframe,
+        signal.strategy,
+        _normalized_direction(signal.direction),
+        str(signal.timestamp),
+        str(signal.entry_min or ""),
+        str(signal.entry_max or ""),
+        str(signal.stop_loss or ""),
+    ]
+    return ":".join(str(part) for part in parts)
+
+
+def _signal_gate_status(signal: StrategySignal) -> str:
+    if signal.execution_gate is not None:
+        return str(signal.execution_gate.status)
+    status = str(signal.status).strip().lower()
+    if status == "actionable":
+        return "passed"
+    if status in {"rejected", "invalidated"}:
+        return "blocked"
+    return "unknown"
+
+
+def _signal_feed_kind(signal: StrategySignal) -> str:
+    if signal.execution_gate is not None:
+        return str(signal.execution_gate.feed_kind)
+    status = str(signal.status).strip().lower()
+    if status == "actionable":
+        return "execution_signal"
+    if status in {"rejected", "invalidated"}:
+        return "blocked"
+    return "watchlist"
+
+
+def _signal_trigger_passed(signal: StrategySignal) -> bool:
+    if signal.trigger is not None:
+        return bool(signal.trigger.passed)
+    return str(signal.status).strip().lower() == "actionable"
+
+
+def _signal_trigger_reason_code(signal: StrategySignal) -> str | None:
+    trigger = signal.trigger
+    if trigger is None:
+        return None
+    for key in ("reason_code", "trigger_reason_code"):
+        value = trigger.metadata.get(key)
+        if value:
+            return _reason_code(value)
+    if trigger.reason:
+        return _reason_code(trigger.reason)
+    for check in trigger.checks:
+        if check.status != "passed" and check.reason:
+            return _reason_code(check.reason)
+    return None
+
+
+def _signal_rejection_reason_code(signal: StrategySignal) -> str | None:
+    if signal.execution_gate is not None:
+        for reason in [*signal.execution_gate.reasons, *signal.execution_gate.warnings]:
+            if reason.code:
+                return _reason_code(reason.code)
+    if signal.no_trade_filter is not None:
+        for blocker in [*signal.no_trade_filter.blockers, *signal.no_trade_filter.warnings]:
+            if blocker:
+                return _reason_code(blocker)
+    if signal.status_reason:
+        return _reason_code(signal.status_reason)
+    return _signal_trigger_reason_code(signal)
+
+
+def _last_reason_code(values: Sequence[str], default: str) -> str:
+    for value in reversed(values):
+        if value:
+            return _reason_code(value)
+    return default
+
+
+def _reason_code(value: object) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    cleaned = "".join(character for character in text if character.isalnum() or character == "_")
+    return cleaned[:80] or "unknown"
 
 
 def _virtual_trade_from_execution(

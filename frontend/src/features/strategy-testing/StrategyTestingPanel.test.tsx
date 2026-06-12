@@ -195,6 +195,32 @@ describe("StrategyTestingPanel", () => {
       timeframes: ["1m", "5m", "15m"]
     }));
   });
+
+  it("shows signal funnel summary for a completed run", () => {
+    mocks.runs = [
+      strategyTestRun({
+        status: "completed",
+        summary: {
+          closed: 7,
+          entry_touched: 8,
+          execution_candidates: 9,
+          filled: 7,
+          no_entry: 2,
+          signals_count: 11,
+          trades_count: 7
+        },
+        test_type: "historical_backtest"
+      })
+    ];
+
+    renderPanel();
+
+    const funnel = screen.getByLabelText("Strategy test funnel summary");
+    expect(within(funnel).getByText("11 signals")).toBeInTheDocument();
+    expect(within(funnel).getByText("9 candidates")).toBeInTheDocument();
+    expect(within(funnel).getByText("8 touched")).toBeInTheDocument();
+    expect(within(funnel).getByText("2 no entry")).toBeInTheDocument();
+  });
 });
 
 function renderPanel({

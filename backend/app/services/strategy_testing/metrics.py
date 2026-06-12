@@ -6,11 +6,12 @@ from decimal import Decimal
 from statistics import median
 from typing import Callable, Sequence
 
-from app.services.strategy_testing.schemas import StrategyTestTrade
+from app.services.strategy_testing.schemas import StrategyTestSignalEvent, StrategyTestTrade
 
 
 MetricValue = float | int | None
 MetricCompute = Callable[[Sequence[StrategyTestTrade]], MetricValue]
+MetricSignalCompute = Callable[[Sequence[StrategyTestTrade], Sequence[StrategyTestSignalEvent]], MetricValue]
 
 SUPPORTED_GROUPINGS = (
     "strategy",
@@ -26,6 +27,7 @@ BASE_METRIC_CODES = (
     "trades_count",
     "signals_count",
     "entry_touch_rate",
+    "no_entry_rate",
     "winrate",
     "avg_win_r",
     "avg_loss_r",
@@ -76,6 +78,7 @@ class MetricDefinition:
     groupings: list[str]
     compute: MetricCompute
     min_sample_size: int = 1
+    compute_with_signals: MetricSignalCompute | None = None
 
     def __post_init__(self) -> None:
         if not self.code.strip():
@@ -122,20 +125,41 @@ class MetricRegistry:
         metric_set: Sequence[str] | None = None,
         group_by: Sequence[str] | None = None,
     ) -> list[MetricResult]:
+        return self.compute_with_signals(
+            trades,
+            signal_events=(),
+            metric_set=metric_set,
+            group_by=group_by,
+        )
+
+    def compute_with_signals(
+        self,
+        trades: Sequence[StrategyTestTrade],
+        *,
+        signal_events: Sequence[StrategyTestSignalEvent] = (),
+        metric_set: Sequence[str] | None = None,
+        group_by: Sequence[str] | None = None,
+    ) -> list[MetricResult]:
         definitions = self._definitions_for(metric_set)
-        groups = _grouped_trades(trades, group_by)
+        groups = _grouped_metric_inputs(trades, signal_events, group_by)
         results: list[MetricResult] = []
 
-        for group, group_trades in groups:
+        for group, group_trades, group_signal_events in groups:
             for definition in definitions:
-                value = _normalize_metric_value(definition.compute(group_trades))
-                warnings = _metric_warnings(definition, group_trades, value)
+                compute_with_signals = definition.compute_with_signals
+                value = _normalize_metric_value(
+                    compute_with_signals(group_trades, group_signal_events)
+                    if compute_with_signals is not None
+                    else definition.compute(group_trades)
+                )
+                sample_size = _metric_sample_size(definition, group_trades, group_signal_events)
+                warnings = _metric_warnings(definition, group_trades, group_signal_events, value, sample_size)
                 results.append(
                     MetricResult(
                         code=definition.code,
                         label=definition.label,
                         value=value,
-                        sample_size=len(group_trades),
+                        sample_size=sample_size,
                         group=group,
                         warnings=warnings,
                     )
@@ -177,18 +201,29 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
         MetricDefinition(
             code="signals_count",
             label="Signals Count",
-            description="Number of evaluated signals. Not derivable from trade rows alone.",
+            description="Number of evaluated signal events.",
             groupings=groupings,
             compute=_metric_unavailable,
             min_sample_size=0,
+            compute_with_signals=_metric_signals_count,
         ),
         MetricDefinition(
             code="entry_touch_rate",
             label="Entry Touch Rate",
-            description="Share of signals whose entry was touched. Requires signal rows, not only trade rows.",
+            description="Share of signals whose entry was touched.",
             groupings=groupings,
             compute=_metric_unavailable,
             min_sample_size=0,
+            compute_with_signals=_metric_entry_touch_rate_from_signals,
+        ),
+        MetricDefinition(
+            code="no_entry_rate",
+            label="No Entry Rate",
+            description="Share of signals that never reached an entry.",
+            groupings=groupings,
+            compute=_metric_unavailable,
+            min_sample_size=0,
+            compute_with_signals=_metric_no_entry_rate_from_signals,
         ),
         MetricDefinition(
             code="winrate",
@@ -350,6 +385,7 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
             groupings=groupings,
             compute=_metric_risk_rejection_rate,
             min_sample_size=0,
+            compute_with_signals=_metric_risk_rejection_rate_from_signals,
         ),
         MetricDefinition(
             code="execution_rejection_rate",
@@ -358,6 +394,7 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
             groupings=groupings,
             compute=_metric_execution_rejection_rate,
             min_sample_size=0,
+            compute_with_signals=_metric_execution_rejection_rate_from_signals,
         ),
         MetricDefinition(
             code="false_signal_rate",
@@ -366,29 +403,39 @@ def base_metric_definitions() -> tuple[MetricDefinition, ...]:
             groupings=groupings,
             compute=_metric_unavailable,
             min_sample_size=0,
+            compute_with_signals=_metric_false_signal_rate_from_signals,
         ),
     )
 
 
-def _grouped_trades(
+def _grouped_metric_inputs(
     trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
     group_by: Sequence[str] | None,
-) -> list[tuple[dict[str, str], list[StrategyTestTrade]]]:
+) -> list[tuple[dict[str, str], list[StrategyTestTrade], list[StrategyTestSignalEvent]]]:
     normalized_group_by = _normalize_group_by(group_by)
-    groups: list[tuple[dict[str, str], list[StrategyTestTrade]]] = [({"all": "all"}, list(trades))]
+    groups: list[tuple[dict[str, str], list[StrategyTestTrade], list[StrategyTestSignalEvent]]] = [
+        ({"all": "all"}, list(trades), list(signal_events))
+    ]
     if not normalized_group_by:
         return groups
 
     grouped: dict[tuple[str, ...], list[StrategyTestTrade]] = {}
+    grouped_events: dict[tuple[str, ...], list[StrategyTestSignalEvent]] = {}
     group_values: dict[tuple[str, ...], dict[str, str]] = {}
     for trade in trades:
         group = {key: _group_value(trade, key) for key in normalized_group_by}
         group_key = tuple(group[key] for key in normalized_group_by)
         grouped.setdefault(group_key, []).append(trade)
         group_values[group_key] = group
+    for signal_event in signal_events:
+        group = {key: _group_value(signal_event, key) for key in normalized_group_by}
+        group_key = tuple(group[key] for key in normalized_group_by)
+        grouped_events.setdefault(group_key, []).append(signal_event)
+        group_values[group_key] = group
 
-    for group_key in sorted(grouped):
-        groups.append((group_values[group_key], grouped[group_key]))
+    for group_key in sorted(set(grouped) | set(grouped_events)):
+        groups.append((group_values[group_key], grouped.get(group_key, []), grouped_events.get(group_key, [])))
     return groups
 
 
@@ -408,8 +455,8 @@ def _normalize_group_by(group_by: Sequence[str] | None) -> list[str]:
     return normalized
 
 
-def _group_value(trade: StrategyTestTrade, group_key: str) -> str:
-    value = getattr(trade, _GROUP_FIELD_MAP[group_key], None)
+def _group_value(item: StrategyTestTrade | StrategyTestSignalEvent, group_key: str) -> str:
+    value = getattr(item, _GROUP_FIELD_MAP[group_key], None)
     text = str(value).strip() if value is not None else ""
     return text or "unknown"
 
@@ -417,16 +464,16 @@ def _group_value(trade: StrategyTestTrade, group_key: str) -> str:
 def _metric_warnings(
     definition: MetricDefinition,
     trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
     value: MetricValue,
+    sample_size: int,
 ) -> list[str]:
     warnings: list[str] = []
-    if len(trades) < definition.min_sample_size:
+    if sample_size < definition.min_sample_size:
         warnings.append("insufficient_sample")
 
     code = definition.code
-    if code == "signals_count" and value is None:
-        warnings.append("signals_count_not_available_from_trade_rows")
-    elif code == "entry_touch_rate" and value is None:
+    if code in {"entry_touch_rate", "no_entry_rate"} and value is None and not signal_events:
         warnings.append("signals_count_not_available_from_trade_rows")
     elif code == "expectancy_after_costs_r" and value is None:
         warnings.append("costs_r_not_available")
@@ -461,12 +508,51 @@ def _metric_warnings(
     return _dedupe_strings(warnings)
 
 
+def _metric_sample_size(
+    definition: MetricDefinition,
+    trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
+) -> int:
+    if definition.compute_with_signals is None:
+        return len(trades)
+    if signal_events:
+        return len(signal_events)
+    if definition.compute is _metric_unavailable:
+        return 0
+    return len(trades)
+
+
 def _metric_unavailable(_trades: Sequence[StrategyTestTrade]) -> None:
     return None
 
 
 def _metric_trades_count(trades: Sequence[StrategyTestTrade]) -> int:
     return len(_executed_trades(trades))
+
+
+def _metric_signals_count(
+    _trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
+) -> int:
+    return len(signal_events)
+
+
+def _metric_entry_touch_rate_from_signals(
+    _trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
+) -> float | None:
+    if not signal_events:
+        return None
+    return _rate(sum(1 for event in signal_events if event.entry_touched), len(signal_events))
+
+
+def _metric_no_entry_rate_from_signals(
+    _trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
+) -> float | None:
+    if not signal_events:
+        return None
+    return _rate(sum(1 for event in signal_events if event.no_entry), len(signal_events))
 
 
 def _metric_winrate(trades: Sequence[StrategyTestTrade]) -> float | None:
@@ -612,10 +698,49 @@ def _metric_risk_rejection_rate(trades: Sequence[StrategyTestTrade]) -> float:
     return sum(1 for trade in trades if trade.risk_rejected) / len(trades)
 
 
+def _metric_risk_rejection_rate_from_signals(
+    trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
+) -> float | None:
+    if not signal_events:
+        return _metric_risk_rejection_rate(trades)
+    return _rate(sum(1 for event in signal_events if event.risk_rejected), len(signal_events))
+
+
 def _metric_execution_rejection_rate(trades: Sequence[StrategyTestTrade]) -> float:
     if not trades:
         return 0.0
     return sum(1 for trade in trades if trade.execution_rejected) / len(trades)
+
+
+def _metric_execution_rejection_rate_from_signals(
+    trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
+) -> float | None:
+    if not signal_events:
+        return _metric_execution_rejection_rate(trades)
+    execution_candidates = [event for event in signal_events if event.execution_candidate]
+    if not execution_candidates:
+        return None
+    return _rate(
+        sum(1 for event in execution_candidates if event.execution_rejected),
+        len(execution_candidates),
+    )
+
+
+def _metric_false_signal_rate_from_signals(
+    _trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
+) -> float | None:
+    if not signal_events:
+        return None
+    false_outcomes = {"no_entry", "invalidated"}
+    false_count = sum(
+        1
+        for event in signal_events
+        if event.no_entry or _normalized_reason(event.outcome) in false_outcomes
+    )
+    return _rate(false_count, len(signal_events))
 
 
 def _executed_trades(trades: Sequence[StrategyTestTrade]) -> list[StrategyTestTrade]:

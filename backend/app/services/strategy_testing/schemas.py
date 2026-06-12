@@ -118,6 +118,26 @@ class StrategyTestRunDetailResponse(BaseModel):
     rejections: list[str] = Field(default_factory=list)
 
 
+class StrategyTestFunnelResponse(BaseModel):
+    run_id: UUID
+    signals_count: int = 0
+    execution_candidates: int = 0
+    entry_touched: int = 0
+    filled: int = 0
+    closed: int = 0
+    wins: int = 0
+    losses: int = 0
+    no_entry: int = 0
+    risk_rejected: int = 0
+    execution_rejected: int = 0
+    entry_touch_rate: float | None = None
+    no_entry_rate: float | None = None
+    risk_rejection_rate: float | None = None
+    execution_rejection_rate: float | None = None
+    false_signal_rate: float | None = None
+    stages: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class StrategyTestActiveRunResponse(BaseModel):
     active_run: StrategyTestRunResponse | None = None
     can_run: bool
@@ -176,6 +196,59 @@ class StrategyTestTrade(BaseModel):
     @field_validator("trade_id", mode="before")
     @classmethod
     def stringify_trade_id(cls, value: Any) -> str:
+        return str(value)
+
+
+class StrategyTestSignalEvent(BaseModel):
+    run_id: UUID
+    user_id: UUID
+    mode: StrategyTestMode
+    test_type: StrategyTestType = "historical_backtest"
+    strategy_code: str
+    strategy_version: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    direction: str
+    signal_id: str | None = None
+    synthetic_signal_id: str
+    signal_key: str
+    event_time: datetime
+    candle_time: datetime
+    signal_score: float | None = None
+    market_regime: str = "unknown"
+    score_bucket: str = "unknown"
+    status: str
+    gate_status: str = "unknown"
+    feed_kind: str = "unknown"
+    trigger_passed: bool = False
+    trigger_reason_code: str | None = None
+    execution_candidate: bool = False
+    entry_touched: bool = False
+    filled: bool = False
+    closed: bool = False
+    outcome: str | None = None
+    funnel_stage: str = "signal"
+    risk_rejected: bool = False
+    execution_rejected: bool = False
+    no_entry: bool = False
+    rejection_reason_code: str | None = None
+    blocked_reason_code: str | None = None
+    selected_rr: float | None = None
+    entry_min: Decimal | None = None
+    entry_max: Decimal | None = None
+    stop_loss: Decimal | None = None
+    features_snapshot: dict[str, Any] = Field(default_factory=dict)
+    trade_plan: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+    @field_validator("signal_id", "synthetic_signal_id", "signal_key", mode="before")
+    @classmethod
+    def stringify_signal_identifiers(cls, value: Any) -> str | None:
+        if value is None:
+            return None
         return str(value)
 
 

@@ -17,6 +17,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunDetailResponse,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignalEvent,
     StrategyTestTrade,
 )
 
@@ -27,6 +28,7 @@ NOW = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
 
 REQUIRED_SECTION_NAMES = {
     "Summary",
+    "Signal funnel",
     "Strategy comparison",
     "Pair/timeframe breakdown",
     "Regime breakdown",
@@ -95,6 +97,22 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertIn("insufficient_data", report.warnings)
         self.assertEqual(report.candidate_adjustments, [])
 
+    def test_signal_funnel_section_lists_no_entry_signals(self) -> None:
+        report = _builder(
+            [],
+            signal_events=[
+                _signal_event("signal-1", no_entry=True, outcome="no_entry", funnel_stage="no_entry"),
+                _signal_event("signal-2", entry_touched=True, filled=True, closed=True, outcome="win"),
+            ],
+        ).build_report(RUN_ID)
+
+        section = _section(report, "Signal funnel")
+
+        self.assertEqual(report.summary["signals_count"], 2)
+        self.assertEqual(section.summary["no_entry"], 1)
+        self.assertEqual(section.rows[0]["synthetic_signal_id"], "signal-1")
+        self.assertEqual(section.metadata["row_filter"], "no_entry")
+
     def test_report_uses_metric_registry(self) -> None:
         registry = _SpyMetricRegistry()
         report = _builder([_trade("trade-1"), _trade("trade-2", realized_r=-1.0)], registry=registry).build_report(RUN_ID)
@@ -161,12 +179,26 @@ class _RunStore:
 
 
 class _AnalyticsStore:
-    def __init__(self, trades: Sequence[StrategyTestTrade]) -> None:
+    def __init__(
+        self,
+        trades: Sequence[StrategyTestTrade],
+        signal_events: Sequence[StrategyTestSignalEvent] = (),
+    ) -> None:
         self._trades = list(trades)
+        self._signal_events = list(signal_events)
 
     def list_trades(self, run_id: UUID) -> list[StrategyTestTrade]:
         _ = run_id
         return list(self._trades)
+
+    def list_signal_events(
+        self,
+        run_id: UUID,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[StrategyTestSignalEvent]:
+        _ = run_id
+        return list(self._signal_events)[offset : offset + limit]
 
 
 class _MissingReportService:
@@ -183,6 +215,7 @@ class _CrashingReportService:
 def _builder(
     trades: Sequence[StrategyTestTrade],
     *,
+    signal_events: Sequence[StrategyTestSignalEvent] = (),
     registry: MetricRegistry | _SpyMetricRegistry | None = None,
 ) -> StrategyTestReportBuilder:
     detail = StrategyTestRunDetailResponse(
@@ -208,7 +241,7 @@ def _builder(
     )
     return StrategyTestReportBuilder(
         run_store=_RunStore(detail),
-        analytics_store=_AnalyticsStore(trades),
+        analytics_store=_AnalyticsStore(trades, signal_events),
         metric_registry=registry,  # type: ignore[arg-type]
     )
 
@@ -272,6 +305,63 @@ def _trade(
         trade_plan={},
         tags=["backtest"],
         created_at=entry_time + timedelta(hours=1),
+    )
+
+
+def _signal_event(
+    synthetic_signal_id: str,
+    *,
+    entry_touched: bool = False,
+    filled: bool = False,
+    closed: bool = False,
+    outcome: str | None = None,
+    funnel_stage: str = "signal",
+    no_entry: bool = False,
+) -> StrategyTestSignalEvent:
+    return StrategyTestSignalEvent(
+        run_id=RUN_ID,
+        user_id=USER_ID,
+        mode="research_virtual",
+        test_type="historical_backtest",
+        strategy_code="trend_pullback_continuation",
+        strategy_version="v1",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        direction="long",
+        signal_id=None,
+        synthetic_signal_id=synthetic_signal_id,
+        signal_key=f"trend_pullback_continuation:BTCUSDT:{synthetic_signal_id}",
+        event_time=NOW,
+        candle_time=NOW,
+        signal_score=82.0,
+        market_regime="trend",
+        score_bucket="80-89",
+        status="actionable",
+        gate_status="passed",
+        feed_kind="execution_signal",
+        trigger_passed=True,
+        trigger_reason_code=None,
+        execution_candidate=True,
+        entry_touched=entry_touched,
+        filled=filled,
+        closed=closed,
+        outcome=outcome,
+        funnel_stage=funnel_stage,
+        risk_rejected=False,
+        execution_rejected=False,
+        no_entry=no_entry,
+        rejection_reason_code=None,
+        blocked_reason_code=None,
+        selected_rr=2.0,
+        entry_min=Decimal("100"),
+        entry_max=Decimal("100"),
+        stop_loss=Decimal("99"),
+        features_snapshot={},
+        trade_plan={},
+        metadata={},
+        tags=["backtest"],
+        created_at=NOW,
     )
 
 

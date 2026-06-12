@@ -7,9 +7,10 @@ from typing import Any
 from uuid import UUID
 import unittest
 
-from app.services.strategy_testing.schemas import StrategyTestMetricRow, StrategyTestTrade
+from app.services.strategy_testing.schemas import StrategyTestMetricRow, StrategyTestSignalEvent, StrategyTestTrade
 from app.services.strategy_testing.stores import (
     STRATEGY_TEST_METRICS_DDL,
+    STRATEGY_TEST_SIGNALS_DDL,
     STRATEGY_TEST_TRADES_DDL,
     ClickHouseStrategyTestStore,
 )
@@ -55,13 +56,16 @@ class FakeClickHouseClient:
 
 
 class ClickHouseStrategyTestStoreTest(unittest.TestCase):
-    def test_ensure_schema_sends_both_ddls(self) -> None:
+    def test_ensure_schema_sends_strategy_test_ddls(self) -> None:
         client = FakeClickHouseClient()
         store = ClickHouseStrategyTestStore(lambda: client)
 
         store.ensure_schema()
 
-        self.assertEqual(client.commands, [STRATEGY_TEST_TRADES_DDL, STRATEGY_TEST_METRICS_DDL])
+        self.assertEqual(
+            client.commands,
+            [STRATEGY_TEST_TRADES_DDL, STRATEGY_TEST_METRICS_DDL, STRATEGY_TEST_SIGNALS_DDL],
+        )
         self.assertTrue(client.closed)
 
     def test_write_trades_inserts_expected_columns(self) -> None:
@@ -94,6 +98,23 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(columns, ClickHouseStrategyTestStore._metric_columns)
         self.assertEqual(row[columns.index("metric_code")], "expectancy_r")
         self.assertEqual(row[columns.index("metadata_json")], '{"source":"lab","note":"проверка"}')
+        self.assertTrue(client.closed)
+
+    def test_write_signal_events_inserts_expected_columns(self) -> None:
+        client = FakeClickHouseClient()
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        store.write_signal_events([_signal_event()])
+
+        table, data, columns = client.inserts[0]
+        row = data[0]
+        self.assertEqual(table, "analytics.strategy_test_signals")
+        self.assertEqual(columns, ClickHouseStrategyTestStore._signal_event_columns)
+        self.assertEqual(row[columns.index("run_id")], RUN_ID)
+        self.assertEqual(row[columns.index("synthetic_signal_id")], "signal-1")
+        self.assertEqual(row[columns.index("execution_candidate")], 1)
+        self.assertEqual(row[columns.index("no_entry")], 1)
+        self.assertEqual(row[columns.index("features_snapshot_json")], '{"atr":"1.2"}')
         self.assertTrue(client.closed)
 
     def test_list_trades_parses_json_decimal_and_datetime_fields(self) -> None:
@@ -130,12 +151,30 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(metric.sample_size, 10)
         self.assertEqual(metric.metadata, {"source": "grouped"})
 
+    def test_list_signal_events_parses_json_decimal_and_flags(self) -> None:
+        client = FakeClickHouseClient(rows=[_signal_event_row()])
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        rows = store.list_signal_events(RUN_ID, limit=25, offset=5)
+
+        self.assertEqual(client.queries[0][1], {"run_id": RUN_ID, "limit": 25, "offset": 5})
+        event = rows[0]
+        self.assertEqual(event.synthetic_signal_id, "signal-1")
+        self.assertEqual(event.candle_time, ENTRY_AT)
+        self.assertEqual(event.entry_min, Decimal("100.25"))
+        self.assertTrue(event.execution_candidate)
+        self.assertFalse(event.filled)
+        self.assertTrue(event.no_entry)
+        self.assertEqual(event.features_snapshot, {"atr": "1.2"})
+        self.assertEqual(event.metadata, {"source": "backtest"})
+
     def test_clickhouse_init_file_contains_strategy_test_tables(self) -> None:
         schema = DDL_FILE.read_text(encoding="utf-8")
 
         self.assertIn("CREATE DATABASE IF NOT EXISTS analytics", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS analytics.strategy_test_trades", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS analytics.strategy_test_metrics", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals", schema)
         self.assertIn("ENGINE = MergeTree", schema)
         self.assertIn("ENGINE = ReplacingMergeTree(created_at)", schema)
         self.assertNotIn("DROP TABLE", schema)
@@ -204,6 +243,54 @@ def _metric() -> StrategyTestMetricRow:
     )
 
 
+def _signal_event() -> StrategyTestSignalEvent:
+    return StrategyTestSignalEvent(
+        run_id=RUN_ID,
+        user_id=USER_ID,
+        mode="research_virtual",
+        test_type="historical_backtest",
+        strategy_code="trend_pullback_continuation",
+        strategy_version="v1",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        direction="long",
+        signal_id=None,
+        synthetic_signal_id="signal-1",
+        signal_key="bybit:BTCUSDT:1h:trend_pullback_continuation:long:1",
+        event_time=ENTRY_AT,
+        candle_time=ENTRY_AT,
+        signal_score=82.5,
+        market_regime="trend:strong:aligned",
+        score_bucket="80-89",
+        status="actionable",
+        gate_status="passed",
+        feed_kind="execution_signal",
+        trigger_passed=True,
+        trigger_reason_code="closed_candle_trigger_passed",
+        execution_candidate=True,
+        entry_touched=False,
+        filled=False,
+        closed=False,
+        outcome="no_entry",
+        funnel_stage="no_entry",
+        risk_rejected=False,
+        execution_rejected=False,
+        no_entry=True,
+        rejection_reason_code=None,
+        blocked_reason_code="not_selected",
+        selected_rr=2.0,
+        entry_min=Decimal("100.25"),
+        entry_max=Decimal("100.50"),
+        stop_loss=Decimal("97.50"),
+        features_snapshot={"atr": "1.2"},
+        trade_plan={"source": "strategy"},
+        metadata={"source": "backtest"},
+        tags=["backtest", "signal_event"],
+        created_at=CREATED_AT,
+    )
+
+
 def _trade_row() -> dict[str, Any]:
     return {
         "run_id": RUN_ID,
@@ -243,6 +330,54 @@ def _trade_row() -> dict[str, Any]:
         "features_snapshot_json": '{"atr":"1.2"}',
         "trade_plan_json": '{"source":"strategy"}',
         "tags": ("backtest", "lab"),
+        "created_at": CREATED_AT,
+    }
+
+
+def _signal_event_row() -> dict[str, Any]:
+    return {
+        "run_id": RUN_ID,
+        "user_id": USER_ID,
+        "mode": "research_virtual",
+        "test_type": "historical_backtest",
+        "strategy_code": "trend_pullback_continuation",
+        "strategy_version": "v1",
+        "exchange": "bybit",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "direction": "long",
+        "signal_id": None,
+        "synthetic_signal_id": "signal-1",
+        "signal_key": "bybit:BTCUSDT:1h:trend_pullback_continuation:long:1",
+        "event_time": ENTRY_AT.replace(tzinfo=None),
+        "candle_time": ENTRY_AT.isoformat(),
+        "signal_score": "82.5",
+        "market_regime": "trend:strong:aligned",
+        "score_bucket": "80-89",
+        "status": "actionable",
+        "gate_status": "passed",
+        "feed_kind": "execution_signal",
+        "trigger_passed": 1,
+        "trigger_reason_code": "closed_candle_trigger_passed",
+        "execution_candidate": "1",
+        "entry_touched": "0",
+        "filled": 0,
+        "closed": 0,
+        "outcome": "no_entry",
+        "funnel_stage": "no_entry",
+        "risk_rejected": 0,
+        "execution_rejected": "0",
+        "no_entry": 1,
+        "rejection_reason_code": None,
+        "blocked_reason_code": "not_selected",
+        "selected_rr": "2.0",
+        "entry_min": "100.25",
+        "entry_max": Decimal("100.50"),
+        "stop_loss": None,
+        "features_snapshot_json": '{"atr":"1.2"}',
+        "trade_plan_json": '{"source":"strategy"}',
+        "metadata_json": '{"source":"backtest"}',
+        "tags": ("backtest", "signal_event"),
         "created_at": CREATED_AT,
     }
 

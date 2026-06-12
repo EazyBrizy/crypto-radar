@@ -76,3 +76,53 @@ ORDER BY (
     direction,
     metric_code
 );
+
+CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals
+(
+    run_id UUID,
+    user_id UUID,
+    mode LowCardinality(String),
+    test_type LowCardinality(String),
+    strategy_code LowCardinality(String),
+    strategy_version String,
+    exchange LowCardinality(String),
+    symbol LowCardinality(String),
+    timeframe LowCardinality(String),
+    direction LowCardinality(String),
+    signal_id Nullable(String),
+    synthetic_signal_id String,
+    signal_key String,
+    event_time DateTime64(3, 'UTC'),
+    candle_time DateTime64(3, 'UTC'),
+    signal_score Nullable(Float64),
+    market_regime LowCardinality(String),
+    score_bucket LowCardinality(String),
+    status LowCardinality(String),
+    gate_status LowCardinality(String),
+    feed_kind LowCardinality(String),
+    trigger_passed UInt8,
+    trigger_reason_code Nullable(String),
+    execution_candidate UInt8,
+    entry_touched UInt8,
+    filled UInt8,
+    closed UInt8,
+    outcome Nullable(String),
+    funnel_stage LowCardinality(String),
+    risk_rejected UInt8,
+    execution_rejected UInt8,
+    no_entry UInt8,
+    rejection_reason_code Nullable(String),
+    blocked_reason_code Nullable(String),
+    selected_rr Nullable(Float64),
+    entry_min Nullable(Decimal(38, 18)),
+    entry_max Nullable(Decimal(38, 18)),
+    stop_loss Nullable(Decimal(38, 18)),
+    features_snapshot_json String,
+    trade_plan_json String,
+    metadata_json String,
+    tags Array(String),
+    created_at DateTime64(3, 'UTC')
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(candle_time)
+ORDER BY (run_id, strategy_code, exchange, symbol, timeframe, candle_time, signal_key);

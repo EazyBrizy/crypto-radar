@@ -21,6 +21,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignalEvent,
     StrategyTestTrade,
 )
 from app.services.strategy_testing.service import StrategyTestingService
@@ -426,6 +427,48 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(response.json()["status"], "cancelled")
         self.assertEqual(store.get_run(active.run_id).run.status, "cancelled")  # type: ignore[union-attr]
 
+    def test_signal_events_and_funnel_endpoints_return_run_signal_funnel(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        trade_store = _EphemeralStrategyTestTradeStore()
+        run = StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="completed",
+            test_type="historical_backtest",
+            requested_matrix={"user_id": "demo_user", "scenario_count": 1},
+            summary={},
+            runtime_state={},
+            created_at=_now(),
+        )
+        store.upsert(run)
+        trade_store.write_signal_events(
+            [
+                _signal_event(run.run_id, "signal-1", no_entry=True, outcome="no_entry", funnel_stage="no_entry"),
+                _signal_event(run.run_id, "signal-2", entry_touched=True, filled=True, closed=True, outcome="win"),
+            ]
+        )
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=trade_store,
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            signals_response = client.get(f"/api/v1/strategy-tests/runs/{run.run_id}/signals")
+            funnel_response = client.get(f"/api/v1/strategy-tests/runs/{run.run_id}/funnel")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(signals_response.status_code, 200)
+        self.assertEqual(funnel_response.status_code, 200)
+        self.assertEqual(len(signals_response.json()), 2)
+        self.assertEqual(signals_response.json()[0]["synthetic_signal_id"], "signal-1")
+        funnel = funnel_response.json()
+        self.assertEqual(funnel["signals_count"], 2)
+        self.assertEqual(funnel["no_entry"], 1)
+        self.assertEqual(funnel["entry_touched"], 1)
+        self.assertEqual(funnel["entry_touch_rate"], 0.5)
+
     def test_existing_backtests_route_remains_registered(self) -> None:
         route_paths = {route.path for route in api_router.routes}
 
@@ -571,13 +614,28 @@ class _EphemeralStrategyTestRunStore:
 class _EphemeralStrategyTestTradeStore:
     def __init__(self) -> None:
         self.trades: list[StrategyTestTrade] = []
+        self.signal_events: list[StrategyTestSignalEvent] = []
         self.metrics: list[StrategyTestMetricRow] = []
 
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         self.trades.extend(trades)
 
+    def write_signal_events(self, signal_events: Sequence[StrategyTestSignalEvent]) -> None:
+        self.signal_events.extend(signal_events)
+
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         self.metrics.extend(rows)
+
+    def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
+        return [trade for trade in self.trades if trade.run_id == run_id][offset : offset + limit]
+
+    def list_signal_events(
+        self,
+        run_id: UUID,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[StrategyTestSignalEvent]:
+        return [event for event in self.signal_events if event.run_id == run_id][offset : offset + limit]
 
 
 class _NoopStrategyTestMatrixRunner:
@@ -658,6 +716,64 @@ class _RecordingEligibilityProfileUpdater:
         metrics: Sequence[MetricResult],
     ) -> None:
         self.calls.append({"run_id": run_id, "request": request, "metrics": list(metrics)})
+
+
+def _signal_event(
+    run_id: UUID,
+    synthetic_signal_id: str,
+    *,
+    entry_touched: bool = False,
+    filled: bool = False,
+    closed: bool = False,
+    outcome: str | None = None,
+    funnel_stage: str = "signal",
+    no_entry: bool = False,
+) -> StrategyTestSignalEvent:
+    return StrategyTestSignalEvent(
+        run_id=run_id,
+        user_id=UUID("22222222-2222-4222-8222-222222222222"),
+        mode="research_virtual",
+        test_type="historical_backtest",
+        strategy_code="trend_pullback_continuation",
+        strategy_version="v1",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        direction="long",
+        signal_id=None,
+        synthetic_signal_id=synthetic_signal_id,
+        signal_key=f"trend_pullback_continuation:BTCUSDT:{synthetic_signal_id}",
+        event_time=_now(),
+        candle_time=_now(),
+        signal_score=82.0,
+        market_regime="trend",
+        score_bucket="80-89",
+        status="actionable",
+        gate_status="passed",
+        feed_kind="execution_signal",
+        trigger_passed=True,
+        trigger_reason_code=None,
+        execution_candidate=True,
+        entry_touched=entry_touched,
+        filled=filled,
+        closed=closed,
+        outcome=outcome,
+        funnel_stage=funnel_stage,
+        risk_rejected=False,
+        execution_rejected=False,
+        no_entry=no_entry,
+        rejection_reason_code=None,
+        blocked_reason_code=None,
+        selected_rr=2.0,
+        entry_min=Decimal("100"),
+        entry_max=Decimal("100"),
+        stop_loss=Decimal("99"),
+        features_snapshot={},
+        trade_plan={},
+        metadata={},
+        tags=["backtest"],
+        created_at=_now(),
+    )
 
 
 def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:

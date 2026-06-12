@@ -9,6 +9,7 @@ from uuid import NAMESPACE_DNS, UUID, uuid5
 from app.schemas.backtest import BacktestRunRequest
 from app.services.backtest_runner import (
     BacktestDetailedRunResult,
+    BacktestSignalEvent,
     BacktestSimulatedTrade,
     ProductionBacktestRunner,
 )
@@ -16,6 +17,7 @@ from app.services.strategy_testing.assumptions import build_strategy_test_assump
 from app.services.strategy_testing.schemas import (
     StrategyTestPair,
     StrategyTestRunRequest,
+    StrategyTestSignalEvent,
     StrategyTestTrade,
 )
 
@@ -28,6 +30,7 @@ class StrategyTestScenarioResult:
     timeframe: str
     summary: dict[str, Any]
     trades: list[StrategyTestTrade] = field(default_factory=list)
+    signal_events: list[StrategyTestSignalEvent] = field(default_factory=list)
     assumptions: dict[str, Any] = field(default_factory=dict)
 
 
@@ -72,6 +75,15 @@ class StrategyTestScenarioRunner:
             )
             for trade in detailed.trades
         ]
+        signal_events = [
+            _strategy_test_signal_event_from_backtest_event(
+                run_id=run_id,
+                user_id=user_id,
+                request=request,
+                event=event,
+            )
+            for event in detailed.signal_events
+        ]
         return StrategyTestScenarioResult(
             run_id=run_id,
             strategy=strategy,
@@ -79,6 +91,7 @@ class StrategyTestScenarioRunner:
             timeframe=timeframe,
             summary=_scenario_summary(detailed, strategy=strategy, pair=pair, timeframe=timeframe),
             trades=trades,
+            signal_events=signal_events,
             assumptions=detailed.assumptions,
         )
 
@@ -190,6 +203,60 @@ def _strategy_test_trade_from_backtest_trade(
     )
 
 
+def _strategy_test_signal_event_from_backtest_event(
+    *,
+    run_id: UUID,
+    user_id: UUID,
+    request: StrategyTestRunRequest,
+    event: BacktestSignalEvent,
+) -> StrategyTestSignalEvent:
+    return StrategyTestSignalEvent(
+        run_id=run_id,
+        user_id=user_id,
+        mode=request.mode,
+        test_type="historical_backtest",
+        strategy_code=event.strategy_code,
+        strategy_version=event.strategy_version,
+        exchange=event.exchange,
+        symbol=event.symbol,
+        timeframe=event.timeframe,
+        direction=event.direction,
+        signal_id=event.signal_id,
+        synthetic_signal_id=event.synthetic_signal_id,
+        signal_key=event.signal_key,
+        event_time=_as_utc(event.event_time),
+        candle_time=_as_utc(event.candle_time),
+        signal_score=event.signal_score,
+        market_regime=event.market_regime,
+        score_bucket=event.score_bucket,
+        status=event.status,
+        gate_status=event.gate_status,
+        feed_kind=event.feed_kind,
+        trigger_passed=event.trigger_passed,
+        trigger_reason_code=event.trigger_reason_code,
+        execution_candidate=event.execution_candidate,
+        entry_touched=event.entry_touched,
+        filled=event.filled,
+        closed=event.closed,
+        outcome=event.outcome,
+        funnel_stage=event.funnel_stage,
+        risk_rejected=event.risk_rejected,
+        execution_rejected=event.execution_rejected,
+        no_entry=event.no_entry,
+        rejection_reason_code=event.rejection_reason_code,
+        blocked_reason_code=event.blocked_reason_code,
+        selected_rr=event.selected_rr,
+        entry_min=event.entry_min,
+        entry_max=event.entry_max,
+        stop_loss=event.stop_loss,
+        features_snapshot=dict(event.features_snapshot),
+        trade_plan=dict(event.trade_plan),
+        metadata=dict(event.metadata),
+        tags=_trade_tags(request.tags, event.tags),
+        created_at=_as_utc(event.created_at),
+    )
+
+
 def _trade_tags(request_tags: list[str], trade_tags: list[str]) -> list[str]:
     tags: list[str] = []
     for tag in [*request_tags, *trade_tags, "backtest"]:
@@ -207,6 +274,7 @@ def _scenario_summary(
 ) -> dict[str, Any]:
     result = detailed.run_result.result
     metrics = result.metrics if result is not None else {}
+    signal_events = detailed.signal_events
     return {
         "strategy": strategy,
         "exchange": pair.exchange,
@@ -215,6 +283,14 @@ def _scenario_summary(
         "status": detailed.run_result.status,
         "trades_count": len(detailed.trades),
         "signals_seen": detailed.signals_seen,
+        "signals_count": len(signal_events),
+        "execution_candidates": sum(1 for event in signal_events if event.execution_candidate),
+        "entry_touched": sum(1 for event in signal_events if event.entry_touched),
+        "filled": sum(1 for event in signal_events if event.filled),
+        "closed": sum(1 for event in signal_events if event.closed),
+        "wins": sum(1 for event in signal_events if _normalized_outcome(event.outcome) == "win"),
+        "losses": sum(1 for event in signal_events if _normalized_outcome(event.outcome) == "loss"),
+        "no_entry": sum(1 for event in signal_events if event.no_entry),
         "risk_rejections": detailed.risk_rejections,
         "execution_rejections": detailed.execution_rejections,
         "pnl": str(result.pnl) if result is not None else str(Decimal("0")),
@@ -222,6 +298,10 @@ def _scenario_summary(
         "metrics": metrics,
         "assumptions": detailed.assumptions,
     }
+
+
+def _normalized_outcome(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _as_utc(value: datetime) -> datetime:

@@ -12,17 +12,20 @@ from app.services.strategy_testing.metrics import MetricResult
 from app.services.strategy_testing.report_builder import (
     StrategyTestReportBuilder,
     build_matrix_metric_results,
+    build_signal_funnel_response,
     metric_results_to_rows,
 )
 from app.services.strategy_testing.runner import strategy_test_user_uuid
 from app.services.strategy_testing.schemas import (
     StrategyTestActiveRunResponse,
+    StrategyTestFunnelResponse,
     StrategyTestMetricRow,
     StrategyTestReport,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignalEvent,
     StrategyTestTrade,
 )
 from app.services.strategy_testing.stores import (
@@ -38,10 +41,16 @@ class StrategyTestTradeStore(Protocol):
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         ...
 
+    def write_signal_events(self, signal_events: Sequence[StrategyTestSignalEvent]) -> None:
+        ...
+
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         ...
 
     def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
+        ...
+
+    def list_signal_events(self, run_id: UUID, limit: int = 1000, offset: int = 0) -> list[StrategyTestSignalEvent]:
         ...
 
 
@@ -96,10 +105,12 @@ class StrategyTestingService:
                 return self._run_store.mark_failed(run_id, _failure_message(matrix_result)).run
             metric_results = matrix_result.metrics or build_matrix_metric_results(
                 matrix_result.trades,
+                signal_events=matrix_result.signal_events,
                 metric_set=request.metric_set,
             )
             summary = matrix_result.summary(metrics=metric_results)
             self._trade_store.write_trades(matrix_result.trades)
+            _write_signal_events(self._trade_store, matrix_result.signal_events)
             self._trade_store.write_metrics(
                 metric_results_to_rows(
                     run_id=run_id,
@@ -195,6 +206,27 @@ class StrategyTestingService:
             raise ValueError(f"Strategy test run is not found: {run_id}")
         return self._trade_store.list_trades(run_id, limit=limit, offset=offset)
 
+    def list_signal_events(
+        self,
+        run_id: UUID,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[StrategyTestSignalEvent]:
+        if self._run_store.get_run(run_id) is None:
+            raise ValueError(f"Strategy test run is not found: {run_id}")
+        list_events = getattr(self._trade_store, "list_signal_events", None)
+        if not callable(list_events):
+            return []
+        return list_events(run_id, limit=limit, offset=offset)
+
+    def get_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
+        if self._run_store.get_run(run_id) is None:
+            raise ValueError(f"Strategy test run is not found: {run_id}")
+        return build_signal_funnel_response(
+            run_id,
+            self.list_signal_events(run_id, limit=10000, offset=0),
+        )
+
     def build_report(self, run_id: UUID) -> StrategyTestReport:
         return self._report_builder().build_report(run_id)
 
@@ -212,6 +244,18 @@ def _failure_message(matrix_result: StrategyTestMatrixResult) -> str:
     if matrix_result.errors:
         return f"All strategy test scenarios failed: {matrix_result.errors[0]['error']}"
     return "All strategy test scenarios failed"
+
+
+def _write_signal_events(
+    trade_store: StrategyTestTradeStore,
+    signal_events: Sequence[StrategyTestSignalEvent],
+) -> None:
+    if not signal_events:
+        return
+    write_events = getattr(trade_store, "write_signal_events", None)
+    if not callable(write_events):
+        raise RuntimeError("strategy_test_signal_event_store_not_available")
+    write_events(signal_events)
 
 
 def _append_summary_warning(summary: dict[str, object], code: str, message: str) -> None:

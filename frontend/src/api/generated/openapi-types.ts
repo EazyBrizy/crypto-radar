@@ -1053,6 +1053,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/strategy-tests/runs/{run_id}/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Strategy Test Signals */
+        get: operations["list_strategy_test_signals_api_v1_strategy_tests_runs__run_id__signals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/strategy-tests/runs/{run_id}/funnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Strategy Test Funnel */
+        get: operations["get_strategy_test_funnel_api_v1_strategy_tests_runs__run_id__funnel_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/strategy-tests/reports": {
         parameters: {
             query?: never;
@@ -6126,6 +6160,78 @@ export interface components {
              */
             confidence: "low" | "medium" | "high";
         };
+        /** StrategyTestFunnelResponse */
+        StrategyTestFunnelResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Signals Count
+             * @default 0
+             */
+            signals_count: number;
+            /**
+             * Execution Candidates
+             * @default 0
+             */
+            execution_candidates: number;
+            /**
+             * Entry Touched
+             * @default 0
+             */
+            entry_touched: number;
+            /**
+             * Filled
+             * @default 0
+             */
+            filled: number;
+            /**
+             * Closed
+             * @default 0
+             */
+            closed: number;
+            /**
+             * Wins
+             * @default 0
+             */
+            wins: number;
+            /**
+             * Losses
+             * @default 0
+             */
+            losses: number;
+            /**
+             * No Entry
+             * @default 0
+             */
+            no_entry: number;
+            /**
+             * Risk Rejected
+             * @default 0
+             */
+            risk_rejected: number;
+            /**
+             * Execution Rejected
+             * @default 0
+             */
+            execution_rejected: number;
+            /** Entry Touch Rate */
+            entry_touch_rate?: number | null;
+            /** No Entry Rate */
+            no_entry_rate?: number | null;
+            /** Risk Rejection Rate */
+            risk_rejection_rate?: number | null;
+            /** Execution Rejection Rate */
+            execution_rejection_rate?: number | null;
+            /** False Signal Rate */
+            false_signal_rate?: number | null;
+            /** Stages */
+            stages?: {
+                [key: string]: unknown;
+            }[];
+        };
         /** StrategyTestPair */
         StrategyTestPair: {
             /** Exchange */
@@ -6336,6 +6442,162 @@ export interface components {
             last_heartbeat_at?: string | null;
             /** Error */
             error?: string | null;
+        };
+        /** StrategyTestSignalEvent */
+        StrategyTestSignalEvent: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "discovery" | "research_virtual" | "production_like";
+            /**
+             * Test Type
+             * @default historical_backtest
+             * @enum {string}
+             */
+            test_type: "historical_backtest" | "forward_virtual";
+            /** Strategy Code */
+            strategy_code: string;
+            /** Strategy Version */
+            strategy_version: string;
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+            /** Timeframe */
+            timeframe: string;
+            /** Direction */
+            direction: string;
+            /** Signal Id */
+            signal_id?: string | null;
+            /** Synthetic Signal Id */
+            synthetic_signal_id: string;
+            /** Signal Key */
+            signal_key: string;
+            /**
+             * Event Time
+             * Format: date-time
+             */
+            event_time: string;
+            /**
+             * Candle Time
+             * Format: date-time
+             */
+            candle_time: string;
+            /** Signal Score */
+            signal_score?: number | null;
+            /**
+             * Market Regime
+             * @default unknown
+             */
+            market_regime: string;
+            /**
+             * Score Bucket
+             * @default unknown
+             */
+            score_bucket: string;
+            /** Status */
+            status: string;
+            /**
+             * Gate Status
+             * @default unknown
+             */
+            gate_status: string;
+            /**
+             * Feed Kind
+             * @default unknown
+             */
+            feed_kind: string;
+            /**
+             * Trigger Passed
+             * @default false
+             */
+            trigger_passed: boolean;
+            /** Trigger Reason Code */
+            trigger_reason_code?: string | null;
+            /**
+             * Execution Candidate
+             * @default false
+             */
+            execution_candidate: boolean;
+            /**
+             * Entry Touched
+             * @default false
+             */
+            entry_touched: boolean;
+            /**
+             * Filled
+             * @default false
+             */
+            filled: boolean;
+            /**
+             * Closed
+             * @default false
+             */
+            closed: boolean;
+            /** Outcome */
+            outcome?: string | null;
+            /**
+             * Funnel Stage
+             * @default signal
+             */
+            funnel_stage: string;
+            /**
+             * Risk Rejected
+             * @default false
+             */
+            risk_rejected: boolean;
+            /**
+             * Execution Rejected
+             * @default false
+             */
+            execution_rejected: boolean;
+            /**
+             * No Entry
+             * @default false
+             */
+            no_entry: boolean;
+            /** Rejection Reason Code */
+            rejection_reason_code?: string | null;
+            /** Blocked Reason Code */
+            blocked_reason_code?: string | null;
+            /** Selected Rr */
+            selected_rr?: number | null;
+            /** Entry Min */
+            entry_min?: string | null;
+            /** Entry Max */
+            entry_max?: string | null;
+            /** Stop Loss */
+            stop_loss?: string | null;
+            /** Features Snapshot */
+            features_snapshot?: {
+                [key: string]: unknown;
+            };
+            /** Trade Plan */
+            trade_plan?: {
+                [key: string]: unknown;
+            };
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+            /** Tags */
+            tags?: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** StrategyTestTrade */
         StrategyTestTrade: {
@@ -10012,6 +10274,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StrategyTestTrade"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_strategy_test_signals_api_v1_strategy_tests_runs__run_id__signals_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestSignalEvent"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_strategy_test_funnel_api_v1_strategy_tests_runs__run_id__funnel_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestFunnelResponse"];
                 };
             };
             /** @description Validation Error */

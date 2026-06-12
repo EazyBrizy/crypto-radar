@@ -2,11 +2,13 @@ import { requestJson } from "./client";
 import { currentUserId } from "./user-identity";
 import type {
   StrategyTestActiveRunResponse,
+  StrategyTestFunnelResponse,
   StrategyTestReport,
   StrategyTestRunDetailResponse,
   StrategyTestRunRequest,
   StrategyTestRunResponse,
   StrategyTestRunStatus,
+  StrategyTestSignalEvent,
   StrategyTestTrade
 } from "@/features/strategy-testing/types";
 
@@ -66,6 +68,12 @@ export const strategyTestsApi = {
   },
   async getTrades(runId: string): Promise<StrategyTestTrade[]> {
     return rawJson<StrategyTestTrade[]>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/trades`);
+  },
+  async getSignals(runId: string): Promise<StrategyTestSignalEvent[]> {
+    return rawJson<StrategyTestSignalEvent[]>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/signals`);
+  },
+  async getFunnel(runId: string): Promise<StrategyTestFunnelResponse> {
+    return rawJson<StrategyTestFunnelResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/funnel`);
   },
   async listReports(params: StrategyTestReportListParams = {}): Promise<StrategyTestReport[]> {
     return rawJson<StrategyTestReport[]>(strategyTestReportsPath(params));

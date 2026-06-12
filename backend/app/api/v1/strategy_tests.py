@@ -5,11 +5,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 
 from app.services.strategy_testing.schemas import (
     StrategyTestActiveRunResponse,
+    StrategyTestFunnelResponse,
     StrategyTestReport,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignalEvent,
     StrategyTestTrade,
 )
 from app.services.strategy_testing.service import StrategyTestingService
@@ -98,6 +100,30 @@ async def list_strategy_test_trades(
 ) -> list[StrategyTestTrade]:
     try:
         return service.list_trades(run_id, limit=limit, offset=offset)
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/signals", response_model=list[StrategyTestSignalEvent])
+async def list_strategy_test_signals(
+    run_id: UUID,
+    limit: int = Query(default=1000, ge=1, le=10000),
+    offset: int = Query(default=0, ge=0),
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> list[StrategyTestSignalEvent]:
+    try:
+        return service.list_signal_events(run_id, limit=limit, offset=offset)
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/funnel", response_model=StrategyTestFunnelResponse)
+async def get_strategy_test_funnel(
+    run_id: UUID,
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> StrategyTestFunnelResponse:
+    try:
+        return service.get_funnel(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

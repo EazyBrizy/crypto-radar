@@ -3809,6 +3809,119 @@
         }
       }
     },
+    "/api/v1/strategy-tests/runs/{run_id}/signals": {
+      "get": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "List Strategy Test Signals",
+        "operationId": "list_strategy_test_signals_api_v1_strategy_tests_runs__run_id__signals_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000,
+              "minimum": 1,
+              "default": 1000,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StrategyTestSignalEvent"
+                  },
+                  "title": "Response List Strategy Test Signals Api V1 Strategy Tests Runs  Run Id  Signals Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy-tests/runs/{run_id}/funnel": {
+      "get": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "Get Strategy Test Funnel",
+        "operationId": "get_strategy_test_funnel_api_v1_strategy_tests_runs__run_id__funnel_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyTestFunnelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/strategy-tests/reports": {
       "get": {
         "tags": [
@@ -18724,6 +18837,133 @@
         ],
         "title": "StrategyTestCandidateAdjustment"
       },
+      "StrategyTestFunnelResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "signals_count": {
+            "type": "integer",
+            "title": "Signals Count",
+            "default": 0
+          },
+          "execution_candidates": {
+            "type": "integer",
+            "title": "Execution Candidates",
+            "default": 0
+          },
+          "entry_touched": {
+            "type": "integer",
+            "title": "Entry Touched",
+            "default": 0
+          },
+          "filled": {
+            "type": "integer",
+            "title": "Filled",
+            "default": 0
+          },
+          "closed": {
+            "type": "integer",
+            "title": "Closed",
+            "default": 0
+          },
+          "wins": {
+            "type": "integer",
+            "title": "Wins",
+            "default": 0
+          },
+          "losses": {
+            "type": "integer",
+            "title": "Losses",
+            "default": 0
+          },
+          "no_entry": {
+            "type": "integer",
+            "title": "No Entry",
+            "default": 0
+          },
+          "risk_rejected": {
+            "type": "integer",
+            "title": "Risk Rejected",
+            "default": 0
+          },
+          "execution_rejected": {
+            "type": "integer",
+            "title": "Execution Rejected",
+            "default": 0
+          },
+          "entry_touch_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Touch Rate"
+          },
+          "no_entry_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Entry Rate"
+          },
+          "risk_rejection_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Rejection Rate"
+          },
+          "execution_rejection_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Rejection Rate"
+          },
+          "false_signal_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "False Signal Rate"
+          },
+          "stages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Stages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id"
+        ],
+        "title": "StrategyTestFunnelResponse"
+      },
       "StrategyTestPair": {
         "properties": {
           "exchange": {
@@ -19190,6 +19430,308 @@
           "requested_matrix"
         ],
         "title": "StrategyTestRunResponse"
+      },
+      "StrategyTestSignalEvent": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "discovery",
+              "research_virtual",
+              "production_like"
+            ],
+            "title": "Mode"
+          },
+          "test_type": {
+            "type": "string",
+            "enum": [
+              "historical_backtest",
+              "forward_virtual"
+            ],
+            "title": "Test Type",
+            "default": "historical_backtest"
+          },
+          "strategy_code": {
+            "type": "string",
+            "title": "Strategy Code"
+          },
+          "strategy_version": {
+            "type": "string",
+            "title": "Strategy Version"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction"
+          },
+          "signal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Id"
+          },
+          "synthetic_signal_id": {
+            "type": "string",
+            "title": "Synthetic Signal Id"
+          },
+          "signal_key": {
+            "type": "string",
+            "title": "Signal Key"
+          },
+          "event_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Event Time"
+          },
+          "candle_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Candle Time"
+          },
+          "signal_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Score"
+          },
+          "market_regime": {
+            "type": "string",
+            "title": "Market Regime",
+            "default": "unknown"
+          },
+          "score_bucket": {
+            "type": "string",
+            "title": "Score Bucket",
+            "default": "unknown"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "gate_status": {
+            "type": "string",
+            "title": "Gate Status",
+            "default": "unknown"
+          },
+          "feed_kind": {
+            "type": "string",
+            "title": "Feed Kind",
+            "default": "unknown"
+          },
+          "trigger_passed": {
+            "type": "boolean",
+            "title": "Trigger Passed",
+            "default": false
+          },
+          "trigger_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Reason Code"
+          },
+          "execution_candidate": {
+            "type": "boolean",
+            "title": "Execution Candidate",
+            "default": false
+          },
+          "entry_touched": {
+            "type": "boolean",
+            "title": "Entry Touched",
+            "default": false
+          },
+          "filled": {
+            "type": "boolean",
+            "title": "Filled",
+            "default": false
+          },
+          "closed": {
+            "type": "boolean",
+            "title": "Closed",
+            "default": false
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "funnel_stage": {
+            "type": "string",
+            "title": "Funnel Stage",
+            "default": "signal"
+          },
+          "risk_rejected": {
+            "type": "boolean",
+            "title": "Risk Rejected",
+            "default": false
+          },
+          "execution_rejected": {
+            "type": "boolean",
+            "title": "Execution Rejected",
+            "default": false
+          },
+          "no_entry": {
+            "type": "boolean",
+            "title": "No Entry",
+            "default": false
+          },
+          "rejection_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Reason Code"
+          },
+          "blocked_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason Code"
+          },
+          "selected_rr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Rr"
+          },
+          "entry_min": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Min"
+          },
+          "entry_max": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Max"
+          },
+          "stop_loss": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss"
+          },
+          "features_snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Features Snapshot"
+          },
+          "trade_plan": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Trade Plan"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "user_id",
+          "mode",
+          "strategy_code",
+          "strategy_version",
+          "exchange",
+          "symbol",
+          "timeframe",
+          "direction",
+          "synthetic_signal_id",
+          "signal_key",
+          "event_time",
+          "candle_time",
+          "status",
+          "created_at"
+        ],
+        "title": "StrategyTestSignalEvent"
       },
       "StrategyTestTrade": {
         "properties": {

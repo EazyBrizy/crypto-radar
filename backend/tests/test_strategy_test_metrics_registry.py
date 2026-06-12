@@ -8,7 +8,7 @@ import unittest
 
 from app.services.strategy_testing.metrics import BASE_METRIC_CODES, MetricResult, build_base_metric_registry
 from app.services.strategy_testing.report_builder import build_matrix_metric_results
-from app.services.strategy_testing.schemas import StrategyTestTrade
+from app.services.strategy_testing.schemas import StrategyTestSignalEvent, StrategyTestTrade
 
 
 RUN_ID = UUID("11111111-1111-4111-8111-111111111111")
@@ -140,6 +140,73 @@ class StrategyTestMetricsRegistryTest(unittest.TestCase):
             groups,
         )
 
+    def test_signal_funnel_metrics_are_computed_from_signal_events(self) -> None:
+        results = build_matrix_metric_results(
+            [_trade("trade-1", realized_r=1.0)],
+            signal_events=[
+                _signal_event(
+                    "signal-1",
+                    entry_touched=True,
+                    filled=True,
+                    closed=True,
+                    outcome="win",
+                    funnel_stage="closed",
+                ),
+                _signal_event(
+                    "signal-2",
+                    entry_touched=False,
+                    no_entry=True,
+                    outcome="no_entry",
+                    funnel_stage="no_entry",
+                ),
+                _signal_event(
+                    "signal-3",
+                    execution_candidate=True,
+                    execution_rejected=True,
+                    rejection_reason_code="execution_policy_rejected",
+                    outcome="rejected",
+                    funnel_stage="execution_rejected",
+                ),
+            ],
+            metric_set=[
+                "signals_count",
+                "entry_touch_rate",
+                "no_entry_rate",
+                "execution_rejection_rate",
+                "false_signal_rate",
+                "expectancy_after_costs_r",
+            ],
+        )
+
+        aggregate = _results_by_code(results)
+        self.assertEqual(aggregate["signals_count"].value, 3)
+        self.assertEqual(aggregate["signals_count"].warnings, [])
+        self.assertAlmostEqual(aggregate["entry_touch_rate"].value or 0, 1 / 3)
+        self.assertAlmostEqual(aggregate["no_entry_rate"].value or 0, 1 / 3)
+        self.assertAlmostEqual(aggregate["execution_rejection_rate"].value or 0, 1 / 3)
+        self.assertAlmostEqual(aggregate["false_signal_rate"].value or 0, 1 / 3)
+        self.assertAlmostEqual(aggregate["expectancy_after_costs_r"].value or 0, 1.0)
+
+    def test_signal_only_groups_are_kept_even_without_trades(self) -> None:
+        results = build_matrix_metric_results(
+            [],
+            signal_events=[
+                _signal_event("signal-1", strategy="s1", symbol="BTCUSDT", no_entry=True),
+                _signal_event("signal-2", strategy="s2", symbol="ETHUSDT", no_entry=True),
+            ],
+            metric_set=["signals_count", "no_entry_rate"],
+        )
+
+        grouped = {
+            (result.group.get("strategy"), result.group.get("symbol"), result.code): result.value
+            for result in results
+            if result.group != {"all": "all"}
+        }
+
+        self.assertEqual(grouped[("s1", "BTCUSDT", "signals_count")], 1)
+        self.assertEqual(grouped[("s2", "ETHUSDT", "signals_count")], 1)
+        self.assertEqual(grouped[("s1", "BTCUSDT", "no_entry_rate")], 1.0)
+
 
 def _results_by_code(results: list[MetricResult]) -> dict[str, MetricResult]:
     return {result.code: result for result in results if result.group == {"all": "all"}}
@@ -199,6 +266,69 @@ def _trade(
         trade_plan={},
         tags=["backtest"],
         created_at=entry_time + timedelta(hours=1),
+    )
+
+
+def _signal_event(
+    synthetic_signal_id: str,
+    *,
+    strategy: str = "trend_pullback_continuation",
+    symbol: str = "BTCUSDT",
+    execution_candidate: bool = True,
+    entry_touched: bool = False,
+    filled: bool = False,
+    closed: bool = False,
+    outcome: str | None = None,
+    funnel_stage: str = "signal",
+    risk_rejected: bool = False,
+    execution_rejected: bool = False,
+    no_entry: bool = False,
+    rejection_reason_code: str | None = None,
+) -> StrategyTestSignalEvent:
+    return StrategyTestSignalEvent(
+        run_id=RUN_ID,
+        user_id=USER_ID,
+        mode="research_virtual",
+        test_type="historical_backtest",
+        strategy_code=strategy,
+        strategy_version="v1",
+        exchange="bybit",
+        symbol=symbol,
+        timeframe="1h",
+        direction="long",
+        signal_id=None,
+        synthetic_signal_id=synthetic_signal_id,
+        signal_key=f"{strategy}:{symbol}:{synthetic_signal_id}",
+        event_time=NOW,
+        candle_time=NOW,
+        signal_score=80.0,
+        market_regime="trend",
+        score_bucket="80-89",
+        status="actionable" if execution_candidate else "watchlist",
+        gate_status="passed" if execution_candidate else "blocked",
+        feed_kind="execution_signal" if execution_candidate else "watchlist",
+        trigger_passed=execution_candidate,
+        trigger_reason_code=None,
+        execution_candidate=execution_candidate,
+        entry_touched=entry_touched,
+        filled=filled,
+        closed=closed,
+        outcome=outcome,
+        funnel_stage=funnel_stage,
+        risk_rejected=risk_rejected,
+        execution_rejected=execution_rejected,
+        no_entry=no_entry,
+        rejection_reason_code=rejection_reason_code,
+        blocked_reason_code=rejection_reason_code,
+        selected_rr=2.0,
+        entry_min=Decimal("100"),
+        entry_max=Decimal("100"),
+        stop_loss=Decimal("99"),
+        features_snapshot={"source": "test"},
+        trade_plan={"entry": {"price": "100"}},
+        metadata={},
+        tags=["backtest"],
+        created_at=NOW,
     )
 
 

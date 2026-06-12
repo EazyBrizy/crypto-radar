@@ -5,9 +5,11 @@ import { isActivePendingEntryStatus } from "@/domain/pending-entry-status";
 import { isExecutionCandidateStatus } from "@/domain/signal-status";
 import type {
   StrategyTestActiveRunResponse,
+  StrategyTestFunnelResponse,
   StrategyTestReport,
   StrategyTestRunRequest,
   StrategyTestRunResponse,
+  StrategyTestSignalEvent,
   StrategyTestTrade
 } from "@/features/strategy-testing/types";
 import type {
@@ -307,6 +309,26 @@ export function useStrategyTestTrades(runId: string | null, options: PlannedQuer
   return useQuery<StrategyTestTrade[]>({
     queryKey: serverStateKeys.strategyTests.trades(runId ?? "none"),
     queryFn: () => api.strategyTests.getTrades(runId as string),
+    enabled: options.enabled ?? Boolean(runId),
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useStrategyTestSignals(runId: string | null, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestSignalEvent[]>({
+    queryKey: serverStateKeys.strategyTests.signals(runId ?? "none"),
+    queryFn: () => api.strategyTests.getSignals(runId as string),
+    enabled: options.enabled ?? Boolean(runId),
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.defaultStaleTimeMs
+  });
+}
+
+export function useStrategyTestFunnel(runId: string | null, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestFunnelResponse>({
+    queryKey: serverStateKeys.strategyTests.funnel(runId ?? "none"),
+    queryFn: () => api.strategyTests.getFunnel(runId as string),
     enabled: options.enabled ?? Boolean(runId),
     refetchInterval: options.refetchInterval,
     staleTime: serverStatePolicy.defaultStaleTimeMs

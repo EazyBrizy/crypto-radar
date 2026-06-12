@@ -93,6 +93,7 @@ export function StrategyTestingPanel({
   const selectedRun = runs.find((run) => run.run_id === selectedReportRunId) ?? null;
   const mutationSelectedRun = runMutation.data?.run_id === selectedReportRunId ? runMutation.data : null;
   const selectedRunForReport = selectedRun ?? mutationSelectedRun;
+  const funnelSummaryRun = selectedRunForReport ?? runs[0] ?? null;
   const selectedRunStatus = selectedRunForReport?.status ?? null;
   const selectedRunIsActive = isActiveStrategyTestRun(selectedRunStatus);
   const mutationRunIsMissingFromList = Boolean(
@@ -171,6 +172,8 @@ export function StrategyTestingPanel({
         {showRunInProgress ? <Badge tone="yellow">Run in progress</Badge> : null}
         {activeRunIsStale ? <Badge tone="yellow">Stale active run</Badge> : null}
       </div>
+
+      <FunnelSummaryStrip run={funnelSummaryRun} />
 
       {activeRun ? (
         <ActiveRunNotice
@@ -324,6 +327,21 @@ function SelectionGroup({ children, title }: { children: ReactNode; title: strin
   );
 }
 
+function FunnelSummaryStrip({ run }: { run: StrategyTestRunResponse | null }) {
+  const signalsCount = numericSummary(run, "signals_count") ?? numericSummary(run, "signals_seen");
+  if (signalsCount == null) return null;
+  return (
+    <div className="strategy-test-status-strip strategy-test-funnel-strip" aria-label="Strategy test funnel summary">
+      <Badge tone="blue">{signalsCount} signals</Badge>
+      <Badge tone="purple">{numericSummary(run, "execution_candidates") ?? 0} candidates</Badge>
+      <Badge tone="green">{numericSummary(run, "entry_touched") ?? 0} touched</Badge>
+      <Badge tone="blue">{numericSummary(run, "filled") ?? numericSummary(run, "trades_count") ?? 0} filled</Badge>
+      <Badge tone="green">{numericSummary(run, "closed") ?? numericSummary(run, "trades_count") ?? 0} closed</Badge>
+      <Badge tone="yellow">{numericSummary(run, "no_entry") ?? 0} no entry</Badge>
+    </div>
+  );
+}
+
 function enabledStrategyOptions(strategyConfigs: StrategyConfig[]): StrategyConfig[] {
   const seen = new Set<string>();
   return strategyConfigs.filter((strategy) => {
@@ -364,6 +382,11 @@ function toggleValue(values: string[], value: string): string[] {
 
 function isActiveStrategyTestRun(status: StrategyTestRunStatus | null | undefined): boolean {
   return status != null && ACTIVE_RUN_STATUSES.has(status);
+}
+
+function numericSummary(run: StrategyTestRunResponse | null, key: keyof StrategyTestRunResponse["summary"]): number | null {
+  const value = run?.summary[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function validateDateRange(startAt: string, endAt: string): string | null {

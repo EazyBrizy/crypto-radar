@@ -367,6 +367,63 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["forward_account"]["unrealized_pnl"], "0")
         self.assertEqual(state["forward_account"]["equity"], "1012")
 
+    async def test_process_market_tick_partially_closes_first_forward_target(self) -> None:
+        run = _run(runtime_state={
+            "forward_account": {
+                "initial_capital": "1000",
+                "balance": "1000",
+                "equity": "1000",
+                "realized_pnl": "0",
+                "unrealized_pnl": "0",
+                "fees": "0",
+                "slippage": "0",
+                "open_positions": 1,
+                "closed_positions": 0,
+            },
+            "forward_positions": [
+                {
+                    "trade_id": "trade_partial",
+                    "signal_id": "sig_partial",
+                    "exchange": "bybit",
+                    "symbol": "BTCUSDT",
+                    "strategy": "trend_pullback_continuation",
+                    "timeframe": "15m",
+                    "side": "long",
+                    "entry_price": "100",
+                    "current_price": "100",
+                    "size_usd": "100",
+                    "quantity": "1",
+                    "stop_loss": "95",
+                    "take_profit": ["110", "120"],
+                    "unrealized_pnl": "0",
+                    "fees": "0",
+                    "status": "open",
+                    "opened_at": NOW.isoformat(),
+                }
+            ],
+        })
+        run_store = _ForwardRunStore([run])
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            virtual_trading=_VirtualTrading(),
+        )
+        tick = MarketData(exchange="bybit", symbol="BTCUSDT", price=110.0, volume=1.0, timestamp=1_780_000_060)
+
+        result = await runtime.process_market_tick(tick)
+
+        self.assertEqual(result.ticks_processed, 1)
+        state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        position = state["forward_positions"][0]
+        self.assertEqual(position["status"], "partially_closed")
+        self.assertEqual(position["close_reason"], "partial_take_profit")
+        self.assertEqual(position["realized_pnl"], "5")
+        self.assertEqual(position["remaining_quantity"], "0.5")
+        self.assertEqual(state["forward_account"]["open_positions"], 1)
+        self.assertEqual(state["forward_account"]["closed_positions"], 0)
+        self.assertEqual(state["forward_account"]["realized_pnl"], "5")
+        self.assertEqual(state["forward_account"]["unrealized_pnl"], "5")
+
     async def test_stopping_run_is_cancelled_after_current_iteration_and_cancelled_runs_are_ignored(self) -> None:
         stopping = _run(status="stopping")
         cancelled = _run(run_id=uuid4(), status="cancelled")

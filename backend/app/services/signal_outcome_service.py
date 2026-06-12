@@ -219,8 +219,11 @@ class SignalOutcomeService:
         outcome.bars_to_outcome = bars_to_outcome
         outcome.closed_at = closed_at
         outcome.updated_at = closed_at
-        if metadata is not None:
-            outcome.metadata_ = metadata
+        updated_metadata = dict(metadata if metadata is not None else outcome.metadata_ or {})
+        updated_metadata["exit_reason_code"] = status
+        updated_metadata["exit_status"] = status
+        updated_metadata["exit_result"] = result
+        outcome.metadata_ = updated_metadata
         return outcome
 
     def record_pending_entry_terminal(self, intent: PendingEntryIntentRead) -> SignalOutcome | None:

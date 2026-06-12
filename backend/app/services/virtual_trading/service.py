@@ -72,12 +72,10 @@ from app.services.trade_repository import (
     VirtualTradePersistenceEvent,
 )
 from app.services.virtual_trade_lifecycle import (
-    apply_virtual_trade_candle,
-    apply_virtual_trade_market_price,
     arm_virtual_trade_time_stop,
-    close_virtual_trade_lifecycle,
     initialize_virtual_trade_lifecycle,
 )
+from app.services.position_management import position_management_engine
 from app.services.virtual_trading.execution_engine import (
     VirtualExecutionEngine,
     VirtualExecutionRejected,
@@ -336,6 +334,9 @@ class VirtualTradingService:
             max_daily_loss_percent=50.0,
             max_account_drawdown_percent=90.0,
             max_open_risk_percent=100.0,
+            max_symbol_risk_percent=100.0,
+            max_strategy_exposure_percent=100.0,
+            max_correlated_risk_percent=100.0,
             futures_max_open_risk_percent=100.0,
             include_fees_in_risk=True,
             include_slippage_in_risk=True,
@@ -1280,7 +1281,7 @@ class VirtualTradingService:
 
             now = _market_event_time(market_tick_or_candle)
             if candle is not None:
-                lifecycle_result = apply_virtual_trade_candle(
+                lifecycle_result = position_management_engine.apply_candle(
                     trade,
                     high=candle.high,
                     low=candle.low,
@@ -1292,10 +1293,10 @@ class VirtualTradingService:
             else:
                 assert price is not None
                 simulated_price = self._private_simulated_price(trade, price, now)
-                lifecycle_result = apply_virtual_trade_market_price(
+                lifecycle_result = position_management_engine.apply_price(
                     trade,
-                    simulated_price,
-                    now,
+                    price=simulated_price,
+                    now=now,
                 )
             updated_trade = self._repository.save_virtual_trade(lifecycle_result.trade)
             self._after_virtual_trade_events(self._consume_repository_events())
@@ -1312,11 +1313,11 @@ class VirtualTradingService:
     ) -> VirtualTrade:
         if not is_active_virtual_trade_status(trade.status):
             return trade
-        lifecycle_result = close_virtual_trade_lifecycle(
+        lifecycle_result = position_management_engine.close(
             trade,
-            exit_price,
-            reason,
-            datetime.now(timezone.utc),
+            exit_price=exit_price,
+            reason=reason,
+            now=datetime.now(timezone.utc),
         )
         updated = self._repository.save_virtual_trade(lifecycle_result.trade)
         self._after_virtual_trade_events(self._consume_repository_events())

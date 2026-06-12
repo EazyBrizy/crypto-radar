@@ -50,6 +50,8 @@ class SignalOutcomeServiceTest(unittest.TestCase):
         self.assertEqual(outcome.outcome, "win")
         self.assertEqual(float(outcome.realized_r), 1.0)
         self.assertEqual(outcome.bars_to_outcome, 1)
+        self.assertEqual(outcome.metadata_["exit_reason_code"], "tp1")
+        self.assertEqual(outcome.metadata_["exit_status"], "tp1")
 
     def test_sl_outcome_closes_with_loss(self) -> None:
         outcome = _outcome(direction="long")
@@ -60,6 +62,7 @@ class SignalOutcomeServiceTest(unittest.TestCase):
         self.assertEqual(outcome.status, "stop_loss")
         self.assertEqual(outcome.outcome, "loss")
         self.assertEqual(float(outcome.realized_r), -1.0)
+        self.assertEqual(outcome.metadata_["exit_reason_code"], "stop_loss")
 
     def test_same_candle_tp_and_sl_uses_conservative_stop_first_by_default(self) -> None:
         outcome = _outcome(direction="long", selected_rr=1, selected_rr_target="nearest")

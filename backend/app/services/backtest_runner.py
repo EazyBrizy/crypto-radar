@@ -27,11 +27,10 @@ from app.services.risk_reward_assessment import RiskRewardAssessmentService
 from app.services.trade_plan_completeness import trade_plan_completeness_service
 from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.services.virtual_trade_lifecycle import (
-    apply_virtual_trade_candle,
     arm_virtual_trade_time_stop,
-    close_virtual_trade_lifecycle,
     initialize_virtual_trade_lifecycle,
 )
+from app.services.position_management import position_management_engine
 from app.services.virtual_trading.execution_engine import VirtualExecutionEngine
 from app.strategies.engine import StrategyEngine
 from app.strategies.pipeline import (
@@ -318,7 +317,7 @@ class BacktestExecutionSimulator:
             if isinstance(assumptions, Mapping)
             else None
         )
-        result = apply_virtual_trade_candle(
+        result = position_management_engine.apply_candle(
             trade,
             high=candle.high,
             low=candle.low,
@@ -335,11 +334,11 @@ class BacktestExecutionSimulator:
         )
 
     def close_at_end(self, position: _SimulatedPosition, candle: OHLCVCandle) -> _SimulatedPosition:
-        result = close_virtual_trade_lifecycle(
+        result = position_management_engine.close(
             position.trade,
-            candle.close,
-            "time_stop",
-            _datetime_from_ms(candle.close_time),
+            exit_price=candle.close,
+            reason="time_stop",
+            now=_datetime_from_ms(candle.close_time),
         )
         return _replace_position(position, trade=result.trade)
 

@@ -243,7 +243,7 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         )
 
         with self.assertLogs("app.services.strategy_testing.service", level="WARNING") as logs:
-            response = service.create_run(_matrix_request())
+            response = service.create_run(_matrix_request(params={"auto_publish_calibration": True}))
 
         self.assertEqual(response.status, "completed")
         self.assertEqual(run_store.transitions, ["queued", "running", "completed"])

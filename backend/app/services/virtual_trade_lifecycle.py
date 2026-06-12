@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
-from typing import Any
+from typing import Any, Literal
 
 from app.domain.virtual_trade_status import (
     is_active_virtual_trade_status,
@@ -25,6 +25,7 @@ from app.services.execution_ambiguity import (
 )
 
 _EPSILON = 1e-9
+TargetFillPrice = Literal["target", "mark"]
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,8 @@ def apply_virtual_trade_market_price(
     trade: VirtualTrade,
     price: float,
     now: datetime,
+    *,
+    target_fill_price: TargetFillPrice = "target",
 ) -> VirtualTradeLifecycleResult:
     updated = _mark_price(initialize_virtual_trade_lifecycle(trade), price, now)
     updated = update_trailing_stop_on_mark(updated, price, now)
@@ -117,7 +120,8 @@ def apply_virtual_trade_market_price(
         if target.hit or not _target_reached(working.side, price, target.price):
             continue
 
-        target_result = _hit_target(working, index, target, now)
+        fill_price = price if target_fill_price == "mark" else target.price
+        target_result = _hit_target(working, index, target, now, fill_price=fill_price)
         working = target_result.trade
         realized_delta += target_result.realized_pnl_delta
         if target_result.closed:
@@ -260,6 +264,8 @@ def _hit_target(
     target_index: int,
     target: VirtualTradeTargetState,
     now: datetime,
+    *,
+    fill_price: float,
 ) -> VirtualTradeLifecycleResult:
     initial_quantity = _initial_quantity(trade)
     remaining_quantity = _remaining_quantity(trade, initial_quantity)
@@ -282,7 +288,7 @@ def _hit_target(
     )
     close_result = _close_quantity(
         trade=trade,
-        exit_price=target.price,
+        exit_price=fill_price,
         reason=reason,
         quantity=close_quantity,
         now=now,

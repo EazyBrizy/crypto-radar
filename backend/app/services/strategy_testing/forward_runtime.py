@@ -9,7 +9,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.schemas.market import MarketData
 from app.schemas.signal import RadarSignal, SignalExecutionGateReason, SignalExecutionGateSnapshot, StrategySignal
-from app.schemas.trade import ManualConfirmRequest, VirtualTrade
+from app.schemas.trade import ManualConfirmRequest, VirtualTrade, VirtualTradeTargetState
 from app.schemas.user import RiskManagementSettings
 from app.services.execution_policy import (
     ExecutionPolicyContext,
@@ -22,6 +22,7 @@ from app.services.portfolio_risk import (
     PortfolioRiskLimits,
     portfolio_risk_service,
 )
+from app.services.position_management import position_management_engine
 from app.services.signal_execution_gate import SignalExecutionGateService, signal_execution_gate_service
 from app.services.strategy_performance_service import score_bucket_for
 from app.services.strategy_testing.runner import strategy_test_user_uuid
@@ -709,33 +710,26 @@ def _mark_to_market_forward_account(
     total_unrealized = Decimal("0")
     realized_delta = Decimal("0")
     closed_count = 0
-    closed_at = _signal_timestamp_to_utc(tick.timestamp).isoformat()
+    now = _signal_timestamp_to_utc(tick.timestamp)
     updated_positions: list[dict[str, Any]] = []
     for position in positions:
         current = dict(position)
         if (
             str(current.get("exchange", "")).strip().lower() == tick_exchange
             and str(current.get("symbol", "")).strip().upper() == tick_symbol
-            and str(current.get("status") or "open") == "open"
+            and _forward_position_is_active(current)
         ):
-            entry_price = _decimal(current.get("entry_price"), Decimal("0"))
-            quantity = _decimal(current.get("quantity"), Decimal("0"))
-            side = str(current.get("side") or "long").lower()
-            pnl = (price - entry_price) * quantity if side == "long" else (entry_price - price) * quantity
-            current["current_price"] = str(price)
-            close_reason = _forward_close_reason(current, price, side)
-            if close_reason is not None:
-                current["status"] = "closed"
-                current["close_reason"] = close_reason
-                current["exit_price"] = str(price)
-                current["closed_at"] = closed_at
-                current["realized_pnl"] = _decimal_string(pnl)
-                current["unrealized_pnl"] = "0"
-                realized_delta += pnl
+            managed = position_management_engine.apply_price(
+                _forward_position_to_virtual_trade(current, now),
+                price=float(price),
+                now=now,
+                target_fill_price="mark",
+            )
+            current = _forward_position_from_virtual_trade(current, managed.trade)
+            realized_delta += _decimal(managed.realized_pnl_delta, Decimal("0"))
+            if managed.closed:
                 closed_count += 1
-            else:
-                current["unrealized_pnl"] = _decimal_string(pnl)
-        if str(current.get("status") or "open") == "open":
+        if _forward_position_is_active(current):
             total_unrealized += _decimal(current.get("unrealized_pnl"), Decimal("0"))
         updated_positions.append(current)
 
@@ -1149,24 +1143,150 @@ def _forward_trade_id(signal_id: str) -> str:
     return f"forward_trade_{uuid5(NAMESPACE_URL, signal_id).hex}"
 
 
-def _forward_close_reason(position: dict[str, Any], price: Decimal, side: str) -> str | None:
-    stop_loss = _decimal(position.get("stop_loss"), Decimal("0"))
-    take_profit = [
-        _decimal(target, Decimal("0"))
-        for target in (position.get("take_profit") if isinstance(position.get("take_profit"), list) else [])
+def _forward_position_to_virtual_trade(position: dict[str, Any], now: datetime) -> VirtualTrade:
+    take_profit = _forward_take_profit(position)
+    entry_price = float(_decimal(position.get("entry_price"), Decimal("0")))
+    quantity = float(_decimal(position.get("quantity"), Decimal("0")))
+    initial_quantity = float(_decimal(position.get("initial_quantity"), Decimal(str(quantity))))
+    remaining_quantity = float(_decimal(position.get("remaining_quantity"), Decimal(str(quantity))))
+    opened_at = _forward_position_datetime(position.get("opened_at"), now)
+    return VirtualTrade(
+        id=str(position.get("trade_id") or position.get("id") or "forward_trade"),
+        user_id=str(position.get("user_id") or _matrix_user_id_from_position(position)),
+        signal_id=str(position.get("signal_id") or "forward_signal"),
+        exchange=str(position.get("exchange") or "bybit"),
+        symbol=str(position.get("symbol") or "BTCUSDT"),
+        strategy=str(position.get("strategy") or "unknown"),
+        timeframe=str(position.get("timeframe") or "15m"),
+        side="short" if str(position.get("side") or "long").lower() == "short" else "long",
+        entry_price=entry_price,
+        current_price=float(_decimal(position.get("current_price"), Decimal(str(entry_price)))),
+        size_usd=float(_decimal(position.get("size_usd"), Decimal("0"))),
+        quantity=quantity,
+        leverage=int(_decimal(position.get("leverage"), Decimal("1"))),
+        risk_percent=float(_decimal(position.get("risk_percent"), Decimal("1"))),
+        risk_amount=float(_decimal(position.get("risk_amount"), Decimal("0"))),
+        stop_loss=float(_decimal(position.get("stop_loss"), Decimal("0"))),
+        take_profit=take_profit,
+        fees=float(_decimal(position.get("fees"), Decimal("0"))),
+        status=str(position.get("status") or "open"),
+        close_reason=position.get("close_reason"),
+        realized_pnl=float(_decimal(position.get("realized_pnl"), Decimal("0"))),
+        unrealized_pnl=float(_decimal(position.get("unrealized_pnl"), Decimal("0"))),
+        initial_quantity=initial_quantity,
+        remaining_quantity=remaining_quantity,
+        closed_quantity=float(
+            _decimal(
+                position.get("closed_quantity"),
+                Decimal(str(initial_quantity - remaining_quantity)),
+            )
+        ),
+        initial_size_usd=float(
+            _decimal(
+                position.get("initial_size_usd"),
+                _decimal(position.get("size_usd"), Decimal("0")),
+            )
+        ),
+        remaining_size_usd=float(_decimal(position.get("remaining_size_usd"), Decimal("0"))),
+        current_stop_loss=_optional_float(position.get("current_stop_loss")),
+        target_states=_forward_target_states(position, take_profit),
+        opened_at=opened_at,
+        updated_at=now,
+    )
+
+
+def _forward_position_from_virtual_trade(position: dict[str, Any], trade: VirtualTrade) -> dict[str, Any]:
+    updated = dict(position)
+    updated.update(
+        {
+            "status": trade.status,
+            "close_reason": trade.close_reason,
+            "current_price": _decimal_string(_decimal(trade.current_price, Decimal("0"))),
+            "realized_pnl": _decimal_string(_decimal(trade.realized_pnl, Decimal("0"))),
+            "unrealized_pnl": _decimal_string(_decimal(trade.unrealized_pnl, Decimal("0"))),
+            "initial_quantity": _decimal_string(_decimal(trade.initial_quantity, Decimal("0"))),
+            "remaining_quantity": _decimal_string(_decimal(trade.remaining_quantity, Decimal("0"))),
+            "closed_quantity": _decimal_string(_decimal(trade.closed_quantity, Decimal("0"))),
+            "initial_size_usd": _decimal_string(_decimal(trade.initial_size_usd, Decimal("0"))),
+            "remaining_size_usd": _decimal_string(_decimal(trade.remaining_size_usd, Decimal("0"))),
+            "current_stop_loss": (
+                _decimal_string(_decimal(trade.current_stop_loss, Decimal("0")))
+                if trade.current_stop_loss is not None
+                else None
+            ),
+            "target_states": [target.model_dump(mode="json") for target in trade.target_states],
+            "lifecycle_events": [event.model_dump(mode="json") for event in trade.lifecycle_events],
+        }
+    )
+    if trade.exit_price is not None:
+        updated["exit_price"] = _decimal_string(_decimal(trade.exit_price, Decimal("0")))
+    if trade.closed_at is not None:
+        updated["closed_at"] = trade.closed_at.astimezone(timezone.utc).isoformat()
+    return updated
+
+
+def _forward_position_is_active(position: dict[str, Any]) -> bool:
+    return str(position.get("status") or "open") in {"open", "partially_closed"}
+
+
+def _forward_take_profit(position: dict[str, Any]) -> list[float]:
+    raw_targets = position.get("take_profit")
+    values = raw_targets if isinstance(raw_targets, list) else []
+    return [float(price) for price in (_decimal(value, Decimal("0")) for value in values) if price > 0]
+
+
+def _forward_target_states(
+    position: dict[str, Any],
+    take_profit: list[float],
+) -> list[VirtualTradeTargetState]:
+    raw_states = position.get("target_states")
+    if isinstance(raw_states, list) and raw_states:
+        return [VirtualTradeTargetState.model_validate(state) for state in raw_states if isinstance(state, dict)]
+    if not take_profit:
+        return []
+    if len(take_profit) == 1:
+        return [
+            VirtualTradeTargetState(
+                label="TP1",
+                price=take_profit[0],
+                close_percent=100.0,
+                action="full_close",
+            )
+        ]
+    partial_percent = 50.0 if len(take_profit) == 2 else 100.0 / len(take_profit)
+    states = [
+        VirtualTradeTargetState(
+            label=f"TP{index + 1}",
+            price=price,
+            close_percent=partial_percent,
+            action="partial_close",
+        )
+        for index, price in enumerate(take_profit[:-1])
     ]
-    take_profit = [target for target in take_profit if target > 0]
-    if side == "short":
-        if stop_loss > 0 and price >= stop_loss:
-            return "stop_loss"
-        if any(price <= target for target in take_profit):
-            return "take_profit"
-        return None
-    if stop_loss > 0 and price <= stop_loss:
-        return "stop_loss"
-    if any(price >= target for target in take_profit):
-        return "take_profit"
-    return None
+    states.append(
+        VirtualTradeTargetState(
+            label=f"TP{len(take_profit)}",
+            price=take_profit[-1],
+            close_percent=100.0,
+            action="full_close",
+        )
+    )
+    return states
+
+
+def _forward_position_datetime(value: Any, default: datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except ValueError:
+            return default
+    return default
+
+
+def _matrix_user_id_from_position(position: dict[str, Any]) -> str:
+    return str(position.get("user_id") or "forward_user")
 
 
 def _entry_price(signal: RadarSignal) -> float:

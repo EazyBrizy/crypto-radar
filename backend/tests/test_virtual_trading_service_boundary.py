@@ -268,26 +268,23 @@ class VirtualTradingServiceBoundaryTest(unittest.TestCase):
         self.assertIsNone(exc.exception.report.average_price)
         self.assertEqual(repository.list_virtual_trades(), [])
 
-    def test_relaxed_paper_opens_virtual_trade_with_stale_orderbook_warning(self) -> None:
+    def test_relaxed_paper_stops_virtual_trade_with_stale_orderbook_kill_switch(self) -> None:
+        repository = _EphemeralTradeRepository()
         service = _service(
             RiskManagementSettings(max_price_deviation_bps=0),
+            repository=repository,
             market_data_service=_StaleVirtualMarketDataService(),
             virtual_execution_profile_provider=lambda _user_id, _risk_settings=None: "relaxed_paper",
         )
 
-        trade = service.open_virtual_trade(
-            _signal("sig_relaxed_stale_orderbook"),
-            _request().model_copy(update={"market_snapshot": None}),
-        )
+        with self.assertRaises(ValueError) as exc:
+            service.open_virtual_trade(
+                _signal("sig_relaxed_stale_orderbook"),
+                _request().model_copy(update={"market_snapshot": None}),
+            )
 
-        self.assertEqual(trade.status, "open")
-        self.assertIsNotNone(trade.execution)
-        assert trade.execution is not None
-        self.assertEqual(trade.execution.execution_profile, "relaxed_paper")
-        self.assertEqual(trade.execution.fill_policy, "relaxed_market_fallback")
-        self.assertEqual(trade.execution.blockers, [])
-        self.assertIn("market_data_stale_relaxed_fallback", trade.execution.reason_codes)
-        self.assertTrue(any("stale" in warning for warning in trade.execution.warnings))
+        self.assertIn("Market data is stale", str(exc.exception))
+        self.assertEqual(repository.list_virtual_trades(), [])
 
     def test_deterministic_test_opens_without_market_or_fee_lookup(self) -> None:
         service = _service(

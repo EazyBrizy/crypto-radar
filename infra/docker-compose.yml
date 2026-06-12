@@ -234,6 +234,7 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/kill-switch-rules.yml:/etc/prometheus/kill-switch-rules.yml:ro
       - prometheus_data:/prometheus
 
   grafana:

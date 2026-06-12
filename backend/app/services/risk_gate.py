@@ -42,6 +42,7 @@ from app.services.portfolio_risk import (
 )
 from app.services.reason_codes import normalize_reason_codes
 from app.services.risk_reward_plan import risk_reward_plan_service
+from app.services.trading_kill_switch import KillSwitchDecision, trading_kill_switch_service
 from app.services.trade_plan_completeness import (
     MISSING_CONTEXT_POLICY_KEY,
     MISSING_SCORE_POLICY_KEY,
@@ -595,7 +596,13 @@ class RiskGateService:
                 }
             )
         risk_check = _apply_portfolio_decision(risk_check, portfolio_decision)
+        kill_switch_decision = trading_kill_switch_service.evaluate_from_risk_context(
+            context,
+            risk_settings,
+        )
+        risk_check = _apply_kill_switch_decision(risk_check, kill_switch_decision)
         risk_check = _risk_check_with_reason_codes(risk_check)
+        risk_check = _risk_check_with_kill_switch_reason_codes(risk_check, kill_switch_decision)
         if portfolio_decision.action != "allow":
             risk_check = risk_check.model_copy(
                 update={
@@ -648,6 +655,7 @@ class RiskGateService:
                 "proposed_risk_amount": portfolio_decision.proposed_risk_amount,
                 "approved_risk_amount": portfolio_decision.approved_risk_amount,
                 "metrics": dict(portfolio_decision.metrics),
+                "kill_switch": _kill_switch_payload(kill_switch_decision),
             },
             notes=notes,
         )
@@ -753,6 +761,55 @@ def _apply_portfolio_decision(
             "blockers": _dedupe([*risk_check.blockers, *portfolio_decision.blockers]),
         }
     )
+
+
+def _apply_kill_switch_decision(
+    risk_check,
+    decision: KillSwitchDecision,
+):
+    blockers = [reason.message for reason in decision.reasons if reason.severity == "blocker"]
+    warnings = [reason.message for reason in decision.reasons if reason.severity == "warning"]
+    if not blockers and not warnings:
+        return risk_check
+    updates = {
+        "blockers": _dedupe([*risk_check.blockers, *blockers]),
+        "warnings": _dedupe([*risk_check.warnings, *warnings]),
+    }
+    if blockers:
+        updates.update(
+            {
+                "status": "failed",
+                "close_only": True,
+                "real_entries_allowed": False,
+                "virtual_entries_allowed": False,
+                "reduce_only_allowed": True,
+                "protective_orders_allowed": True,
+            }
+        )
+    elif risk_check.status == "passed":
+        updates["status"] = "warning"
+    return risk_check.model_copy(update=updates)
+
+
+def _risk_check_with_kill_switch_reason_codes(
+    risk_check,
+    decision: KillSwitchDecision,
+):
+    if not decision.reason_codes:
+        return risk_check
+    reason_codes = _dedupe([*decision.reason_codes, *risk_check.reason_codes])
+    return risk_check.model_copy(
+        update={
+            "reason_code": reason_codes[0],
+            "reason_codes": reason_codes,
+        }
+    )
+
+
+def _kill_switch_payload(decision: KillSwitchDecision) -> dict[str, Any]:
+    payload = decision.model_dump(mode="json")
+    payload["reason_codes"] = list(decision.reason_codes)
+    return payload
 
 
 def _trade_plan_completeness_policy(

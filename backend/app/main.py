@@ -6,8 +6,9 @@ from dataclasses import asdict
 from typing import AsyncIterator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.v1.router import api_router
 from app.core.clickhouse_client import close_clickhouse_client
@@ -19,6 +20,7 @@ from app.core.config import settings
 from app.core.request_timing import add_request_timing_middleware
 from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
 from app.services.realtime_gateway import realtime_gateway
+from app.services.trading_kill_switch import scanner_kill_switch_payload
 from app.workers.derivative_snapshot_worker import DerivativeSnapshotSyncRunner
 from app.workers.exchange_instrument_worker import ExchangeInstrumentRuleSyncRunner
 from app.workers.forward_strategy_test_worker import ForwardStrategyTestWorker
@@ -166,10 +168,16 @@ async def health() -> dict[str, object]:
     forward_strategy_test_worker = getattr(app.state, "forward_strategy_test_worker", None)
     scanner_status = runner.scanner_status if runner else {}
     storage_health = await asyncio.to_thread(get_storage_health)
+    scanner_running = bool(runner and runner.is_running)
+    kill_switch = scanner_kill_switch_payload(
+        scanner_status,
+        scanner_running=scanner_running,
+        max_stale_data_seconds=settings.scanner_market_data_stale_seconds,
+    )
     return {
         "status": "ok" if storage_health["status"] == "ok" else "degraded",
         "scanner_enabled": runner is not None,
-        "scanner_running": bool(runner and runner.is_running),
+        "scanner_running": scanner_running,
         "scanner_stopping": bool(runner and runner.is_stopping),
         "instrument_rule_sync_enabled": bool(
             getattr(app.state, "exchange_instrument_rule_sync_enabled", False)
@@ -250,8 +258,16 @@ async def health() -> dict[str, object]:
         "candles_seeded": scanner_status.get("candles_seeded", 0),
         "last_symbol": scanner_status.get("last_symbol"),
         "last_price": scanner_status.get("last_price"),
+        "kill_switch": kill_switch,
         "storage": storage_health,
     }
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    if not settings.prometheus_metrics_enabled:
+        return Response("", media_type=CONTENT_TYPE_LATEST)
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 async def main() -> None:

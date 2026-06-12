@@ -19,7 +19,7 @@ import {
   useStopScannerMutation
 } from "@/hooks/use-radar-queries";
 import { useUiStore } from "@/stores/ui-store";
-import type { HealthStatus, RadarStatus } from "@/types";
+import type { HealthStatus, KillSwitchStatus, RadarStatus } from "@/types";
 
 const navItems: Array<{ href: string; label: string; icon: ElementType }> = [
   { href: "/dashboard/radar", label: "Radar", icon: LayoutDashboard },
@@ -57,6 +57,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
   const blockingError = [configQuery, startScannerMutation, stopScannerMutation]
     .find((result) => result.error)?.error;
   const error = errorMessage(blockingError ?? statusError);
+  const killSwitchBanner = killSwitchBannerView(radarStatus?.kill_switch ?? health?.kill_switch ?? null);
 
   async function refreshData() {
     await Promise.all([
@@ -131,6 +132,13 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         </header>
 
         {error ? <div className="error-banner">{error}</div> : null}
+        {killSwitchBanner ? (
+          <div className={killSwitchBanner.className}>
+            <strong>{killSwitchBanner.title}</strong>
+            <span>{killSwitchBanner.message}</span>
+            <small>{killSwitchBanner.action}</small>
+          </div>
+        ) : null}
         {children}
       </main>
     </div>
@@ -170,6 +178,40 @@ export function scannerTopbarStatus(
     };
   }
   return { className: "offline-dot", text: "Scanner offline" };
+}
+
+export function killSwitchBannerView(status: KillSwitchStatus | null | undefined): {
+  className: string;
+  title: string;
+  message: string;
+  action: string;
+} | null {
+  if (!status || status.state === "healthy") {
+    return null;
+  }
+  const message = status.reasons[0]?.message ?? "Kill-switch state requires attention.";
+  if (status.state === "killed" || status.state === "manual_unlock_required") {
+    return {
+      className: "error-banner",
+      title: "Execution killed",
+      message,
+      action: status.manual_unlock_required ? "Manual unlock required" : "Execution disabled"
+    };
+  }
+  if (status.state === "paused") {
+    return {
+      className: "warning-banner",
+      title: "Risk paused",
+      message,
+      action: "Execution is paused"
+    };
+  }
+  return {
+    className: "warning-banner",
+    title: "Exchange degraded",
+    message,
+    action: "Review execution quality"
+  };
 }
 
 function errorMessage(exc: unknown): string | null {

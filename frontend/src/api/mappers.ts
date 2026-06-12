@@ -1933,6 +1933,53 @@ function normalizeScannerMarketDataStatus(value: unknown, scannerRunning: boolea
   return scannerRunning ? "waiting" : "offline";
 }
 
+function normalizeKillSwitchStatus(value: unknown): HealthStatus["kill_switch"] {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Partial<NonNullable<HealthStatus["kill_switch"]>>;
+  const state = normalizeKillSwitchState(raw.state);
+  const defaultExecutionAllowed = state === "healthy" || state === "degraded";
+  const rawReasons: unknown[] = Array.isArray(raw.reasons) ? raw.reasons : [];
+  const reasons = rawReasons
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item) => ({
+      code: String(item.code ?? "kill_switch_unknown"),
+      severity: item.severity === "warning" ? "warning" as const : "blocker" as const,
+      message: String(item.message ?? "Kill-switch is active."),
+      metadata: typeof item.metadata === "object" && item.metadata !== null
+        ? item.metadata as Record<string, unknown>
+        : {}
+    }));
+  return {
+    state,
+    execution_allowed: Boolean(raw.execution_allowed ?? defaultExecutionAllowed),
+    manual_unlock_required: Boolean(raw.manual_unlock_required ?? state === "manual_unlock_required"),
+    reasons,
+    reason_codes: Array.isArray(raw.reason_codes)
+      ? raw.reason_codes.map(String)
+      : reasons.map((reason) => reason.code),
+    metrics: typeof raw.metrics === "object" && raw.metrics !== null
+      ? Object.fromEntries(
+          Object.entries(raw.metrics).map(([key, metric]) => [key, Number(metric ?? 0)])
+        )
+      : {}
+  };
+}
+
+function normalizeKillSwitchState(value: unknown): NonNullable<HealthStatus["kill_switch"]>["state"] {
+  if (
+    value === "healthy" ||
+    value === "degraded" ||
+    value === "paused" ||
+    value === "killed" ||
+    value === "manual_unlock_required"
+  ) {
+    return value;
+  }
+  return "healthy";
+}
+
 function normalizeTradeInstrumentType(value: unknown) {
   if (value === "spot" || value === "futures") return value;
   return "virtual";
@@ -2076,7 +2123,8 @@ export function normalizeHealth(value: unknown): HealthStatus {
     estimated_strategy_checks: Number(health.estimated_strategy_checks ?? 0),
     max_scanner_pairs: health.max_scanner_pairs == null ? null : Number(health.max_scanner_pairs),
     last_symbol: health.last_symbol ?? null,
-    last_price: health.last_price ?? null
+    last_price: health.last_price ?? null,
+    kill_switch: normalizeKillSwitchStatus(health.kill_switch)
   };
 }
 

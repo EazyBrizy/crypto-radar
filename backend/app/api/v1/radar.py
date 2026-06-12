@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
+from app.core.config import settings
 from app.schemas.candle import RadarConfig, RadarConfigUpdate
 from app.schemas.risk import RadarDisplayMode
 from app.schemas.signal import RadarResponse
@@ -9,6 +10,7 @@ from app.services.current_user import current_user_identity_service
 from app.services.radar_config_service import radar_config_service
 from app.services.radar_service import RadarFilters, radar_service
 from app.services.realtime_events import radar_status_event
+from app.services.trading_kill_switch import scanner_kill_switch_payload
 
 router = APIRouter(prefix="/radar", tags=["radar"])
 
@@ -97,14 +99,20 @@ def _scanner_status(
     config_status = _scanner_config_status()
     if runner is not None:
         runner_status = dict(runner.scanner_status)
+        scanner_running = bool(runner_status.get("scanner_running"))
         return {
             "status": "ok",
             "scanner_enabled": enabled,
             **config_status,
             **_scanner_runtime_defaults(
-                scanner_running=bool(runner_status.get("scanner_running")),
+                scanner_running=scanner_running,
             ),
             **runner_status,
+            "kill_switch": scanner_kill_switch_payload(
+                runner_status,
+                scanner_running=scanner_running,
+                max_stale_data_seconds=settings.scanner_market_data_stale_seconds,
+            ),
         }
 
     return {
@@ -137,6 +145,11 @@ def _scanner_status(
         "last_symbol": None,
         "last_price": None,
         "candle_history": {},
+        "kill_switch": scanner_kill_switch_payload(
+            {},
+            scanner_running=False,
+            max_stale_data_seconds=settings.scanner_market_data_stale_seconds,
+        ),
     }
 
 

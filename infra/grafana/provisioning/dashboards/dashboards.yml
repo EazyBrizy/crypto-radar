@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: Crypto Radar
+    orgId: 1
+    folder: Crypto Radar
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

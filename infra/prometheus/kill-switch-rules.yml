@@ -1,0 +1,21 @@
+groups:
+  - name: crypto-radar-kill-switch
+    rules:
+      - record: crypto_radar:kill_switch_state
+        expr: kill_switch_state
+      - record: crypto_radar:execution_rejections_count
+        expr: execution_rejections_count
+      - record: crypto_radar:stale_data_seconds
+        expr: stale_data_seconds
+      - record: crypto_radar:daily_loss_pct
+        expr: daily_loss_pct
+      - record: crypto_radar:drawdown_pct
+        expr: drawdown_pct
+      - alert: CryptoRadarExecutionPaused
+        expr: kill_switch_state >= 2
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: Crypto Radar execution is paused or killed
+          description: "kill_switch_state={{ $value }}; manual unlock may be required."

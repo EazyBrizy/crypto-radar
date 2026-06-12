@@ -1232,6 +1232,24 @@ export interface RadarConfig {
   timeframes: string[];
 }
 
+export type KillSwitchState = "healthy" | "degraded" | "paused" | "killed" | "manual_unlock_required";
+
+export interface KillSwitchReason {
+  code: string;
+  severity?: "warning" | "blocker";
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface KillSwitchStatus {
+  state: KillSwitchState;
+  execution_allowed: boolean;
+  manual_unlock_required: boolean;
+  reasons: KillSwitchReason[];
+  reason_codes: string[];
+  metrics?: Record<string, number>;
+}
+
 export interface HealthStatus {
   status: string;
   scanner_enabled: boolean;
@@ -1261,6 +1279,7 @@ export interface HealthStatus {
   max_scanner_pairs?: number | null;
   last_symbol?: string | null;
   last_price?: number | null;
+  kill_switch?: KillSwitchStatus | null;
 }
 
 export interface RadarStatus extends HealthStatus {

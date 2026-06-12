@@ -687,6 +687,26 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertIn("Price moved too far from the signal entry.", decision.blockers)
         self.assertGreater(decision.risk_check.price_deviation_bps or 0, 100)
 
+    def test_kill_switch_blocks_stale_market_data_before_execution(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=_real_context(
+                signal=_signal(),
+                request=ManualConfirmRequest(),
+                entry_price=100,
+                stage="pre_execution",
+                best_bid=99.9,
+                best_ask=100.1,
+                orderbook_depth_usd=10_000,
+                market_data_status="stale",
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.status, "failed")
+        self.assertFalse(decision.can_enter)
+        self.assertIn("kill_switch_stale_market_data", decision.reason_codes)
+        self.assertEqual(decision.portfolio_risk["kill_switch"]["state"], "paused")
+
     def test_virtual_only_protection_makes_real_entries_close_only(self) -> None:
         decision = RiskGateService().evaluate(
             context=_real_context(

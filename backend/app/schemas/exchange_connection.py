@@ -7,7 +7,15 @@ from pydantic import BaseModel, Field
 
 ExchangeConnectionStatus = Literal["active", "disabled", "revoked", "deleted"]
 ExchangeConnectionEnvironment = Literal["testnet", "mainnet"]
-ExchangeOrderPlacementMode = Literal["disabled", "dry_run", "live"]
+ExchangeOrderPlacementMode = Literal[
+    "disabled",
+    "dry_run",
+    "dry_run_orders",
+    "testnet_real_orders",
+    "mainnet_small_size",
+    "mainnet_scaled",
+    "live",
+]
 ExchangeAccountSnapshotStatus = Literal["fresh", "stale", "missing"]
 
 

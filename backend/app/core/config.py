@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     realtime_publish_timeout_seconds: float = 0.75
 
     crypto_radar_scanner_enabled: bool = False
+    real_trading_mode: str = "disabled"
+    real_trading_explicit_unlock: bool = False
+    real_trading_mainnet_small_size_cap_usd: float = 50.0
     enable_live_trading: bool = False
     enable_bybit_live_order_placement: bool = False
     enable_bybit_mainnet_order_placement: bool = False

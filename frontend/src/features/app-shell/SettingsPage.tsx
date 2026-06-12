@@ -943,10 +943,10 @@ export function SettingsPage({
       api_key: apiKey,
       api_secret: apiSecret,
       api_passphrase: apiPassphrase || null,
-      permissions: { read: true, trade: connectionOrderMode === "live" },
+      permissions: { read: true, trade: isRealOrderMode(connectionOrderMode) },
       environment: connectionEnvironment,
       order_placement_mode: connectionOrderMode,
-      mainnet_explicitly_enabled: connectionEnvironment === "mainnet" && connectionOrderMode === "live" && mainnetExplicitConfirm
+      mainnet_explicitly_enabled: connectionEnvironment === "mainnet" && isMainnetOrderMode(connectionOrderMode) && mainnetExplicitConfirm
     });
     setConnectionLabel("");
     setApiKey("");
@@ -1194,6 +1194,10 @@ export function SettingsPage({
             >
               <option value="disabled">{tKey("common.disabled")}</option>
               <option value="dry_run">{tKey("settings.dryRun")}</option>
+              <option value="dry_run_orders">{tKey("settings.dryRunOrders")}</option>
+              <option value="testnet_real_orders">{tKey("settings.testnetRealOrders")}</option>
+              <option value="mainnet_small_size">{tKey("settings.mainnetSmallSize")}</option>
+              <option value="mainnet_scaled">{tKey("settings.mainnetScaled")}</option>
               <option value="live">{tKey("settings.live")}</option>
             </select>
             <input
@@ -1219,7 +1223,7 @@ export function SettingsPage({
               type="password"
               value={apiPassphrase}
             />
-            {connectionEnvironment === "mainnet" && connectionOrderMode === "live" ? (
+            {connectionEnvironment === "mainnet" && isMainnetOrderMode(connectionOrderMode) ? (
               <label className="toggle-row compact-toggle mainnet-confirm-toggle">
                 <input
                   checked={mainnetExplicitConfirm}
@@ -1237,7 +1241,7 @@ export function SettingsPage({
                 || !connectionLabel
                 || !apiKey
                 || !apiSecret
-                || (connectionEnvironment === "mainnet" && connectionOrderMode === "live" && !mainnetExplicitConfirm)
+                || (connectionEnvironment === "mainnet" && isMainnetOrderMode(connectionOrderMode) && !mainnetExplicitConfirm)
               }
               onClick={handleCreateExchangeConnection}
               type="button"
@@ -1304,19 +1308,23 @@ export function SettingsPage({
                     disabled={busy}
                     onChange={(event) => onUpdateExchangeConnection(connection.id, {
                       order_placement_mode: normalizeOrderPlacementMode(event.target.value),
-                      ...(normalizeOrderPlacementMode(event.target.value) !== "live" ? { mainnet_explicitly_enabled: false } : {})
+                      ...(!isMainnetOrderMode(normalizeOrderPlacementMode(event.target.value)) ? { mainnet_explicitly_enabled: false } : {})
                     })}
                     value={connection.order_placement_mode}
                   >
                     <option value="disabled">{tKey("common.disabled")}</option>
                     <option value="dry_run">{tKey("settings.dryRun")}</option>
+                    <option value="dry_run_orders">{tKey("settings.dryRunOrders")}</option>
+                    <option value="testnet_real_orders">{tKey("settings.testnetRealOrders")}</option>
+                    <option value="mainnet_small_size">{tKey("settings.mainnetSmallSize")}</option>
+                    <option value="mainnet_scaled">{tKey("settings.mainnetScaled")}</option>
                     <option value="live">{tKey("settings.live")}</option>
                   </select>
                   {connection.environment === "mainnet" ? (
                     <label className="toggle-row compact-toggle mainnet-confirm-toggle">
                       <input
                         checked={connection.mainnet_explicitly_enabled}
-                        disabled={busy || connection.order_placement_mode !== "live"}
+                        disabled={busy || !isMainnetOrderMode(connection.order_placement_mode)}
                         onChange={(event) => onUpdateExchangeConnection(connection.id, {
                           mainnet_explicitly_enabled: event.target.checked
                         })}
@@ -3293,19 +3301,44 @@ function isVisibleExchangeConnection(connection: ExchangeConnection): boolean {
 }
 
 function normalizeOrderPlacementMode(value: string): ExchangeConnection["order_placement_mode"] {
-  if (value === "disabled" || value === "live") return value;
+  if (
+    value === "disabled" ||
+    value === "dry_run_orders" ||
+    value === "testnet_real_orders" ||
+    value === "mainnet_small_size" ||
+    value === "mainnet_scaled" ||
+    value === "live"
+  ) {
+    return value;
+  }
   return "dry_run";
 }
 
 function orderPlacementModeKey(mode: ExchangeConnection["order_placement_mode"]): I18nKey {
   if (mode === "disabled") return "exchange.orderPlacementDisabled";
+  if (mode === "dry_run_orders") return "exchange.orderPlacementDryRunOrders";
+  if (mode === "testnet_real_orders") return "exchange.orderPlacementTestnetRealOrders";
+  if (mode === "mainnet_small_size") return "exchange.orderPlacementMainnetSmallSize";
+  if (mode === "mainnet_scaled") return "exchange.orderPlacementMainnetScaled";
   if (mode === "live") return "exchange.orderPlacementLive";
   return "exchange.orderPlacementDryRun";
 }
 
+function isRealOrderMode(mode: ExchangeConnection["order_placement_mode"]): boolean {
+  return mode === "live" || mode === "testnet_real_orders" || isMainnetOrderMode(mode);
+}
+
+function isMainnetOrderMode(mode: ExchangeConnection["order_placement_mode"]): boolean {
+  return mode === "live" || mode === "mainnet_small_size" || mode === "mainnet_scaled";
+}
+
+function isDryRunOrderMode(mode: ExchangeConnection["order_placement_mode"]): boolean {
+  return mode === "dry_run" || mode === "dry_run_orders";
+}
+
 function exchangeConnectionExecutionBadge(connection: ExchangeConnection): { labelKey: I18nKey; tone: "blue" | "green" | "red" | "yellow" } {
   if (connection.environment === "testnet") {
-    if (connection.order_placement_mode === "live" && connection.can_place_orders) {
+    if (isRealOrderMode(connection.order_placement_mode) && connection.can_place_orders) {
       return { labelKey: "exchange.testnetLive", tone: "green" };
     }
     return { labelKey: "exchange.testnetDryRun", tone: "blue" };
@@ -3317,7 +3350,7 @@ function exchangeConnectionExecutionBadge(connection: ExchangeConnection): { lab
 }
 
 function safetyBlockerSummary(connection: ExchangeConnection): string {
-  if (connection.order_placement_mode === "dry_run") return "order_placement_dry_run";
+  if (isDryRunOrderMode(connection.order_placement_mode)) return "order_placement_dry_run";
   if (connection.order_placement_mode === "disabled") return "order_placement_disabled";
   if (connection.safety_blockers.length === 0) return "live_safety_pending";
   return connection.safety_blockers.slice(0, 2).join(", ");

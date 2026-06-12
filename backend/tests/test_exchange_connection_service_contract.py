@@ -1,7 +1,11 @@
 import unittest
 from uuid import UUID
 
-from app.schemas.exchange_connection import ExchangeConnectionResponse, ExchangeFeeRateResponse
+from app.schemas.exchange_connection import (
+    ExchangeConnectionCreateRequest,
+    ExchangeConnectionResponse,
+    ExchangeFeeRateResponse,
+)
 from app.services.exchange_connection_service import ExchangeConnectionService, StubSecretRefProvider
 
 
@@ -63,6 +67,26 @@ class ExchangeConnectionServiceContractTest(unittest.TestCase):
         self.assertIn("taker_fee_rate", fields)
         self.assertIn("account_type", fields)
         self.assertIn("source", fields)
+
+    def test_create_request_accepts_staged_real_trading_modes(self) -> None:
+        for mode in (
+            "disabled",
+            "dry_run",
+            "dry_run_orders",
+            "testnet_real_orders",
+            "mainnet_small_size",
+            "mainnet_scaled",
+            "live",
+        ):
+            request = ExchangeConnectionCreateRequest(
+                exchange_code="bybit",
+                label=f"Bybit {mode}",
+                api_key="key",
+                api_secret="secret",
+                order_placement_mode=mode,
+            )
+
+            self.assertEqual(request.order_placement_mode, mode)
 
 
 if __name__ == "__main__":

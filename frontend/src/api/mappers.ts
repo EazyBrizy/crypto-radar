@@ -2088,7 +2088,16 @@ function normalizeExchangeConnectionEnvironment(value: unknown): ExchangeConnect
 }
 
 function normalizeExchangeOrderPlacementMode(value: unknown): ExchangeConnection["order_placement_mode"] {
-  if (value === "disabled" || value === "live") return value;
+  if (
+    value === "disabled" ||
+    value === "dry_run_orders" ||
+    value === "testnet_real_orders" ||
+    value === "mainnet_small_size" ||
+    value === "mainnet_scaled" ||
+    value === "live"
+  ) {
+    return value;
+  }
   return "dry_run";
 }
 

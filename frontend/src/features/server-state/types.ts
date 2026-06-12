@@ -3,7 +3,14 @@ export type SubscriptionState = "active" | "trialing" | "past_due" | "canceled" 
 export type ExchangeConnectionState = "available" | "connected" | "disconnected" | "error";
 export type ExchangeConnectionLifecycleStatus = "active" | "disabled" | "revoked" | "deleted";
 export type ExchangeConnectionEnvironment = "testnet" | "mainnet";
-export type ExchangeOrderPlacementMode = "disabled" | "dry_run" | "live";
+export type ExchangeOrderPlacementMode =
+  | "disabled"
+  | "dry_run"
+  | "dry_run_orders"
+  | "testnet_real_orders"
+  | "mainnet_small_size"
+  | "mainnet_scaled"
+  | "live";
 export type VirtualSimulationLevel = "mvp" | "advanced" | "pro";
 export type VirtualSimulationLevelStatus = "active" | "stub";
 export type RiskProfileName = "conservative" | "balanced" | "aggressive" | "custom";

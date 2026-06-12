@@ -25,6 +25,9 @@ class ExchangeExecutionAdapterTest(unittest.IsolatedAsyncioTestCase):
     async def test_backend_live_trading_settings_default_to_safe_values(self) -> None:
         fields = Settings.model_fields
 
+        self.assertEqual(fields["real_trading_mode"].default, "disabled")
+        self.assertFalse(fields["real_trading_explicit_unlock"].default)
+        self.assertEqual(fields["real_trading_mainnet_small_size_cap_usd"].default, 50.0)
         self.assertFalse(fields["enable_live_trading"].default)
         self.assertFalse(fields["enable_bybit_live_order_placement"].default)
         self.assertFalse(fields["enable_bybit_mainnet_order_placement"].default)

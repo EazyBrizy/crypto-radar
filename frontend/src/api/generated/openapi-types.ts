@@ -1637,6 +1637,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Metrics */
+        get: operations["metrics_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2225,7 +2242,7 @@ export interface components {
              * @default dry_run
              * @enum {string}
              */
-            order_placement_mode: "disabled" | "dry_run" | "live";
+            order_placement_mode: "disabled" | "dry_run" | "dry_run_orders" | "testnet_real_orders" | "mainnet_small_size" | "mainnet_scaled" | "live";
             /**
              * Mainnet Explicitly Enabled
              * @default false
@@ -2281,7 +2298,7 @@ export interface components {
              * Order Placement Mode
              * @enum {string}
              */
-            order_placement_mode: "disabled" | "dry_run" | "live";
+            order_placement_mode: "disabled" | "dry_run" | "dry_run_orders" | "testnet_real_orders" | "mainnet_small_size" | "mainnet_scaled" | "live";
             /** Can Place Orders */
             can_place_orders: boolean;
             /** Safety Blockers */
@@ -2335,7 +2352,7 @@ export interface components {
             /** Environment */
             environment?: ("testnet" | "mainnet") | null;
             /** Order Placement Mode */
-            order_placement_mode?: ("disabled" | "dry_run" | "live") | null;
+            order_placement_mode?: ("disabled" | "dry_run" | "dry_run_orders" | "testnet_real_orders" | "mainnet_small_size" | "mainnet_scaled" | "live") | null;
             /** Mainnet Explicitly Enabled */
             mainnet_explicitly_enabled?: boolean | null;
             /** Metadata */
@@ -4036,7 +4053,7 @@ export interface components {
             /** Environment */
             environment?: ("testnet" | "mainnet") | null;
             /** Order Placement Mode */
-            order_placement_mode?: ("disabled" | "dry_run" | "live") | null;
+            order_placement_mode?: ("disabled" | "dry_run" | "dry_run_orders" | "testnet_real_orders" | "mainnet_small_size" | "mainnet_scaled" | "live") | null;
             /** Reason Code */
             reason_code?: string | null;
             /** Reason Codes */
@@ -11674,6 +11691,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    metrics_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

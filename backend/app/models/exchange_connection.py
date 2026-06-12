@@ -31,7 +31,15 @@ class UserExchangeConnection(Base):
             name="ck_user_exchange_connections_environment",
         ),
         CheckConstraint(
-            "order_placement_mode IN ('disabled', 'dry_run', 'live')",
+            "order_placement_mode IN ("
+            "'disabled', "
+            "'dry_run', "
+            "'dry_run_orders', "
+            "'testnet_real_orders', "
+            "'mainnet_small_size', "
+            "'mainnet_scaled', "
+            "'live'"
+            ")",
             name="ck_user_exchange_connections_order_placement_mode",
         ),
         CheckConstraint(

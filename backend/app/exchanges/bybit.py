@@ -18,6 +18,7 @@ from app.core.config import settings as default_settings
 from app.schemas.candle import OHLCVCandle, Timeframe
 from app.schemas.market import MarketData, TradeSide
 from app.schemas.trade import ExecutionPlannedOrder
+from app.services.real_trading.rollout_guardrails import MAINNET_MODES
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +305,13 @@ class BybitRealExecutionAdapter:
         self._orders: dict[tuple[str, str, str], ExecutionPlannedOrder] = {}
 
     def live_order_placement_safety_reason(self) -> str | None:
+        rollout_mode = str(getattr(self._settings, "real_trading_mode", "") or "").strip().lower()
+        if rollout_mode:
+            if rollout_mode in {"disabled", "dry_run_orders"}:
+                return LIVE_ORDER_PLACEMENT_DISABLED_REASON
+            if self._metadata_is_testnet():
+                return None if rollout_mode == "testnet_real_orders" else LIVE_ORDER_PLACEMENT_DISABLED_REASON
+            return None if rollout_mode in MAINNET_MODES else BYBIT_MAINNET_ORDER_PLACEMENT_DISABLED_REASON
         if not (
             _truthy_setting(self._settings, "enable_live_trading")
             and _truthy_setting(self._settings, "enable_bybit_live_order_placement")

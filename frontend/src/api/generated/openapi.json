@@ -5873,6 +5873,22 @@
           }
         }
       }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Metrics",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7320,6 +7336,10 @@
             "enum": [
               "disabled",
               "dry_run",
+              "dry_run_orders",
+              "testnet_real_orders",
+              "mainnet_small_size",
+              "mainnet_scaled",
               "live"
             ],
             "title": "Order Placement Mode",
@@ -7408,6 +7428,10 @@
             "enum": [
               "disabled",
               "dry_run",
+              "dry_run_orders",
+              "testnet_real_orders",
+              "mainnet_small_size",
+              "mainnet_scaled",
               "live"
             ],
             "title": "Order Placement Mode"
@@ -7638,6 +7662,10 @@
                 "enum": [
                   "disabled",
                   "dry_run",
+                  "dry_run_orders",
+                  "testnet_real_orders",
+                  "mainnet_small_size",
+                  "mainnet_scaled",
                   "live"
                 ]
               },
@@ -12605,6 +12633,10 @@
                 "enum": [
                   "disabled",
                   "dry_run",
+                  "dry_run_orders",
+                  "testnet_real_orders",
+                  "mainnet_small_size",
+                  "mainnet_scaled",
                   "live"
                 ]
               },

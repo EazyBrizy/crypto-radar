@@ -141,6 +141,7 @@ KNOWN_REASON_CODES = {
     "real_execution_partially_filled",
     "real_execution_submitted",
     "real_pending_not_implemented",
+    "real_trading_dry_run_only",
     "readiness_failed",
     "reduce_only_required",
     "requested_notional_above_safe_size",
@@ -171,6 +172,14 @@ KNOWN_REASON_CODES = {
     "trigger_not_confirmed",
     "triggered_pending_entry_missing_before_fill",
     "virtual_entries_disabled",
+    "mainnet_calibration_not_positive",
+    "mainnet_kill_switch_not_healthy",
+    "mainnet_portfolio_risk_blocked",
+    "mainnet_protective_stop_required",
+    "mainnet_size_cap_exceeded",
+    "real_trading_mode_disabled",
+    "real_trading_mode_mismatch",
+    "real_trading_testnet_only",
 }
 
 _REASON_ALIASES = {

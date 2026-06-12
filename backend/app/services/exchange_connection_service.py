@@ -24,6 +24,16 @@ from app.schemas.exchange_connection import (
     ExchangeConnectionUpdateRequest,
     ExchangeOrderPlacementMode,
 )
+from app.services.real_trading.rollout_guardrails import (
+    DRY_RUN_MODES,
+    MAINNET_MODES,
+    REAL_TRADING_DRY_RUN_ONLY_REASON_CODE,
+    REAL_TRADING_MODE_DISABLED_REASON_CODE,
+    REAL_TRADING_MODE_MISMATCH_REASON_CODE,
+    REAL_TRADING_TESTNET_ONLY_REASON_CODE,
+    normalize_order_placement_mode,
+    rollout_mode_for_order_placement,
+)
 from app.services.user_identity import resolve_app_user
 
 DELETED_CONNECTION_STATUSES = ("deleted", "revoked")
@@ -587,10 +597,7 @@ def _normalize_environment(
 
 
 def _normalize_order_placement_mode(value: str | None) -> ExchangeOrderPlacementMode:
-    normalized = str(value or "").strip().lower()
-    if normalized in {"disabled", "dry_run", "live"}:
-        return normalized  # type: ignore[return-value]
-    return "dry_run"
+    return normalize_order_placement_mode(value)  # type: ignore[return-value]
 
 
 def _connection_environment(connection: UserExchangeConnection) -> ExchangeConnectionEnvironment:
@@ -614,7 +621,7 @@ def exchange_connection_safety_blockers(
     if order_placement_mode == "disabled":
         blockers.append(ORDER_PLACEMENT_DISABLED_REASON_CODE)
         return _dedupe(blockers)
-    if order_placement_mode == "dry_run":
+    if order_placement_mode in DRY_RUN_MODES:
         blockers.append(ORDER_PLACEMENT_DRY_RUN_REASON_CODE)
         return _dedupe(blockers)
 
@@ -623,15 +630,26 @@ def exchange_connection_safety_blockers(
         blockers.append(EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE)
         return _dedupe(blockers)
 
-    if not _truthy_setting(settings_obj, "enable_live_trading"):
-        blockers.append(ENABLE_LIVE_TRADING_FALSE_REASON_CODE)
-    if not _truthy_setting(settings_obj, "enable_bybit_live_order_placement"):
-        blockers.append(ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE)
-    if _connection_environment(connection) == "mainnet":
-        if not _truthy_setting(settings_obj, "enable_bybit_mainnet_order_placement"):
-            blockers.append(ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE)
-        if not bool(connection.mainnet_explicitly_enabled):
-            blockers.append(MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE)
+    environment = _connection_environment(connection)
+    if _has_staged_real_trading_mode(settings_obj):
+        blockers.extend(
+            _staged_rollout_connection_blockers(
+                order_placement_mode=order_placement_mode,
+                environment=environment,
+                mainnet_explicitly_enabled=bool(connection.mainnet_explicitly_enabled),
+                settings_obj=settings_obj,
+            )
+        )
+    else:
+        if not _truthy_setting(settings_obj, "enable_live_trading"):
+            blockers.append(ENABLE_LIVE_TRADING_FALSE_REASON_CODE)
+        if not _truthy_setting(settings_obj, "enable_bybit_live_order_placement"):
+            blockers.append(ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE)
+        if environment == "mainnet":
+            if not _truthy_setting(settings_obj, "enable_bybit_mainnet_order_placement"):
+                blockers.append(ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT_FALSE_REASON_CODE)
+            if not bool(connection.mainnet_explicitly_enabled):
+                blockers.append(MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE)
     return _dedupe(blockers)
 
 
@@ -641,7 +659,7 @@ def exchange_connection_can_place_orders(
     settings_obj: Any = settings,
 ) -> bool:
     return (
-        _connection_order_placement_mode(connection) == "live"
+        _connection_order_placement_mode(connection) not in {"disabled", *DRY_RUN_MODES}
         and not exchange_connection_safety_blockers(connection, settings_obj=settings_obj)
     )
 
@@ -713,6 +731,39 @@ def _write_fee_rate_cache(
     metadata["fee_rates"] = cache
     metadata["fee_rates_updated_at"] = datetime.now(timezone.utc).isoformat()
     connection.metadata_ = metadata
+
+
+def _has_staged_real_trading_mode(settings_obj: Any) -> bool:
+    return hasattr(settings_obj, "real_trading_mode")
+
+
+def _staged_rollout_connection_blockers(
+    *,
+    order_placement_mode: str,
+    environment: ExchangeConnectionEnvironment,
+    mainnet_explicitly_enabled: bool,
+    settings_obj: Any,
+) -> list[str]:
+    configured = str(getattr(settings_obj, "real_trading_mode", "disabled") or "disabled").strip().lower()
+    requested = rollout_mode_for_order_placement(order_placement_mode, environment=environment)
+    blockers: list[str] = []
+    if configured == "disabled":
+        blockers.append(REAL_TRADING_MODE_DISABLED_REASON_CODE)
+    elif configured == "dry_run_orders":
+        blockers.append(REAL_TRADING_DRY_RUN_ONLY_REASON_CODE)
+    elif configured == "testnet_real_orders":
+        if environment != "testnet":
+            blockers.append(REAL_TRADING_TESTNET_ONLY_REASON_CODE)
+        elif requested != "testnet_real_orders":
+            blockers.append(REAL_TRADING_MODE_MISMATCH_REASON_CODE)
+    elif configured in MAINNET_MODES:
+        if environment != "mainnet" or requested != configured:
+            blockers.append(REAL_TRADING_MODE_MISMATCH_REASON_CODE)
+        if not mainnet_explicitly_enabled:
+            blockers.append(MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE)
+    else:
+        blockers.append(REAL_TRADING_MODE_DISABLED_REASON_CODE)
+    return blockers
 
 
 def _soft_delete_metadata(
@@ -789,7 +840,7 @@ def _connection_to_response(connection: UserExchangeConnection) -> ExchangeConne
         status=connection.status,
         environment=environment,
         order_placement_mode=order_placement_mode,
-        can_place_orders=order_placement_mode == "live" and not safety_blockers,
+        can_place_orders=order_placement_mode not in {"disabled", *DRY_RUN_MODES} and not safety_blockers,
         safety_blockers=safety_blockers,
         mainnet_explicitly_enabled=bool(connection.mainnet_explicitly_enabled),
         last_sync_at=connection.last_sync_at,

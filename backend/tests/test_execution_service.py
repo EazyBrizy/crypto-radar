@@ -26,6 +26,7 @@ from app.schemas.risk import (
 )
 from app.schemas.decision import SignalDecisionSnapshot
 from app.schemas.signal import NoTradeFilterResult, RadarSignal
+from app.schemas.signal import SignalEdgeSnapshot
 from app.schemas.trade import ExecutionPlannedOrder, ManualConfirmRequest, RealExecutionPlan
 from app.schemas.trade_plan import (
     TargetThesis,
@@ -199,6 +200,17 @@ class _NoProtectiveGuaranteeAdapter(_FakeExecutionAdapter):
 
 @dataclass(frozen=True)
 class _LiveTradingSettings:
+    enable_live_trading: bool = False
+    enable_bybit_live_order_placement: bool = False
+    enable_bybit_mainnet_order_placement: bool = False
+    require_protective_stop_for_live_entry: bool = True
+
+
+@dataclass(frozen=True)
+class _RolloutSettings:
+    real_trading_mode: str = "disabled"
+    real_trading_explicit_unlock: bool = False
+    real_trading_mainnet_small_size_cap_usd: float = 50.0
     enable_live_trading: bool = False
     enable_bybit_live_order_placement: bool = False
     enable_bybit_mainnet_order_placement: bool = False
@@ -631,6 +643,65 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.connection_id, str(connection.id))
         self.assertEqual(result.environment, "mainnet")
         self.assertEqual(result.order_placement_mode, "live")
+        self.assertEqual(factory_calls, [])
+
+    async def test_connection_dry_run_orders_mode_builds_intent_without_live_adapter(self) -> None:
+        factory_calls: list[dict[str, object]] = []
+        connection = _exchange_connection_response(
+            environment="testnet",
+            order_placement_mode="dry_run_orders",
+            can_place_orders=False,
+        )
+        service = _service(
+            _decision(),
+            exchange_connections=_FakeExchangeConnectionService(connection),
+            settings_obj=_rollout_settings(real_trading_mode="dry_run_orders"),
+            bybit_adapter_factory=lambda **kwargs: factory_calls.append(kwargs) or _FakeExecutionAdapter(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request(), connection_id=str(connection.id))
+
+        self.assertEqual(result.status, "dry_run")
+        self.assertEqual(result.adapter, "dry_run")
+        self.assertTrue(result.execution_allowed)
+        self.assertEqual(result.order_placement_mode, "dry_run_orders")
+        self.assertEqual(factory_calls, [])
+
+    async def test_connection_mainnet_small_size_requires_rollout_unlock_before_adapter_factory(self) -> None:
+        factory_calls: list[dict[str, object]] = []
+        connection = _exchange_connection_response(
+            environment="mainnet",
+            order_placement_mode="mainnet_small_size",
+            mainnet_explicitly_enabled=True,
+        )
+        service = _service(
+            _decision(),
+            exchange_connections=_FakeExchangeConnectionService(connection),
+            settings_obj=_rollout_settings(
+                real_trading_mode="mainnet_small_size",
+                real_trading_explicit_unlock=False,
+                enable_live_trading=True,
+                enable_bybit_live_order_placement=True,
+                enable_bybit_mainnet_order_placement=True,
+            ),
+            bybit_adapter_factory=lambda **kwargs: factory_calls.append(kwargs) or _FakeExecutionAdapter(),
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(
+            _signal(edge=_positive_edge()),
+            _request(),
+            connection_id=str(connection.id),
+        )
+
+        self.assertEqual(result.status, "not_implemented")
+        self.assertFalse(result.execution_allowed)
+        self.assertEqual(result.reason_code, "real_trading_unlock_required")
+        self.assertIn("real_trading_unlock_required", result.reason_codes)
+        self.assertEqual(result.order_placement_mode, "mainnet_small_size")
         self.assertEqual(factory_calls, [])
 
     async def test_protective_stop_is_included_and_reduce_only(self) -> None:
@@ -1491,6 +1562,7 @@ def _signal(
     no_trade_filter: NoTradeFilterResult | None = None,
     trade_plan: TradePlan | None = None,
     decision: SignalDecisionSnapshot | None = None,
+    edge: SignalEdgeSnapshot | None = None,
     status: str = "actionable",
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
@@ -1512,10 +1584,28 @@ def _signal(
         status=status,
         trade_plan=trade_plan if trade_plan is not None else _structural_trade_plan(),
         decision=decision if decision is not None else _real_allowed_decision(),
+        edge=edge,
         no_trade_filter=no_trade_filter,
         created_at=now,
         updated_at=now,
     )
+
+
+def _positive_edge() -> SignalEdgeSnapshot:
+    return SignalEdgeSnapshot(
+        status="positive",
+        sample_size=80,
+        min_sample_size=50,
+        expectancy_r=0.2,
+        expectancy_after_costs_r=0.18,
+        profit_factor=1.4,
+        confidence_score=0.8,
+        source="backtest",
+    )
+
+
+def _rollout_settings(**overrides: object) -> _RolloutSettings:
+    return _RolloutSettings(**overrides)
 
 
 def _real_allowed_decision(

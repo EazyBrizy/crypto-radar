@@ -525,7 +525,17 @@ class RealExecutionResult(BaseModel):
     adapter: Optional[str] = None
     connection_id: Optional[str] = None
     environment: Optional[Literal["testnet", "mainnet"]] = None
-    order_placement_mode: Optional[Literal["disabled", "dry_run", "live"]] = None
+    order_placement_mode: Optional[
+        Literal[
+            "disabled",
+            "dry_run",
+            "dry_run_orders",
+            "testnet_real_orders",
+            "mainnet_small_size",
+            "mainnet_scaled",
+            "live",
+        ]
+    ] = None
     reason_code: Optional[str] = None
     reason_codes: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

@@ -24,6 +24,19 @@ class UserExchangeConnectionModelsTest(unittest.TestCase):
         self.assertIn("ck_user_exchange_connections_order_placement_mode", constraint_names)
         self.assertIn("ck_user_exchange_connections_account_snapshot_status", constraint_names)
 
+    def test_order_placement_constraint_accepts_staged_real_trading_modes(self) -> None:
+        constraint = next(
+            constraint
+            for constraint in UserExchangeConnection.__table__.constraints
+            if constraint.name == "ck_user_exchange_connections_order_placement_mode"
+        )
+        expression = str(constraint.sqltext)
+
+        self.assertIn("dry_run_orders", expression)
+        self.assertIn("testnet_real_orders", expression)
+        self.assertIn("mainnet_small_size", expression)
+        self.assertIn("mainnet_scaled", expression)
+
     def test_soft_delete_columns_are_present(self) -> None:
         column_names = set(UserExchangeConnection.__table__.c.keys())
 

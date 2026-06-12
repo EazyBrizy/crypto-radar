@@ -44,6 +44,15 @@ from app.services.real_execution_readiness import (
     RealExecutionReadinessResult,
     real_execution_readiness_service,
 )
+from app.services.real_trading.rollout_guardrails import (
+    DRY_RUN_MODES,
+    MAINNET_MODES,
+    RealTradingRolloutContext,
+    RealTradingRolloutDecision,
+    RealTradingRolloutGuard,
+    normalize_order_placement_mode,
+    rollout_mode_for_order_placement,
+)
 from app.services.exchange_account_snapshot import exchange_account_snapshot_service
 from app.services.exchange_connection_service import (
     ENABLE_BYBIT_LIVE_ORDER_PLACEMENT_FALSE_REASON_CODE,
@@ -102,6 +111,7 @@ class RealExecutionService:
         market_data_service: RiskMarketDataService | None = risk_market_data_service,
         fee_rate_service: RiskFeeRateService | None = risk_fee_rate_service,
         readiness_service: RealExecutionReadinessService | None = real_execution_readiness_service,
+        rollout_guard: RealTradingRolloutGuard | None = None,
         order_plan_normalizer: OrderRuleNormalizer | None = order_rule_normalizer,
         execution_adapter: ExchangeExecutionAdapter | None | object = _DEFAULT_EXECUTION_ADAPTER,
         risk_settings_provider: RiskSettingsProvider | None = None,
@@ -117,6 +127,7 @@ class RealExecutionService:
         self._market_data_service = market_data_service
         self._fee_rate_service = fee_rate_service
         self._readiness_service = readiness_service or RealExecutionReadinessService()
+        self._rollout_guard = rollout_guard
         self._order_plan_normalizer = order_plan_normalizer or OrderRuleNormalizer()
         self._execution_adapter = (
             DryRunExecutionAdapter()
@@ -126,6 +137,8 @@ class RealExecutionService:
         self._risk_settings_provider = risk_settings_provider or get_user_risk_management_settings
         self._exchange_connections = exchange_connections or exchange_connection_service
         self._settings = settings_obj or settings
+        if self._rollout_guard is None:
+            self._rollout_guard = RealTradingRolloutGuard(self._settings)
         self._bybit_adapter_factory = bybit_adapter_factory or _default_bybit_execution_adapter
         if account_snapshot_provider is not None:
             self._account_snapshot_provider = account_snapshot_provider
@@ -442,6 +455,39 @@ class RealExecutionService:
                 order_placement_mode=adapter_resolution.order_placement_mode,
                 lifecycle_trace=execution_plan.lifecycle_trace,
             )
+        rollout_decision = _evaluate_rollout_after_risk(
+            guard=self._rollout_guard,
+            signal=signal,
+            risk_decision=risk_decision,
+            execution_plan=execution_plan,
+            execution_adapter=execution_adapter,
+            adapter_resolution=adapter_resolution,
+        )
+        execution_plan = _execution_plan_with_rollout_decision(execution_plan, rollout_decision)
+        if not rollout_decision.allowed:
+            reason_code = rollout_decision.reason_codes[0]
+            return RealExecutionResult(
+                status="readiness_failed",
+                signal_valid=True,
+                execution_allowed=False,
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                message=_rollout_rejection_message(rollout_decision),
+                technical_message=_rollout_rejection_message(rollout_decision),
+                risk_decision=risk_decision,
+                risk_decision_id=risk_decision_id,
+                execution_plan=execution_plan,
+                planned_orders=execution_plan.planned_orders,
+                idempotency_key=execution_plan.idempotency_key,
+                warnings=normalization.warnings,
+                validation_errors=rollout_decision.blockers,
+                reason_code=reason_code,
+                reason_codes=rollout_decision.reason_codes,
+                environment=adapter_resolution.environment,
+                connection_id=_connection_id(adapter_resolution.connection),
+                order_placement_mode=adapter_resolution.order_placement_mode,
+                lifecycle_trace=execution_plan.lifecycle_trace,
+            )
         if not_implemented_reason is not None:
             return RealExecutionResult(
                 status="not_implemented",
@@ -679,7 +725,7 @@ class RealExecutionService:
                 message=_reason_message(ORDER_PLACEMENT_DISABLED_REASON_CODE),
                 validation_errors=[_reason_message(code) for code in blockers or [ORDER_PLACEMENT_DISABLED_REASON_CODE]],
             )
-        if order_placement_mode == "dry_run":
+        if order_placement_mode in DRY_RUN_MODES:
             return _ResolvedExecutionAdapter(
                 adapter=DryRunExecutionAdapter(),
                 connection=connection,
@@ -698,6 +744,32 @@ class RealExecutionService:
                 reason_codes=live_blockers,
                 message=_reason_message(live_blockers[0]),
                 validation_errors=[_reason_message(code) for code in live_blockers],
+            )
+
+        rollout_decision = self._rollout_guard.evaluate(
+            RealTradingRolloutContext(
+                environment=environment,
+                order_placement_mode=order_placement_mode,
+                adapter_is_dry_run=False,
+                requested_notional=request.size_usd,
+                has_protective_stop=_signal_has_protective_stop(signal),
+                kill_switch_state="healthy",
+                portfolio_risk_passed=True,
+                edge_status=_signal_edge_status(signal),
+                explicit_unlock=bool(connection.mainnet_explicitly_enabled),
+            )
+        )
+        if not rollout_decision.allowed:
+            reason_code = rollout_decision.reason_codes[0]
+            return _ResolvedExecutionAdapter(
+                adapter=None,
+                connection=connection,
+                environment=environment,
+                order_placement_mode=order_placement_mode,
+                reason_code=reason_code,
+                reason_codes=rollout_decision.reason_codes,
+                message=_rollout_rejection_message(rollout_decision),
+                validation_errors=rollout_decision.blockers,
             )
 
         if connection.exchange_code.strip().lower() != "bybit":
@@ -799,6 +871,55 @@ def _blocked_real_execution_result(
     )
 
 
+def _evaluate_rollout_after_risk(
+    *,
+    guard: RealTradingRolloutGuard,
+    signal: RadarSignal,
+    risk_decision: RiskDecision,
+    execution_plan: RealExecutionPlan,
+    execution_adapter: Any,
+    adapter_resolution: _ResolvedExecutionAdapter,
+) -> RealTradingRolloutDecision:
+    adapter_is_dry_run = bool(getattr(execution_adapter, "is_dry_run", False))
+    if adapter_resolution.connection is None and not adapter_is_dry_run:
+        return RealTradingRolloutDecision(allowed=True, mode="dry_run_orders")
+    environment = adapter_resolution.environment or _adapter_environment(execution_adapter)
+    order_placement_mode = adapter_resolution.order_placement_mode or _adapter_order_placement_mode(
+        execution_adapter,
+        environment=environment,
+    )
+    if not adapter_is_dry_run and environment is None and order_placement_mode is None:
+        return RealTradingRolloutDecision(allowed=True, mode="dry_run_orders")
+    return guard.evaluate(
+        RealTradingRolloutContext(
+            environment=environment,
+            order_placement_mode=order_placement_mode,
+            adapter_is_dry_run=adapter_is_dry_run,
+            requested_notional=execution_plan.notional,
+            has_protective_stop=_execution_plan_has_protective_stop(execution_plan),
+            kill_switch_state=_kill_switch_state(risk_decision),
+            portfolio_risk_passed=_portfolio_risk_passed(risk_decision),
+            edge_status=_signal_edge_status(signal),
+            explicit_unlock=_connection_mainnet_unlock(adapter_resolution.connection),
+        )
+    )
+
+
+def _execution_plan_with_rollout_decision(
+    execution_plan: RealExecutionPlan,
+    decision: RealTradingRolloutDecision,
+) -> RealExecutionPlan:
+    metadata = dict(execution_plan.metadata)
+    metadata["real_trading_rollout"] = {
+        "mode": decision.mode,
+        "allowed": decision.allowed,
+        "reason_codes": list(decision.reason_codes),
+        "blockers": list(decision.blockers),
+        **decision.metadata,
+    }
+    return execution_plan.model_copy(update={"metadata": metadata})
+
+
 def _request_with_connection_context(
     request: ManualConfirmRequest,
     connection: ExchangeConnectionResponse | None,
@@ -851,6 +972,76 @@ def _adapter_connection_metadata(connection: ExchangeConnectionResponse) -> dict
     return metadata
 
 
+def _adapter_environment(adapter: Any) -> str | None:
+    metadata = getattr(adapter, "connection_metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    environment = metadata.get("environment")
+    if environment in {"testnet", "mainnet"}:
+        return environment
+    testnet = metadata.get("testnet")
+    if isinstance(testnet, bool):
+        return "testnet" if testnet else "mainnet"
+    return None
+
+
+def _adapter_order_placement_mode(adapter: Any, *, environment: str | None) -> str | None:
+    metadata = getattr(adapter, "connection_metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    raw = metadata.get("order_placement_mode")
+    if raw is None:
+        return None
+    return normalize_order_placement_mode(str(raw), environment=environment)
+
+
+def _connection_mainnet_unlock(connection: ExchangeConnectionResponse | None) -> bool:
+    return bool(connection and connection.mainnet_explicitly_enabled)
+
+
+def _signal_has_protective_stop(signal: RadarSignal) -> bool:
+    trade_plan = getattr(signal, "trade_plan", None)
+    if trade_plan is not None:
+        invalidation = getattr(trade_plan, "invalidation", None)
+        if getattr(invalidation, "hard_stop", None) is not None:
+            return True
+        if getattr(trade_plan, "stop_loss", None) is not None:
+            return True
+    return getattr(signal, "stop_loss", None) is not None
+
+
+def _execution_plan_has_protective_stop(plan: RealExecutionPlan) -> bool:
+    return any(
+        order.role == "protective_stop"
+        and order.stop_price is not None
+        and order.reduce_only
+        for order in plan.planned_orders
+    )
+
+
+def _kill_switch_state(risk_decision: RiskDecision) -> str | None:
+    kill_switch = risk_decision.portfolio_risk.get("kill_switch")
+    if isinstance(kill_switch, dict):
+        state = kill_switch.get("state")
+        return str(state) if state is not None else None
+    return "healthy"
+
+
+def _portfolio_risk_passed(risk_decision: RiskDecision) -> bool:
+    if not risk_decision.can_enter or risk_decision.risk_check.status == "failed":
+        return False
+    portfolio_risk = risk_decision.portfolio_risk
+    if not portfolio_risk:
+        return True
+    action = str(portfolio_risk.get("action", "allow"))
+    return action in {"allow", "reduce_size"}
+
+
+def _signal_edge_status(signal: RadarSignal) -> str | None:
+    edge = getattr(signal, "edge", None)
+    return getattr(edge, "status", None)
+
+
 def _connection_response_safety_blockers(
     connection: ExchangeConnectionResponse,
     *,
@@ -862,11 +1053,32 @@ def _connection_response_safety_blockers(
     if connection.order_placement_mode == "disabled":
         blockers.append(ORDER_PLACEMENT_DISABLED_REASON_CODE)
         return _dedupe(blockers)
-    if connection.order_placement_mode == "dry_run":
+    if connection.order_placement_mode in DRY_RUN_MODES:
         blockers.append(ORDER_PLACEMENT_DRY_RUN_REASON_CODE)
         return _dedupe(blockers)
     if connection.exchange_code.strip().lower() != "bybit":
         blockers.append(EXCHANGE_ADAPTER_UNSUPPORTED_REASON_CODE)
+        return _dedupe(blockers)
+    if hasattr(settings_obj, "real_trading_mode"):
+        mode = str(getattr(settings_obj, "real_trading_mode", "disabled") or "disabled").strip().lower()
+        environment = connection.environment
+        requested_mode = rollout_mode_for_order_placement(
+            connection.order_placement_mode,
+            environment=environment,
+        )
+        if mode == "disabled":
+            blockers.append("real_trading_mode_disabled")
+        elif mode == "dry_run_orders":
+            blockers.append("real_trading_dry_run_only")
+        elif mode == "testnet_real_orders" and environment != "testnet":
+            blockers.append("real_trading_testnet_only")
+        elif mode in MAINNET_MODES:
+            if environment != "mainnet" or requested_mode != mode:
+                blockers.append("real_trading_mode_mismatch")
+            if not connection.mainnet_explicitly_enabled:
+                blockers.append(MAINNET_CONNECTION_NOT_EXPLICITLY_ENABLED_REASON_CODE)
+        elif mode == "testnet_real_orders" and requested_mode != "testnet_real_orders":
+            blockers.append("real_trading_mode_mismatch")
         return _dedupe(blockers)
     if not _truthy_setting(settings_obj, "enable_live_trading"):
         blockers.append(ENABLE_LIVE_TRADING_FALSE_REASON_CODE)
@@ -912,7 +1124,27 @@ def _reason_message(reason_code: str) -> str:
         EXCHANGE_CREDENTIALS_UNAVAILABLE_REASON_CODE: "Exchange credentials are unavailable.",
         BYBIT_API_CREDENTIALS_REQUIRED_REASON_CODE: "Bybit live order placement requires api_key and api_secret.",
         PROTECTIVE_STOP_REQUIRED_REASON_CODE: "Live entry requires a protective stop before placement.",
+        "real_trading_mode_disabled": "Real trading rollout mode is disabled.",
+        "real_trading_dry_run_only": "Real trading rollout mode only permits dry-run order intents.",
+        "real_trading_testnet_only": "Real trading rollout mode only permits testnet real orders.",
+        "real_trading_mode_mismatch": "Exchange connection order mode does not match the configured real trading rollout.",
+        "real_trading_unlock_required": "Mainnet real trading requires explicit rollout unlock.",
+        "mainnet_protective_stop_required": "Mainnet entry requires a protective stop before placement.",
+        "mainnet_kill_switch_not_healthy": "Mainnet entry requires a healthy kill-switch state.",
+        "mainnet_portfolio_risk_blocked": "Mainnet entry requires portfolio risk to pass.",
+        "mainnet_calibration_not_positive": "Mainnet entry requires positive published calibration.",
+        "mainnet_size_cap_exceeded": "Mainnet small-size rollout cap is exceeded.",
     }.get(reason_code, reason_code)
+
+
+def _rollout_rejection_message(decision: RealTradingRolloutDecision) -> str:
+    if decision.blockers:
+        return "Real trading rollout guard blocked order placement: " + "; ".join(decision.blockers)
+    if decision.reason_codes:
+        return "Real trading rollout guard blocked order placement: " + "; ".join(
+            _reason_message(code) for code in decision.reason_codes
+        )
+    return "Real trading rollout guard blocked order placement."
 
 
 def _reason_code_for_adapter_safety_message(message: str) -> str:

@@ -108,6 +108,33 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime_state["signal_events_written"], 1)
         self.assertEqual(runtime_state["pending_entries_armed"], 1)
 
+    async def test_execution_policy_pending_retest_records_forward_pending_event(self) -> None:
+        run_store = _ForwardRunStore(
+            [
+                _run(
+                    params={"execution_policy": {"allow_pending_retest": True}},
+                    runtime_state={"last_price": 105},
+                )
+            ]
+        )
+        trade_store = _RecordingTradeStore()
+        virtual_trading = _VirtualTrading()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_enter_now=True))),
+            virtual_trading=virtual_trading,
+        )
+
+        result = await runtime.process_strategy_signal(_strategy_signal())
+
+        self.assertEqual(result.opened_trades, 0)
+        self.assertEqual(result.pending_entries_armed, 1)
+        self.assertEqual(virtual_trading.open_calls, [])
+        self.assertEqual(len(trade_store.signal_events), 1)
+        self.assertEqual(trade_store.signal_events[0].funnel_stage, "pending")
+        self.assertEqual(trade_store.signal_events[0].trigger_reason_code, "entry_zone_missed_wait_for_retest")
+
     async def test_process_strategy_signal_opens_virtual_trade_and_records_runtime_state(self) -> None:
         run_store = _ForwardRunStore([_run()])
         trade_store = _RecordingTradeStore()

@@ -22466,6 +22466,11 @@
               }
             ]
           },
+          "execution_policy": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Execution Policy"
+          },
           "lifecycle_trace": {
             "$ref": "#/components/schemas/LifecycleTrace"
           },

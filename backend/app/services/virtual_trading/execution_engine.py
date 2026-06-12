@@ -26,6 +26,11 @@ from app.services.virtual_trading.simulation_model import (
     planned_capability_codes_for_report,
     simulation_tier_for_report,
 )
+from app.services.execution_policy import (
+    ExecutionPolicyContext,
+    ExecutionPolicyDecision,
+    execution_policy_resolver,
+)
 from app.services.reason_codes import normalize_reason_code
 from app.services.virtual_execution_profile import fill_policy_for_profile, normalize_virtual_execution_profile
 
@@ -89,6 +94,17 @@ class VirtualExecutionEngine:
             metrics=metrics,
             requested_size_usd=requested_size_usd,
         )
+        execution_policy = execution_policy_resolver.resolve(
+            _execution_policy_context(
+                signal=signal,
+                request=request,
+                reference_price=reference_price,
+                requested_size_usd=requested_size_usd,
+                metrics=metrics,
+                entry_spread_limit_bps=entry_spread_limit_bps,
+                orderbook_depth_usd=orderbook_depth_usd,
+            )
+        )
         raw_inputs_snapshot = _raw_inputs_snapshot(
             signal=signal,
             request=request,
@@ -108,6 +124,21 @@ class VirtualExecutionEngine:
             virtual_execution_profile=execution_profile_name,
             fill_policy=fill_policy,
         )
+        raw_inputs_snapshot["execution_policy"] = execution_policy.to_dict()
+        if not execution_policy.can_execute:
+            report = _execution_policy_rejection_report(
+                mode=mode,
+                metrics=metrics,
+                reference_price=reference_price,
+                requested_size_usd=requested_size_usd,
+                decision=execution_policy,
+            )
+            report = _with_execution_profile(
+                report,
+                execution_profile=execution_profile_name,
+                fill_policy=fill_policy,
+            )
+            return _finalize_report(report, raw_inputs_snapshot=raw_inputs_snapshot)
         if execution_profile_name == "deterministic_test":
             report = self._simulate_deterministic(
                 request=request,
@@ -116,6 +147,7 @@ class VirtualExecutionEngine:
                 requested_size_usd=requested_size_usd,
                 buy_side=signal.direction == "long",
             )
+            report = report.model_copy(update={"execution_policy": execution_policy.to_dict()})
             report = _with_execution_profile(
                 report,
                 execution_profile=execution_profile_name,
@@ -191,6 +223,7 @@ class VirtualExecutionEngine:
                 requested_size_usd=requested_size_usd,
                 buy_side=signal.direction == "long",
             )
+        report = report.model_copy(update={"execution_policy": execution_policy.to_dict()})
         report = _with_execution_profile(
             report,
             execution_profile=execution_profile_name,
@@ -1101,6 +1134,98 @@ def _raw_inputs_snapshot(
     }
 
 
+def _execution_policy_context(
+    *,
+    signal: RadarSignal,
+    request: ManualConfirmRequest,
+    reference_price: float,
+    requested_size_usd: float,
+    metrics: LiquidityMetrics,
+    entry_spread_limit_bps: float | None,
+    orderbook_depth_usd: float | None,
+) -> ExecutionPolicyContext:
+    options = _execution_policy_options(request)
+    return ExecutionPolicyContext(
+        side="short" if signal.direction == "short" else "long",
+        current_price=reference_price,
+        entry_min=signal.entry_min,
+        entry_max=signal.entry_max,
+        stop_loss=signal.stop_loss,
+        take_profit=_policy_take_profit(signal),
+        min_rr_ratio=float(signal.min_rr_ratio or 0.0),
+        preferred_mode=_policy_mode(options.get("mode") or options.get("preferred_mode")),
+        allow_pending_retest=_bool_option(options, "allow_pending_retest", False),
+        allow_probe=_bool_option(options, "allow_probe", False),
+        max_late_entry_deviation_bps=_float_option(options, "max_late_entry_deviation_bps", 100.0),
+        max_probe_deviation_bps=_float_option(options, "max_probe_deviation_bps", 10.0),
+        slippage_bps=max(0.0, request.slippage_bps),
+        max_slippage_bps=_float_option(options, "max_slippage_bps", request.max_virtual_slippage_bps),
+        spread_bps=metrics.spread_percent * 100,
+        max_spread_bps=_float_option(options, "max_spread_bps", 0.0),
+        orderbook_depth_usd=orderbook_depth_usd,
+        requested_size_usd=requested_size_usd,
+        min_depth_to_size_ratio=_float_option(options, "min_depth_to_size_ratio", 1.0),
+    )
+
+
+def _execution_policy_rejection_report(
+    *,
+    mode: VirtualSimulationMode,
+    metrics: LiquidityMetrics,
+    reference_price: float,
+    requested_size_usd: float,
+    decision: ExecutionPolicyDecision,
+) -> VirtualExecutionReport:
+    return VirtualExecutionReport(
+        mode=mode,
+        status="rejected_virtual_execution",
+        requested_size_usd=requested_size_usd,
+        filled_size_usd=0.0,
+        unfilled_size_usd=requested_size_usd,
+        fill_ratio=0.0,
+        reference_price=reference_price,
+        liquidity=metrics,
+        quality_gate=ExecutionQualityGate(
+            status="blocked",
+            blockers=[decision.reason_code],
+            message=decision.message,
+            technical_message=decision.message,
+        ),
+        execution_policy=decision.to_dict(),
+        rejected_reason=decision.reason_code,
+        technical_message=decision.message,
+        blockers=[decision.reason_code],
+    )
+
+
+def _execution_policy_options(request: ManualConfirmRequest) -> dict[str, Any]:
+    raw = request.metadata.get("execution_policy") if isinstance(request.metadata, dict) else None
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _policy_take_profit(signal: RadarSignal) -> float | None:
+    return signal.take_profit_1 or signal.take_profit_2
+
+
+def _policy_mode(value: Any) -> Any | None:
+    return value if value in {"limit", "market", "pending_retest", "late_entry", "probe", "skip"} else None
+
+
+def _bool_option(options: dict[str, Any], key: str, default: bool) -> bool:
+    value = options.get(key)
+    return default if value is None else bool(value)
+
+
+def _float_option(options: dict[str, Any], key: str, default: float) -> float:
+    value = options.get(key)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _with_execution_profile(
     report: VirtualExecutionReport,
     *,
@@ -1111,6 +1236,7 @@ def _with_execution_profile(
         update={
             "execution_profile": execution_profile,
             "fill_policy": fill_policy,
+            "execution_policy": dict(report.execution_policy),
         }
     )
 

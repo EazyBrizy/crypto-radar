@@ -7594,6 +7594,10 @@ export interface components {
             breakeven_plan?: components["schemas"]["BreakevenPlan"] | null;
             trailing_stop_plan?: components["schemas"]["TrailingStopPlan"] | null;
             futures_risk_plan?: components["schemas"]["FuturesRiskPlan"] | null;
+            /** Execution Policy */
+            execution_policy?: {
+                [key: string]: unknown;
+            };
             lifecycle_trace?: components["schemas"]["LifecycleTrace"];
             simulated_path?: components["schemas"]["VirtualSimulatedPositionPath"] | null;
             fill_result?: components["schemas"]["VirtualFillResult"] | null;

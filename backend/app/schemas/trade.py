@@ -285,6 +285,7 @@ class VirtualExecutionReport(BaseModel):
     breakeven_plan: Optional[BreakevenPlan] = None
     trailing_stop_plan: Optional[TrailingStopPlan] = None
     futures_risk_plan: Optional[FuturesRiskPlan] = None
+    execution_policy: dict[str, Any] = Field(default_factory=dict)
     lifecycle_trace: LifecycleTrace = Field(default_factory=LifecycleTrace)
     simulated_path: Optional[VirtualSimulatedPositionPath] = None
     fill_result: Optional[VirtualFillResult] = None

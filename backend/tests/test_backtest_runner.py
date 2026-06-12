@@ -84,6 +84,36 @@ class RepeatingStrategyEngine:
         return [signal.model_copy(update={"status": "actionable"})]
 
 
+class MissedRetestStrategyEngine:
+    def __init__(self, trigger_timestamp: int) -> None:
+        self.trigger_timestamp = trigger_timestamp
+
+    async def generate_signals(self, features: Features, **_: object):
+        if features.timestamp != self.trigger_timestamp:
+            return []
+        signal = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            reasons=["synthetic missed retest setup"],
+            score=90,
+            entry=100.5,
+            stop_loss=99.0,
+            take_profit_1=108.0,
+            take_profit_2=110.0,
+        )
+        return [
+            signal.model_copy(
+                update={
+                    "status": "actionable",
+                    "entry_min": 100.0,
+                    "entry_max": 101.0,
+                    "min_rr_ratio": 2.0,
+                }
+            )
+        ]
+
+
 class AlphaRecordingStrategyEngine:
     def __init__(self) -> None:
         self.seen_alpha_contexts: list[object] = []
@@ -178,6 +208,30 @@ class BacktestRunnerTest(unittest.TestCase):
         assert result.run_result.result is not None
         self.assertEqual(result.run_result.result.metrics["risk_rejections"], 0)
         self.assertEqual(result.run_result.result.metrics["risk_gate_blockers"], [])
+
+    def test_backtest_records_pending_retest_reason_when_price_missed_entry_zone(self) -> None:
+        candles = _candles()
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=MissedRetestStrategyEngine(candles[4].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "execution_policy": {"allow_pending_retest": True},
+                }
+            }
+        )
+
+        result = runner.run_detailed(request)
+
+        self.assertEqual(len(result.trades), 0)
+        self.assertEqual(result.execution_rejections, 0)
+        event = next(event for event in result.signal_events if event.execution_candidate)
+        self.assertTrue(event.no_entry)
+        self.assertEqual(event.blocked_reason_code, "entry_zone_missed_wait_for_retest")
 
     def test_runner_does_not_include_future_candles_in_feature_window(self) -> None:
         candles = _candles()

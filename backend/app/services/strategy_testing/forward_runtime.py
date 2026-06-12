@@ -11,6 +11,11 @@ from app.schemas.market import MarketData
 from app.schemas.signal import RadarSignal, SignalExecutionGateReason, SignalExecutionGateSnapshot, StrategySignal
 from app.schemas.trade import ManualConfirmRequest, VirtualTrade
 from app.schemas.user import RiskManagementSettings
+from app.services.execution_policy import (
+    ExecutionPolicyContext,
+    ExecutionPolicyDecision,
+    execution_policy_resolver,
+)
 from app.services.portfolio_risk import (
     PortfolioRiskContext,
     PortfolioRiskDecision,
@@ -219,6 +224,59 @@ class ForwardStrategyTestRuntime:
                 result.signals_processed += 1
                 if gate.can_enter_now:
                     gate_request = _manual_confirm_request(run)
+                    execution_policy_decision = _forward_execution_policy_decision(run, radar_signal, gate_request)
+                    if not execution_policy_decision.can_execute:
+                        if execution_policy_decision.should_wait:
+                            gate = _gate_waiting_for_execution_policy(gate, execution_policy_decision)
+                            radar_signal = radar_signal.model_copy(update={"execution_gate": gate})
+                            event = _strategy_test_signal_event_from_forward_signal(
+                                run=run,
+                                signal=radar_signal,
+                                gate=gate,
+                                funnel_stage="pending",
+                                outcome="pending",
+                            )
+                            result.pending_entries_armed += 1
+                            result.signal_events_written += self._write_signal_event(event)
+                            self._increment_runtime_state(
+                                run,
+                                {
+                                    "processed_signals": 1,
+                                    "pending_entries_armed": 1,
+                                    "signal_events_written": 1,
+                                    "last_signal_id": radar_signal.id,
+                                    "last_gate_status": gate.status,
+                                    "last_feed_kind": gate.feed_kind,
+                                    "last_execution_policy_mode": execution_policy_decision.mode,
+                                    "last_execution_policy_reason_code": execution_policy_decision.reason_code,
+                                },
+                            )
+                            result.runtime_state_updates += 1
+                            continue
+                        gate = _gate_blocked_by_execution_policy(gate, execution_policy_decision)
+                        radar_signal = radar_signal.model_copy(update={"execution_gate": gate})
+                        event = _strategy_test_signal_event_from_forward_signal(
+                            run=run,
+                            signal=radar_signal,
+                            gate=gate,
+                            funnel_stage="blocked",
+                            outcome="blocked",
+                        )
+                        result.signal_events_written += self._write_signal_event(event)
+                        self._increment_runtime_state(
+                            run,
+                            {
+                                "processed_signals": 1,
+                                "signal_events_written": 1,
+                                "last_signal_id": radar_signal.id,
+                                "last_gate_status": gate.status,
+                                "last_feed_kind": gate.feed_kind,
+                                "last_execution_policy_mode": execution_policy_decision.mode,
+                                "last_execution_policy_reason_code": execution_policy_decision.reason_code,
+                            },
+                        )
+                        result.runtime_state_updates += 1
+                        continue
                     portfolio_decision = _forward_portfolio_decision(run, radar_signal, gate_request)
                     if not portfolio_decision.can_enter:
                         gate = _gate_blocked_by_portfolio(gate, portfolio_decision)
@@ -741,6 +799,96 @@ def _manual_confirm_request(
     )
 
 
+def _forward_execution_policy_decision(
+    run: StrategyTestRunResponse,
+    signal: RadarSignal,
+    request: ManualConfirmRequest,
+) -> ExecutionPolicyDecision:
+    policy = _execution_policy_params(run)
+    risk_settings = _forward_risk_settings(run)
+    return execution_policy_resolver.resolve(
+        ExecutionPolicyContext(
+            side="short" if signal.direction == "short" else "long",
+            current_price=_forward_policy_price(run, signal),
+            entry_min=signal.entry_min,
+            entry_max=signal.entry_max,
+            stop_loss=signal.stop_loss,
+            take_profit=_forward_policy_take_profit(signal),
+            min_rr_ratio=float(signal.min_rr_ratio or risk_settings.min_rr_ratio or 0.0),
+            preferred_mode=_execution_policy_mode(policy.get("mode") or policy.get("preferred_mode")),
+            allow_pending_retest=_bool_policy_param(policy, "allow_pending_retest", False),
+            allow_probe=_bool_policy_param(policy, "allow_probe", False),
+            max_late_entry_deviation_bps=_float_policy_param(policy, "max_late_entry_deviation_bps", 100.0),
+            max_probe_deviation_bps=_float_policy_param(policy, "max_probe_deviation_bps", 10.0),
+            slippage_bps=request.slippage_bps,
+            max_slippage_bps=_float_policy_param(policy, "max_slippage_bps", request.max_virtual_slippage_bps),
+            spread_bps=_optional_float_policy_param(policy, "spread_bps"),
+            max_spread_bps=_float_policy_param(policy, "max_spread_bps", risk_settings.max_spread_bps),
+            orderbook_depth_usd=_optional_float_policy_param(policy, "orderbook_depth_usd"),
+            requested_size_usd=_virtual_size_usd(request),
+            min_depth_to_size_ratio=_float_policy_param(policy, "min_depth_to_size_ratio", 1.0),
+        )
+    )
+
+
+def _gate_waiting_for_execution_policy(
+    gate: SignalExecutionGateSnapshot,
+    decision: ExecutionPolicyDecision,
+) -> SignalExecutionGateSnapshot:
+    reason = _execution_policy_gate_reason(decision, severity="warning")
+    return gate.model_copy(
+        update={
+            "status": "warning",
+            "feed_kind": "watchlist",
+            "can_notify": False,
+            "can_enter_now": False,
+            "can_arm_pending": True,
+            "can_show_in_execution_feed": False,
+            "warnings": [*gate.warnings, reason],
+            "metadata": {
+                **gate.metadata,
+                "execution_policy": decision.to_dict(),
+            },
+        }
+    )
+
+
+def _gate_blocked_by_execution_policy(
+    gate: SignalExecutionGateSnapshot,
+    decision: ExecutionPolicyDecision,
+) -> SignalExecutionGateSnapshot:
+    reason = _execution_policy_gate_reason(decision, severity="blocker")
+    return gate.model_copy(
+        update={
+            "status": "blocked",
+            "feed_kind": "blocked",
+            "can_notify": False,
+            "can_enter_now": False,
+            "can_arm_pending": False,
+            "can_show_in_execution_feed": False,
+            "reasons": [*gate.reasons, reason],
+            "metadata": {
+                **gate.metadata,
+                "execution_policy": decision.to_dict(),
+            },
+        }
+    )
+
+
+def _execution_policy_gate_reason(
+    decision: ExecutionPolicyDecision,
+    *,
+    severity: Literal["blocker", "warning"],
+) -> SignalExecutionGateReason:
+    return SignalExecutionGateReason(
+        code=decision.reason_code,
+        severity=severity,
+        source="execution_policy",
+        message=decision.message,
+        metadata=decision.to_dict(),
+    )
+
+
 def _forward_portfolio_decision(
     run: StrategyTestRunResponse,
     signal: RadarSignal,
@@ -1176,6 +1324,47 @@ def _forward_max_concurrent_positions(run: StrategyTestRunResponse) -> int:
 def _run_params(run: StrategyTestRunResponse) -> dict[str, Any]:
     params = run.requested_matrix.get("params")
     return dict(params) if isinstance(params, dict) else {}
+
+
+def _execution_policy_params(run: StrategyTestRunResponse) -> dict[str, Any]:
+    raw = _run_params(run).get("execution_policy")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _forward_policy_price(run: StrategyTestRunResponse, signal: RadarSignal) -> float:
+    price = _optional_float(run.runtime_state.get("last_price"))
+    return price if price is not None and price > 0 else _entry_price(signal)
+
+
+def _forward_policy_take_profit(signal: RadarSignal) -> float | None:
+    return signal.take_profit_1 or signal.take_profit_2
+
+
+def _execution_policy_mode(value: Any) -> Any | None:
+    return value if value in {"limit", "market", "pending_retest", "late_entry", "probe", "skip"} else None
+
+
+def _bool_policy_param(params: dict[str, Any], key: str, default: bool) -> bool:
+    value = params.get(key)
+    return default if value is None else bool(value)
+
+
+def _float_policy_param(params: dict[str, Any], key: str, default: float) -> float:
+    value = _optional_float(params.get(key))
+    return default if value is None else value
+
+
+def _optional_float_policy_param(params: dict[str, Any], key: str) -> float | None:
+    return _optional_float(params.get(key))
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _first_gate_reason_code(gate: SignalExecutionGateSnapshot) -> str | None:

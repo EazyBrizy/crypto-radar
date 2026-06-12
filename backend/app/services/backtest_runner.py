@@ -19,6 +19,7 @@ from app.schemas.trade_plan import TradePlan
 from app.schemas.trade import ManualConfirmRequest, VirtualAccount, VirtualExecutionReport, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.execution_ambiguity import normalize_virtual_execution_ambiguity_policy
+from app.services.execution_policy import ExecutionPolicyContext, execution_policy_resolver
 from app.services.feature_engine import FeatureEngine
 from app.services.historical_candle_provider import ClickHouseHistoricalCandleProvider, HistoricalCandleProvider
 from app.services.risk_gate import RiskContextService, RiskGateService
@@ -52,6 +53,7 @@ _RESERVED_PARAM_KEYS = {
     "leverage",
     "risk_settings",
     "strategy_params",
+    "execution_policy",
     "size_usd",
     "simulation_mode",
     "funding_buffer_per_unit",
@@ -160,6 +162,8 @@ class _BacktestState:
     execution_rejections: int = 0
     trade_plan_completion_warnings: list[str] = field(default_factory=list)
     risk_gate_blockers: list[str] = field(default_factory=list)
+    execution_policy_no_entries: list[str] = field(default_factory=list)
+    execution_policy_rejections: list[str] = field(default_factory=list)
     backtest_trade_plan_assumptions: list[str] = field(default_factory=list)
     signal_events: list[BacktestSignalEvent] = field(default_factory=list)
 
@@ -504,6 +508,8 @@ class ProductionBacktestRunner:
                         continue
                     previous_risk_rejections = state.risk_rejections
                     previous_execution_rejections = state.execution_rejections
+                    previous_execution_policy_no_entries = len(state.execution_policy_no_entries)
+                    previous_execution_policy_rejections = len(state.execution_policy_rejections)
                     position = self._try_open_position(
                         request=request,
                         risk_settings=risk_settings,
@@ -530,7 +536,18 @@ class ProductionBacktestRunner:
                             _mark_signal_event_rejected(
                                 signal_event,
                                 execution_rejected=True,
-                                reason_code="virtual_execution_rejected",
+                                reason_code=(
+                                    _last_reason_code(state.execution_policy_rejections, "virtual_execution_rejected")
+                                    if len(state.execution_policy_rejections) > previous_execution_policy_rejections
+                                    else "virtual_execution_rejected"
+                                ),
+                            )
+                        )
+                    elif len(state.execution_policy_no_entries) > previous_execution_policy_no_entries:
+                        state.signal_events.append(
+                            _mark_signal_event_no_entry(
+                                signal_event,
+                                _last_reason_code(state.execution_policy_no_entries, "not_filled"),
                             )
                         )
                     else:
@@ -700,6 +717,22 @@ class ProductionBacktestRunner:
         if not pre_execution_decision.can_enter:
             state.risk_rejections += 1
             state.risk_gate_blockers.extend(pre_execution_decision.blockers)
+            return None
+
+        execution_policy_decision = _backtest_execution_policy_decision(
+            request=request,
+            risk_settings=risk_settings,
+            signal=signal,
+            features=features,
+            confirm_request=confirm_request,
+            risk_decision=pre_execution_decision,
+        )
+        if not execution_policy_decision.can_execute:
+            if execution_policy_decision.should_wait:
+                state.execution_policy_no_entries.append(execution_policy_decision.reason_code)
+            else:
+                state.execution_rejections += 1
+                state.execution_policy_rejections.append(execution_policy_decision.reason_code)
             return None
 
         execution = self._execution_simulator.simulate_entry(
@@ -2273,6 +2306,50 @@ def _entry_price(signal: StrategySignal) -> float | None:
     if signal.entry_min is not None:
         return signal.entry_min
     return signal.entry_max
+
+
+def _backtest_execution_policy_decision(
+    *,
+    request: BacktestRunRequest,
+    risk_settings: RiskManagementSettings,
+    signal: StrategySignal,
+    features: Features,
+    confirm_request: ManualConfirmRequest,
+    risk_decision: RiskDecision,
+):
+    policy = _mapping_param(request.params.get("execution_policy"))
+    return execution_policy_resolver.resolve(
+        ExecutionPolicyContext(
+            side="short" if signal.direction.lower() == "short" else "long",
+            current_price=features.close,
+            entry_min=signal.entry_min,
+            entry_max=signal.entry_max,
+            stop_loss=signal.stop_loss,
+            take_profit=_strategy_signal_take_profit(signal),
+            min_rr_ratio=float(signal.min_rr_ratio or risk_settings.min_rr_ratio or 0.0),
+            preferred_mode=_execution_policy_mode(policy.get("mode") or policy.get("preferred_mode")),
+            allow_pending_retest=_bool_param(policy, "allow_pending_retest", False),
+            allow_probe=_bool_param(policy, "allow_probe", False),
+            max_late_entry_deviation_bps=_float_param(policy, "max_late_entry_deviation_bps", 100.0) or 100.0,
+            max_probe_deviation_bps=_float_param(policy, "max_probe_deviation_bps", 10.0) or 10.0,
+            slippage_bps=float(request.slippage_bps),
+            max_slippage_bps=confirm_request.max_virtual_slippage_bps,
+            spread_bps=_float_param(request.params, "spread_bps", None),
+            max_spread_bps=_float_param(policy, "max_spread_bps", risk_settings.max_spread_bps)
+            or risk_settings.max_spread_bps,
+            orderbook_depth_usd=_float_param(request.params, "orderbook_depth_usd", None),
+            requested_size_usd=risk_decision.checked_position_sizing.notional,
+            min_depth_to_size_ratio=_float_param(policy, "min_depth_to_size_ratio", 1.0) or 1.0,
+        )
+    )
+
+
+def _strategy_signal_take_profit(signal: StrategySignal) -> float | None:
+    return signal.take_profit_1 or signal.take_profit_2
+
+
+def _execution_policy_mode(value: Any) -> Any | None:
+    return value if value in {"limit", "market", "pending_retest", "late_entry", "probe", "skip"} else None
 
 
 def _replace_position(

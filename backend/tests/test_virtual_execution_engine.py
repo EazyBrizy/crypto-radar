@@ -102,6 +102,27 @@ class ZeroFeeRateService:
 
 
 class VirtualExecutionEngineTest(unittest.TestCase):
+    def test_late_entry_without_rr_recalculation_is_rejected_by_execution_policy(self) -> None:
+        signal = _signal().model_copy(
+            update={
+                "stop_loss": None,
+                "take_profit_1": None,
+                "take_profit_2": None,
+            }
+        )
+
+        report = VirtualExecutionEngine().simulate_entry(
+            signal=signal,
+            request=ManualConfirmRequest(simulation_mode="passive"),
+            reference_price=105.0,
+            requested_size_usd=100.0,
+        )
+
+        self.assertEqual(report.status, "rejected_virtual_execution")
+        self.assertEqual(report.reason_code, "late_entry_rr_recalculation_required")
+        self.assertIn("late_entry_rr_recalculation_required", report.reason_codes)
+        self.assertEqual(report.raw_inputs_snapshot["execution_policy"]["mode"], "skip")
+
     def test_impact_aware_entry_walks_orderbook_and_calculates_slippage(self) -> None:
         report = VirtualExecutionEngine().simulate_entry(
             signal=_signal(),

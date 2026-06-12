@@ -110,6 +110,11 @@ class SignalExecutionGateService:
                 )
             )
 
+        market_context_reasons = _market_context_reasons(signal)
+        hard_blockers.extend(reason for reason in market_context_reasons if reason.severity == "blocker")
+        warnings.extend(reason for reason in market_context_reasons if reason.severity == "warning")
+        reasons.extend(reason for reason in market_context_reasons if reason.severity == "info")
+
         decision = signal.decision
         if execution_candidate:
             hard_blockers.extend(_decision_blockers(decision))
@@ -582,6 +587,55 @@ def _trade_plan_reasons(
     if not _targets(signal):
         reasons.append(_reason("missing_target", severity, "trade_plan", "Take-profit target is missing."))
     return reasons
+
+
+def _market_context_reasons(signal: SignalLike) -> list[SignalExecutionGateReason]:
+    context = _market_context_metadata(signal)
+    if context is None:
+        return []
+    reasons: list[SignalExecutionGateReason] = []
+    for item in _context_reason_items(context.get("blockers")):
+        reasons.append(
+            _reason(
+                str(item.get("code") or "market_context_blocker"),
+                "blocker",
+                str(item.get("source") or "market_context"),
+                str(item.get("message") or "Market context blocks execution."),
+                dict(item),
+            )
+        )
+    for item in _context_reason_items(context.get("warnings")):
+        reasons.append(
+            _reason(
+                str(item.get("code") or "market_context_warning"),
+                "warning",
+                str(item.get("source") or "market_context"),
+                str(item.get("message") or "Market context warning is active."),
+                dict(item),
+            )
+        )
+    return reasons
+
+
+def _market_context_metadata(signal: SignalLike) -> Mapping[str, Any] | None:
+    if signal.trade_plan is not None:
+        for metadata in (signal.trade_plan.metadata, signal.trade_plan.risk_rules.metadata):
+            context = metadata.get("market_context")
+            if isinstance(context, Mapping):
+                return context
+    no_trade = getattr(signal, "no_trade_filter", None)
+    no_trade_metadata = getattr(no_trade, "metadata", None)
+    if isinstance(no_trade_metadata, Mapping):
+        context = no_trade_metadata.get("market_context")
+        if isinstance(context, Mapping):
+            return context
+    return None
+
+
+def _context_reason_items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
 
 
 def _trade_plan_execution_blocked(plan: TradePlan) -> bool:

@@ -275,6 +275,11 @@ class BacktestRunnerTest(unittest.TestCase):
         for trade in result.trades:
             self.assertEqual(trade.features_snapshot.get("candle_state"), "closed")
             self.assertFalse(trade.features_snapshot.get("alpha_context_available"))
+            self.assertIsInstance(trade.features_snapshot.get("market_context"), dict)
+            self.assertEqual(
+                trade.features_snapshot["trade_plan"]["metadata"].get("market_context"),
+                trade.features_snapshot.get("market_context"),
+            )
             self.assertIn("candle_state=closed", trade.tags)
             self.assertIn("alpha_context_available=false", trade.tags)
 

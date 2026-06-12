@@ -1518,6 +1518,11 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             "market_wide_risk_off",
             long_signal.no_trade_filter.metadata.get("blocker_codes", []) if long_signal and long_signal.no_trade_filter else [],
         )
+        long_reason_codes = [reason.code for reason in long_signal.execution_gate.reasons] if long_signal and long_signal.execution_gate else []
+        self.assertIn("btc_risk_off", long_reason_codes)
+        market_context = long_signal.trade_plan.metadata.get("market_context") if long_signal and long_signal.trade_plan else {}
+        self.assertTrue(market_context.get("risk_off"))
+        self.assertIn("btc_risk_off", market_context.get("reason_codes") or [])
         self.assertIsNotNone(short_signal)
         self.assertNotIn(
             "market_wide_risk_off",

@@ -22,6 +22,7 @@ from app.services.execution_ambiguity import normalize_virtual_execution_ambigui
 from app.services.execution_policy import ExecutionPolicyContext, execution_policy_resolver
 from app.services.feature_engine import FeatureEngine
 from app.services.historical_candle_provider import ClickHouseHistoricalCandleProvider, HistoricalCandleProvider
+from app.services.market_context import MarketContextService, MarketContextSnapshot
 from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.risk_reward_assessment import RiskRewardAssessmentService
 from app.services.trade_plan_completeness import trade_plan_completeness_service
@@ -840,10 +841,16 @@ def _normalize_signal_for_backtest(
         strategy_params=strategy_params,
         execution_policy=execution_policy,
     )
+    market_context = MarketContextService().build_snapshot(
+        features=features,
+        direction=signal.direction,
+        settings=pipeline_settings,
+    )
     context = StrategyEvaluationContext(
         signal_features=features,
         strategy_params=strategy_params,
         pipeline_settings=pipeline_settings,
+        market_context=market_context,
         rr_guard_context="backtest",
     )
     risk_reward = RiskRewardAssessmentService().assess(
@@ -866,11 +873,16 @@ def _normalize_signal_for_backtest(
         state=state,
         execution_policy=execution_policy,
     )
+    trade_plan = _trade_plan_with_backtest_market_context(trade_plan, market_context)
     completeness = trade_plan_completeness_service.assess(
         signal,
         trade_plan,
         settings=pipeline_settings,
-        context={"backtest_features": features, "backtest_request": request},
+        context={
+            "backtest_features": features,
+            "backtest_request": request,
+            "market_context": market_context,
+        },
         production_mode=execution_policy.production_mode,
     )
     trade_plan = trade_plan_enrichment.attach_completeness_metadata(
@@ -1003,6 +1015,29 @@ def _trade_plan_with_backtest_assumption_metadata(
     if execution_policy.preserve_legacy_backtest:
         metadata["preserve_legacy_backtest"] = True
     return trade_plan.model_copy(update={"metadata": metadata}, deep=True)
+
+
+def _trade_plan_with_backtest_market_context(
+    trade_plan: TradePlan,
+    market_context: MarketContextSnapshot,
+) -> TradePlan:
+    context_payload = market_context.model_dump(mode="json")
+    context_updates = {
+        "market_context": context_payload,
+        "market_context_reason_codes": list(market_context.reason_codes),
+        "market_context_risk_off": market_context.risk_off,
+    }
+    metadata = dict(trade_plan.metadata)
+    metadata.update(context_updates)
+    risk_metadata = dict(trade_plan.risk_rules.metadata)
+    risk_metadata.update(context_updates)
+    return trade_plan.model_copy(
+        update={
+            "metadata": metadata,
+            "risk_rules": trade_plan.risk_rules.model_copy(update={"metadata": risk_metadata}),
+        },
+        deep=True,
+    )
 
 
 def _assumptions_with_runtime_diagnostics(
@@ -1556,6 +1591,9 @@ def _features_snapshot(
         snapshot["strategy_test_assumptions"] = dict(assumptions)
     if signal.trade_plan is not None:
         snapshot["trade_plan"] = signal.trade_plan.model_dump(mode="json")
+        market_context = signal.trade_plan.metadata.get("market_context")
+        if isinstance(market_context, Mapping):
+            snapshot["market_context"] = dict(market_context)
     if signal.no_trade_filter is not None:
         snapshot["no_trade_filter"] = signal.no_trade_filter.model_dump(mode="json")
     return snapshot

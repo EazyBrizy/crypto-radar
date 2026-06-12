@@ -26,6 +26,7 @@ from app.schemas.trade_plan import (
 )
 from app.services.no_trade_filter import NoTradeFilterService
 from app.services.auto_entry_eligibility import AutoEntryEligibilityService
+from app.services.market_context import MarketContextService, MarketContextSnapshot
 from app.services.market_regime import MarketQualityInput, MarketRegimeService, MarketWideRegimeContext
 from app.services.risk_reward_assessment import (
     RiskRewardAssessment,
@@ -113,6 +114,7 @@ class StrategyEvaluationContext:
     execution_settings: StrategyExecutionSettings = field(default_factory=StrategyExecutionSettings)
     pipeline_settings: Mapping[str, Any] = field(default_factory=dict)
     market_quality: MarketQualityInput | None = None
+    market_context: MarketContextSnapshot | None = None
     market_wide_context: MarketWideRegimeContext | None = None
     pair_scope_configured: bool = False
     rr_guard_context: str = "discovery"
@@ -177,6 +179,14 @@ class StrategySignalPipeline:
         if _has_severe_ema200_chop(regime) and signal.strategy == "trend_pullback_continuation":
             return None
         signal = signal.model_copy(update={"regime": regime})
+        market_context = context.market_context or MarketContextService().build_snapshot(
+            features=context.signal_features,
+            direction=signal.direction,
+            alpha_context=context.alpha_context,
+            market_quality=context.market_quality,
+            market_wide_context=context.market_wide_context,
+            settings=pipeline_settings,
+        )
         signal = _apply_regime_score(signal, regime)
         setup = StrategySetupLayer().evaluate(signal)
         risk_reward = RiskRewardAssessmentService().assess(
@@ -194,9 +204,11 @@ class StrategySignalPipeline:
                 "regime": regime,
                 "confirmation": confirmation,
                 "market_quality": context.market_quality,
+                "market_context": market_context,
             },
             settings=pipeline_settings,
         )
+        no_trade = _no_trade_with_market_context(no_trade, market_context)
         confirmation = _confirmation_with_no_trade_check(confirmation, no_trade)
         if not quality.passed and not no_trade.blocked:
             return None
@@ -220,6 +232,7 @@ class StrategySignalPipeline:
                 "setup": setup,
                 "confirmation": confirmation,
                 "market_quality": context.market_quality,
+                "market_context": market_context,
                 "alpha_context": context.alpha_context,
                 "context_features": context.context_features,
                 "context_features_by_timeframe": context.context_features_by_timeframe,
@@ -260,6 +273,7 @@ class StrategySignalPipeline:
         setup = status_decision.setup
         trade_plan = status_decision.trade_plan
         trade_plan = _trade_plan_with_risk_reward_metadata(trade_plan, risk_reward)
+        trade_plan = _trade_plan_with_market_context(trade_plan, market_context)
         legacy_display_note = _legacy_display_filter_note(
             pipeline_settings,
             risk_reward=risk_reward,
@@ -314,6 +328,9 @@ class StrategySignalPipeline:
         for reason in [*no_trade.blockers, *no_trade.warnings]:
             if reason not in risks:
                 risks.append(reason)
+        for blocker in market_context.blockers:
+            if blocker.message not in risks:
+                risks.append(blocker.message)
 
         updates: dict[str, Any] = {
             "status": status,
@@ -3031,6 +3048,97 @@ def _confirmation_with_no_trade_check(
             ],
         }
     )
+
+
+def _no_trade_with_market_context(
+    no_trade: NoTradeFilterResult,
+    market_context: MarketContextSnapshot,
+) -> NoTradeFilterResult:
+    context_payload = market_context.model_dump(mode="json")
+    blockers = [blocker for blocker in market_context.blockers if blocker.severity == "blocker"]
+    warnings = [warning for warning in market_context.warnings if warning.severity != "blocker"]
+    if not blockers and not warnings:
+        metadata = dict(no_trade.metadata)
+        metadata["market_context"] = context_payload
+        return no_trade.model_copy(update={"metadata": metadata}, deep=True)
+
+    metadata = dict(no_trade.metadata)
+    metadata["market_context"] = context_payload
+    metadata["blocker_codes"] = _dedupe_values(
+        [
+            *(str(value) for value in metadata.get("blocker_codes", []) if value),
+            *(blocker.code for blocker in blockers),
+        ]
+    )
+    metadata["warning_codes"] = _dedupe_values(
+        [
+            *(str(value) for value in metadata.get("warning_codes", []) if value),
+            *(warning.code for warning in warnings),
+        ]
+    )
+    checks = [
+        *no_trade.checks,
+        *[
+            SignalLayerCheck(
+                name=blocker.code,
+                status="failed",
+                reason=blocker.message,
+                metadata=blocker.model_dump(mode="json"),
+            )
+            for blocker in blockers
+        ],
+        *[
+            SignalLayerCheck(
+                name=warning.code,
+                status="warning",
+                reason=warning.message,
+                metadata=warning.model_dump(mode="json"),
+            )
+            for warning in warnings
+        ],
+    ]
+    return no_trade.model_copy(
+        update={
+            "blocked": no_trade.blocked or bool(blockers),
+            "hard_block": no_trade.hard_block or bool(blockers),
+            "blockers": _dedupe_values([*no_trade.blockers, *(blocker.message for blocker in blockers)]),
+            "warnings": _dedupe_values([*no_trade.warnings, *(warning.message for warning in warnings)]),
+            "checks": checks,
+            "metadata": metadata,
+        },
+        deep=True,
+    )
+
+
+def _trade_plan_with_market_context(
+    trade_plan: TradePlan,
+    market_context: MarketContextSnapshot,
+) -> TradePlan:
+    context_payload = market_context.model_dump(mode="json")
+    context_updates = {
+        "market_context": context_payload,
+        "market_context_reason_codes": list(market_context.reason_codes),
+        "market_context_risk_off": market_context.risk_off,
+    }
+    metadata = dict(trade_plan.metadata)
+    metadata.update(context_updates)
+    risk_metadata = dict(trade_plan.risk_rules.metadata)
+    risk_metadata.update(context_updates)
+    return trade_plan.model_copy(
+        update={
+            "metadata": metadata,
+            "risk_rules": trade_plan.risk_rules.model_copy(update={"metadata": risk_metadata}),
+        },
+        deep=True,
+    )
+
+
+def _dedupe_values(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result
 
 
 def _overextension_check(confirmation: SignalConfirmationSnapshot) -> SignalLayerCheck | None:

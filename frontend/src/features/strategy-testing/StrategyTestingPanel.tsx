@@ -21,7 +21,8 @@ import type {
   StrategyTestRunRequest,
   StrategyTestRunResponse,
   StrategyTestRunStatus,
-  StrategyTestSameCandlePolicy
+  StrategyTestSameCandlePolicy,
+  StrategyTestType
 } from "./types";
 
 interface StrategyTestingPanelProps {
@@ -32,7 +33,13 @@ interface StrategyTestingPanelProps {
 const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
 const DEFAULT_SELECTED_TIMEFRAMES = ["1m", "5m", "15m"];
 const DEFAULT_MODE: StrategyTestMode = "research_virtual";
+const DEFAULT_TEST_TYPE: StrategyTestType = "historical_backtest";
 const DEFAULT_SAME_CANDLE_POLICY: StrategyTestSameCandlePolicy = "stop_first";
+
+const TEST_TYPE_OPTIONS: Array<{ value: StrategyTestType; label: string }> = [
+  { value: "historical_backtest", label: "Historical" },
+  { value: "forward_virtual", label: "Forward virtual" }
+];
 
 const MODE_LABELS: Record<StrategyTestMode, string> = {
   discovery: "Discovery",
@@ -66,6 +73,7 @@ export function StrategyTestingPanel({
   const [selectedPairIds, setSelectedPairIds] = useState<string[] | null>(null);
   const [selectedTimeframes, setSelectedTimeframes] = useState<string[] | null>(null);
   const [mode, setMode] = useState<StrategyTestMode>(DEFAULT_MODE);
+  const [testType, setTestType] = useState<StrategyTestType>(DEFAULT_TEST_TYPE);
   const [startAt, setStartAt] = useState(dateDefaults.startAt);
   const [endAt, setEndAt] = useState(dateDefaults.endAt);
   const [initialCapital, setInitialCapital] = useState("1000");
@@ -144,7 +152,8 @@ export function StrategyTestingPanel({
         selectedStrategyCodes: effectiveStrategyCodes,
         selectedTimeframes: validTimeframes,
         slippageBps,
-        startAt
+        startAt,
+        testType
       }));
       setSelectedReportRunId(response.run_id);
     } catch (error) {
@@ -284,6 +293,19 @@ export function StrategyTestingPanel({
             type="button"
           >
             {MODE_LABELS[option]}
+          </button>
+        ))}
+      </div>
+
+      <div className="strategy-test-mode-row" aria-label="Strategy test type">
+        {TEST_TYPE_OPTIONS.map((option) => (
+          <button
+            className={testType === option.value ? "active" : ""}
+            key={option.value}
+            onClick={() => setTestType(option.value)}
+            type="button"
+          >
+            {option.label}
           </button>
         ))}
       </div>
@@ -445,7 +467,8 @@ function buildRunRequest({
   selectedStrategyCodes,
   selectedTimeframes,
   slippageBps,
-  startAt
+  startAt,
+  testType
 }: {
   endAt: string;
   feeRate: string;
@@ -457,6 +480,7 @@ function buildRunRequest({
   selectedTimeframes: string[];
   slippageBps: string;
   startAt: string;
+  testType: StrategyTestType;
 }): StrategyTestRunRequest {
   return {
     end_at: new Date(endAt).toISOString(),
@@ -469,8 +493,8 @@ function buildRunRequest({
     slippage_bps: Number(slippageBps),
     start_at: new Date(startAt).toISOString(),
     strategies: selectedStrategyCodes,
-    tags: ["backtest"],
-    test_type: "historical_backtest",
+    tags: [testType === "forward_virtual" ? "forward_virtual" : "backtest"],
+    test_type: testType,
     timeframes: selectedTimeframes
   };
 }

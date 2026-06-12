@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable, Sequence
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from app.schemas.market import MarketData
@@ -19,6 +20,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignalEvent,
     StrategyTestTrade,
 )
 from app.workers.forward_strategy_test_worker import ForwardStrategyTestWorker
@@ -30,6 +32,82 @@ NOW = datetime(2026, 6, 11, 12, 0, tzinfo=timezone.utc)
 
 
 class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    def test_start_run_initializes_isolated_forward_account_state(self) -> None:
+        request = _run_request()
+        run_store = _ForwardRunStore([_run()])
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            virtual_trading=_VirtualTrading(),
+        )
+
+        detail = runtime.start_run(RUN_ID, request)
+
+        account = detail.run.runtime_state["forward_account"]
+        self.assertEqual(account["initial_capital"], "1000")
+        self.assertEqual(account["balance"], "1000")
+        self.assertEqual(account["equity"], "1000")
+        self.assertEqual(account["realized_pnl"], "0")
+        self.assertEqual(account["unrealized_pnl"], "0")
+        self.assertEqual(account["fees"], "0")
+        self.assertEqual(account["slippage"], "0")
+        self.assertEqual(account["open_positions"], 0)
+        self.assertEqual(account["closed_positions"], 0)
+
+    async def test_default_runtime_uses_isolated_forward_writers_only(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        radar_writer = _SignalWriter(_radar_signal(execution_gate=_gate(can_enter_now=True)))
+
+        with (
+            patch("app.services.strategy_testing.forward_runtime.signal_service", radar_writer, create=True),
+            patch(
+                "app.services.strategy_testing.forward_runtime.virtual_trading_service",
+                _ForbiddenVirtualTrading(),
+                create=True,
+            ),
+        ):
+            runtime = ForwardStrategyTestRuntime(run_store=run_store, trade_store=trade_store)
+
+        result = await runtime.process_strategy_signal(_strategy_signal(execution_gate=_gate(can_enter_now=True)))
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.signals_processed, 1)
+        self.assertEqual(result.opened_trades, 1)
+        self.assertEqual(len(radar_writer.calls), 0)
+        self.assertEqual(len(trade_store.signal_events), 1)
+        self.assertEqual(trade_store.signal_events[0].test_type, "forward_virtual")
+        self.assertEqual(trade_store.signal_events[0].filled, True)
+        self.assertEqual(trade_store.signal_events[0].signal_id, trade_store.trades[0].trade_id.replace("forward_trade_", "forward_sig_"))
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        self.assertEqual(runtime_state["signal_events_written"], 1)
+        self.assertEqual(runtime_state["forward_account"]["open_positions"], 1)
+        self.assertEqual(runtime_state["forward_account"]["closed_positions"], 0)
+
+    async def test_pending_forward_signal_records_isolated_event_without_normal_pending_service(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_arm_pending=True))),
+            virtual_trading=_VirtualTrading(),
+        )
+
+        result = await runtime.process_strategy_signal(_strategy_signal())
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.signals_processed, 1)
+        self.assertEqual(result.pending_entries_armed, 1)
+        self.assertEqual(len(trade_store.trades), 0)
+        self.assertEqual(len(trade_store.signal_events), 1)
+        self.assertEqual(trade_store.signal_events[0].funnel_stage, "pending")
+        self.assertEqual(trade_store.signal_events[0].filled, False)
+        self.assertEqual(trade_store.signal_events[0].execution_candidate, True)
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        self.assertEqual(runtime_state["signal_events_written"], 1)
+        self.assertEqual(runtime_state["pending_entries_armed"], 1)
+
     async def test_process_strategy_signal_opens_virtual_trade_and_records_runtime_state(self) -> None:
         run_store = _ForwardRunStore([_run()])
         trade_store = _RecordingTradeStore()
@@ -98,6 +176,62 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.signals_processed, 1)
         self.assertEqual(result.opened_trades, 1)
 
+    async def test_process_market_tick_closes_isolated_position_at_target(self) -> None:
+        run = _run(runtime_state={
+            "forward_account": {
+                "initial_capital": "1000",
+                "balance": "1000",
+                "equity": "1000",
+                "realized_pnl": "0",
+                "unrealized_pnl": "0",
+                "fees": "0",
+                "slippage": "0",
+                "open_positions": 1,
+                "closed_positions": 0,
+            },
+            "forward_positions": [
+                {
+                    "trade_id": "trade_target",
+                    "signal_id": "sig_target",
+                    "exchange": "bybit",
+                    "symbol": "BTCUSDT",
+                    "strategy": "trend_pullback_continuation",
+                    "timeframe": "15m",
+                    "side": "long",
+                    "entry_price": "100",
+                    "current_price": "100",
+                    "size_usd": "100",
+                    "quantity": "1",
+                    "stop_loss": "95",
+                    "take_profit": ["110"],
+                    "unrealized_pnl": "0",
+                    "fees": "0",
+                    "status": "open",
+                    "opened_at": NOW.isoformat(),
+                }
+            ],
+        })
+        run_store = _ForwardRunStore([run])
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            virtual_trading=_VirtualTrading(),
+        )
+        tick = MarketData(exchange="bybit", symbol="BTCUSDT", price=112.0, volume=1.0, timestamp=1_780_000_060)
+
+        result = await runtime.process_market_tick(tick)
+
+        self.assertEqual(result.ticks_processed, 1)
+        state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        self.assertEqual(state["forward_positions"][0]["status"], "closed")
+        self.assertEqual(state["forward_positions"][0]["close_reason"], "take_profit")
+        self.assertEqual(state["forward_positions"][0]["realized_pnl"], "12")
+        self.assertEqual(state["forward_account"]["open_positions"], 0)
+        self.assertEqual(state["forward_account"]["closed_positions"], 1)
+        self.assertEqual(state["forward_account"]["realized_pnl"], "12")
+        self.assertEqual(state["forward_account"]["unrealized_pnl"], "0")
+        self.assertEqual(state["forward_account"]["equity"], "1012")
+
     async def test_stopping_run_is_cancelled_after_current_iteration_and_cancelled_runs_are_ignored(self) -> None:
         stopping = _run(status="stopping")
         cancelled = _run(run_id=uuid4(), status="cancelled")
@@ -153,7 +287,22 @@ def _run(
     run_id: UUID = RUN_ID,
     status: StrategyTestRunStatus = "running",
     pairs: list[StrategyTestPair] | None = None,
+    runtime_state: dict[str, Any] | None = None,
 ) -> StrategyTestRunResponse:
+    request = _run_request(pairs=pairs)
+    return StrategyTestRunResponse(
+        run_id=run_id,
+        status=status,
+        test_type="forward_virtual",
+        requested_matrix=_requested_matrix(request),
+        runtime_state=runtime_state or {},
+        created_at=NOW,
+        started_at=NOW if status in {"running", "stopping"} else None,
+        last_heartbeat_at=NOW if status in {"running", "stopping"} else None,
+    )
+
+
+def _run_request(*, pairs: list[StrategyTestPair] | None = None) -> StrategyTestRunRequest:
     request = StrategyTestRunRequest(
         user_id=USER_ID,
         test_type="forward_virtual",
@@ -166,19 +315,14 @@ def _run(
         initial_capital=Decimal("1000"),
         tags=["forward"],
     )
-    return StrategyTestRunResponse(
-        run_id=run_id,
-        status=status,
-        test_type="forward_virtual",
-        requested_matrix=_requested_matrix(request),
-        runtime_state={},
-        created_at=NOW,
-        started_at=NOW if status in {"running", "stopping"} else None,
-        last_heartbeat_at=NOW if status in {"running", "stopping"} else None,
-    )
+    return request
 
 
-def _strategy_signal(*, symbol: str = "BTCUSDT") -> StrategySignal:
+def _strategy_signal(
+    *,
+    symbol: str = "BTCUSDT",
+    execution_gate: SignalExecutionGateSnapshot | None = None,
+) -> StrategySignal:
     return StrategySignal(
         exchange="bybit",
         symbol=symbol,
@@ -195,6 +339,7 @@ def _strategy_signal(*, symbol: str = "BTCUSDT") -> StrategySignal:
         take_profit_1=110.0,
         take_profit_2=115.0,
         risk_reward=2.0,
+        execution_gate=execution_gate,
     )
 
 
@@ -296,6 +441,12 @@ class _ForwardRunStore:
     def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
         return self._runs.get(run_id)
 
+    def mark_running(self, run_id: UUID) -> StrategyTestRunDetailResponse:
+        detail = self._runs[run_id]
+        updated = detail.run.model_copy(update={"status": "running", "started_at": NOW, "last_heartbeat_at": NOW})
+        self._runs[run_id] = StrategyTestRunDetailResponse(run=updated)
+        return self._runs[run_id]
+
     def mark_cancelled(self, run_id: UUID) -> StrategyTestRunDetailResponse:
         detail = self._runs[run_id]
         updated = detail.run.model_copy(update={"status": "cancelled", "last_heartbeat_at": NOW})
@@ -322,12 +473,16 @@ class _RecordingTradeStore:
     def __init__(self) -> None:
         self.trades: list[StrategyTestTrade] = []
         self.metrics: list[StrategyTestMetricRow] = []
+        self.signal_events: list[StrategyTestSignalEvent] = []
 
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         self.trades.extend(trades)
 
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         self.metrics.extend(rows)
+
+    def write_signal_events(self, signal_events: Sequence[StrategyTestSignalEvent]) -> None:
+        self.signal_events.extend(signal_events)
 
 
 class _SignalWriter:
@@ -353,6 +508,12 @@ class _VirtualTrading:
     def open_virtual_trade(self, signal: RadarSignal, request: ManualConfirmRequest) -> VirtualTrade:
         self.open_calls.append((signal, request))
         return _trade(signal.id)
+
+
+class _ForbiddenVirtualTrading:
+    def open_virtual_trade(self, signal: RadarSignal, request: ManualConfirmRequest) -> VirtualTrade:
+        _ = signal, request
+        raise AssertionError("forward runtime must use an isolated virtual account by default")
 
 
 class _Scanner:

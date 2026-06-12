@@ -5,15 +5,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol, Sequence
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.schemas.market import MarketData
-from app.schemas.risk import ResolvedExecutionProfile
 from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot, StrategySignal
 from app.schemas.trade import ManualConfirmRequest, VirtualTrade
-from app.services.pending_entry import pending_entry_service
 from app.services.signal_execution_gate import SignalExecutionGateService, signal_execution_gate_service
-from app.services.signal_service import signal_service
 from app.services.strategy_performance_service import score_bucket_for
 from app.services.strategy_testing.runner import strategy_test_user_uuid
 from app.services.strategy_testing.schemas import (
@@ -22,10 +19,10 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestSignalEvent,
     StrategyTestTrade,
 )
 from app.services.strategy_testing.stores import ClickHouseStrategyTestStore, PostgresStrategyTestRunStore
-from app.services.virtual_trading import virtual_trading_service
 
 
 class ForwardRunStore(Protocol):
@@ -60,6 +57,9 @@ class ForwardTradeStore(Protocol):
     def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
         ...
 
+    def write_signal_events(self, signal_events: Sequence[StrategyTestSignalEvent]) -> None:
+        ...
+
     def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
         ...
 
@@ -79,19 +79,6 @@ class ForwardVirtualTrading(Protocol):
         ...
 
 
-class ForwardPendingEntryService(Protocol):
-    def arm_from_signal(
-        self,
-        *,
-        user_id: str | UUID,
-        signal_id: str | UUID,
-        mode: str,
-        request: ManualConfirmRequest | dict[str, Any],
-        execution_profile: ResolvedExecutionProfile,
-    ) -> Any:
-        ...
-
-
 class ForwardScanner(Protocol):
     def process_tick(self, tick: MarketData) -> Any:
         ...
@@ -105,6 +92,7 @@ class ForwardRuntimeResult:
     opened_trades: int = 0
     pending_entries_armed: int = 0
     trades_written: int = 0
+    signal_events_written: int = 0
     metrics_written: int = 0
     runtime_state_updates: int = 0
     cancelled_runs: int = 0
@@ -117,6 +105,7 @@ class ForwardRuntimeResult:
         self.opened_trades += other.opened_trades
         self.pending_entries_armed += other.pending_entries_armed
         self.trades_written += other.trades_written
+        self.signal_events_written += other.signal_events_written
         self.metrics_written += other.metrics_written
         self.runtime_state_updates += other.runtime_state_updates
         self.cancelled_runs += other.cancelled_runs
@@ -131,15 +120,13 @@ class ForwardStrategyTestRuntime:
         trade_store: ForwardTradeStore | None = None,
         signal_writer: ForwardSignalWriter | None = None,
         virtual_trading: ForwardVirtualTrading | None = None,
-        pending_entries: ForwardPendingEntryService | None = None,
         execution_gate: SignalExecutionGateService | None = None,
         scanner: ForwardScanner | None = None,
     ) -> None:
         self._run_store = run_store or PostgresStrategyTestRunStore()
         self._trade_store = trade_store or ClickHouseStrategyTestStore()
-        self._signal_writer = signal_writer or signal_service
-        self._virtual_trading = virtual_trading or virtual_trading_service
-        self._pending_entries = pending_entries or pending_entry_service
+        self._signal_writer = signal_writer
+        self._virtual_trading = virtual_trading or ForwardIsolatedVirtualTrading()
         self._execution_gate = execution_gate or signal_execution_gate_service
         self._scanner = scanner
 
@@ -159,7 +146,10 @@ class ForwardStrategyTestRuntime:
                 "opened_trades": _counter(detail.run.runtime_state, "opened_trades"),
                 "pending_entries_armed": _counter(detail.run.runtime_state, "pending_entries_armed"),
                 "trades_written": _counter(detail.run.runtime_state, "trades_written"),
+                "signal_events_written": _counter(detail.run.runtime_state, "signal_events_written"),
                 "metrics_written": _counter(detail.run.runtime_state, "metrics_written"),
+                "forward_account": _initial_forward_account(request),
+                "forward_positions": list(detail.run.runtime_state.get("forward_positions") or []),
                 "last_error": None,
             },
         )
@@ -193,6 +183,7 @@ class ForwardStrategyTestRuntime:
                     "last_symbol": tick.symbol.upper(),
                     "last_price": tick.price,
                     "last_tick_timestamp": tick.timestamp,
+                    **_mark_to_market_forward_account(run, tick),
                 },
             )
             result.runtime_state_updates += 1
@@ -216,17 +207,20 @@ class ForwardStrategyTestRuntime:
 
         for run in runs:
             try:
-                radar_signal, _ = self._signal_writer.upsert_strategy_signal(
-                    signal,
-                    exchange=signal.exchange,
-                    explanation=list(signal.explanation),
-                )
+                radar_signal = self._radar_signal_for_forward_run(run, signal)
                 gate = radar_signal.execution_gate or self._execution_gate.evaluate(radar_signal)
                 result.signals_processed += 1
                 if gate.can_enter_now:
                     opened = self._open_virtual_trade(run, radar_signal)
+                    event = _strategy_test_signal_event_from_forward_signal(
+                        run=run,
+                        signal=radar_signal,
+                        gate=gate,
+                        trade=opened,
+                    )
                     result.opened_trades += 1
                     result.trades_written += self._write_trade(run, radar_signal, opened)
+                    result.signal_events_written += self._write_signal_event(event)
                     result.metrics_written += self._write_metric(run, radar_signal, opened)
                     self._increment_runtime_state(
                         run,
@@ -234,31 +228,50 @@ class ForwardStrategyTestRuntime:
                             "processed_signals": 1,
                             "opened_trades": 1,
                             "trades_written": 1,
+                            "signal_events_written": 1,
                             "metrics_written": 1,
                             "last_signal_id": radar_signal.id,
                             "last_gate_status": gate.status,
                             "last_feed_kind": gate.feed_kind,
                             "last_trade_id": opened.id,
+                            **_apply_forward_trade_open(run, opened),
                         },
                     )
                 elif gate.can_arm_pending:
-                    self._arm_pending_entry(run, radar_signal, gate)
+                    event = _strategy_test_signal_event_from_forward_signal(
+                        run=run,
+                        signal=radar_signal,
+                        gate=gate,
+                        funnel_stage="pending",
+                        outcome="pending",
+                    )
                     result.pending_entries_armed += 1
+                    result.signal_events_written += self._write_signal_event(event)
                     self._increment_runtime_state(
                         run,
                         {
                             "processed_signals": 1,
                             "pending_entries_armed": 1,
+                            "signal_events_written": 1,
                             "last_signal_id": radar_signal.id,
                             "last_gate_status": gate.status,
                             "last_feed_kind": gate.feed_kind,
                         },
                     )
                 else:
+                    event = _strategy_test_signal_event_from_forward_signal(
+                        run=run,
+                        signal=radar_signal,
+                        gate=gate,
+                        funnel_stage="blocked" if gate.status == "blocked" else "no_entry",
+                        outcome="blocked" if gate.status == "blocked" else "no_entry",
+                    )
+                    result.signal_events_written += self._write_signal_event(event)
                     self._increment_runtime_state(
                         run,
                         {
                             "processed_signals": 1,
+                            "signal_events_written": 1,
                             "last_signal_id": radar_signal.id,
                             "last_gate_status": gate.status,
                             "last_feed_kind": gate.feed_kind,
@@ -278,6 +291,20 @@ class ForwardStrategyTestRuntime:
                 )
                 result.runtime_state_updates += 1
         return result
+
+    def _radar_signal_for_forward_run(
+        self,
+        run: StrategyTestRunResponse,
+        signal: StrategySignal,
+    ) -> RadarSignal:
+        if self._signal_writer is not None:
+            radar_signal, _ = self._signal_writer.upsert_strategy_signal(
+                signal,
+                exchange=signal.exchange,
+                explanation=list(signal.explanation),
+            )
+            return radar_signal
+        return _forward_radar_signal_from_strategy_signal(run, signal)
 
     def _running_forward_runs(self) -> list[StrategyTestRunResponse]:
         return _forward_runs(self._run_store.list_runs(user_id=None, limit=500, status="running"))
@@ -303,20 +330,6 @@ class ForwardStrategyTestRuntime:
             _manual_confirm_request(run),
         )
 
-    def _arm_pending_entry(
-        self,
-        run: StrategyTestRunResponse,
-        signal: RadarSignal,
-        gate: SignalExecutionGateSnapshot,
-    ) -> Any:
-        return self._pending_entries.arm_from_signal(
-            user_id=_matrix_user_id(run),
-            signal_id=signal.id,
-            mode="virtual",
-            request=_manual_confirm_request(run, auto_enter_on_confirmation=True),
-            execution_profile=_execution_profile_from_run(run, gate),
-        )
-
     def _write_trade(
         self,
         run: StrategyTestRunResponse,
@@ -325,6 +338,10 @@ class ForwardStrategyTestRuntime:
     ) -> int:
         row = _strategy_test_trade_from_virtual_trade(run=run, signal=signal, trade=trade)
         self._trade_store.write_trades([row])
+        return 1
+
+    def _write_signal_event(self, event: StrategyTestSignalEvent) -> int:
+        self._trade_store.write_signal_events([event])
         return 1
 
     def _write_metric(
@@ -355,12 +372,279 @@ class ForwardStrategyTestRuntime:
                 "opened_trades",
                 "pending_entries_armed",
                 "trades_written",
+                "signal_events_written",
                 "metrics_written",
             }:
                 patch[key] = _counter(state, key) + int(value or 0)
             else:
                 patch[key] = value
         return self._run_store.update_runtime_state(run.run_id, patch)
+
+
+class ForwardIsolatedVirtualTrading:
+    def open_virtual_trade(self, signal: RadarSignal, request: ManualConfirmRequest) -> VirtualTrade:
+        entry_price = _entry_price(signal)
+        size_usd = _virtual_size_usd(request)
+        quantity = size_usd / entry_price if entry_price > 0 else 0.0
+        opened_at = signal.created_at.astimezone(timezone.utc)
+        return VirtualTrade(
+            id=_forward_trade_id(signal.id),
+            user_id=request.user_id,
+            signal_id=signal.id,
+            exchange=signal.exchange,
+            symbol=signal.symbol,
+            strategy=signal.strategy,
+            timeframe=signal.timeframe,
+            side=signal.direction,
+            entry_price=entry_price,
+            current_price=entry_price,
+            size_usd=size_usd,
+            quantity=quantity,
+            initial_quantity=quantity,
+            remaining_quantity=quantity,
+            initial_size_usd=size_usd,
+            remaining_size_usd=size_usd,
+            leverage=request.leverage,
+            risk_percent=float(request.risk_percent or 1.0),
+            risk_amount=size_usd * float(request.risk_percent or 1.0) / 100,
+            risk_reward=float(signal.selected_rr or signal.risk_reward or 0.0),
+            stop_loss=float(signal.stop_loss or entry_price),
+            take_profit=[price for price in [signal.take_profit_1, signal.take_profit_2] if price is not None],
+            fees=size_usd * request.fee_rate,
+            slippage_bps=request.slippage_bps,
+            requested_size_usd=size_usd,
+            filled_size_usd=size_usd,
+            opened_at=opened_at,
+            updated_at=opened_at,
+        )
+
+
+def _forward_radar_signal_from_strategy_signal(
+    run: StrategyTestRunResponse,
+    signal: StrategySignal,
+) -> RadarSignal:
+    created_at = _signal_timestamp_to_utc(signal.timestamp)
+    return RadarSignal(
+        id=_forward_signal_id(run, signal),
+        symbol=signal.symbol,
+        exchange=signal.exchange,
+        strategy=signal.strategy,
+        direction=signal.direction.lower(),
+        confidence=signal.confidence,
+        risk_reward=signal.risk_reward,
+        first_target_rr=signal.first_target_rr,
+        final_target_rr=signal.final_target_rr,
+        selected_rr=signal.selected_rr,
+        selected_rr_target=signal.selected_rr_target,
+        min_rr_ratio=signal.min_rr_ratio,
+        urgency=signal.urgency,
+        status=signal.status,
+        score=signal.score,
+        timeframe=signal.timeframe,
+        candle_state=signal.candle_state,
+        entry_min=signal.entry_min,
+        entry_max=signal.entry_max,
+        stop_loss=signal.stop_loss,
+        take_profit_1=signal.take_profit_1,
+        take_profit_2=signal.take_profit_2,
+        explanation=list(signal.explanation),
+        risks=list(signal.risks),
+        score_breakdown=signal.score_breakdown,
+        status_reason=signal.status_reason,
+        quality=signal.quality,
+        regime=signal.regime,
+        setup=signal.setup,
+        confirmation=signal.confirmation,
+        trigger=signal.trigger,
+        invalidation=signal.invalidation,
+        exit_plan=signal.exit_plan,
+        trade_plan=signal.trade_plan,
+        edge=signal.edge,
+        no_trade_filter=signal.no_trade_filter,
+        decision=signal.decision,
+        execution_gate=signal.execution_gate,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+
+def _strategy_test_signal_event_from_forward_signal(
+    *,
+    run: StrategyTestRunResponse,
+    signal: RadarSignal,
+    gate: SignalExecutionGateSnapshot,
+    trade: VirtualTrade | None = None,
+    funnel_stage: str | None = None,
+    outcome: str | None = None,
+) -> StrategyTestSignalEvent:
+    event_time = signal.created_at.astimezone(timezone.utc)
+    filled = trade is not None
+    blocked_reason_code = _first_gate_reason_code(gate)
+    stage = funnel_stage or ("filled" if filled else "signal")
+    event_outcome = outcome or ("open" if filled else None)
+    return StrategyTestSignalEvent(
+        run_id=run.run_id,
+        user_id=strategy_test_user_uuid(_matrix_user_id(run)),
+        mode=_matrix_mode(run),
+        test_type="forward_virtual",
+        strategy_code=signal.strategy,
+        strategy_version=str(signal.trade_plan.metadata.get("strategy_version", "")) if signal.trade_plan else "",
+        exchange=signal.exchange,
+        symbol=signal.symbol,
+        timeframe=signal.timeframe,
+        direction=signal.direction,
+        signal_id=signal.id,
+        synthetic_signal_id=signal.id,
+        signal_key=_forward_signal_key(run, signal),
+        event_time=event_time,
+        candle_time=event_time,
+        signal_score=float(signal.score) if signal.score is not None else None,
+        market_regime=_market_regime(signal),
+        score_bucket=_score_bucket(signal.score),
+        status=signal.status,
+        gate_status=gate.status,
+        feed_kind=gate.feed_kind,
+        trigger_passed=bool(gate.can_enter_now or gate.can_arm_pending or getattr(signal.trigger, "passed", False)),
+        trigger_reason_code=blocked_reason_code if gate.status != "passed" else None,
+        execution_candidate=bool(gate.can_enter_now or gate.can_arm_pending or gate.feed_kind == "execution_signal"),
+        entry_touched=filled,
+        filled=filled,
+        closed=bool(trade and trade.closed_at is not None),
+        outcome=event_outcome,
+        funnel_stage=stage,
+        risk_rejected=_gate_has_reason_source(gate, {"risk", "rr", "no_trade"}),
+        execution_rejected=gate.status == "blocked" and gate.feed_kind == "blocked",
+        no_entry=stage in {"blocked", "no_entry"},
+        rejection_reason_code=blocked_reason_code if gate.status == "blocked" else None,
+        blocked_reason_code=blocked_reason_code if gate.status == "blocked" else None,
+        selected_rr=signal.selected_rr or signal.risk_reward,
+        entry_min=_optional_decimal(signal.entry_min),
+        entry_max=_optional_decimal(signal.entry_max),
+        stop_loss=_optional_decimal(signal.stop_loss),
+        features_snapshot=signal.model_dump(mode="json", exclude={"card_view", "details_view"}),
+        trade_plan=signal.trade_plan.model_dump(mode="json") if signal.trade_plan else {},
+        metadata={
+            "test_type": "forward_virtual",
+            "trade_id": trade.id if trade else None,
+            "runtime": "forward_strategy_test",
+        },
+        tags=_run_tags(run),
+        created_at=_now_utc(),
+    )
+
+
+def _initial_forward_account(request: StrategyTestRunRequest) -> dict[str, Any]:
+    initial_capital = _decimal(request.initial_capital, Decimal("1000"))
+    return _serialize_forward_account(
+        {
+            "initial_capital": initial_capital,
+            "balance": initial_capital,
+            "equity": initial_capital,
+            "realized_pnl": Decimal("0"),
+            "unrealized_pnl": Decimal("0"),
+            "fees": Decimal("0"),
+            "slippage": Decimal("0"),
+            "open_positions": 0,
+            "closed_positions": 0,
+        }
+    )
+
+
+def _apply_forward_trade_open(
+    run: StrategyTestRunResponse,
+    trade: VirtualTrade,
+) -> dict[str, Any]:
+    account = _forward_account_from_runtime(run)
+    fees = _decimal(trade.fees, Decimal("0"))
+    slippage = _decimal(trade.slippage_bps, Decimal("0"))
+    account["balance"] -= fees
+    account["fees"] += fees
+    account["slippage"] += slippage
+    account["open_positions"] += 1
+    account["equity"] = account["balance"] + account["unrealized_pnl"]
+
+    positions = _forward_positions(run)
+    positions.append(
+        {
+            "trade_id": trade.id,
+            "signal_id": trade.signal_id,
+            "exchange": trade.exchange,
+            "symbol": trade.symbol,
+            "strategy": trade.strategy,
+            "timeframe": trade.timeframe,
+            "side": trade.side,
+            "entry_price": str(_decimal(trade.entry_price, Decimal("0"))),
+            "current_price": str(_decimal(trade.current_price, Decimal("0"))),
+            "size_usd": str(_decimal(trade.size_usd, Decimal("0"))),
+            "quantity": str(_decimal(trade.quantity, Decimal("0"))),
+            "stop_loss": str(_decimal(trade.stop_loss, Decimal("0"))),
+            "take_profit": [str(_decimal(price, Decimal("0"))) for price in trade.take_profit],
+            "unrealized_pnl": "0",
+            "fees": str(fees),
+            "status": "open",
+            "opened_at": trade.opened_at.astimezone(timezone.utc).isoformat(),
+        }
+    )
+    return {
+        "forward_account": _serialize_forward_account(account),
+        "forward_positions": positions,
+    }
+
+
+def _mark_to_market_forward_account(
+    run: StrategyTestRunResponse,
+    tick: MarketData,
+) -> dict[str, Any]:
+    positions = _forward_positions(run)
+    if not positions:
+        return {}
+
+    tick_exchange = tick.exchange.strip().lower()
+    tick_symbol = tick.symbol.strip().upper()
+    price = _decimal(tick.price, Decimal("0"))
+    total_unrealized = Decimal("0")
+    realized_delta = Decimal("0")
+    closed_count = 0
+    closed_at = _signal_timestamp_to_utc(tick.timestamp).isoformat()
+    updated_positions: list[dict[str, Any]] = []
+    for position in positions:
+        current = dict(position)
+        if (
+            str(current.get("exchange", "")).strip().lower() == tick_exchange
+            and str(current.get("symbol", "")).strip().upper() == tick_symbol
+            and str(current.get("status") or "open") == "open"
+        ):
+            entry_price = _decimal(current.get("entry_price"), Decimal("0"))
+            quantity = _decimal(current.get("quantity"), Decimal("0"))
+            side = str(current.get("side") or "long").lower()
+            pnl = (price - entry_price) * quantity if side == "long" else (entry_price - price) * quantity
+            current["current_price"] = str(price)
+            close_reason = _forward_close_reason(current, price, side)
+            if close_reason is not None:
+                current["status"] = "closed"
+                current["close_reason"] = close_reason
+                current["exit_price"] = str(price)
+                current["closed_at"] = closed_at
+                current["realized_pnl"] = _decimal_string(pnl)
+                current["unrealized_pnl"] = "0"
+                realized_delta += pnl
+                closed_count += 1
+            else:
+                current["unrealized_pnl"] = _decimal_string(pnl)
+        if str(current.get("status") or "open") == "open":
+            total_unrealized += _decimal(current.get("unrealized_pnl"), Decimal("0"))
+        updated_positions.append(current)
+
+    account = _forward_account_from_runtime(run)
+    account["realized_pnl"] += realized_delta
+    account["unrealized_pnl"] = total_unrealized
+    account["open_positions"] = max(0, account["open_positions"] - closed_count)
+    account["closed_positions"] += closed_count
+    account["equity"] = account["balance"] + account["realized_pnl"] + total_unrealized
+    return {
+        "forward_account": _serialize_forward_account(account),
+        "forward_positions": updated_positions,
+    }
 
 
 def _forward_runs(details: Sequence[StrategyTestRunDetailResponse]) -> list[StrategyTestRunResponse]:
@@ -405,33 +689,6 @@ def _manual_confirm_request(
             "strategy_test_run_id": str(run.run_id),
             "test_type": "forward_virtual",
         },
-    )
-
-
-def _execution_profile_from_run(
-    run: StrategyTestRunResponse,
-    gate: SignalExecutionGateSnapshot,
-) -> ResolvedExecutionProfile:
-    params = run.requested_matrix.get("params")
-    params = params if isinstance(params, dict) else {}
-    return ResolvedExecutionProfile(
-        execution_mode="virtual",
-        instrument_type=str(params.get("instrument_type") or "spot"),
-        risk_mode=str(params.get("risk_mode") or "percent"),
-        risk_percent=_decimal(params.get("risk_percent"), Decimal("1")),
-        fixed_risk_amount=_optional_decimal(params.get("fixed_risk_amount")),
-        fixed_risk_currency=str(params.get("fixed_risk_currency") or "USDT"),
-        leverage=_decimal(params.get("leverage"), Decimal("1")),
-        rr_guard_mode=str(params.get("rr_guard_mode") or "soft"),
-        min_rr_ratio=_decimal(params.get("min_rr_ratio"), Decimal("2.0")),
-        rr_target=str(params.get("rr_target") or "final"),
-        radar_display_mode=str(params.get("radar_display_mode") or "all_market_opportunities"),
-        sources={"forward_runtime": "strategy_test_run.requested_matrix"},
-        warnings=[
-            reason.message
-            for reason in [*gate.reasons, *gate.warnings]
-            if reason.severity != "blocker"
-        ],
     )
 
 
@@ -542,6 +799,148 @@ def _score_bucket(score: int | float | None) -> str:
     return score_bucket_for(score)
 
 
+def _forward_signal_id(run: StrategyTestRunResponse, signal: StrategySignal) -> str:
+    suffix = uuid5(
+        NAMESPACE_URL,
+        "|".join(
+            [
+                str(run.run_id),
+                signal.exchange.strip().lower(),
+                signal.symbol.strip().upper(),
+                signal.strategy,
+                signal.timeframe,
+                signal.direction,
+                str(signal.timestamp),
+            ]
+        ),
+    ).hex
+    return f"forward_sig_{suffix}"
+
+
+def _forward_signal_key(run: StrategyTestRunResponse, signal: RadarSignal) -> str:
+    return "|".join(
+        [
+            str(run.run_id),
+            signal.exchange.strip().lower(),
+            signal.symbol.strip().upper(),
+            signal.strategy,
+            signal.timeframe,
+            signal.direction,
+            signal.created_at.astimezone(timezone.utc).isoformat(),
+        ]
+    )
+
+
+def _forward_trade_id(signal_id: str) -> str:
+    if signal_id.startswith("forward_sig_"):
+        return f"forward_trade_{signal_id.removeprefix('forward_sig_')}"
+    return f"forward_trade_{uuid5(NAMESPACE_URL, signal_id).hex}"
+
+
+def _forward_close_reason(position: dict[str, Any], price: Decimal, side: str) -> str | None:
+    stop_loss = _decimal(position.get("stop_loss"), Decimal("0"))
+    take_profit = [
+        _decimal(target, Decimal("0"))
+        for target in (position.get("take_profit") if isinstance(position.get("take_profit"), list) else [])
+    ]
+    take_profit = [target for target in take_profit if target > 0]
+    if side == "short":
+        if stop_loss > 0 and price >= stop_loss:
+            return "stop_loss"
+        if any(price <= target for target in take_profit):
+            return "take_profit"
+        return None
+    if stop_loss > 0 and price <= stop_loss:
+        return "stop_loss"
+    if any(price >= target for target in take_profit):
+        return "take_profit"
+    return None
+
+
+def _entry_price(signal: RadarSignal) -> float:
+    for value in (signal.entry_min, signal.entry_max, signal.take_profit_1, signal.stop_loss):
+        price = _decimal(value, Decimal("0"))
+        if price > 0:
+            return float(price)
+    return 1.0
+
+
+def _virtual_size_usd(request: ManualConfirmRequest) -> float:
+    if request.size_usd is not None:
+        return float(request.size_usd)
+    account_balance = _decimal(request.account_balance, Decimal("100"))
+    return float(max(Decimal("1"), min(account_balance, Decimal("100"))))
+
+
+def _signal_timestamp_to_utc(value: int | float) -> datetime:
+    timestamp = float(value)
+    if timestamp > 10_000_000_000:
+        timestamp /= 1000
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+
+def _forward_account_from_runtime(run: StrategyTestRunResponse) -> dict[str, Any]:
+    account = run.runtime_state.get("forward_account")
+    if not isinstance(account, dict):
+        initial = _decimal(run.requested_matrix.get("initial_capital"), Decimal("1000"))
+        account = _serialize_forward_account(
+            {
+                "initial_capital": initial,
+                "balance": initial,
+                "equity": initial,
+                "realized_pnl": Decimal("0"),
+                "unrealized_pnl": Decimal("0"),
+                "fees": Decimal("0"),
+                "slippage": Decimal("0"),
+                "open_positions": 0,
+                "closed_positions": 0,
+            }
+        )
+    return {
+        "initial_capital": _decimal(account.get("initial_capital"), Decimal("1000")),
+        "balance": _decimal(account.get("balance"), Decimal("1000")),
+        "equity": _decimal(account.get("equity"), Decimal("1000")),
+        "realized_pnl": _decimal(account.get("realized_pnl"), Decimal("0")),
+        "unrealized_pnl": _decimal(account.get("unrealized_pnl"), Decimal("0")),
+        "fees": _decimal(account.get("fees"), Decimal("0")),
+        "slippage": _decimal(account.get("slippage"), Decimal("0")),
+        "open_positions": _counter(account, "open_positions"),
+        "closed_positions": _counter(account, "closed_positions"),
+    }
+
+
+def _serialize_forward_account(account: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "initial_capital": _decimal_string(_decimal(account.get("initial_capital"), Decimal("1000"))),
+        "balance": _decimal_string(_decimal(account.get("balance"), Decimal("1000"))),
+        "equity": _decimal_string(_decimal(account.get("equity"), Decimal("1000"))),
+        "realized_pnl": _decimal_string(_decimal(account.get("realized_pnl"), Decimal("0"))),
+        "unrealized_pnl": _decimal_string(_decimal(account.get("unrealized_pnl"), Decimal("0"))),
+        "fees": _decimal_string(_decimal(account.get("fees"), Decimal("0"))),
+        "slippage": _decimal_string(_decimal(account.get("slippage"), Decimal("0"))),
+        "open_positions": int(account.get("open_positions") or 0),
+        "closed_positions": int(account.get("closed_positions") or 0),
+    }
+
+
+def _forward_positions(run: StrategyTestRunResponse) -> list[dict[str, Any]]:
+    raw_positions = run.runtime_state.get("forward_positions")
+    if not isinstance(raw_positions, list):
+        return []
+    return [dict(position) for position in raw_positions if isinstance(position, dict)]
+
+
+def _first_gate_reason_code(gate: SignalExecutionGateSnapshot) -> str | None:
+    for reason in [*gate.reasons, *gate.warnings]:
+        if reason.code:
+            return reason.code
+    return None
+
+
+def _gate_has_reason_source(gate: SignalExecutionGateSnapshot, sources: set[str]) -> bool:
+    return any(reason.source in sources for reason in [*gate.reasons, *gate.warnings])
+
+
 def _counter(state: dict[str, Any], key: str) -> int:
     try:
         return int(state.get(key) or 0)
@@ -556,6 +955,10 @@ def _decimal(value: Any, default: Decimal) -> Decimal:
         return default
 
 
+def _decimal_string(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
 def _optional_decimal(value: Any) -> Decimal | None:
     if value is None:
         return None
@@ -564,3 +967,7 @@ def _optional_decimal(value: Any) -> Decimal | None:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)

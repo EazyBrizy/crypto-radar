@@ -67,6 +67,7 @@ describe("StrategyTestingPanel", () => {
 
     expect(screen.getByRole("button", { name: "Research virtual" })).toHaveClass("active");
     expect(screen.getByRole("button", { name: "Production-like" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Forward virtual" })).toBeInTheDocument();
   });
 
   it("disables Run when the matrix is missing", () => {
@@ -193,6 +194,27 @@ describe("StrategyTestingPanel", () => {
       strategies: ["trend_pullback_continuation"],
       tags: ["backtest"],
       timeframes: ["1m", "5m", "15m"]
+    }));
+  });
+
+  it("runs a forward virtual strategy test when selected", async () => {
+    const user = userEvent.setup();
+    mocks.runStrategyTest.mockResolvedValue(strategyTestRun({
+      status: "queued",
+      test_type: "forward_virtual"
+    }));
+
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Forward virtual" }));
+    const runButton = screen.getByRole("button", { name: /Run strategy test/u });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    await user.click(runButton);
+
+    await waitFor(() => expect(mocks.runStrategyTest).toHaveBeenCalledTimes(1));
+    expect(mocks.runStrategyTest).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ["forward_virtual"],
+      test_type: "forward_virtual"
     }));
   });
 

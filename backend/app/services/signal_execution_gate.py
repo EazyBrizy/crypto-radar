@@ -317,6 +317,16 @@ def _trigger_failed_reason(
     if trigger is not None:
         message = getattr(trigger, "reason", None) or "Signal trigger is not confirmed."
         metadata = _model_metadata(trigger)
+        trigger_metadata = getattr(trigger, "metadata", {}) or {}
+        if isinstance(trigger_metadata, Mapping):
+            reason_code = trigger_metadata.get("reason_code")
+            if reason_code:
+                metadata.setdefault("reason_code", str(reason_code))
+                metadata.setdefault("trigger_reason_code", str(reason_code))
+            failed_checks = trigger_metadata.get("failed_checks")
+            if isinstance(failed_checks, list):
+                metadata.setdefault("failed_checks", [str(item) for item in failed_checks])
+                metadata.setdefault("trigger_failed_checks", [str(item) for item in failed_checks])
     return _reason(
         "trigger_not_confirmed",
         "blocker" if execution_candidate else "info",

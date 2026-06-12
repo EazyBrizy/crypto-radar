@@ -1108,6 +1108,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(signal.trigger.passed if signal.trigger else True)
         self.assertEqual(signal.trigger.trigger_type if signal.trigger else None, "breakout_retest")
         self.assertIn("breakout requires retest", signal.trigger.reason if signal.trigger else "")
+        _assert_trigger_reason_propagates(signal, "breakout_retest_required")
         self.assertEqual(signal.status, "ready")
 
     def test_breakout_retest_trigger_passes(self) -> None:
@@ -1172,6 +1173,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(signal.trigger.passed if signal.trigger else True)
         self.assertIn(signal.status, {"ready", "watchlist", "wait_for_pullback"})
         self.assertIn("structural zone", signal.trigger.reason if signal.trigger else "")
+        _assert_trigger_reason_propagates(signal, "trend_structural_zone_missing")
 
     def test_trend_pullback_required_htf_alignment_blocks_trigger(self) -> None:
         features = _breakout_features().model_copy(update={"history_length": 260})
@@ -1531,6 +1533,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
             "trigger_not_confirmed",
             {reason.code for reason in signal.execution_gate.reasons} if signal.execution_gate else set(),
         )
+        _assert_trigger_reason_propagates(signal, "liquidity_reclaim_missing")
 
     def test_sweep_ignores_nearest_target_that_is_behind_entry(self) -> None:
         features = _breakout_features().model_copy(
@@ -1768,7 +1771,7 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(signal)
-        self.assertEqual(signal.status, "ready")
+        self.assertEqual(signal.status, "rejected")
         self.assertIn("No-trade hard block", signal.status_reason or "")
         self.assertTrue(signal.no_trade_filter.blocked if signal and signal.no_trade_filter else False)
         self.assertIn("high_spread", signal.no_trade_filter.metadata.get("blocker_codes") if signal and signal.no_trade_filter else [])
@@ -3238,6 +3241,24 @@ def _with_trade_plan_metadata(
         deep=True,
     )
     return candidate.model_copy(update={"trade_plan": trade_plan})
+
+
+def _assert_trigger_reason_propagates(signal, reason_code: str) -> None:
+    assert signal.trigger is not None
+    assert signal.confirmation is not None
+    assert signal.trade_plan is not None
+    assert signal.execution_gate is not None
+
+    assert signal.trigger.metadata.get("reason_code") == reason_code
+    trigger_gate = next(
+        check
+        for check in signal.confirmation.checks
+        if check.name == "trigger_confirmation_gate"
+    )
+    assert trigger_gate.metadata.get("trigger_reason_code") == reason_code
+    assert signal.trade_plan.metadata.get("trigger_reason_code") == reason_code
+    gate_reason = next(reason for reason in signal.execution_gate.reasons if reason.code == "trigger_not_confirmed")
+    assert gate_reason.metadata.get("reason_code") == reason_code
 
 
 def _breakout_alpha_context(features: Features) -> AlphaMarketContext:

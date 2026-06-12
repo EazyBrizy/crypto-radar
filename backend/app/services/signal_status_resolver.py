@@ -384,6 +384,9 @@ def _confirmation_with_actionability_source_checks(
                 reason=_trigger_not_confirmed_reason(trigger) if blocked_by_trigger else "Signal trigger is confirmed",
                 metadata={
                     "reason_code": "trigger_not_confirmed" if blocked_by_trigger else None,
+                    "trigger_reason_code": _trigger_reason_code(trigger),
+                    "trigger_failed_checks": _trigger_failed_checks(trigger),
+                    "trigger_reason": trigger.reason if trigger is not None else None,
                     "trigger_passed": _trigger_passed(trigger),
                     "trigger_type": trigger.trigger_type if trigger is not None else "none",
                     "signal_actionable": _is_actionable_status(final_status),
@@ -431,6 +434,9 @@ def _trade_plan_with_actionability_source_metadata(
         "actionable_from_lower_timeframe_trigger": lower_timeframe_trigger and allow_lower_timeframe and signal_actionable,
         "trigger_passed": _trigger_passed(trigger),
         "trigger_type": trigger.trigger_type if trigger is not None else "none",
+        "trigger_reason_code": _trigger_reason_code(trigger),
+        "trigger_failed_checks": _trigger_failed_checks(trigger),
+        "trigger_reason": trigger.reason if trigger is not None else None,
     }
     if blocked_by_open:
         source_metadata.update(
@@ -531,6 +537,22 @@ def _trigger_confirmed_on_closed_candle(trigger: SignalTriggerSnapshot | None) -
         or ""
     ).strip().lower()
     return trigger_candle_state == "closed" and trigger.confirmed_at is not None
+
+
+def _trigger_reason_code(trigger: SignalTriggerSnapshot | None) -> str | None:
+    if trigger is None:
+        return None
+    value = trigger.metadata.get("reason_code")
+    return str(value) if value else None
+
+
+def _trigger_failed_checks(trigger: SignalTriggerSnapshot | None) -> list[str]:
+    if trigger is None:
+        return []
+    value = trigger.metadata.get("failed_checks")
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []
 
 
 def _trigger_not_confirmed_reason(trigger: SignalTriggerSnapshot | None) -> str:

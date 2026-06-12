@@ -915,6 +915,17 @@ def _liquidity_sweep_trigger(
         },
         success="Liquidity sweep reclaim trigger confirmed.",
     )
+    reason_code = _first_trigger_reason_code(
+        failed_checks,
+        {
+            "closed_candle": "forming_candle",
+            "confirmation_passed": "trigger_not_confirmed",
+            "swept_level_exists": "liquidity_sweep_level_missing",
+            "reclaim_close_confirmed": "liquidity_reclaim_missing",
+            "absorption_ok": "liquidity_absorption_missing",
+            "oi_flush_ok": "liquidity_oi_flush_missing",
+        },
+    )
     return _trigger_snapshot(
         signal,
         context,
@@ -926,6 +937,7 @@ def _liquidity_sweep_trigger(
         evidence=evidence,
         failed_checks=failed_checks,
         source="strategy_trigger_layer",
+        reason_code=reason_code,
     )
 
 
@@ -998,6 +1010,17 @@ def _breakout_trigger(
         },
         success="Breakout trigger confirmed.",
     )
+    reason_code = _first_trigger_reason_code(
+        failed_checks,
+        {
+            "closed_candle": "forming_candle",
+            "confirmation_passed": "trigger_not_confirmed",
+            "compression_existed": "breakout_compression_missing",
+            "closed_outside_breakout_level": "breakout_level_not_closed",
+            "breakout_closed": "breakout_close_missing",
+            "retest_ok": "breakout_retest_required",
+        },
+    )
     return _trigger_snapshot(
         signal,
         context,
@@ -1009,6 +1032,7 @@ def _breakout_trigger(
         evidence=evidence,
         failed_checks=failed_checks,
         source="strategy_trigger_layer",
+        reason_code=reason_code,
     )
 
 
@@ -1080,6 +1104,17 @@ def _trend_pullback_trigger(
         },
         success="Trend pullback trigger confirmed.",
     )
+    reason_code = _first_trigger_reason_code(
+        failed_checks,
+        {
+            "closed_candle": "forming_candle",
+            "structural_ok": "trend_structural_zone_missing",
+            "htf_alignment_ok": "trend_htf_alignment_missing",
+            "pullback_held_or_reclaimed": "trend_pullback_hold_missing",
+            "ema200_chop_clear": "trend_chop_blocked",
+            "confirmation_passed": "trigger_not_confirmed",
+        },
+    )
     return _trigger_snapshot(
         signal,
         context,
@@ -1091,6 +1126,7 @@ def _trend_pullback_trigger(
         evidence=evidence,
         failed_checks=failed_checks,
         source="strategy_trigger_layer",
+        reason_code=reason_code,
     )
 
 
@@ -1106,6 +1142,7 @@ def _trigger_snapshot(
     evidence: dict[str, Any],
     failed_checks: list[str],
     source: str,
+    reason_code: str | None = None,
 ) -> SignalTriggerSnapshot:
     confirmed_at = _signal_timestamp_datetime(signal.timestamp) if passed else None
     trigger_candle_state = signal.candle_state
@@ -1121,6 +1158,7 @@ def _trigger_snapshot(
         "trigger_candle_state": trigger_candle_state,
         "confirmed_on_closed_candle": confirmed_on_closed_candle,
         "trigger_confirmed_at": confirmed_at.isoformat() if confirmed_at is not None else None,
+        "reason_code": None if passed else reason_code,
         **evidence,
     }
     check = SignalLayerCheck(
@@ -1154,6 +1192,15 @@ def _first_trigger_reason(
     if not failed_checks:
         return success
     return reasons.get(failed_checks[0], "Strategy trigger is not confirmed.")
+
+
+def _first_trigger_reason_code(
+    failed_checks: list[str],
+    reason_codes: Mapping[str, str],
+) -> str | None:
+    if not failed_checks:
+        return None
+    return reason_codes.get(failed_checks[0], "trigger_not_confirmed")
 
 
 def _breakout_compression_ok(signal: StrategySignal, context: StrategyEvaluationContext) -> bool:

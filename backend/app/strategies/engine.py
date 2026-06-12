@@ -8,10 +8,8 @@ from app.services.edge_calibration import edge_calibration_service
 from app.services.market_regime import MarketWideRegimeContext
 from app.services.signal_execution_gate import signal_execution_gate_service
 from app.services.support_resistance import SupportResistanceSnapshot
-from app.strategies.breakout import VolatilitySqueezeBreakoutStrategy
-from app.strategies.liquidity_sweep import LiquiditySweepReversalStrategy
 from app.strategies.pipeline import MarketQualityInput, StrategyEvaluationContext, StrategySignalPipeline
-from app.strategies.trend_pullback import TrendPullbackContinuationStrategy
+from app.strategies.plugins import StrategyPluginDiagnostics, StrategyPluginRegistry, default_strategy_plugin_registry
 
 
 EXECUTION_PROFILE_PARAM_KEYS = {
@@ -54,12 +52,9 @@ EXECUTION_PROFILE_PARAM_KEYS = {
 class StrategyEngine:
     """Запускает MVP-набор стратегий и возвращает отсортированные сигналы."""
 
-    def __init__(self) -> None:
-        self._strategies = [
-            TrendPullbackContinuationStrategy(),
-            VolatilitySqueezeBreakoutStrategy(),
-            LiquiditySweepReversalStrategy(),
-        ]
+    def __init__(self, strategy_registry: StrategyPluginRegistry | None = None) -> None:
+        self._strategy_registry = strategy_registry or default_strategy_plugin_registry
+        self._strategies = self._strategy_registry.trading_plugins
         self._pipeline = StrategySignalPipeline()
 
     @property
@@ -131,6 +126,18 @@ class StrategyEngine:
                     signals.append(finalized)
             await asyncio.sleep(0)
         return sorted(signals, key=lambda signal: signal.score, reverse=True)
+
+    def generate_diagnostics(
+        self,
+        features: Features,
+        strategy_configs: Mapping[str, Any] | None = None,
+    ) -> list[StrategyPluginDiagnostics]:
+        diagnostics: list[StrategyPluginDiagnostics] = []
+        for plugin in self._strategy_registry.diagnostic_plugins:
+            runtime_config = strategy_configs.get(plugin.name) if strategy_configs is not None else None
+            params = getattr(runtime_config, "params", {}) if runtime_config is not None else {}
+            diagnostics.append(plugin.diagnostics(features, params))
+        return diagnostics
 
 
 def _strategy_logic_params(values: Mapping[str, Any]) -> dict[str, Any]:

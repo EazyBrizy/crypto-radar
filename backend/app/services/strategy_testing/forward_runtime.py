@@ -4,12 +4,19 @@ import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol, Sequence
+from typing import Any, Literal, Protocol, Sequence
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.schemas.market import MarketData
-from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot, StrategySignal
+from app.schemas.signal import RadarSignal, SignalExecutionGateReason, SignalExecutionGateSnapshot, StrategySignal
 from app.schemas.trade import ManualConfirmRequest, VirtualTrade
+from app.schemas.user import RiskManagementSettings
+from app.services.portfolio_risk import (
+    PortfolioRiskContext,
+    PortfolioRiskDecision,
+    PortfolioRiskLimits,
+    portfolio_risk_service,
+)
 from app.services.signal_execution_gate import SignalExecutionGateService, signal_execution_gate_service
 from app.services.strategy_performance_service import score_bucket_for
 from app.services.strategy_testing.runner import strategy_test_user_uuid
@@ -211,7 +218,38 @@ class ForwardStrategyTestRuntime:
                 gate = radar_signal.execution_gate or self._execution_gate.evaluate(radar_signal)
                 result.signals_processed += 1
                 if gate.can_enter_now:
-                    opened = self._open_virtual_trade(run, radar_signal)
+                    gate_request = _manual_confirm_request(run)
+                    portfolio_decision = _forward_portfolio_decision(run, radar_signal, gate_request)
+                    if not portfolio_decision.can_enter:
+                        gate = _gate_blocked_by_portfolio(gate, portfolio_decision)
+                        radar_signal = radar_signal.model_copy(update={"execution_gate": gate})
+                        event = _strategy_test_signal_event_from_forward_signal(
+                            run=run,
+                            signal=radar_signal,
+                            gate=gate,
+                            funnel_stage="blocked",
+                            outcome="blocked",
+                        )
+                        result.signal_events_written += self._write_signal_event(event)
+                        self._increment_runtime_state(
+                            run,
+                            {
+                                "processed_signals": 1,
+                                "signal_events_written": 1,
+                                "last_signal_id": radar_signal.id,
+                                "last_gate_status": gate.status,
+                                "last_feed_kind": gate.feed_kind,
+                                "last_portfolio_risk_action": portfolio_decision.action,
+                                "last_portfolio_risk_reason_code": portfolio_decision.reason_code,
+                            },
+                        )
+                        result.runtime_state_updates += 1
+                        continue
+                    if portfolio_decision.action == "reduce_size":
+                        gate_request = _request_with_portfolio_size(gate_request, portfolio_decision)
+                        gate = _gate_with_portfolio_warning(gate, portfolio_decision)
+                        radar_signal = radar_signal.model_copy(update={"execution_gate": gate})
+                    opened = self._open_virtual_trade(run, radar_signal, request=gate_request)
                     event = _strategy_test_signal_event_from_forward_signal(
                         run=run,
                         signal=radar_signal,
@@ -324,10 +362,16 @@ class ForwardStrategyTestRuntime:
             cancelled += 1
         return cancelled
 
-    def _open_virtual_trade(self, run: StrategyTestRunResponse, signal: RadarSignal) -> VirtualTrade:
+    def _open_virtual_trade(
+        self,
+        run: StrategyTestRunResponse,
+        signal: RadarSignal,
+        *,
+        request: ManualConfirmRequest | None = None,
+    ) -> VirtualTrade:
         return self._virtual_trading.open_virtual_trade(
             signal,
-            _manual_confirm_request(run),
+            request or _manual_confirm_request(run),
         )
 
     def _write_trade(
@@ -577,6 +621,8 @@ def _apply_forward_trade_open(
             "current_price": str(_decimal(trade.current_price, Decimal("0"))),
             "size_usd": str(_decimal(trade.size_usd, Decimal("0"))),
             "quantity": str(_decimal(trade.quantity, Decimal("0"))),
+            "risk_percent": str(_decimal(trade.risk_percent, Decimal("0"))),
+            "risk_amount": str(_decimal(trade.risk_amount, Decimal("0"))),
             "stop_loss": str(_decimal(trade.stop_loss, Decimal("0"))),
             "take_profit": [str(_decimal(price, Decimal("0"))) for price in trade.take_profit],
             "unrealized_pnl": "0",
@@ -678,18 +724,136 @@ def _manual_confirm_request(
     auto_enter_on_confirmation: bool = False,
 ) -> ManualConfirmRequest:
     matrix = run.requested_matrix
+    risk_settings = _forward_risk_settings(run)
     return ManualConfirmRequest(
         mode="virtual",
         user_id=_matrix_user_id(run),
         auto_enter_on_confirmation=auto_enter_on_confirmation,
         account_balance=float(_decimal(matrix.get("initial_capital"), Decimal("1000"))),
+        risk_percent=risk_settings.risk_per_trade_percent,
         fee_rate=float(_decimal(matrix.get("fee_rate"), Decimal("0"))),
         slippage_bps=float(_decimal(matrix.get("slippage_bps"), Decimal("0"))),
+        max_open_positions=_forward_max_concurrent_positions(run),
         metadata={
             "strategy_test_run_id": str(run.run_id),
             "test_type": "forward_virtual",
         },
     )
+
+
+def _forward_portfolio_decision(
+    run: StrategyTestRunResponse,
+    signal: RadarSignal,
+    request: ManualConfirmRequest,
+) -> PortfolioRiskDecision:
+    account = _forward_account_from_runtime(run)
+    risk_settings = _forward_risk_settings(run)
+    open_positions = _open_forward_positions(run)
+    equity = float(account["equity"])
+    proposed_risk_amount = _virtual_size_usd(request) * float(request.risk_percent or 1.0) / 100
+    return portfolio_risk_service.evaluate(
+        PortfolioRiskContext(
+            account_equity=equity,
+            proposed_risk_amount=proposed_risk_amount,
+            open_risk_amount=_forward_positions_risk(open_positions),
+            symbol_open_risk_amount=_forward_positions_risk(open_positions, symbol=signal.symbol),
+            strategy_open_risk_amount=_forward_positions_risk(open_positions, strategy=signal.strategy),
+            daily_loss_amount=max(0.0, -float(account["realized_pnl"])),
+            account_drawdown_percent=_forward_account_drawdown_percent(account),
+            open_position_count=len(open_positions),
+            strategy_losses_today=_forward_strategy_losses_today(run, signal.strategy),
+        ),
+        PortfolioRiskLimits(
+            max_open_risk_percent=risk_settings.max_open_risk_percent,
+            max_symbol_risk_percent=risk_settings.max_symbol_risk_percent,
+            max_strategy_exposure_percent=risk_settings.max_strategy_exposure_percent,
+            max_correlated_risk_percent=0.0,
+            max_daily_loss_percent=risk_settings.max_daily_loss_percent,
+            max_account_drawdown_percent=risk_settings.max_account_drawdown_percent,
+            max_concurrent_positions=request.max_open_positions,
+            max_strategy_losses_per_day=risk_settings.max_strategy_losses_per_day,
+        ),
+    )
+
+
+def _request_with_portfolio_size(
+    request: ManualConfirmRequest,
+    decision: PortfolioRiskDecision,
+) -> ManualConfirmRequest:
+    metadata = {
+        **request.metadata,
+        "portfolio_risk": _portfolio_decision_metadata(decision),
+    }
+    return request.model_copy(
+        update={
+            "size_usd": max(0.0, _virtual_size_usd(request) * decision.size_multiplier),
+            "metadata": metadata,
+        }
+    )
+
+
+def _gate_blocked_by_portfolio(
+    gate: SignalExecutionGateSnapshot,
+    decision: PortfolioRiskDecision,
+) -> SignalExecutionGateSnapshot:
+    reason = _portfolio_gate_reason(decision, severity="blocker")
+    return gate.model_copy(
+        update={
+            "status": "blocked",
+            "feed_kind": "blocked",
+            "can_notify": False,
+            "can_enter_now": False,
+            "can_arm_pending": False,
+            "can_show_in_execution_feed": False,
+            "reasons": [*gate.reasons, reason],
+            "metadata": {
+                **gate.metadata,
+                "portfolio_risk": _portfolio_decision_metadata(decision),
+            },
+        }
+    )
+
+
+def _gate_with_portfolio_warning(
+    gate: SignalExecutionGateSnapshot,
+    decision: PortfolioRiskDecision,
+) -> SignalExecutionGateSnapshot:
+    reason = _portfolio_gate_reason(decision, severity="warning")
+    return gate.model_copy(
+        update={
+            "warnings": [*gate.warnings, reason],
+            "metadata": {
+                **gate.metadata,
+                "portfolio_risk": _portfolio_decision_metadata(decision),
+            },
+        }
+    )
+
+
+def _portfolio_gate_reason(
+    decision: PortfolioRiskDecision,
+    *,
+    severity: Literal["blocker", "warning"],
+) -> SignalExecutionGateReason:
+    return SignalExecutionGateReason(
+        code=decision.reason_code,
+        severity=severity,
+        source="portfolio_risk",
+        message=decision.message,
+        metadata=_portfolio_decision_metadata(decision),
+    )
+
+
+def _portfolio_decision_metadata(decision: PortfolioRiskDecision) -> dict[str, Any]:
+    return {
+        "action": decision.action,
+        "reason_code": decision.reason_code,
+        "reason_codes": list(decision.reason_codes),
+        "proposed_risk_amount": decision.proposed_risk_amount,
+        "approved_risk_amount": decision.approved_risk_amount,
+        "size_multiplier": decision.size_multiplier,
+        "metrics": dict(decision.metrics),
+    }
 
 
 def _strategy_test_trade_from_virtual_trade(
@@ -928,6 +1092,90 @@ def _forward_positions(run: StrategyTestRunResponse) -> list[dict[str, Any]]:
     if not isinstance(raw_positions, list):
         return []
     return [dict(position) for position in raw_positions if isinstance(position, dict)]
+
+
+def _open_forward_positions(run: StrategyTestRunResponse) -> list[dict[str, Any]]:
+    return [
+        position
+        for position in _forward_positions(run)
+        if str(position.get("status") or "open").lower() == "open"
+    ]
+
+
+def _forward_positions_risk(
+    positions: Sequence[dict[str, Any]],
+    *,
+    symbol: str | None = None,
+    strategy: str | None = None,
+) -> float:
+    symbol_key = symbol.strip().upper() if symbol is not None else None
+    strategy_key = strategy.strip() if strategy is not None else None
+    return float(
+        sum(
+            _forward_position_risk(position)
+            for position in positions
+            if (symbol_key is None or str(position.get("symbol") or "").strip().upper() == symbol_key)
+            and (strategy_key is None or str(position.get("strategy") or "").strip() == strategy_key)
+        )
+    )
+
+
+def _forward_position_risk(position: dict[str, Any]) -> Decimal:
+    risk_amount = _decimal(position.get("risk_amount"), Decimal("0"))
+    if risk_amount > 0:
+        return risk_amount
+    size_usd = _decimal(position.get("size_usd"), Decimal("0"))
+    risk_percent = _decimal(position.get("risk_percent"), Decimal("0"))
+    if size_usd > 0 and risk_percent > 0:
+        return size_usd * risk_percent / Decimal("100")
+    return Decimal("0")
+
+
+def _forward_strategy_losses_today(run: StrategyTestRunResponse, strategy: str) -> int:
+    strategy_key = strategy.strip()
+    losses = 0
+    for position in _forward_positions(run):
+        if str(position.get("strategy") or "").strip() != strategy_key:
+            continue
+        if str(position.get("status") or "open").lower() == "open":
+            continue
+        if _decimal(position.get("realized_pnl"), Decimal("0")) < 0:
+            losses += 1
+    return losses
+
+
+def _forward_account_drawdown_percent(account: dict[str, Any]) -> float:
+    initial = _decimal(account.get("initial_capital"), Decimal("0"))
+    equity = _decimal(account.get("equity"), Decimal("0"))
+    if initial <= 0 or equity >= initial:
+        return 0.0
+    return float((initial - equity) / initial * Decimal("100"))
+
+
+def _forward_risk_settings(run: StrategyTestRunResponse) -> RiskManagementSettings:
+    params = _run_params(run)
+    raw_settings = params.get("risk_settings")
+    if isinstance(raw_settings, dict):
+        return RiskManagementSettings(**raw_settings)
+    return RiskManagementSettings()
+
+
+def _forward_max_concurrent_positions(run: StrategyTestRunResponse) -> int:
+    params = _run_params(run)
+    for key in ("max_concurrent_positions", "max_open_positions"):
+        value = params.get(key)
+        if value is None:
+            continue
+        try:
+            return max(1, min(100, int(value)))
+        except (TypeError, ValueError):
+            continue
+    return 3
+
+
+def _run_params(run: StrategyTestRunResponse) -> dict[str, Any]:
+    params = run.requested_matrix.get("params")
+    return dict(params) if isinstance(params, dict) else {}
 
 
 def _first_gate_reason_code(gate: SignalExecutionGateSnapshot) -> str | None:

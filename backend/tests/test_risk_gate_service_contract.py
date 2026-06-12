@@ -189,6 +189,50 @@ class RiskGateServiceContractTest(unittest.TestCase):
         self.assertIn("Max correlated risk would be exceeded.", decision.blockers)
         self.assertGreater(decision.risk_check.correlated_risk_used_percent or 0, 3)
 
+    def test_virtual_gate_reduces_size_when_open_risk_budget_has_partial_room(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[_open_virtual_trade(risk_amount=4.5)],
+                stage="pre_execution",
+            ),
+            risk_settings=_risk_settings().model_copy(
+                update={
+                    "max_symbol_risk_percent": 100,
+                    "max_strategy_exposure_percent": 100,
+                }
+            ),
+        )
+
+        self.assertEqual(decision.portfolio_action, "reduce_size")
+        self.assertTrue(decision.can_enter)
+        self.assertEqual(decision.reason_code, "max_open_risk_exceeded")
+        self.assertIn("max_open_risk_exceeded", decision.reason_codes)
+        self.assertAlmostEqual(decision.checked_position_sizing.risk_amount, 0.5, places=6)
+        self.assertLess(decision.checked_position_sizing.notional, decision.position_sizing.notional)
+
+    def test_virtual_gate_stops_agent_when_daily_loss_limit_is_reached(self) -> None:
+        decision = RiskGateService().evaluate(
+            context=RiskContextService().build_virtual_context(
+                signal=_signal(),
+                request=ManualConfirmRequest(),
+                account=_account(),
+                entry_price=100,
+                open_positions=[],
+                stage="pre_execution",
+                daily_loss_amount=3.0,
+            ),
+            risk_settings=_risk_settings(),
+        )
+
+        self.assertEqual(decision.portfolio_action, "stop_agent")
+        self.assertFalse(decision.can_enter)
+        self.assertEqual(decision.reason_code, "daily_loss_limit_exceeded")
+        self.assertIn("daily_loss_limit_exceeded", decision.reason_codes)
+
     def test_virtual_gate_warns_when_exchange_rules_are_missing(self) -> None:
         decision = RiskGateService().evaluate(
             context=RiskContextService().build_virtual_context(
@@ -1346,6 +1390,36 @@ def _account() -> VirtualAccount:
         realized_pnl=0,
         unrealized_pnl=0,
         updated_at=datetime.now(timezone.utc),
+    )
+
+
+def _open_virtual_trade(
+    *,
+    risk_amount: float,
+    symbol: str = "BTCUSDT",
+    strategy: str = "trend_pullback_continuation",
+) -> VirtualTrade:
+    now = datetime.now(timezone.utc)
+    return VirtualTrade(
+        id=f"trade_{symbol}_{strategy}",
+        user_id="demo_user",
+        signal_id="sig_existing",
+        exchange="bybit",
+        symbol=symbol,
+        strategy=strategy,
+        timeframe="15m",
+        side="long",
+        entry_price=100,
+        current_price=100,
+        size_usd=100,
+        quantity=1,
+        leverage=1,
+        risk_percent=1,
+        risk_amount=risk_amount,
+        stop_loss=90,
+        take_profit=[120],
+        opened_at=now,
+        updated_at=now,
     )
 
 

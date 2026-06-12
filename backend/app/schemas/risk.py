@@ -491,8 +491,13 @@ class RiskContext(BaseModel):
     market_data_warnings: list[str] = Field(default_factory=list)
     requested_notional: float | None = Field(default=None, gt=0)
     open_risk_amount: float = Field(default=0.0, ge=0)
+    symbol_open_risk_amount: float = Field(default=0.0, ge=0)
+    strategy_open_risk_amount: float = Field(default=0.0, ge=0)
     correlated_open_risk_amount: float = Field(default=0.0, ge=0)
     daily_loss_amount: float = Field(default=0.0, ge=0)
+    open_position_count: int = Field(default=0, ge=0)
+    max_concurrent_positions: int = Field(default=0, ge=0)
+    strategy_losses_today: int = Field(default=0, ge=0)
     exchange_min_order_size: float | None = Field(default=None, gt=0)
     exchange_max_order_size: float | None = Field(default=None, gt=0)
     exchange_min_notional: float | None = Field(default=None, gt=0)
@@ -561,6 +566,9 @@ class RiskDecision(BaseModel):
     breakeven_plan: BreakevenPlan
     trailing_stop_plan: TrailingStopPlan
     futures_risk_plan: FuturesRiskPlan | None = None
+    portfolio_action: Literal["allow", "reduce_size", "block_trade", "pause_strategy", "stop_agent"] = "allow"
+    portfolio_size_multiplier: float = Field(default=1.0, ge=0, le=1)
+    portfolio_risk: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
 
 

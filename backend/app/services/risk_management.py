@@ -173,6 +173,8 @@ _RISK_CUSTOM_FIELDS = {
     "max_weekly_loss_percent",
     "max_account_drawdown_percent",
     "max_open_risk_percent",
+    "max_symbol_risk_percent",
+    "max_strategy_exposure_percent",
     "max_correlated_risk_percent",
     "max_spread_bps",
     "max_slippage_bps",

@@ -13823,6 +13823,30 @@
               }
             ]
           },
+          "portfolio_action": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "reduce_size",
+              "block_trade",
+              "pause_strategy",
+              "stop_agent"
+            ],
+            "title": "Portfolio Action",
+            "default": "allow"
+          },
+          "portfolio_size_multiplier": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Portfolio Size Multiplier",
+            "default": 1
+          },
+          "portfolio_risk": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Portfolio Risk"
+          },
           "notes": {
             "items": {
               "type": "string"
@@ -14105,6 +14129,32 @@
               }
             ],
             "title": "Max Open Risk Percent"
+          },
+          "max_symbol_risk_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Symbol Risk Percent"
+          },
+          "max_strategy_exposure_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100,
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Strategy Exposure Percent"
           },
           "max_correlated_risk_percent": {
             "anyOf": [

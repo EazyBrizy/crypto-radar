@@ -34,6 +34,12 @@ from app.services.risk_management import (
     calculate_trailing_stop_plan,
     position_sizing_for_notional,
 )
+from app.services.portfolio_risk import (
+    PortfolioRiskContext,
+    PortfolioRiskDecision,
+    PortfolioRiskLimits,
+    portfolio_risk_service,
+)
 from app.services.reason_codes import normalize_reason_codes
 from app.services.risk_reward_plan import risk_reward_plan_service
 from app.services.trade_plan_completeness import (
@@ -100,12 +106,17 @@ class RiskContextService:
         market_data_source: str | None = None,
         market_data_warnings: list[str] | None = None,
         daily_loss_amount: float = 0.0,
+        symbol_open_risk_amount: float | None = None,
+        strategy_open_risk_amount: float | None = None,
         correlated_open_risk_amount: float = 0.0,
         correlation_group: str | None = None,
         protection_state: str = "normal",
         protection_reason: str | None = None,
         account_drawdown_percent: float | None = None,
         max_account_drawdown_percent: float = 0.0,
+        open_position_count: int | None = None,
+        max_concurrent_positions: int | None = None,
+        strategy_losses_today: int = 0,
         user_mode_multiplier: float = 1.0,
         fee_rate_source: str | None = None,
         maker_fee_rate: float | None = None,
@@ -124,6 +135,7 @@ class RiskContextService:
             execution_profile=execution_profile,
         )
         lifecycle_trace = _lifecycle_trace_from_request(signal, request)
+        active_positions = _open_virtual_positions(open_positions)
         return RiskContext(
             mode="virtual",
             rr_guard_context=rr_guard_context,
@@ -172,9 +184,26 @@ class RiskContextService:
             market_data_source=market_data_source,
             market_data_warnings=market_data_warnings or [],
             requested_notional=requested_notional,
-            open_risk_amount=sum(trade.risk_amount for trade in open_positions),
+            open_risk_amount=sum(trade.risk_amount for trade in active_positions),
+            symbol_open_risk_amount=(
+                _virtual_positions_risk(active_positions, symbol=signal.symbol)
+                if symbol_open_risk_amount is None
+                else symbol_open_risk_amount
+            ),
+            strategy_open_risk_amount=(
+                _virtual_positions_risk(active_positions, strategy=signal.strategy)
+                if strategy_open_risk_amount is None
+                else strategy_open_risk_amount
+            ),
             correlated_open_risk_amount=correlated_open_risk_amount,
             daily_loss_amount=daily_loss_amount,
+            open_position_count=len(active_positions) if open_position_count is None else open_position_count,
+            max_concurrent_positions=(
+                request.max_open_positions
+                if max_concurrent_positions is None
+                else max_concurrent_positions
+            ),
+            strategy_losses_today=strategy_losses_today,
             exchange_min_order_size=exchange_min_order_size,
             exchange_max_order_size=exchange_max_order_size,
             exchange_min_notional=exchange_min_notional,
@@ -233,11 +262,16 @@ class RiskContextService:
         open_risk_amount: float = 0.0,
         correlated_open_risk_amount: float = 0.0,
         daily_loss_amount: float = 0.0,
+        symbol_open_risk_amount: float | None = None,
+        strategy_open_risk_amount: float = 0.0,
         correlation_group: str | None = None,
         protection_state: str = "normal",
         protection_reason: str | None = None,
         account_drawdown_percent: float | None = None,
         max_account_drawdown_percent: float = 0.0,
+        open_position_count: int | None = None,
+        max_concurrent_positions: int | None = None,
+        strategy_losses_today: int = 0,
         user_mode_multiplier: float = 1.0,
         fee_rate_source: str | None = None,
         maker_fee_rate: float | None = None,
@@ -319,8 +353,25 @@ class RiskContextService:
             market_data_warnings=market_data_warnings or [],
             requested_notional=requested_notional or request.size_usd,
             open_risk_amount=open_risk_for_context,
+            symbol_open_risk_amount=(
+                _snapshot_symbol_risk(snapshot, signal.symbol)
+                if symbol_open_risk_amount is None
+                else symbol_open_risk_amount
+            ),
+            strategy_open_risk_amount=strategy_open_risk_amount,
             correlated_open_risk_amount=correlated_open_risk_amount,
             daily_loss_amount=daily_loss_amount,
+            open_position_count=(
+                len(snapshot.positions)
+                if open_position_count is None
+                else open_position_count
+            ),
+            max_concurrent_positions=(
+                request.max_open_positions
+                if max_concurrent_positions is None
+                else max_concurrent_positions
+            ),
+            strategy_losses_today=strategy_losses_today,
             exchange_min_order_size=exchange_min_order_size,
             exchange_max_order_size=exchange_max_order_size,
             exchange_min_notional=exchange_min_notional,
@@ -412,6 +463,18 @@ class RiskGateService:
             if context.requested_notional is not None
             else position_sizing
         )
+        portfolio_decision = _portfolio_decision(
+            context=context,
+            risk_settings=risk_settings,
+            position_sizing=checked_position_sizing,
+        )
+        if portfolio_decision.action == "reduce_size":
+            checked_position_sizing = position_sizing_for_notional(
+                checked_position_sizing,
+                notional=checked_position_sizing.notional * portfolio_decision.size_multiplier,
+                entry_price=context.entry_price,
+                leverage=context.leverage,
+            )
         futures_risk_plan = None
         if context.instrument_type == "futures" or context.leverage > 1:
             futures_risk_plan = calculate_futures_risk_plan(
@@ -531,7 +594,15 @@ class RiskGateService:
                     "blockers": _dedupe([*risk_check.blockers, *take_profit_blockers]),
                 }
             )
+        risk_check = _apply_portfolio_decision(risk_check, portfolio_decision)
         risk_check = _risk_check_with_reason_codes(risk_check)
+        if portfolio_decision.action != "allow":
+            risk_check = risk_check.model_copy(
+                update={
+                    "reason_code": portfolio_decision.reason_code,
+                    "reason_codes": _dedupe([*portfolio_decision.reason_codes, *risk_check.reason_codes]),
+                }
+            )
         warnings = [
             *stop_loss_plan.warnings,
             *trailing_stop_plan.warnings,
@@ -568,6 +639,16 @@ class RiskGateService:
             breakeven_plan=breakeven_plan,
             trailing_stop_plan=trailing_stop_plan,
             futures_risk_plan=futures_risk_plan,
+            portfolio_action=portfolio_decision.action,
+            portfolio_size_multiplier=portfolio_decision.size_multiplier,
+            portfolio_risk={
+                "reason_code": portfolio_decision.reason_code,
+                "reason_codes": list(portfolio_decision.reason_codes),
+                "message": portfolio_decision.message,
+                "proposed_risk_amount": portfolio_decision.proposed_risk_amount,
+                "approved_risk_amount": portfolio_decision.approved_risk_amount,
+                "metrics": dict(portfolio_decision.metrics),
+            },
             notes=notes,
         )
 
@@ -609,6 +690,69 @@ class RiskGateService:
             side=context.side,
             risk_settings=risk_settings,
         )
+
+
+def _portfolio_decision(
+    *,
+    context: RiskContext,
+    risk_settings: RiskManagementSettings,
+    position_sizing,
+) -> PortfolioRiskDecision:
+    return portfolio_risk_service.evaluate(
+        PortfolioRiskContext(
+            account_equity=context.account_equity,
+            proposed_risk_amount=position_sizing.risk_amount,
+            open_risk_amount=context.open_risk_amount,
+            symbol_open_risk_amount=context.symbol_open_risk_amount,
+            strategy_open_risk_amount=context.strategy_open_risk_amount,
+            correlated_open_risk_amount=context.correlated_open_risk_amount,
+            daily_loss_amount=context.daily_loss_amount,
+            account_drawdown_percent=context.account_drawdown_percent,
+            open_position_count=context.open_position_count,
+            strategy_losses_today=context.strategy_losses_today,
+        ),
+        PortfolioRiskLimits(
+            max_open_risk_percent=(
+                risk_settings.futures_max_open_risk_percent
+                if context.instrument_type == "futures"
+                else risk_settings.max_open_risk_percent
+            ),
+            max_symbol_risk_percent=getattr(risk_settings, "max_symbol_risk_percent", 0.0),
+            max_strategy_exposure_percent=getattr(risk_settings, "max_strategy_exposure_percent", 0.0),
+            max_correlated_risk_percent=risk_settings.max_correlated_risk_percent
+            if context.correlation_group is not None
+            else 0.0,
+            max_daily_loss_percent=risk_settings.max_daily_loss_percent,
+            max_account_drawdown_percent=(
+                risk_settings.max_account_drawdown_percent
+                if context.max_account_drawdown_percent <= 0
+                else context.max_account_drawdown_percent
+            ),
+            max_concurrent_positions=context.max_concurrent_positions,
+            max_strategy_losses_per_day=risk_settings.max_strategy_losses_per_day,
+        ),
+    )
+
+
+def _apply_portfolio_decision(
+    risk_check,
+    portfolio_decision: PortfolioRiskDecision,
+):
+    if portfolio_decision.action == "allow":
+        return risk_check
+    if portfolio_decision.action == "reduce_size":
+        return risk_check.model_copy(
+            update={
+                "status": "warning" if risk_check.status == "passed" else risk_check.status,
+                "warnings": _dedupe([*risk_check.warnings, *portfolio_decision.warnings]),
+            }
+        )
+    return risk_check.model_copy(
+        update={
+            "status": "failed",
+            "blockers": _dedupe([*risk_check.blockers, *portfolio_decision.blockers]),
+        }
+    )
 
 
 def _trade_plan_completeness_policy(
@@ -719,6 +863,32 @@ def _account_values_from_snapshot(
         float(snapshot.account_equity),
         float(snapshot.available_balance),
         snapshot,
+    )
+
+
+def _open_virtual_positions(open_positions: list[VirtualTrade]) -> list[VirtualTrade]:
+    return [trade for trade in open_positions if trade.status == "open"]
+
+
+def _virtual_positions_risk(
+    open_positions: list[VirtualTrade],
+    *,
+    symbol: str | None = None,
+    strategy: str | None = None,
+) -> float:
+    return sum(
+        trade.risk_amount
+        for trade in open_positions
+        if (symbol is None or trade.symbol == symbol)
+        and (strategy is None or trade.strategy == strategy)
+    )
+
+
+def _snapshot_symbol_risk(snapshot: AccountRiskSnapshot, symbol: str) -> float:
+    return sum(
+        float(position.risk_amount or 0)
+        for position in snapshot.positions
+        if position.symbol == symbol
     )
 
 

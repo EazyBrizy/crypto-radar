@@ -141,6 +141,114 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime_state["last_signal_id"], "sig_1")
         self.assertIsNotNone(run_store.get_run(RUN_ID).run.last_heartbeat_at)  # type: ignore[union-attr]
 
+    async def test_process_strategy_signal_blocks_when_forward_portfolio_limit_is_reached(self) -> None:
+        run_store = _ForwardRunStore(
+            [
+                _run(
+                    params={"max_concurrent_positions": 1},
+                    runtime_state={
+                        "forward_account": {
+                            "initial_capital": "1000",
+                            "balance": "1000",
+                            "equity": "1000",
+                            "realized_pnl": "0",
+                            "unrealized_pnl": "0",
+                            "fees": "0",
+                            "slippage": "0",
+                            "open_positions": 1,
+                            "closed_positions": 0,
+                        },
+                        "forward_positions": [
+                            {
+                                "trade_id": "existing_trade",
+                                "signal_id": "existing_sig",
+                                "exchange": "bybit",
+                                "symbol": "BTCUSDT",
+                                "strategy": "trend_pullback_continuation",
+                                "status": "open",
+                                "risk_amount": "10",
+                            }
+                        ],
+                    },
+                )
+            ]
+        )
+        trade_store = _RecordingTradeStore()
+        virtual_trading = _VirtualTrading()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_enter_now=True))),
+            virtual_trading=virtual_trading,
+        )
+
+        result = await runtime.process_strategy_signal(_strategy_signal())
+
+        self.assertEqual(result.signals_processed, 1)
+        self.assertEqual(result.opened_trades, 0)
+        self.assertEqual(virtual_trading.open_calls, [])
+        self.assertEqual(len(trade_store.signal_events), 1)
+        self.assertEqual(trade_store.signal_events[0].funnel_stage, "blocked")
+        self.assertEqual(trade_store.signal_events[0].blocked_reason_code, "max_concurrent_positions_exceeded")
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        self.assertEqual(runtime_state["last_gate_status"], "blocked")
+
+    async def test_process_strategy_signal_reduces_forward_size_to_open_risk_budget(self) -> None:
+        run_store = _ForwardRunStore(
+            [
+                _run(
+                    params={
+                        "risk_settings": {
+                            "max_open_risk_percent": 5,
+                            "max_symbol_risk_percent": 100,
+                            "max_strategy_exposure_percent": 100,
+                        }
+                    },
+                    runtime_state={
+                        "forward_account": {
+                            "initial_capital": "1000",
+                            "balance": "1000",
+                            "equity": "1000",
+                            "realized_pnl": "0",
+                            "unrealized_pnl": "0",
+                            "fees": "0",
+                            "slippage": "0",
+                            "open_positions": 1,
+                            "closed_positions": 0,
+                        },
+                        "forward_positions": [
+                            {
+                                "trade_id": "existing_trade",
+                                "signal_id": "existing_sig",
+                                "exchange": "bybit",
+                                "symbol": "BTCUSDT",
+                                "strategy": "trend_pullback_continuation",
+                                "status": "open",
+                                "risk_amount": "49.5",
+                            }
+                        ],
+                    },
+                )
+            ]
+        )
+        virtual_trading = _VirtualTrading()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_enter_now=True))),
+            virtual_trading=virtual_trading,
+        )
+
+        result = await runtime.process_strategy_signal(_strategy_signal())
+
+        self.assertEqual(result.opened_trades, 1)
+        self.assertEqual(len(virtual_trading.open_calls), 1)
+        self.assertAlmostEqual(virtual_trading.open_calls[0][1].size_usd or 0, 50.0)
+        self.assertEqual(
+            virtual_trading.open_calls[0][1].metadata["portfolio_risk"]["reason_code"],
+            "max_open_risk_exceeded",
+        )
+
     async def test_process_strategy_signal_filters_by_requested_matrix(self) -> None:
         run_store = _ForwardRunStore([_run(pairs=[StrategyTestPair(exchange="bybit", symbol="ETHUSDT")])])
         virtual_trading = _VirtualTrading()
@@ -287,9 +395,10 @@ def _run(
     run_id: UUID = RUN_ID,
     status: StrategyTestRunStatus = "running",
     pairs: list[StrategyTestPair] | None = None,
+    params: dict[str, Any] | None = None,
     runtime_state: dict[str, Any] | None = None,
 ) -> StrategyTestRunResponse:
-    request = _run_request(pairs=pairs)
+    request = _run_request(pairs=pairs, params=params)
     return StrategyTestRunResponse(
         run_id=run_id,
         status=status,
@@ -302,7 +411,11 @@ def _run(
     )
 
 
-def _run_request(*, pairs: list[StrategyTestPair] | None = None) -> StrategyTestRunRequest:
+def _run_request(
+    *,
+    pairs: list[StrategyTestPair] | None = None,
+    params: dict[str, Any] | None = None,
+) -> StrategyTestRunRequest:
     request = StrategyTestRunRequest(
         user_id=USER_ID,
         test_type="forward_virtual",
@@ -313,6 +426,7 @@ def _run_request(*, pairs: list[StrategyTestPair] | None = None) -> StrategyTest
         end_at=NOW + timedelta(hours=1),
         mode="research_virtual",
         initial_capital=Decimal("1000"),
+        params=params or {},
         tags=["forward"],
     )
     return request

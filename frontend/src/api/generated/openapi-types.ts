@@ -4488,6 +4488,21 @@ export interface components {
             breakeven_plan: components["schemas"]["BreakevenPlan"];
             trailing_stop_plan: components["schemas"]["TrailingStopPlan"];
             futures_risk_plan?: components["schemas"]["FuturesRiskPlan"] | null;
+            /**
+             * Portfolio Action
+             * @default allow
+             * @enum {string}
+             */
+            portfolio_action: "allow" | "reduce_size" | "block_trade" | "pause_strategy" | "stop_agent";
+            /**
+             * Portfolio Size Multiplier
+             * @default 1
+             */
+            portfolio_size_multiplier: number;
+            /** Portfolio Risk */
+            portfolio_risk?: {
+                [key: string]: unknown;
+            };
             /** Notes */
             notes?: string[];
         };
@@ -4529,6 +4544,10 @@ export interface components {
             max_account_drawdown_percent?: number | null;
             /** Max Open Risk Percent */
             max_open_risk_percent?: number | null;
+            /** Max Symbol Risk Percent */
+            max_symbol_risk_percent?: number | null;
+            /** Max Strategy Exposure Percent */
+            max_strategy_exposure_percent?: number | null;
             /** Max Correlated Risk Percent */
             max_correlated_risk_percent?: number | null;
             /** Max Spread Bps */

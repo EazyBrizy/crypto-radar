@@ -35,6 +35,8 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(settings["max_daily_loss_percent"], 3.0)
         self.assertEqual(settings["max_weekly_loss_percent"], 7.0)
         self.assertEqual(settings["max_open_risk_percent"], 5.0)
+        self.assertEqual(settings["max_symbol_risk_percent"], 3.0)
+        self.assertEqual(settings["max_strategy_exposure_percent"], 3.0)
         self.assertEqual(settings["max_correlated_risk_percent"], 3.0)
         self.assertEqual(settings["max_spread_bps"], 50.0)
         self.assertEqual(settings["max_slippage_bps"], 150.0)
@@ -117,6 +119,8 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
                 max_daily_loss_percent=2.0,
                 max_account_drawdown_percent=9.0,
                 max_open_risk_percent=4.0,
+                max_symbol_risk_percent=2.5,
+                max_strategy_exposure_percent=3.5,
                 max_spread_bps=25.0,
                 max_slippage_bps=80.0,
                 max_price_deviation_bps=60.0,
@@ -163,6 +167,8 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertEqual(settings["risk_profile"], "custom")
         self.assertEqual(settings["risk_per_trade_percent"], 0.6)
         self.assertEqual(settings["min_rr_ratio"], 2.5)
+        self.assertEqual(settings["max_symbol_risk_percent"], 2.5)
+        self.assertEqual(settings["max_strategy_exposure_percent"], 3.5)
         self.assertEqual(settings["max_spread_bps"], 25.0)
         self.assertEqual(settings["max_slippage_bps"], 80.0)
         self.assertEqual(settings["max_price_deviation_bps"], 60.0)
@@ -197,6 +203,8 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
                 max_weekly_loss_percent=0,
                 max_account_drawdown_percent=0,
                 max_open_risk_percent=0,
+                max_symbol_risk_percent=0,
+                max_strategy_exposure_percent=0,
                 max_correlated_risk_percent=0,
                 max_spread_bps=0,
                 max_slippage_bps=0,
@@ -212,6 +220,8 @@ class RiskManagementSettingsContractTest(unittest.TestCase):
         self.assertIsNotNone(settings)
         self.assertEqual(settings["max_daily_loss_percent"], 0)
         self.assertEqual(settings["max_open_risk_percent"], 0)
+        self.assertEqual(settings["max_symbol_risk_percent"], 0)
+        self.assertEqual(settings["max_strategy_exposure_percent"], 0)
         self.assertEqual(settings["futures_max_open_risk_percent"], 0)
         self.assertEqual(settings["max_orderbook_liquidity_ratio"], 0)
 

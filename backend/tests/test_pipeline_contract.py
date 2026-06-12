@@ -1,6 +1,8 @@
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
+from app.schemas.market import Features
 from app.schemas.pipeline import (
     KAFKA_TOPICS,
     PIPELINE_STAGES,
@@ -9,7 +11,8 @@ from app.schemas.pipeline import (
     normalized_topic_for,
     raw_topic_for,
 )
-from app.schemas.signal import NoTradeFilterResult, SignalLayerCheck
+from app.schemas.signal import NoTradeFilterResult, SignalConfirmationSnapshot, SignalLayerCheck, StrategySignal
+from app.strategies.pipeline import StrategyEvaluationContext, _fallback_current_trigger
 
 
 EXPECTED_PIPELINE_STAGES = (
@@ -123,6 +126,52 @@ class PipelineContractTest(unittest.TestCase):
         self.assertTrue(payload["blocked"])
         self.assertEqual(payload["checks"][0]["name"], "high_spread")
         self.assertEqual(payload["metadata"]["blocker_codes"], ["high_spread"])
+
+    def test_trigger_snapshot_records_closed_trigger_candle_metadata(self) -> None:
+        signal = StrategySignal(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            strategy="trend_pullback_continuation",
+            direction="LONG",
+            confidence=0.82,
+            timestamp=int(datetime(2026, 6, 6, tzinfo=timezone.utc).timestamp()),
+            score=82,
+            status="actionable",
+            timeframe="15m",
+            candle_state="closed",
+        )
+
+        trigger = _fallback_current_trigger(
+            signal,
+            StrategyEvaluationContext(signal_features=_features(candle_state="closed")),
+            SignalConfirmationSnapshot(passed=True),
+        )
+
+        self.assertTrue(trigger.passed)
+        self.assertTrue(trigger.metadata["confirmed_on_closed_candle"])
+        self.assertEqual(trigger.metadata["trigger_candle_state"], "closed")
+        self.assertEqual(trigger.metadata["trigger_confirmed_at"], trigger.confirmed_at.isoformat())
+
+
+def _features(*, candle_state: str) -> Features:
+    return Features(
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="15m",
+        timestamp=1_780_000_000,
+        candle_state=candle_state,
+        price=100.0,
+        open=99.0,
+        high=101.0,
+        low=98.0,
+        close=100.0,
+        price_change_1m=0.01,
+        volume=1_000_000,
+        volume_spike=1.2,
+        volume_ma_20=900_000,
+        volatility=0.02,
+        history_length=250,
+    )
 
 
 if __name__ == "__main__":

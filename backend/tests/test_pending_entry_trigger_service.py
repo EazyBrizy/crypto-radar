@@ -104,6 +104,29 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(self.virtual.trades[0].trigger_source, "pending_entry")
         self.assertEqual(self.events.statuses(), ["triggered", "filling", "filled"])
 
+    def test_confirmed_trigger_allows_open_entry_candle_touch_to_fill_virtual_pending(self) -> None:
+        self.signals.signal = _signal(candle_state="open", confirmed_trigger=True)
+        created = self.repository.create_intent(_intent_create(side="long"))
+
+        results = self.service.process_market_tick(
+            "bybit",
+            "BTCUSDT",
+            {"ask": 100.5, "last": 100.4, "candle_state": "open"},
+        )
+
+        self.assertEqual(results[0].status, "filled")
+        self.assertEqual(results[0].price_source, "ask")
+        self.assertEqual(self.virtual.calls[0][0].candle_state, "open")
+        self.assertEqual(
+            self.virtual.calls[0][0].trigger.metadata["confirmed_on_closed_candle"],
+            True,
+        )
+        self.assertEqual(
+            self.virtual.calls[0][1].metadata["pending_entry_trigger"]["entry_candle_state"],
+            "open",
+        )
+        self.assertEqual(self.virtual.trades[0].pending_entry_intent_id, str(created.id))
+
     def test_short_entry_touched_by_bid_fills_once(self) -> None:
         self.signals.signal = _signal(direction="short")
         self.repository.create_intent(_intent_create(side="short"))
@@ -468,6 +491,8 @@ def _signal(
     *,
     status: str = "active",
     direction: str = "long",
+    candle_state: str = "closed",
+    confirmed_trigger: bool = False,
     entry_min: float = 100.0,
     entry_max: float = 101.0,
     stop_loss: float | None = None,
@@ -487,6 +512,7 @@ def _signal(
         status=status,
         score=score,
         timeframe="15m",
+        candle_state=candle_state,
         entry_min=entry_min,
         entry_max=entry_max,
         stop_loss=stop_loss if stop_loss is not None else (95.0 if direction == "long" else 105.0),
@@ -494,6 +520,21 @@ def _signal(
         take_profit_2=take_profit_2 if take_profit_2 is not None else (115.0 if direction == "long" else 85.0),
         created_at=now,
         updated_at=now,
+        trigger=(
+            {
+                "trigger_type": "closed_candle",
+                "passed": True,
+                "candle_state": "closed",
+                "confirmed_at": now,
+                "metadata": {
+                    "confirmed_on_closed_candle": True,
+                    "trigger_candle_state": "closed",
+                    "trigger_confirmed_at": now.isoformat(),
+                },
+            }
+            if confirmed_trigger
+            else None
+        ),
     )
 
 

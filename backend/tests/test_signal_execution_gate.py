@@ -27,8 +27,19 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertTrue(gate.can_show_in_execution_feed)
         self.assertEqual(gate.reasons, [])
 
-    def test_open_candle_is_never_shown_in_execution_feed(self) -> None:
-        signal = _signal(candle_state="open")
+    def test_open_trigger_candle_is_not_shown_in_execution_feed(self) -> None:
+        signal = _signal(
+            candle_state="open",
+            trigger=SignalTriggerSnapshot(
+                passed=False,
+                candle_state="open",
+                reason="Trigger requires a closed candle.",
+                metadata={
+                    "confirmed_on_closed_candle": False,
+                    "trigger_candle_state": "open",
+                },
+            ),
+        )
 
         gate = SignalExecutionGateService().evaluate(signal)
 
@@ -39,6 +50,31 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertFalse(gate.can_arm_pending)
         self.assertFalse(gate.can_show_in_execution_feed)
         self.assertIn("forming_candle", _reason_codes(gate))
+        self.assertIn("trigger_not_confirmed", _reason_codes(gate))
+
+    def test_open_entry_candle_after_closed_trigger_can_arm_pending_with_warning(self) -> None:
+        signal = _signal(
+            candle_state="open",
+            trigger=SignalTriggerSnapshot(
+                passed=True,
+                trigger_type="closed_candle",
+                candle_state="closed",
+                confirmed_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+                metadata={
+                    "confirmed_on_closed_candle": True,
+                    "trigger_candle_state": "closed",
+                    "trigger_confirmed_at": "2026-06-06T00:00:00+00:00",
+                },
+            ),
+        )
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.feed_kind, "execution_signal")
+        self.assertTrue(gate.can_enter_now)
+        self.assertTrue(gate.can_arm_pending)
+        self.assertNotIn("forming_candle", _reason_codes(gate))
+        self.assertIn("entry_candle_open_allowed", _warning_codes(gate))
 
     def test_low_score_is_blocked_diagnostic_not_market_idea(self) -> None:
         signal = _signal(score=23)

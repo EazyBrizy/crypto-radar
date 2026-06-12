@@ -15,6 +15,7 @@ KNOWN_REASON_CODES = {
     "enable_bybit_live_order_placement_false",
     "enable_bybit_mainnet_order_placement_false",
     "enable_live_trading_false",
+    "entry_candle_open_allowed",
     "entry_zone_shifted",
     "edge_missing",
     "edge_negative",

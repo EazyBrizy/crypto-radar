@@ -1107,6 +1107,9 @@ def _trigger_snapshot(
     failed_checks: list[str],
     source: str,
 ) -> SignalTriggerSnapshot:
+    confirmed_at = _signal_timestamp_datetime(signal.timestamp) if passed else None
+    trigger_candle_state = signal.candle_state
+    confirmed_on_closed_candle = bool(passed and trigger_candle_state == "closed")
     metadata = {
         "strategy": signal.strategy,
         "timeframe": signal.timeframe,
@@ -1115,6 +1118,9 @@ def _trigger_snapshot(
         "failed_checks": failed_checks,
         "confirmation_passed": confirmation.passed,
         "candle_state": signal.candle_state,
+        "trigger_candle_state": trigger_candle_state,
+        "confirmed_on_closed_candle": confirmed_on_closed_candle,
+        "trigger_confirmed_at": confirmed_at.isoformat() if confirmed_at is not None else None,
         **evidence,
     }
     check = SignalLayerCheck(
@@ -1128,7 +1134,7 @@ def _trigger_snapshot(
         passed=passed,
         price=_entry_price(signal) or context.signal_features.close,
         candle_state=signal.candle_state,
-        confirmed_at=_signal_timestamp_datetime(signal.timestamp) if passed else None,
+        confirmed_at=confirmed_at,
         reason=reason,
         checks=[check],
         metadata=metadata,

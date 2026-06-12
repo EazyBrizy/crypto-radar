@@ -42,6 +42,11 @@ class SignalExecutionGateService:
         score_threshold = int(execution_score_threshold or settings.execution_min_score)
         market_idea_score_threshold = int(settings.radar_min_market_idea_score)
         execution_candidate = is_execution_candidate_status(status)
+        open_entry_candle_allowed = (
+            settings.execution_closed_candle_only
+            and signal.candle_state == "open"
+            and _trigger_confirmed_on_closed_candle(signal)
+        )
 
         if status == "expired":
             hard_blockers.append(_reason("expired_signal", "blocker", "lifecycle", "Signal expired."))
@@ -50,7 +55,7 @@ class SignalExecutionGateService:
                 _reason("terminal_signal", "blocker", "lifecycle", f"Signal is terminal: {status}.")
             )
 
-        if settings.execution_closed_candle_only and signal.candle_state == "open":
+        if settings.execution_closed_candle_only and signal.candle_state == "open" and not open_entry_candle_allowed:
             hard_blockers.append(
                 _reason(
                     "forming_candle",
@@ -58,6 +63,24 @@ class SignalExecutionGateService:
                     "candle",
                     "Forming candle is not allowed in the execution feed.",
                     {"candle_state": signal.candle_state},
+                )
+            )
+        elif open_entry_candle_allowed:
+            warnings.append(
+                _reason(
+                    "entry_candle_open_allowed",
+                    "warning",
+                    "candle",
+                    "Entry candle is still forming, but the trigger was confirmed on a closed candle.",
+                    {
+                        "entry_candle_state": signal.candle_state,
+                        "trigger_candle_state": getattr(signal.trigger, "candle_state", None),
+                        "trigger_confirmed_at": (
+                            signal.trigger.confirmed_at.isoformat()
+                            if getattr(signal.trigger, "confirmed_at", None) is not None
+                            else None
+                        ),
+                    },
                 )
             )
 
@@ -150,7 +173,11 @@ class SignalExecutionGateService:
         execution_ready = (
             execution_candidate
             and score >= score_threshold
-            and (signal.candle_state == "closed" or not settings.execution_closed_candle_only)
+            and (
+                signal.candle_state == "closed"
+                or open_entry_candle_allowed
+                or not settings.execution_closed_candle_only
+            )
             and not hard_blockers
             and _edge_allows_execution(signal.edge)
             and _has_valid_execution_plan(signal)
@@ -186,6 +213,7 @@ class SignalExecutionGateService:
                 "market_idea_score_threshold": market_idea_score_threshold,
                 "execution_candidate_status": execution_candidate,
                 "strict_edge_mode": strict_edge_mode,
+                "open_entry_candle_allowed": open_entry_candle_allowed,
             },
         )
 
@@ -296,6 +324,21 @@ def _trigger_failed_reason(
         message,
         metadata,
     )
+
+
+def _trigger_confirmed_on_closed_candle(signal: SignalLike) -> bool:
+    trigger = getattr(signal, "trigger", None)
+    if trigger is None or getattr(trigger, "passed", False) is not True:
+        return False
+    metadata = _model_metadata(trigger)
+    if metadata.get("confirmed_on_closed_candle") is True:
+        return True
+    trigger_candle_state = str(
+        metadata.get("trigger_candle_state")
+        or getattr(trigger, "candle_state", "")
+        or ""
+    ).strip().lower()
+    return trigger_candle_state == "closed" and getattr(trigger, "confirmed_at", None) is not None
 
 
 def _regime_compatibility_reason(signal: SignalLike) -> SignalExecutionGateReason | None:

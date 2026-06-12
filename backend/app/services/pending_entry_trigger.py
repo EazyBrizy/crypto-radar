@@ -567,7 +567,7 @@ def _trigger_confirm_request(
         "user_id": str(intent.user_id),
         "auto_enter_on_confirmation": True,
         "market_snapshot": _virtual_market_snapshot(market_tick, intent.side, touch),
-        "metadata": _trigger_request_metadata(request, intent, touch),
+        "metadata": _trigger_request_metadata(request, intent, touch, market_tick),
     }
     accepted_profile = _accepted_execution_profile(intent.execution_profile_snapshot)
     if accepted_profile is not None:
@@ -693,6 +693,7 @@ def _trigger_request_metadata(
     request: ManualConfirmRequest,
     intent: PendingEntryIntentRead,
     touch: EntryTouchResult,
+    market_tick: Any,
 ) -> dict[str, Any]:
     metadata = dict(request.metadata or {})
     raw_trace = metadata.get("lifecycle_trace")
@@ -722,6 +723,7 @@ def _trigger_request_metadata(
         "trigger_price": trigger_price,
         "trigger_reason": "entry_zone_touched",
         "touch_price_source": touch.price_source,
+        "entry_candle_state": _market_value(market_tick, "candle_state"),
         "warnings": list(touch.warnings),
     }
     return metadata

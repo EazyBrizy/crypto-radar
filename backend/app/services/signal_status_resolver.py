@@ -180,7 +180,12 @@ class SignalStatusResolver:
             "allow_lower_timeframe_trigger_actionable",
             False,
         )
-        blocked_by_open = candle_state == "open" and not allow_open
+        open_entry_candle_allowed = (
+            candle_state == "open"
+            and not allow_open
+            and _trigger_confirmed_on_closed_candle(trigger)
+        )
+        blocked_by_open = candle_state == "open" and not allow_open and not open_entry_candle_allowed
         blocked_by_lower_timeframe = (
             lower_timeframe_trigger
             and not blocked_by_open
@@ -219,6 +224,8 @@ class SignalStatusResolver:
             )
         elif candle_state == "open" and allow_open and _is_actionable_status(status):
             explanation.append("forming candle preview is explicitly allowed to remain actionable by configuration.")
+        elif open_entry_candle_allowed and _is_actionable_status(status):
+            explanation.append("entry candle is open, but the trigger was already confirmed on a closed candle.")
 
         if blocked_by_trigger and not blocked_by_open:
             final_status = "ready"
@@ -247,6 +254,7 @@ class SignalStatusResolver:
             blocked_by_lower_timeframe=blocked_by_lower_timeframe,
             trigger=trigger,
             blocked_by_trigger=blocked_by_trigger,
+            open_entry_candle_allowed=open_entry_candle_allowed,
             final_status=final_status,
         )
         trade_plan = _trade_plan_with_actionability_source_metadata(
@@ -259,6 +267,7 @@ class SignalStatusResolver:
             blocked_by_lower_timeframe=blocked_by_lower_timeframe,
             trigger=trigger,
             blocked_by_trigger=blocked_by_trigger,
+            open_entry_candle_allowed=open_entry_candle_allowed,
             final_status=final_status,
         )
         return SignalStatusDecision(
@@ -313,8 +322,12 @@ def _confirmation_with_actionability_source_checks(
     blocked_by_lower_timeframe: bool,
     trigger: SignalTriggerSnapshot | None,
     blocked_by_trigger: bool,
+    open_entry_candle_allowed: bool,
     final_status: str,
 ) -> SignalConfirmationSnapshot:
+    actionable_from_open_entry_candle = (
+        open_entry_candle_allowed and _is_actionable_status(final_status)
+    )
     checks = [
         *confirmation.checks,
         SignalLayerCheck(
@@ -325,6 +338,8 @@ def _confirmation_with_actionability_source_checks(
                 if blocked_by_open
                 else "Open candle actionability is explicitly allowed by configuration"
                 if candle_state == "open" and allow_open and _is_actionable_status(final_status)
+                else "Entry candle is open; trigger was already confirmed on a closed candle"
+                if actionable_from_open_entry_candle
                 else f"Signal evaluated on a {candle_state} candle"
             ),
             metadata={
@@ -333,6 +348,8 @@ def _confirmation_with_actionability_source_checks(
                 "allow_open_candle_actionable": allow_open,
                 "open_candle_preview": candle_state == "open",
                 "actionable_from_open_candle": candle_state == "open" and allow_open and _is_actionable_status(final_status),
+                "actionable_from_open_entry_candle": actionable_from_open_entry_candle,
+                "trigger_confirmed_on_closed_candle": _trigger_confirmed_on_closed_candle(trigger),
                 "signal_actionable": _is_actionable_status(final_status),
             },
         ),
@@ -397,14 +414,18 @@ def _trade_plan_with_actionability_source_metadata(
     blocked_by_lower_timeframe: bool,
     trigger: SignalTriggerSnapshot | None,
     blocked_by_trigger: bool,
+    open_entry_candle_allowed: bool,
     final_status: str,
 ) -> TradePlan:
     signal_actionable = _is_actionable_status(final_status)
+    actionable_from_open_entry_candle = open_entry_candle_allowed and signal_actionable
     source_metadata: dict[str, Any] = {
         "candle_state": candle_state,
         "open_candle_preview": candle_state == "open",
         "allow_open_candle_actionable": allow_open,
         "actionable_from_open_candle": candle_state == "open" and allow_open and signal_actionable,
+        "actionable_from_open_entry_candle": actionable_from_open_entry_candle,
+        "trigger_confirmed_on_closed_candle": _trigger_confirmed_on_closed_candle(trigger),
         "lower_timeframe_trigger": lower_timeframe_trigger,
         "allow_lower_timeframe_trigger_actionable": allow_lower_timeframe,
         "actionable_from_lower_timeframe_trigger": lower_timeframe_trigger and allow_lower_timeframe and signal_actionable,
@@ -443,6 +464,8 @@ def _trade_plan_with_actionability_source_metadata(
         )
     elif candle_state == "open" and allow_open and signal_actionable:
         source_metadata["actionability_source"] = "open_candle_explicitly_allowed"
+    elif actionable_from_open_entry_candle:
+        source_metadata["actionability_source"] = "confirmed_trigger_open_entry_candle"
     elif lower_timeframe_trigger and allow_lower_timeframe and signal_actionable:
         source_metadata["actionability_source"] = "lower_timeframe_trigger_explicitly_allowed"
 
@@ -495,6 +518,19 @@ def _is_actionable_status(status: str) -> bool:
 
 def _trigger_passed(trigger: SignalTriggerSnapshot | None) -> bool:
     return trigger is not None and trigger.passed is True
+
+
+def _trigger_confirmed_on_closed_candle(trigger: SignalTriggerSnapshot | None) -> bool:
+    if trigger is None or trigger.passed is not True:
+        return False
+    if trigger.metadata.get("confirmed_on_closed_candle") is True:
+        return True
+    trigger_candle_state = str(
+        trigger.metadata.get("trigger_candle_state")
+        or trigger.candle_state
+        or ""
+    ).strip().lower()
+    return trigger_candle_state == "closed" and trigger.confirmed_at is not None
 
 
 def _trigger_not_confirmed_reason(trigger: SignalTriggerSnapshot | None) -> str:

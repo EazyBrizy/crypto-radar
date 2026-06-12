@@ -158,6 +158,48 @@ class SignalStatusContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.status, "rejected")
         self.assertIn("Scheduled news event", decision.status_reason)
 
+    def test_open_entry_candle_does_not_reset_closed_confirmed_trigger_status(self) -> None:
+        decision = SignalStatusResolver().resolve(
+            signal=_strategy_signal(status="active"),
+            params={},
+            quality=MarketQualitySnapshot(),
+            regime=MarketRegimeSnapshot(),
+            confirmation=SignalConfirmationSnapshot(passed=True),
+            setup=StrategySetupSnapshot(name="test", stage="confirmed"),
+            risk_reward=_risk_reward(passed=True),
+            no_trade_filter=NoTradeFilterResult(blocked=False),
+            completeness=TradePlanCompletenessResult(
+                complete=True,
+                has_entry=True,
+                has_structural_stop=True,
+                has_structural_target=True,
+            ),
+            trade_plan=build_trade_plan_from_legacy_fields(
+                entry_min=100.0,
+                entry_max=101.0,
+                stop_loss=98.0,
+                take_profit_1=104.0,
+                risk_reward=2.0,
+            ),
+            candle_state="open",
+            production_mode=False,
+            actionable_score=70,
+            trigger=SignalTriggerSnapshot(
+                passed=True,
+                candle_state="closed",
+                confirmed_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+                metadata={
+                    "confirmed_on_closed_candle": True,
+                    "trigger_candle_state": "closed",
+                },
+            ),
+        )
+
+        self.assertEqual(decision.status, "actionable")
+        self.assertNotEqual(decision.actionability_block_reason, "forming_candle")
+        self.assertTrue(decision.trade_plan.metadata["actionable_from_open_entry_candle"])
+        self.assertEqual(decision.trade_plan.metadata["actionability_source"], "confirmed_trigger_open_entry_candle")
+
 def _signal(
     *,
     status: str,

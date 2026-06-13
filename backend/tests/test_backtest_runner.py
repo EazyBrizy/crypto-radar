@@ -68,6 +68,51 @@ class DeterministicStrategyEngine:
         return [signal.model_copy(update={"status": "actionable"})]
 
 
+class NoLegacyTargetsStrategyEngine:
+    def __init__(self, trigger_timestamp: int) -> None:
+        self.trigger_timestamp = trigger_timestamp
+
+    async def generate_signals(self, features: Features, **_: object):
+        if features.timestamp != self.trigger_timestamp:
+            return []
+        signal = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            reasons=["synthetic exit-layer target setup"],
+            score=90,
+            entry=features.close,
+            stop_loss=features.close - 1.0,
+            take_profit_1=features.close + 1.0,
+            take_profit_2=features.close + 2.0,
+        )
+        return [
+            signal.model_copy(
+                update={
+                    "status": "actionable",
+                    "take_profit_1": None,
+                    "take_profit_2": None,
+                    "risk_reward": None,
+                    "first_target_rr": None,
+                    "final_target_rr": None,
+                    "selected_rr": None,
+                    "selected_rr_target": None,
+                    "trade_plan": None,
+                }
+            )
+        ]
+
+
+class ExitLayerTargetFeatureEngine(RecordingFeatureEngine):
+    def process_candles(self, candles: list[OHLCVCandle]) -> Features:
+        features = super().process_candles(candles)
+        return features.model_copy(
+            update={
+                "previous_day_high": features.close + 4.0,
+            }
+        )
+
+
 class RepeatingStrategyEngine:
     async def generate_signals(self, features: Features, **_: object):
         signal = build_signal(
@@ -207,6 +252,40 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertTrue(trade_plan["invalidation"]["conditions"])
         assert result.run_result.result is not None
         self.assertEqual(result.run_result.result.metrics["risk_rejections"], 0)
+        self.assertEqual(result.run_result.result.metrics["risk_gate_blockers"], [])
+
+    def test_backtest_rr_uses_exit_layer_targets_when_legacy_targets_are_missing(self) -> None:
+        candles = _candles()
+        runner = ProductionBacktestRunner(
+            feature_engine=ExitLayerTargetFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=NoLegacyTargetsStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "risk_settings": {
+                        "min_rr_ratio": 1.5,
+                        "max_price_deviation_bps": 1000,
+                    },
+                }
+            }
+        )
+
+        result = runner.run_detailed(request)
+
+        self.assertEqual(result.risk_rejections, 0)
+        self.assertEqual(result.execution_rejections, 0)
+        self.assertEqual(len(result.trades), 1)
+        trade_plan = result.trades[0].trade_plan
+        self.assertTrue(trade_plan["targets"])
+        self.assertAlmostEqual(trade_plan["risk_rules"]["selected_rr"], 4.0)
+        self.assertNotIn(
+            "target is missing",
+            trade_plan["risk_rules"]["metadata"].get("risk_reward_block_reason") or "",
+        )
+        assert result.run_result.result is not None
         self.assertEqual(result.run_result.result.metrics["risk_gate_blockers"], [])
 
     def test_backtest_records_pending_retest_reason_when_price_missed_entry_zone(self) -> None:

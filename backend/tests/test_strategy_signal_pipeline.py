@@ -170,6 +170,52 @@ class StrategySignalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rr_check.reason, assessment.reason)
         self.assertEqual(rr_check.metadata.get("selected_rr_target"), assessment.target_key)
 
+    def test_pipeline_rr_uses_exit_layer_targets_when_legacy_targets_are_missing(self) -> None:
+        features = _breakout_features()
+        candidate = _quality_candidate(features).model_copy(
+            update={
+                "take_profit_1": None,
+                "take_profit_2": None,
+                "risk_reward": None,
+                "first_target_rr": None,
+                "final_target_rr": None,
+                "selected_rr": None,
+                "selected_rr_target": None,
+                "trade_plan": None,
+            }
+        )
+
+        signal = StrategySignalPipeline().finalize(
+            candidate,
+            StrategyEvaluationContext(
+                signal_features=features,
+                context_features=_bullish_context_features(),
+                strategy_params={
+                    "allow_r_multiple_fallback": True,
+                    "min_rr_ratio": 1.5,
+                    "rr_target": "final",
+                },
+            ),
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertIsNone(signal.take_profit_1 if signal else 0)
+        self.assertIsNone(signal.take_profit_2 if signal else 0)
+        self.assertTrue(signal.exit_plan.targets if signal and signal.exit_plan else [])
+        self.assertTrue(signal.trade_plan.targets if signal and signal.trade_plan else [])
+        self.assertGreaterEqual(signal.selected_rr or 0, 1.5)
+        rr_check = next(
+            check
+            for check in (signal.confirmation.checks if signal and signal.confirmation else [])
+            if check.name == "risk_reward_guard"
+        )
+        self.assertNotIn("target is missing", rr_check.reason or "")
+        self.assertFalse(rr_check.metadata.get("risk_reward_blocked"))
+        self.assertNotIn(
+            "target is missing",
+            signal.trade_plan.risk_rules.metadata.get("risk_reward_block_reason") or "",
+        )
+
     def test_status_resolver_blocks_incomplete_trade_plan(self) -> None:
         features = _breakout_features()
         candidate = _quality_candidate(features)

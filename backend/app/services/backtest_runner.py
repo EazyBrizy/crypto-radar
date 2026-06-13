@@ -24,7 +24,6 @@ from app.services.feature_engine import FeatureEngine
 from app.services.historical_candle_provider import ClickHouseHistoricalCandleProvider, HistoricalCandleProvider
 from app.services.market_context import MarketContextService, MarketContextSnapshot
 from app.services.risk_gate import RiskContextService, RiskGateService
-from app.services.risk_reward_assessment import RiskRewardAssessmentService
 from app.services.trade_plan_completeness import trade_plan_completeness_service
 from app.services.trade_plan_enrichment import TradePlanEnrichmentService
 from app.services.virtual_trade_lifecycle import (
@@ -39,6 +38,7 @@ from app.strategies.pipeline import (
     InvalidationLayer,
     StrategyEvaluationContext,
     StrategySignalPipeline,
+    _enrich_trade_plan_with_final_risk_reward,
 )
 
 DEFAULT_WARMUP_CANDLES = 200
@@ -853,18 +853,15 @@ def _normalize_signal_for_backtest(
         market_context=market_context,
         rr_guard_context="backtest",
     )
-    risk_reward = RiskRewardAssessmentService().assess(
-        signal,
-        pipeline_settings,
-        rr_guard_context="backtest",
-    )
     invalidation = InvalidationLayer().build(signal, context)
     exit_plan = ExitManagementLayer().build(signal, context)
-    trade_plan = trade_plan_enrichment.enrich(
+    trade_plan, risk_reward, signal = _enrich_trade_plan_with_final_risk_reward(
         signal=signal,
         exit_plan=exit_plan,
         invalidation=invalidation,
-        risk_reward=risk_reward,
+        params=pipeline_settings,
+        rr_guard_context="backtest",
+        trade_plan_enrichment=trade_plan_enrichment,
     )
     trade_plan = _trade_plan_with_executable_backtest_rr_target(trade_plan)
     trade_plan = _trade_plan_with_explicit_backtest_targets(trade_plan, state=state)

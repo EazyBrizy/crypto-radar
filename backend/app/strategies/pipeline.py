@@ -189,15 +189,30 @@ class StrategySignalPipeline:
         )
         signal = _apply_regime_score(signal, regime)
         setup = StrategySetupLayer().evaluate(signal)
-        risk_reward = RiskRewardAssessmentService().assess(
-            signal,
-            pipeline_settings,
-            context.rr_guard_context,
-        )
-        confirmation = ConfirmationLayer().evaluate(signal, context, risk_reward)
-        trigger = TriggerLayer().evaluate(signal, context, confirmation)
-        no_trade = NoTradeFilterService().evaluate(
+        invalidation = InvalidationLayer().build(signal, context)
+        exit_management = ExitManagementLayer()
+        exit_plan = exit_management.build(signal, context)
+        trade_plan, risk_reward, signal_for_layers = _enrich_trade_plan_with_final_risk_reward(
             signal=signal,
+            exit_plan=exit_plan,
+            invalidation=invalidation,
+            params=pipeline_settings,
+            rr_guard_context=context.rr_guard_context,
+            trade_plan_enrichment=trade_plan_enrichment,
+        )
+        signal_for_layers = signal_for_layers.model_copy(
+            update={
+                "quality": quality,
+                "regime": regime,
+                "invalidation": invalidation,
+                "exit_plan": exit_plan,
+            },
+            deep=True,
+        )
+        confirmation = ConfirmationLayer().evaluate(signal_for_layers, context, risk_reward)
+        trigger = TriggerLayer().evaluate(signal_for_layers, context, confirmation)
+        no_trade = NoTradeFilterService().evaluate(
+            signal=signal_for_layers,
             features=context.signal_features,
             context={
                 "quality": quality,
@@ -212,32 +227,24 @@ class StrategySignalPipeline:
         confirmation = _confirmation_with_no_trade_check(confirmation, no_trade)
         if not quality.passed and not no_trade.blocked:
             return None
-        invalidation = InvalidationLayer().build(signal, context)
-        exit_management = ExitManagementLayer()
-        exit_plan = exit_management.build(signal, context)
-        trade_plan = trade_plan_enrichment.enrich(
-            signal=signal,
-            exit_plan=exit_plan,
-            invalidation=invalidation,
-            risk_reward=risk_reward,
-        )
         production_mode = _is_production_mode(pipeline_settings)
+        completeness_context = {
+            "quality": quality,
+            "regime": regime,
+            "setup": setup,
+            "confirmation": confirmation,
+            "market_quality": context.market_quality,
+            "market_context": market_context,
+            "alpha_context": context.alpha_context,
+            "context_features": context.context_features,
+            "context_features_by_timeframe": context.context_features_by_timeframe,
+            "support_resistance_by_timeframe": context.support_resistance_by_timeframe,
+        }
         completeness = trade_plan_completeness_service.assess(
-            signal,
+            signal_for_layers,
             trade_plan,
             settings=pipeline_settings,
-            context={
-                "quality": quality,
-                "regime": regime,
-                "setup": setup,
-                "confirmation": confirmation,
-                "market_quality": context.market_quality,
-                "market_context": market_context,
-                "alpha_context": context.alpha_context,
-                "context_features": context.context_features,
-                "context_features_by_timeframe": context.context_features_by_timeframe,
-                "support_resistance_by_timeframe": context.support_resistance_by_timeframe,
-            },
+            context=completeness_context,
             production_mode=production_mode,
         )
         trade_plan = trade_plan_enrichment.attach_completeness_metadata(
@@ -251,8 +258,17 @@ class StrategySignalPipeline:
             production_mode=production_mode,
         )
 
+        signal_for_status = signal_for_layers.model_copy(
+            update={
+                "trade_plan": trade_plan,
+                "confirmation": confirmation,
+                "trigger": trigger,
+                "no_trade_filter": no_trade,
+            },
+            deep=True,
+        )
         status_decision = SignalStatusResolver().resolve(
-            signal=signal,
+            signal=signal_for_status,
             params=pipeline_settings,
             quality=quality,
             regime=regime,
@@ -272,6 +288,101 @@ class StrategySignalPipeline:
         confirmation = status_decision.confirmation
         setup = status_decision.setup
         trade_plan = status_decision.trade_plan
+        entry_updates: dict[str, Any] = {}
+        if status == "wait_for_pullback":
+            overextension = _overextension_check(confirmation)
+            target = _pullback_target_from_check(overextension)
+            if target is not None:
+                entry_updates = {
+                    "entry_min": target.entry_min,
+                    "entry_max": target.entry_max,
+                }
+                trade_plan = _sync_trade_plan_entry(
+                    trade_plan=trade_plan,
+                    entry_min=target.entry_min,
+                    entry_max=target.entry_max,
+                )
+                signal_for_layers = signal_for_layers.model_copy(
+                    update={**entry_updates, "trade_plan": trade_plan},
+                    deep=True,
+                )
+                exit_plan = exit_management.build(signal_for_layers, context)
+                trade_plan, risk_reward, signal_for_layers = _enrich_trade_plan_with_final_risk_reward(
+                    signal=signal_for_layers,
+                    exit_plan=exit_plan,
+                    invalidation=invalidation,
+                    params=pipeline_settings,
+                    rr_guard_context=context.rr_guard_context,
+                    trade_plan_enrichment=trade_plan_enrichment,
+                )
+                confirmation = ConfirmationLayer().evaluate(signal_for_layers, context, risk_reward)
+                trigger = TriggerLayer().evaluate(signal_for_layers, context, confirmation)
+                no_trade = NoTradeFilterService().evaluate(
+                    signal=signal_for_layers,
+                    features=context.signal_features,
+                    context={
+                        "quality": quality,
+                        "regime": regime,
+                        "confirmation": confirmation,
+                        "market_quality": context.market_quality,
+                        "market_context": market_context,
+                    },
+                    settings=pipeline_settings,
+                )
+                no_trade = _no_trade_with_market_context(no_trade, market_context)
+                confirmation = _confirmation_with_no_trade_check(confirmation, no_trade)
+                completeness_context["confirmation"] = confirmation
+                completeness = trade_plan_completeness_service.assess(
+                    signal_for_layers,
+                    trade_plan,
+                    settings=pipeline_settings,
+                    context=completeness_context,
+                    production_mode=production_mode,
+                )
+                trade_plan = trade_plan_enrichment.attach_completeness_metadata(
+                    trade_plan=trade_plan,
+                    completeness=completeness,
+                    production_mode=production_mode,
+                )
+                confirmation = trade_plan_enrichment.annotate_confirmation_completeness(
+                    confirmation=confirmation,
+                    completeness=completeness,
+                    production_mode=production_mode,
+                )
+                signal_for_status = signal_for_layers.model_copy(
+                    update={
+                        "quality": quality,
+                        "regime": regime,
+                        "invalidation": invalidation,
+                        "exit_plan": exit_plan,
+                        "trade_plan": trade_plan,
+                        "confirmation": confirmation,
+                        "trigger": trigger,
+                        "no_trade_filter": no_trade,
+                    },
+                    deep=True,
+                )
+                status_decision = SignalStatusResolver().resolve(
+                    signal=signal_for_status,
+                    params=pipeline_settings,
+                    quality=quality,
+                    regime=regime,
+                    confirmation=confirmation,
+                    setup=setup,
+                    risk_reward=risk_reward,
+                    no_trade_filter=no_trade,
+                    completeness=completeness,
+                    trade_plan=trade_plan,
+                    candle_state=candle_state,
+                    trigger=trigger,
+                    production_mode=production_mode,
+                    actionable_score=ACTIONABLE_SCORE,
+                )
+                status = status_decision.status
+                status_reason = status_decision.status_reason
+                confirmation = status_decision.confirmation
+                setup = status_decision.setup
+                trade_plan = status_decision.trade_plan
         trade_plan = _trade_plan_with_risk_reward_metadata(trade_plan, risk_reward)
         trade_plan = _trade_plan_with_market_context(trade_plan, market_context)
         legacy_display_note = _legacy_display_filter_note(
@@ -351,18 +462,8 @@ class StrategySignalPipeline:
             "explanation": explanation,
             "risks": risks,
             "candle_state": candle_state,
+            **entry_updates,
         }
-        if status == "wait_for_pullback":
-            overextension = _overextension_check(confirmation)
-            target = _pullback_target_from_check(overextension)
-            if target is not None:
-                updates["entry_min"] = target.entry_min
-                updates["entry_max"] = target.entry_max
-                trade_plan = _sync_trade_plan_entry(
-                    trade_plan=trade_plan,
-                    entry_min=target.entry_min,
-                    entry_max=target.entry_max,
-                )
         updates["decision"] = signal_decision_service.from_pipeline_outputs(
             signal=signal,
             quality=quality,
@@ -1640,6 +1741,82 @@ def _effective_candle_state(signal: StrategySignal, features: Features) -> str:
     if signal.candle_state == "open" or features.candle_state == "open":
         return "open"
     return "closed"
+
+
+def _enrich_trade_plan_with_final_risk_reward(
+    *,
+    signal: StrategySignal,
+    exit_plan: SignalExitPlanSnapshot,
+    invalidation: SignalInvalidationSnapshot,
+    params: Mapping[str, Any],
+    rr_guard_context: str,
+    trade_plan_enrichment: TradePlanEnrichmentService,
+) -> tuple[TradePlan, RiskRewardAssessment, StrategySignal]:
+    rr_service = RiskRewardAssessmentService()
+    draft_risk_reward = rr_service.assess(signal, params, rr_guard_context)
+    trade_plan = trade_plan_enrichment.enrich(
+        signal=signal,
+        exit_plan=exit_plan,
+        invalidation=invalidation,
+        risk_reward=draft_risk_reward,
+    )
+    signal_with_trade_plan = signal.model_copy(update={"trade_plan": trade_plan}, deep=True)
+    risk_reward_signal = _signal_for_risk_reward_assessment(
+        signal=signal,
+        trade_plan=trade_plan,
+    )
+    risk_reward = rr_service.assess(risk_reward_signal, params, rr_guard_context)
+    trade_plan = trade_plan_enrichment.enrich(
+        signal=signal_with_trade_plan,
+        exit_plan=exit_plan,
+        invalidation=invalidation,
+        risk_reward=risk_reward,
+    )
+    signal_with_trade_plan = signal_with_trade_plan.model_copy(
+        update={"trade_plan": trade_plan},
+        deep=True,
+    )
+    return trade_plan, risk_reward, signal_with_trade_plan
+
+
+def _signal_for_risk_reward_assessment(
+    *,
+    signal: StrategySignal,
+    trade_plan: TradePlan,
+) -> StrategySignal:
+    legacy_target_labels = {
+        label
+        for label, price in (
+            ("TP1", signal.take_profit_1),
+            ("TP2", signal.take_profit_2),
+        )
+        if price is not None
+    }
+    if not legacy_target_labels:
+        return signal.model_copy(
+            update={"trade_plan": _trade_plan_with_priced_rr_targets(trade_plan)},
+            deep=True,
+        )
+    legacy_targets = [
+        target
+        for target in (signal.trade_plan.targets if signal.trade_plan is not None else [])
+        if target.label.strip().upper() in legacy_target_labels
+        and target.source == "legacy_fields"
+    ]
+    if not legacy_targets:
+        return signal.model_copy(
+            update={"trade_plan": _trade_plan_with_priced_rr_targets(trade_plan)},
+            deep=True,
+        )
+    rr_trade_plan = trade_plan.model_copy(update={"targets": legacy_targets}, deep=True)
+    return signal.model_copy(update={"trade_plan": rr_trade_plan}, deep=True)
+
+
+def _trade_plan_with_priced_rr_targets(trade_plan: TradePlan) -> TradePlan:
+    priced_targets = [target for target in trade_plan.targets if target.price is not None]
+    if not priced_targets or len(priced_targets) == len(trade_plan.targets):
+        return trade_plan
+    return trade_plan.model_copy(update={"targets": priced_targets}, deep=True)
 
 
 def _sync_trade_plan_entry(

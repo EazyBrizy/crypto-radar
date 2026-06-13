@@ -258,7 +258,13 @@ class ForwardStrategyTestRuntime:
                 result.signals_processed += 1
                 if gate.can_enter_now:
                     gate_request = _manual_confirm_request(run)
-                    execution_policy_decision = _forward_execution_policy_decision(run, radar_signal, gate_request)
+                    policy_reference_price = _forward_policy_price(run, radar_signal)
+                    execution_policy_decision = _forward_execution_policy_decision(
+                        run,
+                        radar_signal,
+                        gate_request,
+                        reference_price=policy_reference_price,
+                    )
                     if not execution_policy_decision.can_execute:
                         if execution_policy_decision.should_wait:
                             gate = _gate_waiting_for_execution_policy(gate, execution_policy_decision)
@@ -315,6 +321,11 @@ class ForwardStrategyTestRuntime:
                         )
                         result.runtime_state_updates += 1
                         continue
+                    gate_request = _request_with_execution_policy_reference(
+                        gate_request,
+                        execution_policy_decision,
+                        reference_price=policy_reference_price,
+                    )
                     portfolio_decision = _forward_portfolio_decision(run, radar_signal, gate_request)
                     if not portfolio_decision.can_enter:
                         gate = _gate_blocked_by_portfolio(gate, portfolio_decision)
@@ -734,7 +745,7 @@ class ForwardStrategyTestRuntime:
 
 class ForwardIsolatedVirtualTrading:
     def open_virtual_trade(self, signal: RadarSignal, request: ManualConfirmRequest) -> VirtualTrade:
-        entry_price = _entry_price(signal)
+        entry_price = _entry_price(signal, request=request)
         size_usd = _virtual_size_usd(request)
         quantity = size_usd / entry_price if entry_price > 0 else 0.0
         opened_at = signal.created_at.astimezone(timezone.utc)
@@ -1355,13 +1366,19 @@ def _forward_execution_policy_decision(
     run: StrategyTestRunResponse,
     signal: RadarSignal,
     request: ManualConfirmRequest,
+    *,
+    reference_price: float | None = None,
 ) -> ExecutionPolicyDecision:
     policy = _execution_policy_params(run)
     risk_settings = _forward_risk_settings(run)
     return execution_policy_resolver.resolve(
         ExecutionPolicyContext(
             side="short" if signal.direction == "short" else "long",
-            current_price=_forward_policy_price(run, signal),
+            current_price=(
+                reference_price
+                if reference_price is not None and reference_price > 0
+                else _forward_policy_price(run, signal)
+            ),
             entry_min=signal.entry_min,
             entry_max=signal.entry_max,
             stop_loss=signal.stop_loss,
@@ -1381,6 +1398,24 @@ def _forward_execution_policy_decision(
             min_depth_to_size_ratio=_float_policy_param(policy, "min_depth_to_size_ratio", 1.0),
         )
     )
+
+
+def _request_with_execution_policy_reference(
+    request: ManualConfirmRequest,
+    decision: ExecutionPolicyDecision,
+    *,
+    reference_price: float,
+) -> ManualConfirmRequest:
+    decision_metadata = {
+        **decision.to_dict(),
+        "reference_price": reference_price,
+    }
+    metadata = {
+        **dict(request.metadata or {}),
+        "execution_policy_decision": decision_metadata,
+        "reference_price": reference_price,
+    }
+    return request.model_copy(update={"metadata": metadata})
 
 
 def _gate_waiting_for_execution_policy(
@@ -1944,12 +1979,126 @@ def _matrix_user_id_from_position(position: dict[str, Any]) -> str:
     return str(position.get("user_id") or "forward_user")
 
 
-def _entry_price(signal: RadarSignal) -> float:
-    for value in (signal.entry_min, signal.entry_max, signal.take_profit_1, signal.stop_loss):
+def _entry_price(signal: RadarSignal, *, request: ManualConfirmRequest | None = None) -> float:
+    lower, upper = _entry_zone_prices(signal)
+    explicit = _explicit_entry_price(signal, request=request, lower=lower, upper=upper)
+    if explicit is not None:
+        return float(explicit)
+    if lower is not None and upper is not None:
+        return float((lower + upper) / Decimal("2"))
+    if lower is not None:
+        return float(lower)
+    if upper is not None:
+        return float(upper)
+    for value in (signal.take_profit_1, signal.stop_loss):
         price = _decimal(value, Decimal("0"))
         if price > 0:
             return float(price)
     return 1.0
+
+
+def _entry_zone_prices(signal: RadarSignal) -> tuple[Decimal | None, Decimal | None]:
+    entry_min = _positive_decimal(signal.entry_min)
+    entry_max = _positive_decimal(signal.entry_max)
+    if entry_min is not None and entry_max is not None and entry_max < entry_min:
+        return entry_max, entry_min
+    return entry_min, entry_max
+
+
+def _explicit_entry_price(
+    signal: RadarSignal,
+    *,
+    request: ManualConfirmRequest | None,
+    lower: Decimal | None,
+    upper: Decimal | None,
+) -> Decimal | None:
+    metadata_sources: list[dict[str, Any]] = []
+    if request is not None and isinstance(request.metadata, dict):
+        pending_price = _pending_touch_metadata_price(request.metadata, lower=lower, upper=upper)
+        if pending_price is not None:
+            return pending_price
+        metadata_sources.append(request.metadata)
+    gate = signal.execution_gate
+    if gate is not None and isinstance(gate.metadata, dict):
+        metadata_sources.append(gate.metadata)
+
+    for metadata in metadata_sources:
+        price = _metadata_fill_price(metadata)
+        if price is not None:
+            return price
+    return None
+
+
+def _pending_touch_metadata_price(
+    metadata: dict[str, Any],
+    *,
+    lower: Decimal | None,
+    upper: Decimal | None,
+) -> Decimal | None:
+    trigger = metadata.get("pending_entry_trigger")
+    if not isinstance(trigger, dict):
+        return None
+    price = _first_metadata_price(trigger, ("touch_price", "trigger_price", "current_price", "price"))
+    if price is None:
+        return None
+    return _clamp_price_to_zone(price, lower=lower, upper=upper)
+
+
+def _metadata_fill_price(metadata: dict[str, Any]) -> Decimal | None:
+    direct = _first_metadata_price(
+        metadata,
+        (
+            "fill_price",
+            "filled_price",
+            "avg_fill_price",
+            "average_price",
+            "estimated_fill_price",
+        ),
+    )
+    if direct is not None:
+        return direct
+
+    for key in (
+        "execution_policy_decision",
+        "execution_policy",
+        "fill",
+        "execution_fill",
+        "execution",
+        "virtual_execution",
+        "market_snapshot",
+    ):
+        nested = metadata.get(key)
+        if isinstance(nested, dict):
+            price = _metadata_fill_price(nested)
+            if price is not None:
+                return price
+    return _first_metadata_price(metadata, ("reference_price", "execution_price", "current_price"))
+
+
+def _first_metadata_price(metadata: dict[str, Any], keys: Sequence[str]) -> Decimal | None:
+    for key in keys:
+        price = _positive_decimal(metadata.get(key))
+        if price is not None:
+            return price
+    return None
+
+
+def _positive_decimal(value: Any) -> Decimal | None:
+    price = _decimal(value, Decimal("0"))
+    return price if price > 0 else None
+
+
+def _clamp_price_to_zone(
+    price: Decimal,
+    *,
+    lower: Decimal | None,
+    upper: Decimal | None,
+) -> Decimal:
+    if lower is not None and price < lower:
+        return lower
+    if upper is not None and price > upper:
+        return upper
+    return price
 
 
 def _virtual_size_usd(request: ManualConfirmRequest) -> float:

@@ -5,7 +5,7 @@ import contextlib
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Literal, Sequence
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
@@ -84,6 +84,87 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime_state["forward_account"]["open_positions"], 1)
         self.assertEqual(runtime_state["forward_account"]["closed_positions"], 0)
 
+    async def test_default_forward_entry_price_uses_long_entry_zone_midpoint(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(run_store=run_store, trade_store=trade_store)
+
+        result = await runtime.process_strategy_signal(
+            _strategy_signal(
+                direction="LONG",
+                entry_min=100.0,
+                entry_max=101.0,
+                stop_loss=95.0,
+                take_profit_1=110.0,
+                take_profit_2=115.0,
+                execution_gate=_gate(can_enter_now=True),
+            )
+        )
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.opened_trades, 1)
+        self.assertEqual(trade_store.trades[0].entry_price, Decimal("100.5"))
+        self.assertNotEqual(trade_store.trades[0].entry_price, Decimal("100"))
+
+    async def test_default_forward_entry_price_uses_short_entry_zone_midpoint(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(run_store=run_store, trade_store=trade_store)
+
+        result = await runtime.process_strategy_signal(
+            _strategy_signal(
+                direction="SHORT",
+                entry_min=99.0,
+                entry_max=100.0,
+                stop_loss=105.0,
+                take_profit_1=90.0,
+                take_profit_2=85.0,
+                execution_gate=_gate(can_enter_now=True),
+            )
+        )
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.opened_trades, 1)
+        self.assertEqual(trade_store.trades[0].entry_price, Decimal("99.5"))
+        self.assertNotEqual(trade_store.trades[0].entry_price, Decimal("99"))
+
+    async def test_default_forward_entry_price_uses_execution_policy_reference_price(self) -> None:
+        run_store = _ForwardRunStore([_run(runtime_state={"last_price": 100.25})])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(run_store=run_store, trade_store=trade_store)
+
+        result = await runtime.process_strategy_signal(
+            _strategy_signal(
+                entry_min=100.0,
+                entry_max=101.0,
+                execution_gate=_gate(can_enter_now=True),
+            )
+        )
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.opened_trades, 1)
+        self.assertEqual(trade_store.trades[0].entry_price, Decimal("100.25"))
+
+    async def test_default_forward_entry_price_keeps_legacy_no_zone_fallback(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(run_store=run_store, trade_store=trade_store)
+
+        result = await runtime.process_strategy_signal(
+            _strategy_signal(
+                entry_min=None,
+                entry_max=None,
+                stop_loss=95.0,
+                take_profit_1=110.0,
+                take_profit_2=None,
+                execution_gate=_gate(can_enter_now=True),
+            )
+        )
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.opened_trades, 1)
+        self.assertEqual(trade_store.trades[0].entry_price, Decimal("110"))
+
     async def test_pending_forward_signal_records_isolated_event_without_normal_pending_service(self) -> None:
         run_store = _ForwardRunStore([_run()])
         trade_store = _RecordingTradeStore()
@@ -154,6 +235,27 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime_state["pending_entries"][0]["status"], "filled")
         self.assertEqual(runtime_state["pending_entries"][0]["trade_id"], "trade_1")
         self.assertEqual(runtime_state["opened_trades"], 1)
+
+    async def test_default_forward_pending_touch_uses_bounded_touch_price(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_arm_pending=True))),
+        )
+
+        pending_result = await runtime.process_strategy_signal(_strategy_signal())
+        fill_result = await runtime.process_market_tick(
+            MarketData(exchange="bybit", symbol="BTCUSDT", price=100.25, volume=1.0, timestamp=1_780_000_060)
+        )
+
+        self.assertEqual(pending_result.pending_entries_armed, 1)
+        self.assertEqual(fill_result.errors, [])
+        self.assertEqual(fill_result.opened_trades, 1)
+        self.assertEqual(trade_store.trades[0].entry_price, Decimal("100.25"))
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        self.assertEqual(runtime_state["pending_entries"][0]["touch_price"], 100.25)
 
     async def test_execution_policy_pending_retest_records_forward_pending_event(self) -> None:
         run_store = _ForwardRunStore(
@@ -610,23 +712,29 @@ def _run_request(
 def _strategy_signal(
     *,
     symbol: str = "BTCUSDT",
+    direction: Literal["LONG", "SHORT"] = "LONG",
+    entry_min: float | None = 100.0,
+    entry_max: float | None = 101.0,
+    stop_loss: float | None = 95.0,
+    take_profit_1: float | None = 110.0,
+    take_profit_2: float | None = 115.0,
     execution_gate: SignalExecutionGateSnapshot | None = None,
 ) -> StrategySignal:
     return StrategySignal(
         exchange="bybit",
         symbol=symbol,
         strategy="trend_pullback_continuation",
-        direction="LONG",
+        direction=direction,
         confidence=0.82,
         timestamp=1_780_000_000,
         score=82,
         timeframe="15m",
         status="actionable",
-        entry_min=100.0,
-        entry_max=101.0,
-        stop_loss=95.0,
-        take_profit_1=110.0,
-        take_profit_2=115.0,
+        entry_min=entry_min,
+        entry_max=entry_max,
+        stop_loss=stop_loss,
+        take_profit_1=take_profit_1,
+        take_profit_2=take_profit_2,
         risk_reward=2.0,
         execution_gate=execution_gate,
     )

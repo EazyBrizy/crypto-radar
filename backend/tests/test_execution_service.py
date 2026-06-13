@@ -179,6 +179,12 @@ class _PartialFillExecutionAdapter(_FakeExecutionAdapter):
         return recorded
 
 
+class _FailingPlacementAdapter(_FakeExecutionAdapter):
+    async def place_order(self, order: ExecutionPlannedOrder) -> ExecutionPlannedOrder:
+        self.calls.append(("entry", order))
+        raise RuntimeError("exchange placement exploded")
+
+
 class _DryReadinessAdapter:
     name = "dry_readiness"
     is_dry_run = True
@@ -873,6 +879,34 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.status, "submitted")
         self.assertEqual(len(adapter.calls), 4)
         self.assertTrue(all(order.metadata.get("idempotent_replay") for order in second.planned_orders))
+
+    async def test_live_adapter_place_order_exception_returns_structured_failed_result(self) -> None:
+        adapter = _FailingPlacementAdapter()
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.place_order(_signal(), _request())
+
+        self.assertEqual(result.status, "failed")
+        self.assertTrue(result.execution_allowed)
+        self.assertEqual(result.reason_code, "ORDER_PLACEMENT_FAILED")
+        self.assertEqual(result.reason_codes, ["ORDER_PLACEMENT_FAILED"])
+        self.assertEqual(result.technical_message, "exchange placement exploded")
+        self.assertIsNotNone(result.execution_plan)
+        assert result.execution_plan is not None
+        self.assertEqual(result.planned_orders, result.execution_plan.planned_orders)
+        self.assertEqual(
+            [order.role for order in result.planned_orders],
+            ["entry", "protective_stop", "take_profit", "take_profit"],
+        )
+        self.assertTrue(all(order.status == "planned" for order in result.planned_orders))
+        self.assertEqual(result.lifecycle_trace, result.execution_plan.lifecycle_trace)
+        self.assertEqual(adapter.calls[0][0], "entry")
 
     async def test_live_adapter_without_protective_guarantee_blocks_before_entry(self) -> None:
         adapter = _NoProtectiveGuaranteeAdapter()

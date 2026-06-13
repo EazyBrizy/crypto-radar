@@ -80,6 +80,7 @@ EXCHANGE_CONNECTION_EXCHANGE_MISMATCH_REASON_CODE = "EXCHANGE_CONNECTION_EXCHANG
 EXCHANGE_CREDENTIALS_UNAVAILABLE_REASON_CODE = "EXCHANGE_CREDENTIALS_UNAVAILABLE"
 BYBIT_API_CREDENTIALS_REQUIRED_REASON_CODE = "BYBIT_API_CREDENTIALS_REQUIRED"
 PROTECTIVE_STOP_REQUIRED_REASON_CODE = "PROTECTIVE_STOP_REQUIRED"
+ORDER_PLACEMENT_FAILED_REASON_CODE = "ORDER_PLACEMENT_FAILED"
 
 
 @dataclass(frozen=True)
@@ -173,11 +174,38 @@ class RealExecutionService:
         execution_plan = prepared.result.execution_plan
         if execution_adapter is None or execution_plan is None:
             return prepared.result
-        planned_orders = await _place_execution_plan(
-            execution_plan,
-            execution_adapter,
-        )
         adapter_name = getattr(execution_adapter, "name", "unknown")
+        try:
+            planned_orders = await _place_execution_plan(
+                execution_plan,
+                execution_adapter,
+            )
+        except Exception as exc:
+            message = "Real execution adapter failed during order placement."
+            planned_orders = execution_plan.planned_orders
+            lifecycle_trace = execution_plan.lifecycle_trace
+            return RealExecutionResult(
+                status="failed",
+                signal_valid=True,
+                execution_allowed=True,
+                exchange=signal.exchange,
+                symbol=signal.symbol,
+                message=message,
+                technical_message=str(exc),
+                risk_decision=prepared.result.risk_decision,
+                risk_decision_id=prepared.result.risk_decision_id,
+                execution_plan=execution_plan,
+                planned_orders=planned_orders,
+                idempotency_key=execution_plan.idempotency_key,
+                adapter=adapter_name,
+                warnings=prepared.result.warnings,
+                reason_code=ORDER_PLACEMENT_FAILED_REASON_CODE,
+                reason_codes=[ORDER_PLACEMENT_FAILED_REASON_CODE],
+                environment=prepared.result.environment,
+                connection_id=prepared.result.connection_id,
+                order_placement_mode=prepared.result.order_placement_mode,
+                lifecycle_trace=lifecycle_trace,
+            )
         result_status = _real_execution_status_from_orders(
             adapter_is_dry_run=getattr(execution_adapter, "is_dry_run", False),
             planned_orders=planned_orders,

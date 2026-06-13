@@ -254,7 +254,7 @@ class SignalService:
         final_result = dedup_result.final_result
         self._after_write(final_result)
         self._reconcile_pending_entry_trade_plan(final_result)
-        return final_result.signal, result.created
+        return final_result.signal, final_result.created
 
     def confirm_signal(
         self,

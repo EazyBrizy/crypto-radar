@@ -4,7 +4,9 @@ from typing import Any
 from unittest.mock import patch
 from uuid import uuid4
 
+from app.repositories.signal_repository import SignalWriteResult
 from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot, StrategySignal
+from app.services.signal_service import NullSignalAnalyticsWriter, NullSignalHotStore, SignalService
 from app.workers import signal_worker
 from app.workers.signal_worker import ScannerRunner, _should_notify_signal
 
@@ -145,6 +147,28 @@ class ScannerRunnerForwardStrategyTestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.processed_signals, 0)
         self.assertEqual(broker.events, [])
 
+    async def test_write_side_dedup_update_publishes_update_not_created(self) -> None:
+        strategy_signal = _strategy_signal()
+        broker = _RecordingBroker()
+        store = SignalService(
+            repository=_WriteSideDedupUpdateRepository(),  # type: ignore[arg-type]
+            analytics_writer=NullSignalAnalyticsWriter(),
+            hot_store=NullSignalHotStore(),
+        )
+        runner = ScannerRunner(
+            scanner=_Scanner([strategy_signal]),  # type: ignore[arg-type]
+            store=store,
+        )
+
+        with (
+            patch.object(signal_worker, "realtime_event_broker", broker),
+            patch.object(store, "_reconcile_pending_entry_trade_plan", return_value=None),
+        ):
+            await runner._run()
+
+        self.assertEqual(runner.processed_signals, 0)
+        self.assertEqual([event["type"] for event in broker.events], ["signal.updated"])
+
     async def test_forward_strategy_test_error_is_logged_and_does_not_stop_scanner(self) -> None:
         strategy_signal = _strategy_signal()
         forward = _FailingForwardStrategyTests()
@@ -248,6 +272,60 @@ class _Store:
         return self.radar_signal, True
 
 
+class _WriteSideDedupUpdateRepository:
+    def __init__(self) -> None:
+        self.signal: RadarSignal | None = None
+
+    def list_open_signals(self, limit: int = 200) -> list[RadarSignal]:
+        return []
+
+    def upsert_strategy_signal(
+        self,
+        signal: StrategySignal,
+        **_: object,
+    ) -> SignalWriteResult:
+        execution_gate = SignalExecutionGateSnapshot(
+            status="warning",
+            feed_kind="watchlist",
+            can_notify=False,
+            can_enter_now=False,
+            can_arm_pending=False,
+            can_show_in_execution_feed=True,
+        )
+        self.signal = _signal(
+            symbol=signal.symbol,
+            direction=signal.direction.lower(),
+            score=signal.score or 0,
+            status=signal.status,
+            candle_state=signal.candle_state,
+            execution_gate=execution_gate,
+        )
+        return _write_result(self.signal, created=True, event_type="signal.created")
+
+    def list_open_signals_for_market_direction(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        direction: str,
+        since: datetime,
+        limit: int = 200,
+    ) -> list[RadarSignal]:
+        if self.signal is None:
+            return []
+        return [self.signal]
+
+    def update_signal_dedup_metadata(
+        self,
+        signal_id: str,
+        *,
+        dedup: dict[str, object],
+    ) -> SignalWriteResult | None:
+        if self.signal is None or self.signal.id != signal_id:
+            return None
+        return _write_result(self.signal, created=False, event_type="signal.updated")
+
+
 class _AsyncForwardStrategyTests:
     def __init__(self) -> None:
         self.calls: list[StrategySignal] = []
@@ -272,6 +350,19 @@ class _RecordingBroker:
 
     async def publish(self, event: dict[str, object]) -> None:
         self.events.append(event)
+
+
+def _write_result(signal: RadarSignal, *, created: bool, event_type: str) -> SignalWriteResult:
+    return SignalWriteResult(
+        signal=signal,
+        created=created,
+        event_type=event_type,
+        analytics_event={
+            "event_type": event_type,
+            "signal_id": signal.id,
+            "signal_key": signal.id,
+        },
+    )
 
 
 if __name__ == "__main__":

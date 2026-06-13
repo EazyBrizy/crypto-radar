@@ -83,7 +83,7 @@ class SignalServiceWriteSideDedupTest(unittest.TestCase):
 
         radar_signal, created = service.upsert_strategy_signal(_strategy_signal(score=82))
 
-        self.assertTrue(created)
+        self.assertFalse(created)
         self.assertEqual(radar_signal.id, "candidate")
         self.assertEqual(radar_signal.status, "rejected")
         self.assertEqual(radar_signal.status_reason, "dedup_suppressed_by_better_signal")
@@ -103,7 +103,7 @@ class SignalServiceWriteSideDedupTest(unittest.TestCase):
 
         radar_signal, created = service.upsert_strategy_signal(_strategy_signal(score=82))
 
-        self.assertTrue(created)
+        self.assertFalse(created)
         self.assertEqual(radar_signal.status, "rejected")
         self.assertEqual([result.signal.status for result in hot_store.results], ["rejected"])
         self.assertEqual([event["event_type"] for event in analytics.events], ["signal.rejected"])
@@ -120,7 +120,7 @@ class SignalServiceWriteSideDedupTest(unittest.TestCase):
 
         radar_signal, created = service.upsert_strategy_signal(_strategy_signal(score=92))
 
-        self.assertTrue(created)
+        self.assertFalse(created)
         self.assertEqual(radar_signal.status, "actionable")
         self.assertEqual(repository.signals["existing"].status, "rejected")
         self.assertEqual(repository.signals["existing"].status_reason, "dedup_replaced_by_better_signal")

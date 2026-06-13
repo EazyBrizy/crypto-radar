@@ -108,6 +108,53 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime_state["signal_events_written"], 1)
         self.assertEqual(runtime_state["pending_entries_armed"], 1)
 
+    async def test_wait_for_pullback_pending_entry_opens_on_future_entry_touch(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        virtual_trading = _VirtualTrading()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_arm_pending=True))),
+            virtual_trading=virtual_trading,
+        )
+
+        pending_result = await runtime.process_strategy_signal(_strategy_signal())
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        pending_entries = runtime_state["pending_entries"]
+
+        self.assertEqual(pending_result.pending_entries_armed, 1)
+        self.assertEqual(len(pending_entries), 1)
+        self.assertEqual(pending_entries[0]["status"], "pending")
+        self.assertEqual(pending_entries[0]["signal_id"], "sig_1")
+        self.assertEqual(pending_entries[0]["exchange"], "bybit")
+        self.assertEqual(pending_entries[0]["symbol"], "BTCUSDT")
+        self.assertEqual(pending_entries[0]["side"], "long")
+        self.assertEqual(pending_entries[0]["entry_min"], 100.0)
+        self.assertEqual(pending_entries[0]["entry_max"], 101.0)
+        self.assertEqual(pending_entries[0]["stop_loss"], 95.0)
+        self.assertEqual(pending_entries[0]["targets"], [110.0, 115.0])
+        self.assertIsNone(pending_entries[0]["expires_at"])
+        self.assertTrue(pending_entries[0]["trade_plan_hash"].startswith("sha256:"))
+        self.assertEqual(pending_entries[0]["created_at"], NOW.isoformat())
+
+        fill_result = await runtime.process_market_tick(
+            MarketData(exchange="bybit", symbol="BTCUSDT", price=100.5, volume=1.0, timestamp=1_780_000_060)
+        )
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+
+        self.assertEqual(fill_result.opened_trades, 1)
+        self.assertEqual(len(virtual_trading.open_calls), 1)
+        self.assertEqual(virtual_trading.open_calls[0][0].id, "sig_1")
+        self.assertEqual(len(trade_store.trades), 1)
+        self.assertEqual(trade_store.trades[0].trade_id, "trade_1")
+        self.assertEqual(len(trade_store.signal_events), 2)
+        self.assertEqual(trade_store.signal_events[1].funnel_stage, "filled")
+        self.assertEqual(trade_store.signal_events[1].outcome, "filled")
+        self.assertEqual(runtime_state["pending_entries"][0]["status"], "filled")
+        self.assertEqual(runtime_state["pending_entries"][0]["trade_id"], "trade_1")
+        self.assertEqual(runtime_state["opened_trades"], 1)
+
     async def test_execution_policy_pending_retest_records_forward_pending_event(self) -> None:
         run_store = _ForwardRunStore(
             [

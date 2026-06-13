@@ -36,6 +36,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestTrade,
 )
 from app.services.strategy_testing.stores import ClickHouseStrategyTestStore, PostgresStrategyTestRunStore
+from app.services.trade_plan_fingerprint import fingerprint_signal_trade_plan
 
 
 class ForwardRunStore(Protocol):
@@ -173,6 +174,7 @@ class ForwardStrategyTestRuntime:
                 "metrics_written": _counter(detail.run.runtime_state, "metrics_written"),
                 "forward_account": _initial_forward_account(request),
                 "forward_positions": list(detail.run.runtime_state.get("forward_positions") or []),
+                "pending_entries": _forward_pending_entries(detail.run),
                 "last_error": None,
             },
         )
@@ -217,7 +219,7 @@ class ForwardStrategyTestRuntime:
                     "last_closed_trade_id": marked.closed_trades[-1].id,
                     "last_close_reason": marked.closed_trades[-1].close_reason,
                 }
-            self._increment_runtime_state(
+            updated_detail = self._increment_runtime_state(
                 run,
                 {
                     "processed_ticks": 1,
@@ -230,6 +232,7 @@ class ForwardStrategyTestRuntime:
                 },
             )
             result.runtime_state_updates += 1
+            result.merge(self._process_pending_entries_for_tick(updated_detail.run, tick))
 
         if self._scanner is None:
             return result
@@ -274,6 +277,10 @@ class ForwardStrategyTestRuntime:
                                 {
                                     "processed_signals": 1,
                                     "pending_entries_armed": 1,
+                                    "pending_entries": _upsert_forward_pending_entry(
+                                        _forward_pending_entries(run),
+                                        _forward_pending_entry_snapshot(radar_signal, gate),
+                                    ),
                                     "signal_events_written": 1,
                                     "last_signal_id": radar_signal.id,
                                     "last_gate_status": gate.status,
@@ -379,6 +386,10 @@ class ForwardStrategyTestRuntime:
                         {
                             "processed_signals": 1,
                             "pending_entries_armed": 1,
+                            "pending_entries": _upsert_forward_pending_entry(
+                                _forward_pending_entries(run),
+                                _forward_pending_entry_snapshot(radar_signal, gate),
+                            ),
                             "signal_events_written": 1,
                             "last_signal_id": radar_signal.id,
                             "last_gate_status": gate.status,
@@ -432,6 +443,176 @@ class ForwardStrategyTestRuntime:
             )
             return radar_signal
         return _forward_radar_signal_from_strategy_signal(run, signal)
+
+    def _process_pending_entries_for_tick(
+        self,
+        run: StrategyTestRunResponse,
+        tick: MarketData,
+    ) -> ForwardRuntimeResult:
+        entries = _forward_pending_entries(run)
+        if not entries:
+            return ForwardRuntimeResult()
+
+        result = ForwardRuntimeResult()
+        updated_entries: list[dict[str, Any]] = []
+        current_run = run
+        state_patch: dict[str, Any] = {}
+        counter_patch: dict[str, int] = {}
+        last_patch: dict[str, Any] = {}
+        changed = False
+        now = _signal_timestamp_to_utc(tick.timestamp)
+        for entry in entries:
+            pending = dict(entry)
+            if (
+                _forward_pending_entry_status(pending) != "pending"
+                or not _forward_pending_entry_matches_market(pending, tick.exchange, tick.symbol)
+            ):
+                updated_entries.append(pending)
+                continue
+
+            if _forward_pending_entry_is_expired(pending, now):
+                updated_entries.append(
+                    _terminal_forward_pending_entry(
+                        pending,
+                        status="expired",
+                        now=now,
+                        reason_code="pending_entry_expired_before_touch",
+                        reason="Pending forward entry expired before entry touch.",
+                    )
+                )
+                changed = True
+                continue
+
+            try:
+                touch_price = _forward_pending_entry_touch_price(pending, tick)
+            except ValueError as exc:
+                updated_entries.append(
+                    _terminal_forward_pending_entry(
+                        pending,
+                        status="blocked",
+                        now=now,
+                        reason_code="pending_entry_execution_invalid",
+                        reason=str(exc),
+                    )
+                )
+                changed = True
+                continue
+            if touch_price is None:
+                updated_entries.append(pending)
+                continue
+
+            try:
+                signal = _forward_radar_signal_from_pending_entry(pending, tick)
+                gate = signal.execution_gate or _forward_pending_entry_fill_gate(pending)
+                request = _pending_entry_manual_confirm_request(current_run, pending, touch_price)
+                portfolio_decision = _forward_portfolio_decision(current_run, signal, request)
+                if not portfolio_decision.can_enter:
+                    blocked_gate = _gate_blocked_by_portfolio(gate, portfolio_decision)
+                    signal = signal.model_copy(update={"execution_gate": blocked_gate})
+                    event = _strategy_test_signal_event_from_forward_signal(
+                        run=current_run,
+                        signal=signal,
+                        gate=blocked_gate,
+                        funnel_stage="blocked",
+                        outcome="blocked",
+                    )
+                    result.signal_events_written += self._write_signal_event(event)
+                    counter_patch["signal_events_written"] = counter_patch.get("signal_events_written", 0) + 1
+                    updated_entries.append(
+                        _terminal_forward_pending_entry(
+                            pending,
+                            status="blocked",
+                            now=now,
+                            reason_code=portfolio_decision.reason_code,
+                            reason=portfolio_decision.message,
+                            touch_price=touch_price,
+                        )
+                    )
+                    last_patch.update(
+                        {
+                            "last_signal_id": signal.id,
+                            "last_gate_status": blocked_gate.status,
+                            "last_feed_kind": blocked_gate.feed_kind,
+                            "last_portfolio_risk_action": portfolio_decision.action,
+                            "last_portfolio_risk_reason_code": portfolio_decision.reason_code,
+                        }
+                    )
+                    changed = True
+                    continue
+                if portfolio_decision.action == "reduce_size":
+                    request = _request_with_portfolio_size(request, portfolio_decision)
+                    gate = _gate_with_portfolio_warning(gate, portfolio_decision)
+                    signal = signal.model_copy(update={"execution_gate": gate})
+                opened = self._open_virtual_trade(current_run, signal, request=request)
+            except (TypeError, ValueError) as exc:
+                updated_entries.append(
+                    _terminal_forward_pending_entry(
+                        pending,
+                        status="blocked",
+                        now=now,
+                        reason_code="pending_entry_execution_invalid",
+                        reason=str(exc),
+                        touch_price=touch_price,
+                    )
+                )
+                changed = True
+                continue
+
+            event = _strategy_test_signal_event_from_forward_signal(
+                run=current_run,
+                signal=signal,
+                gate=gate,
+                trade=opened,
+                funnel_stage="filled",
+                outcome="filled",
+            )
+            trade_writes = self._write_trade(current_run, signal, opened)
+            event_writes = self._write_signal_event(event)
+            metric_writes = self._write_metric(current_run, signal, opened)
+            result.opened_trades += 1
+            result.trades_written += trade_writes
+            result.signal_events_written += event_writes
+            result.metrics_written += metric_writes
+            counter_patch["opened_trades"] = counter_patch.get("opened_trades", 0) + 1
+            counter_patch["trades_written"] = counter_patch.get("trades_written", 0) + trade_writes
+            counter_patch["signal_events_written"] = counter_patch.get("signal_events_written", 0) + event_writes
+            counter_patch["metrics_written"] = counter_patch.get("metrics_written", 0) + metric_writes
+            trade_state = _apply_forward_trade_open(current_run, opened)
+            state_patch.update(trade_state)
+            current_run = current_run.model_copy(
+                update={"runtime_state": {**current_run.runtime_state, **trade_state}}
+            )
+            updated_entries.append(
+                _terminal_forward_pending_entry(
+                    pending,
+                    status="filled",
+                    now=now,
+                    trade_id=opened.id,
+                    touch_price=touch_price,
+                )
+            )
+            last_patch.update(
+                {
+                    "last_signal_id": signal.id,
+                    "last_gate_status": gate.status,
+                    "last_feed_kind": gate.feed_kind,
+                    "last_trade_id": opened.id,
+                }
+            )
+            changed = True
+
+        if changed:
+            self._increment_runtime_state(
+                run,
+                {
+                    **counter_patch,
+                    **state_patch,
+                    **last_patch,
+                    "pending_entries": updated_entries,
+                },
+            )
+            result.runtime_state_updates += 1
+        return result
 
     def _running_forward_runs(self) -> list[StrategyTestRunResponse]:
         return _forward_runs(self._run_store.list_runs(user_id=None, limit=500, status="running"))
@@ -767,6 +948,259 @@ def _initial_forward_account(request: StrategyTestRunRequest) -> dict[str, Any]:
             "closed_positions": 0,
         }
     )
+
+
+def _forward_pending_entries(run: StrategyTestRunResponse) -> list[dict[str, Any]]:
+    raw_entries = run.runtime_state.get("pending_entries")
+    if not isinstance(raw_entries, list):
+        return []
+    return [dict(entry) for entry in raw_entries if isinstance(entry, dict)]
+
+
+def _upsert_forward_pending_entry(
+    entries: Sequence[dict[str, Any]],
+    pending_entry: dict[str, Any],
+) -> list[dict[str, Any]]:
+    signal_id = str(pending_entry.get("signal_id") or "")
+    updated: list[dict[str, Any]] = []
+    replaced = False
+    for entry in entries:
+        if (
+            signal_id
+            and str(entry.get("signal_id") or "") == signal_id
+            and _forward_pending_entry_status(entry) == "pending"
+        ):
+            if not replaced:
+                updated.append(dict(pending_entry))
+                replaced = True
+            continue
+        updated.append(dict(entry))
+    if not replaced:
+        updated.append(dict(pending_entry))
+    return updated
+
+
+def _forward_pending_entry_snapshot(
+    signal: RadarSignal,
+    gate: SignalExecutionGateSnapshot,
+) -> dict[str, Any]:
+    targets = _pending_entry_targets_from_signal(signal)
+    base = {
+        "status": "pending",
+        "signal_id": signal.id,
+        "exchange": signal.exchange.strip().lower(),
+        "symbol": signal.symbol.strip().upper(),
+        "side": "short" if signal.direction == "short" else "long",
+        "entry_min": signal.entry_min,
+        "entry_max": signal.entry_max,
+        "stop_loss": signal.stop_loss,
+        "targets": targets,
+        "expires_at": signal.expires_at.astimezone(timezone.utc).isoformat()
+        if signal.expires_at is not None
+        else None,
+        "created_at": signal.created_at.astimezone(timezone.utc).isoformat(),
+        "strategy": signal.strategy,
+        "timeframe": signal.timeframe,
+        "confidence": signal.confidence,
+        "risk_reward": signal.risk_reward,
+        "first_target_rr": signal.first_target_rr,
+        "final_target_rr": signal.final_target_rr,
+        "selected_rr": signal.selected_rr,
+        "selected_rr_target": signal.selected_rr_target,
+        "min_rr_ratio": signal.min_rr_ratio,
+        "urgency": signal.urgency,
+        "score": signal.score,
+        "signal_status": signal.status,
+        "candle_state": signal.candle_state,
+        "trade_plan": signal.trade_plan.model_dump(mode="json") if signal.trade_plan else None,
+        "gate": gate.model_dump(mode="json"),
+    }
+    try:
+        base["trade_plan_hash"] = fingerprint_signal_trade_plan(signal).hash
+    except ValueError as exc:
+        base.update(
+            {
+                "status": "blocked",
+                "trade_plan_hash": None,
+                "blocked_reason_code": "pending_entry_execution_invalid",
+                "blocked_reason": str(exc),
+                "resolved_at": _now_iso(),
+            }
+        )
+    return base
+
+
+def _pending_entry_targets_from_signal(signal: RadarSignal) -> list[float]:
+    return [
+        float(price)
+        for price in (signal.take_profit_1, signal.take_profit_2)
+        if price is not None and _decimal(price, Decimal("0")) > 0
+    ]
+
+
+def _forward_pending_entry_status(entry: dict[str, Any]) -> str:
+    return str(entry.get("status") or "pending").strip().lower()
+
+
+def _forward_pending_entry_matches_market(entry: dict[str, Any], exchange: str, symbol: str) -> bool:
+    return (
+        str(entry.get("exchange") or "").strip().lower() == exchange.strip().lower()
+        and str(entry.get("symbol") or "").strip().upper() == symbol.strip().upper()
+    )
+
+
+def _forward_pending_entry_is_expired(entry: dict[str, Any], now: datetime) -> bool:
+    expires_at = _forward_pending_entry_datetime(entry.get("expires_at"))
+    return expires_at is not None and expires_at <= now
+
+
+def _forward_pending_entry_touch_price(entry: dict[str, Any], tick: MarketData) -> Decimal | None:
+    price = _decimal(tick.price, Decimal("0"))
+    if price <= 0:
+        return None
+    lower = _decimal(entry.get("entry_min"), Decimal("0"))
+    upper = _decimal(entry.get("entry_max"), Decimal("0"))
+    if lower <= 0 or upper <= 0:
+        raise ValueError("Pending forward entry requires a positive entry zone.")
+    if upper < lower:
+        lower, upper = upper, lower
+    return price if lower <= price <= upper else None
+
+
+def _terminal_forward_pending_entry(
+    entry: dict[str, Any],
+    *,
+    status: Literal["blocked", "expired", "filled"],
+    now: datetime,
+    reason_code: str | None = None,
+    reason: str | None = None,
+    trade_id: str | None = None,
+    touch_price: Decimal | None = None,
+) -> dict[str, Any]:
+    updated = dict(entry)
+    updated["status"] = status
+    updated["resolved_at"] = now.astimezone(timezone.utc).isoformat()
+    if status == "filled":
+        updated["filled_at"] = updated["resolved_at"]
+    if trade_id is not None:
+        updated["trade_id"] = trade_id
+    if reason_code is not None:
+        updated["reason_code"] = reason_code
+    if reason is not None:
+        updated["reason"] = reason
+    if touch_price is not None:
+        updated["touch_price"] = float(touch_price)
+        updated["touch_price_source"] = "last"
+    return updated
+
+
+def _forward_radar_signal_from_pending_entry(
+    entry: dict[str, Any],
+    tick: MarketData,
+) -> RadarSignal:
+    targets = _pending_entry_targets_from_snapshot(entry)
+    created_at = _signal_timestamp_to_utc(tick.timestamp)
+    gate = _forward_pending_entry_fill_gate(entry)
+    return RadarSignal(
+        id=str(entry.get("signal_id") or ""),
+        symbol=str(entry.get("symbol") or tick.symbol).strip().upper(),
+        exchange=str(entry.get("exchange") or tick.exchange).strip().lower(),
+        strategy=str(entry.get("strategy") or "unknown"),
+        direction="short" if str(entry.get("side") or "").lower() == "short" else "long",
+        confidence=float(_decimal(entry.get("confidence"), Decimal("0"))),
+        risk_reward=_optional_float(entry.get("risk_reward")),
+        first_target_rr=_optional_float(entry.get("first_target_rr")),
+        final_target_rr=_optional_float(entry.get("final_target_rr")),
+        selected_rr=_optional_float(entry.get("selected_rr")),
+        selected_rr_target=str(entry.get("selected_rr_target")) if entry.get("selected_rr_target") else None,
+        min_rr_ratio=_optional_float(entry.get("min_rr_ratio")),
+        urgency=str(entry.get("urgency") or "medium"),
+        status=str(entry.get("signal_status") or "actionable"),
+        score=int(_decimal(entry.get("score"), Decimal("0"))),
+        timeframe=str(entry.get("timeframe") or "stream"),
+        candle_state=str(entry.get("candle_state") or "closed"),
+        entry_min=float(_required_pending_decimal(entry.get("entry_min"), "entry_min")),
+        entry_max=float(_required_pending_decimal(entry.get("entry_max"), "entry_max")),
+        stop_loss=float(_required_pending_decimal(entry.get("stop_loss"), "stop_loss")),
+        take_profit_1=targets[0] if len(targets) >= 1 else None,
+        take_profit_2=targets[1] if len(targets) >= 2 else None,
+        trade_plan=entry.get("trade_plan") if isinstance(entry.get("trade_plan"), dict) else None,
+        execution_gate=gate,
+        created_at=created_at,
+        updated_at=created_at,
+        expires_at=_forward_pending_entry_datetime(entry.get("expires_at")),
+    )
+
+
+def _forward_pending_entry_fill_gate(entry: dict[str, Any]) -> SignalExecutionGateSnapshot:
+    return SignalExecutionGateSnapshot(
+        status="passed",
+        feed_kind="execution_signal",
+        can_notify=True,
+        can_enter_now=True,
+        can_arm_pending=False,
+        can_show_in_execution_feed=True,
+        metadata={
+            "runtime": "forward_strategy_test",
+            "event": "pending_entry_filled",
+            "pending_signal_id": str(entry.get("signal_id") or ""),
+            "trade_plan_hash": entry.get("trade_plan_hash"),
+        },
+    )
+
+
+def _pending_entry_manual_confirm_request(
+    run: StrategyTestRunResponse,
+    entry: dict[str, Any],
+    touch_price: Decimal,
+) -> ManualConfirmRequest:
+    request = _manual_confirm_request(run, auto_enter_on_confirmation=True)
+    metadata = dict(request.metadata or {})
+    metadata.update(
+        {
+            "trigger_source": "pending_entry",
+            "accepted_trade_plan_hash": entry.get("trade_plan_hash"),
+            "pending_entry_trigger": {
+                "touch_price": str(touch_price),
+                "trigger_price": str(touch_price),
+                "trigger_reason": "entry_zone_touched",
+                "touch_price_source": "last",
+            },
+        }
+    )
+    return request.model_copy(update={"metadata": metadata})
+
+
+def _pending_entry_targets_from_snapshot(entry: dict[str, Any]) -> list[float]:
+    raw_targets = entry.get("targets")
+    if not isinstance(raw_targets, list):
+        raw_targets = []
+    targets = [
+        float(price)
+        for price in (_decimal(target, Decimal("0")) for target in raw_targets)
+        if price > 0
+    ]
+    if not targets:
+        raise ValueError("Pending forward entry requires at least one target.")
+    return targets
+
+
+def _required_pending_decimal(value: Any, field_name: str) -> Decimal:
+    number = _decimal(value, Decimal("0"))
+    if number <= 0:
+        raise ValueError(f"Pending forward entry requires positive {field_name}.")
+    return number
+
+
+def _forward_pending_entry_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except ValueError:
+            return None
+    return None
 
 
 def _apply_forward_trade_open(

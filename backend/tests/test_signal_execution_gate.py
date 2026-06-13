@@ -100,6 +100,8 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
 
         self.assertEqual(gate.status, "blocked")
         self.assertEqual(gate.feed_kind, "blocked")
+        self.assertFalse(gate.can_enter_now)
+        self.assertFalse(gate.can_arm_pending)
         self.assertFalse(gate.can_show_in_execution_feed)
         self.assertIn("no_trade_hard_block", _reason_codes(gate))
 
@@ -173,7 +175,7 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertFalse(gate.can_show_in_execution_feed)
         self.assertIn("edge_unknown", _reason_codes(gate))
 
-    def test_wait_for_pullback_is_watchlist(self) -> None:
+    def test_wait_for_pullback_with_complete_trade_plan_can_arm_pending_without_enter_now(self) -> None:
         signal = _signal(status="wait_for_pullback")
 
         gate = SignalExecutionGateService().evaluate(signal)
@@ -181,8 +183,28 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertEqual(gate.feed_kind, "watchlist")
         self.assertFalse(gate.can_notify)
         self.assertFalse(gate.can_enter_now)
-        self.assertFalse(gate.can_arm_pending)
+        self.assertTrue(gate.can_arm_pending)
         self.assertFalse(gate.can_show_in_execution_feed)
+
+    def test_rr_hard_block_blocks_enter_now_and_pending(self) -> None:
+        signal = _signal(status="wait_for_pullback")
+        assert signal.trade_plan is not None
+        trade_plan = signal.trade_plan.model_copy(
+            update={
+                "metadata": {
+                    **signal.trade_plan.metadata,
+                    "rr_status": "failed",
+                    "risk_reward_block_reason": "Risk/reward is below minimum.",
+                }
+            }
+        )
+
+        gate = SignalExecutionGateService().evaluate(signal.model_copy(update={"trade_plan": trade_plan}))
+
+        self.assertEqual(gate.status, "blocked")
+        self.assertFalse(gate.can_enter_now)
+        self.assertFalse(gate.can_arm_pending)
+        self.assertIn("rr_failed", _reason_codes(gate))
 
     def test_unconfirmed_trigger_blocks_execution_signal(self) -> None:
         signal = _signal(trigger=SignalTriggerSnapshot(passed=False, reason="Breakout trigger not confirmed"))

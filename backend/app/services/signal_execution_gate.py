@@ -4,7 +4,11 @@ from collections.abc import Mapping
 from typing import Any, TypeAlias
 
 from app.core.config import settings
-from app.domain.signal_status import is_execution_candidate_status, is_terminal_signal_status
+from app.domain.signal_status import (
+    is_execution_candidate_status,
+    is_terminal_signal_status,
+    is_waiting_entry_status,
+)
 from app.schemas.decision import SignalDecisionSnapshot
 from app.schemas.signal import (
     NoTradeFilterResult,
@@ -175,18 +179,27 @@ class SignalExecutionGateService:
                 )
             )
 
+        candle_allows_execution = (
+            signal.candle_state == "closed"
+            or open_entry_candle_allowed
+            or not settings.execution_closed_candle_only
+        )
         execution_ready = (
             execution_candidate
             and score >= score_threshold
-            and (
-                signal.candle_state == "closed"
-                or open_entry_candle_allowed
-                or not settings.execution_closed_candle_only
-            )
+            and candle_allows_execution
             and not hard_blockers
             and _edge_allows_execution(signal.edge)
             and _has_valid_execution_plan(signal)
             and not _decision_blocks_virtual(decision)
+        )
+        pending_candidate = is_waiting_entry_status(status) or execution_ready
+        can_arm_pending = (
+            pending_candidate
+            and candle_allows_execution
+            and not hard_blockers
+            and _edge_allows_execution(signal.edge)
+            and _has_valid_execution_plan(signal)
         )
 
         feed_kind = (
@@ -201,13 +214,14 @@ class SignalExecutionGateService:
             )
         )
         gate_status = "blocked" if hard_blockers else "warning" if warnings or reasons else "passed"
-        can_show = feed_kind == "execution_signal" and gate_status in {"passed", "warning"}
+        can_enter_now = execution_ready and gate_status in {"passed", "warning"}
+        can_show = can_enter_now
         return SignalExecutionGateSnapshot(
             status=gate_status,
             feed_kind=feed_kind,
             can_notify=can_show,
-            can_enter_now=can_show,
-            can_arm_pending=can_show,
+            can_enter_now=can_enter_now,
+            can_arm_pending=can_arm_pending,
             can_show_in_execution_feed=can_show,
             reasons=[*hard_blockers, *reasons],
             warnings=warnings,

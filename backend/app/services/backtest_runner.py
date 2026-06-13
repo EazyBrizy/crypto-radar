@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any, Awaitable, Callable, Mapping, Sequence, TypeVar
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
 
+from app.domain.signal_status import is_execution_candidate_status
 from app.domain.virtual_trade_status import is_terminal_virtual_trade_status
 from app.schemas.backtest import BacktestResultResponse, BacktestRunRequest, BacktestRunResult
 from app.schemas.candle import OHLCVCandle
@@ -1833,7 +1834,10 @@ def _is_signal_eligible_for_selection(
     cooldown_bars_after_close: int,
     current_index: int | None,
 ) -> bool:
-    if signal.status != "actionable":
+    status = str(signal.status).strip().lower()
+    if not is_execution_candidate_status(status):
+        return False
+    if status == "confirmed":
         return False
     if _open_positions_for_symbol(signal, open_positions) >= max_positions_per_symbol:
         return False

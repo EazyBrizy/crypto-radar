@@ -23,6 +23,7 @@ class _SignalSpec:
     score: int = 80
     stop_distance: float = 10.0
     target_distance: float = 20.0
+    status: str = "actionable"
 
 
 class _RecordingFeatureEngine:
@@ -81,7 +82,7 @@ class _PlannedSignalEngine:
                 take_profit_1=take_profit_1,
                 take_profit_2=take_profit_2,
             )
-            result.append(signal.model_copy(update={"status": "actionable"}))
+            result.append(signal.model_copy(update={"status": spec.status}))
         return result
 
 
@@ -115,6 +116,17 @@ class StrategyTestSignalSelectionTest(unittest.TestCase):
         detailed = _run_signal_selection(
             candles=candles,
             plan={candles[3].close_time: [_SignalSpec(score=80), _SignalSpec(score=95)]},
+            params={"signal_selection_policy": "first_actionable"},
+        )
+
+        self.assertEqual(len(detailed.trades), 1)
+        self.assertEqual(detailed.trades[0].signal_score, 80.0)
+
+    def test_entry_touched_status_is_selected_when_position_constraints_allow(self) -> None:
+        candles = _candles()
+        detailed = _run_signal_selection(
+            candles=candles,
+            plan={candles[3].close_time: [_SignalSpec(score=80, status="entry_touched")]},
             params={"signal_selection_policy": "first_actionable"},
         )
 

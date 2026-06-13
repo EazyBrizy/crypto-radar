@@ -177,6 +177,14 @@ class _BacktestState:
 
 
 @dataclass(frozen=True)
+class _PendingSignalEntry:
+    signal: StrategySignal
+    signal_event: BacktestSignalEvent
+    features: Features
+    signal_candle: OHLCVCandle
+
+
+@dataclass(frozen=True)
 class _PositionConstraints:
     signal_selection_policy: str
     max_concurrent_positions: int = 1
@@ -190,6 +198,7 @@ class BacktestExecutionPolicy:
     mode: str
     production_mode: bool
     preserve_legacy_backtest: bool = False
+    entry_timing: str = "same_candle_close"
 
 
 @dataclass(frozen=True)
@@ -436,8 +445,48 @@ class ProductionBacktestRunner:
             _equity_point(candles[warmup - 1], float(request.initial_capital), float(request.initial_capital))
         )
 
+        pending_entries: list[_PendingSignalEntry] = []
         for index in range(warmup, len(candles)):
             candle = candles[index]
+            if pending_entries:
+                ready_entries = pending_entries
+                pending_entries = []
+                for pending in ready_entries:
+                    if (
+                        len(state.open_positions) >= constraints.max_concurrent_positions
+                        or not _can_open_position_for_signal(
+                            pending.signal,
+                            policy=constraints.signal_selection_policy,
+                            open_positions=state.open_positions,
+                            recently_closed=state.closed_positions,
+                            max_positions_per_symbol=constraints.max_positions_per_symbol,
+                            allow_opposite_signal_flip=constraints.allow_opposite_signal_flip,
+                            cooldown_bars_after_close=constraints.cooldown_bars_after_close,
+                            current_index=index,
+                        )
+                    ):
+                        state.risk_rejections += 1
+                        state.signal_events.append(
+                            _mark_signal_event_rejected(
+                                pending.signal_event,
+                                risk_rejected=True,
+                                reason_code="position_constraints_blocked",
+                            )
+                        )
+                        continue
+                    self._record_open_position_attempt(
+                        request=request,
+                        risk_settings=risk_settings,
+                        features=pending.features,
+                        signal=pending.signal,
+                        signal_candle=pending.signal_candle,
+                        entry_candle=candle,
+                        index=index,
+                        state=state,
+                        execution_policy=execution_policy,
+                        signal_event=pending.signal_event,
+                    )
+
             next_open_positions: list[_SimulatedPosition] = []
             for position in state.open_positions:
                 updated_position = self._execution_simulator.apply_candle(position, candle)
@@ -510,48 +559,32 @@ class ProductionBacktestRunner:
                     previous_execution_rejections = state.execution_rejections
                     previous_execution_policy_no_entries = len(state.execution_policy_no_entries)
                     previous_execution_policy_rejections = len(state.execution_policy_rejections)
-                    position = self._try_open_position(
-                        request=request,
-                        risk_settings=risk_settings,
-                        features=features,
-                        signal=signal,
-                        candle=candle,
-                        index=index,
-                        state=state,
-                        execution_policy=execution_policy,
-                    )
-                    if position is not None:
-                        state.open_positions.append(position)
-                        state.signal_events.append(_mark_signal_event_filled(signal_event, position))
-                    elif state.risk_rejections > previous_risk_rejections:
-                        state.signal_events.append(
-                            _mark_signal_event_rejected(
-                                signal_event,
-                                risk_rejected=True,
-                                reason_code=_last_reason_code(state.risk_gate_blockers, "risk_gate_rejected"),
-                            )
-                        )
-                    elif state.execution_rejections > previous_execution_rejections:
-                        state.signal_events.append(
-                            _mark_signal_event_rejected(
-                                signal_event,
-                                execution_rejected=True,
-                                reason_code=(
-                                    _last_reason_code(state.execution_policy_rejections, "virtual_execution_rejected")
-                                    if len(state.execution_policy_rejections) > previous_execution_policy_rejections
-                                    else "virtual_execution_rejected"
-                                ),
-                            )
-                        )
-                    elif len(state.execution_policy_no_entries) > previous_execution_policy_no_entries:
-                        state.signal_events.append(
-                            _mark_signal_event_no_entry(
-                                signal_event,
-                                _last_reason_code(state.execution_policy_no_entries, "not_filled"),
+                    if execution_policy.entry_timing == "next_candle_open":
+                        pending_entries.append(
+                            _PendingSignalEntry(
+                                signal=signal,
+                                signal_event=signal_event,
+                                features=features,
+                                signal_candle=candle,
                             )
                         )
                     else:
-                        state.signal_events.append(_mark_signal_event_no_entry(signal_event, "not_filled"))
+                        self._record_open_position_attempt(
+                            request=request,
+                            risk_settings=risk_settings,
+                            features=features,
+                            signal=signal,
+                            signal_candle=candle,
+                            entry_candle=None,
+                            index=index,
+                            state=state,
+                            execution_policy=execution_policy,
+                            signal_event=signal_event,
+                            previous_risk_rejections=previous_risk_rejections,
+                            previous_execution_rejections=previous_execution_rejections,
+                            previous_execution_policy_no_entries=previous_execution_policy_no_entries,
+                            previous_execution_policy_rejections=previous_execution_policy_rejections,
+                        )
                 for signal in signals:
                     signal_key = _strategy_signal_key(request, signal)
                     if signal_key in attempted_signal_keys:
@@ -561,6 +594,10 @@ class ProductionBacktestRunner:
                     )
 
             state.equity_curve.append(_equity_point(candle, _current_equity(state), float(request.initial_capital)))
+
+        for pending in pending_entries:
+            state.signal_events.append(_mark_signal_event_no_entry(pending.signal_event, "no_next_candle_for_entry"))
+        pending_entries = []
 
         if state.open_positions:
             closed_at_end: list[_SimulatedPosition] = []
@@ -632,6 +669,78 @@ class ProductionBacktestRunner:
             raise AssertionError("backtest_open_candle_detected: strategy signal used an open candle")
         return signals
 
+    def _record_open_position_attempt(
+        self,
+        *,
+        request: BacktestRunRequest,
+        risk_settings: RiskManagementSettings,
+        features: Features,
+        signal: StrategySignal,
+        signal_candle: OHLCVCandle,
+        entry_candle: OHLCVCandle | None,
+        index: int,
+        state: _BacktestState,
+        execution_policy: BacktestExecutionPolicy,
+        signal_event: BacktestSignalEvent,
+        previous_risk_rejections: int | None = None,
+        previous_execution_rejections: int | None = None,
+        previous_execution_policy_no_entries: int | None = None,
+        previous_execution_policy_rejections: int | None = None,
+    ) -> _SimulatedPosition | None:
+        if previous_risk_rejections is None:
+            previous_risk_rejections = state.risk_rejections
+        if previous_execution_rejections is None:
+            previous_execution_rejections = state.execution_rejections
+        if previous_execution_policy_no_entries is None:
+            previous_execution_policy_no_entries = len(state.execution_policy_no_entries)
+        if previous_execution_policy_rejections is None:
+            previous_execution_policy_rejections = len(state.execution_policy_rejections)
+
+        position = self._try_open_position(
+            request=request,
+            risk_settings=risk_settings,
+            features=features,
+            signal=signal,
+            candle=signal_candle,
+            entry_candle=entry_candle,
+            index=index,
+            state=state,
+            execution_policy=execution_policy,
+        )
+        if position is not None:
+            state.open_positions.append(position)
+            state.signal_events.append(_mark_signal_event_filled(signal_event, position))
+        elif state.risk_rejections > previous_risk_rejections:
+            state.signal_events.append(
+                _mark_signal_event_rejected(
+                    signal_event,
+                    risk_rejected=True,
+                    reason_code=_last_reason_code(state.risk_gate_blockers, "risk_gate_rejected"),
+                )
+            )
+        elif state.execution_rejections > previous_execution_rejections:
+            state.signal_events.append(
+                _mark_signal_event_rejected(
+                    signal_event,
+                    execution_rejected=True,
+                    reason_code=(
+                        _last_reason_code(state.execution_policy_rejections, "virtual_execution_rejected")
+                        if len(state.execution_policy_rejections) > previous_execution_policy_rejections
+                        else "virtual_execution_rejected"
+                    ),
+                )
+            )
+        elif len(state.execution_policy_no_entries) > previous_execution_policy_no_entries:
+            state.signal_events.append(
+                _mark_signal_event_no_entry(
+                    signal_event,
+                    _last_reason_code(state.execution_policy_no_entries, "not_filled"),
+                )
+            )
+        else:
+            state.signal_events.append(_mark_signal_event_no_entry(signal_event, "not_filled"))
+        return position
+
     def _try_open_position(
         self,
         *,
@@ -640,6 +749,7 @@ class ProductionBacktestRunner:
         features: Features,
         signal: StrategySignal | None,
         candle: OHLCVCandle,
+        entry_candle: OHLCVCandle | None = None,
         index: int,
         state: _BacktestState,
         execution_policy: BacktestExecutionPolicy,
@@ -654,7 +764,8 @@ class ProductionBacktestRunner:
             state=state,
         )
         radar_signal = _radar_signal_from_strategy_signal(signal, candle)
-        entry_price = _entry_price(signal) or features.close
+        opened_at = _datetime_from_ms(entry_candle.open_time if entry_candle is not None else candle.close_time)
+        entry_price = float(entry_candle.open) if entry_candle is not None else (_entry_price(signal) or features.close)
         request_fee_rate = float(request.fee_rate)
         request_slippage_bps = float(request.slippage_bps)
         confirm_request = ManualConfirmRequest(
@@ -686,7 +797,7 @@ class ProductionBacktestRunner:
             risk_reward=risk_settings.min_rr_ratio,
             open_positions=len(state.open_positions),
             closed_trades=len(state.closed_positions),
-            updated_at=_datetime_from_ms(candle.close_time),
+            updated_at=opened_at,
         )
         try:
             pre_execution_decision = self._risk_gate_service.evaluate(
@@ -724,6 +835,7 @@ class ProductionBacktestRunner:
             risk_settings=risk_settings,
             signal=signal,
             features=features,
+            current_price=entry_price,
             confirm_request=confirm_request,
             risk_decision=pre_execution_decision,
         )
@@ -787,12 +899,12 @@ class ProductionBacktestRunner:
             signal=radar_signal,
             execution=execution,
             decision=post_execution_decision,
-            opened_at=_datetime_from_ms(candle.close_time),
+            opened_at=opened_at,
         )
         trade = arm_virtual_trade_time_stop(
             initialize_virtual_trade_lifecycle(trade),
             _trade_plan_time_stop_metadata(radar_signal),
-            _datetime_from_ms(candle.close_time),
+            opened_at,
         )
         return _SimulatedPosition(
             trade=trade,
@@ -822,7 +934,14 @@ def _execution_policy_for_backtest(
         mode=mode,
         production_mode=mode == "production_like",
         preserve_legacy_backtest=bool(assumptions.get("preserve_legacy_backtest")),
+        entry_timing=str(assumptions.get("entry_timing") or _entry_timing_for_backtest(mode, assumptions)),
     )
+
+
+def _entry_timing_for_backtest(mode: str, assumptions: Mapping[str, Any]) -> str:
+    if mode == "production_like" and not bool(assumptions.get("preserve_legacy_backtest")):
+        return "next_candle_open"
+    return "same_candle_close"
 
 
 def _normalize_signal_for_backtest(
@@ -1055,6 +1174,7 @@ def _assumptions_for_backtest(
 ) -> dict[str, Any]:
     values = dict(options or {})
     values.setdefault("mode", mode)
+    values["entry_timing"] = _entry_timing_for_backtest(mode, values)
     values.setdefault("fee_rate", str(request.fee_rate))
     values.setdefault("slippage_bps", str(request.slippage_bps))
     values.setdefault("initial_capital", str(request.initial_capital))
@@ -1344,10 +1464,14 @@ def _mark_signal_event_filled(
     position: _SimulatedPosition,
 ) -> BacktestSignalEvent:
     execution = position.trade.execution
+    assumptions = position.features_snapshot.get("strategy_test_assumptions")
+    entry_timing = assumptions.get("entry_timing") if isinstance(assumptions, Mapping) else None
     metadata = {
         **event.metadata,
         "trade_id": position.trade.id,
         "signal_id": position.signal.id,
+        "entry_time": position.trade.opened_at.isoformat(),
+        "entry_timing": entry_timing,
         "execution_status": execution.status if execution is not None else position.trade.execution_status,
     }
     return replace(
@@ -2348,6 +2472,7 @@ def _backtest_execution_policy_decision(
     risk_settings: RiskManagementSettings,
     signal: StrategySignal,
     features: Features,
+    current_price: float | None,
     confirm_request: ManualConfirmRequest,
     risk_decision: RiskDecision,
 ):
@@ -2355,7 +2480,7 @@ def _backtest_execution_policy_decision(
     return execution_policy_resolver.resolve(
         ExecutionPolicyContext(
             side="short" if signal.direction.lower() == "short" else "long",
-            current_price=features.close,
+            current_price=features.close if current_price is None else current_price,
             entry_min=signal.entry_min,
             entry_max=signal.entry_max,
             stop_loss=signal.stop_loss,

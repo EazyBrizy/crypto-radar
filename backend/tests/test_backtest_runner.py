@@ -236,7 +236,7 @@ class BacktestRunnerTest(unittest.TestCase):
             historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
         )
 
-        result = runner.run_detailed(_request(candles))
+        result = runner.run_detailed(_request(candles), options={"preserve_legacy_backtest": True})
 
         self.assertEqual(result.risk_rejections, 0)
         self.assertEqual(result.execution_rejections, 0)
@@ -246,7 +246,7 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertTrue(trade_plan["metadata"]["execution_allowed_virtual"])
         self.assertEqual(trade_plan["metadata"]["backtest_execution_policy"], "production_compatible")
         self.assertIn(
-            "backtest_pipeline_invalidation_enrichment",
+            "preserve_legacy_backtest_pipeline_invalidation_enrichment",
             trade_plan["metadata"]["backtest_assumptions"],
         )
         self.assertTrue(trade_plan["invalidation"]["conditions"])
@@ -273,7 +273,7 @@ class BacktestRunnerTest(unittest.TestCase):
             }
         )
 
-        result = runner.run_detailed(request)
+        result = runner.run_detailed(request, options={"preserve_legacy_backtest": True})
 
         self.assertEqual(result.risk_rejections, 0)
         self.assertEqual(result.execution_rejections, 0)
@@ -311,6 +311,34 @@ class BacktestRunnerTest(unittest.TestCase):
         event = next(event for event in result.signal_events if event.execution_candidate)
         self.assertTrue(event.no_entry)
         self.assertEqual(event.blocked_reason_code, "entry_zone_missed_wait_for_retest")
+
+    def test_production_like_opens_closed_candle_signal_on_next_candle_open(self) -> None:
+        candles = _candles()
+        signal_candle = candles[3]
+        entry_candle = candles[4].model_copy(
+            update={
+                "open": 100.0,
+                "high": 100.2,
+                "low": 98.0,
+                "close": 99.2,
+            }
+        )
+        candles[4] = entry_candle
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=DeterministicStrategyEngine(signal_candle.close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(_request(candles), mode="production_like")
+
+        self.assertEqual(result.assumptions["entry_timing"], "next_candle_open")
+        self.assertEqual(len(result.trades), 1)
+        trade = result.trades[0]
+        self.assertNotEqual(trade.entry_time, _datetime_from_ms(signal_candle.close_time))
+        self.assertEqual(trade.entry_time, _datetime_from_ms(entry_candle.open_time))
+        self.assertEqual(trade.exit_time, _datetime_from_ms(entry_candle.close_time))
+        self.assertEqual(trade.close_reason, "stop_loss")
 
     def test_runner_does_not_include_future_candles_in_feature_window(self) -> None:
         candles = _candles()
@@ -431,7 +459,7 @@ class BacktestRunnerTest(unittest.TestCase):
             historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
         )
 
-        result = runner.run_detailed(request)
+        result = runner.run_detailed(request, options={"preserve_legacy_backtest": True})
 
         self.assertEqual(
             result.assumptions["breakout_classifier_experiment_params"],
@@ -468,7 +496,7 @@ class BacktestRunnerTest(unittest.TestCase):
             historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
         )
 
-        result = runner.run_detailed(request)
+        result = runner.run_detailed(request, options={"preserve_legacy_backtest": True})
 
         self.assertEqual(
             result.assumptions["exit_policy_experiment_params"],
@@ -643,6 +671,10 @@ def _legacy_default_candles() -> list[OHLCVCandle]:
             )
         )
     return candles
+
+
+def _datetime_from_ms(timestamp_ms: int) -> datetime:
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
 
 
 if __name__ == "__main__":

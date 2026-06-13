@@ -523,6 +523,7 @@ class RealExecutionResult(BaseModel):
     planned_orders: list[ExecutionPlannedOrder] = Field(default_factory=list)
     idempotency_key: Optional[str] = None
     adapter: Optional[str] = None
+    blockers: list[str] = Field(default_factory=list)
     connection_id: Optional[str] = None
     environment: Optional[Literal["testnet", "mainnet"]] = None
     order_placement_mode: Optional[

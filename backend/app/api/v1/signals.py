@@ -11,6 +11,7 @@ from app.schemas.trade import (
     ManualConfirmRequest,
     ManualDecisionResponse,
     ManualRejectRequest,
+    RealExecutionResult,
     VirtualExecutionReport,
 )
 from app.services.execution_service import real_execution_service
@@ -173,12 +174,12 @@ async def confirm_signal(
         ) from exc
 
 
-@router.post("/{signal_id}/execution-preview", response_model=VirtualExecutionReport)
+@router.post("/{signal_id}/execution-preview", response_model=VirtualExecutionReport | RealExecutionResult)
 async def preview_virtual_execution(
     signal_id: str,
     http_request: Request,
     request: ManualConfirmRequest | None = None,
-) -> VirtualExecutionReport:
+) -> VirtualExecutionReport | RealExecutionResult:
     try:
         current_user = resolve_current_user(http_request)
     except PermissionError as exc:
@@ -212,10 +213,17 @@ async def preview_virtual_execution(
             detail="Signal is not found",
         )
     if request.mode == "real":
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Real execution preview is not implemented yet",
-        )
+        try:
+            return await real_execution_service.preview_order_plan(
+                signal,
+                request,
+                connection_id=request.connection_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
     try:
         return virtual_trading_service.preview_virtual_execution(signal, request)
     except ValueError as exc:

@@ -954,6 +954,30 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(order.status == "submitted" for order in result.planned_orders))
         self.assertTrue(result.execution_plan.metadata["reconciliation_required"])
 
+    async def test_preview_order_plan_builds_live_plan_without_adapter_placement(self) -> None:
+        adapter = _FakeExecutionAdapter()
+        service = _service(
+            _decision(),
+            execution_adapter=adapter,
+            risk_state=_FakeRiskState(_Reference()),
+            fee_rate_service=_FakeFeeRateService(),
+            risk_settings=_risk_settings(real_execution_enabled=True),
+        )
+
+        result = await service.preview_order_plan(_signal(), _request())
+
+        self.assertEqual(result.status, "submitted")
+        self.assertTrue(result.signal_valid)
+        self.assertTrue(result.execution_allowed)
+        self.assertIsNotNone(result.risk_decision)
+        self.assertIsNotNone(result.execution_plan)
+        self.assertEqual(adapter.calls, [])
+        self.assertEqual(
+            [order.role for order in result.planned_orders],
+            ["entry", "protective_stop", "take_profit", "take_profit"],
+        )
+        self.assertTrue(all(order.status == "planned" for order in result.planned_orders))
+
     async def test_real_mode_ignores_virtual_relaxed_policy_and_blocks_stale_market_data(self) -> None:
         adapter = _FakeExecutionAdapter()
         service = _service(

@@ -40,6 +40,7 @@ class _FakeRealExecutionService:
     def __init__(self, result: RealExecutionResult) -> None:
         self.result = result
         self.calls = 0
+        self.preview_calls: list[tuple[str, str, str | None]] = []
 
     async def place_order(
         self,
@@ -49,6 +50,16 @@ class _FakeRealExecutionService:
         connection_id: str | None = None,
     ) -> RealExecutionResult:
         self.calls += 1
+        return self.result
+
+    async def preview_order_plan(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        *,
+        connection_id: str | None = None,
+    ) -> RealExecutionResult:
+        self.preview_calls.append((signal.id, request.user_id, connection_id))
         return self.result
 
 
@@ -438,6 +449,38 @@ class SignalApiContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(preview_service.requests), 1)
         self.assertEqual(preview_service.requests[0].user_id, "usr_current")
         self.assertEqual(preview_service.requests[0].size_usd, 321.0)
+
+    async def test_real_execution_preview_body_returns_real_execution_result(self) -> None:
+        signal = _real_ready_signal("sig_real_preview")
+        self.signal_service.add_signal(signal)
+        service = _FakeRealExecutionService(
+            _real_execution_result(signal, status="submitted", message="Real execution preview plan built.")
+        )
+        app = FastAPI()
+        app.include_router(signals_api.router)
+
+        with (
+            patch("app.api.v1.signals.signal_service", self.signal_service),
+            patch("app.api.v1.signals.real_execution_service", service),
+        ):
+            response = TestClient(app).post(
+                f"/signals/{signal.id}/execution-preview",
+                headers={"x-auth-user-id": "usr_current"},
+                json={
+                    "mode": "real",
+                    "user_id": "spoofed_user",
+                    "connection_id": "conn-preview",
+                    "account_balance": 1_000,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["mode"], "real")
+        self.assertEqual(payload["status"], "submitted")
+        self.assertEqual(payload["execution_allowed"], True)
+        self.assertEqual(service.calls, 0)
+        self.assertEqual(service.preview_calls, [(signal.id, "usr_current", "conn-preview")])
 
     async def test_execution_preview_endpoint_has_no_usr_demo_hardcode(self) -> None:
         source = inspect.getsource(preview_virtual_execution)

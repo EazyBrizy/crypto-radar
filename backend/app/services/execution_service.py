@@ -94,6 +94,13 @@ class _ResolvedExecutionAdapter:
     validation_errors: list[str] | None = None
 
 
+@dataclass(frozen=True)
+class _PreparedRealExecution:
+    result: RealExecutionResult
+    execution_adapter: ExchangeExecutionAdapter | None = None
+    ready_for_placement: bool = False
+
+
 class RealExecutionService:
     """Real-order boundary.
 
@@ -154,6 +161,78 @@ class RealExecutionService:
         *,
         connection_id: str | UUID | None = None,
     ) -> RealExecutionResult:
+        prepared = self._prepare_order_plan(
+            signal=signal,
+            request=request,
+            connection_id=connection_id,
+            preview=False,
+        )
+        if not prepared.ready_for_placement:
+            return prepared.result
+        execution_adapter = prepared.execution_adapter
+        execution_plan = prepared.result.execution_plan
+        if execution_adapter is None or execution_plan is None:
+            return prepared.result
+        planned_orders = await _place_execution_plan(
+            execution_plan,
+            execution_adapter,
+        )
+        adapter_name = getattr(execution_adapter, "name", "unknown")
+        result_status = _real_execution_status_from_orders(
+            adapter_is_dry_run=getattr(execution_adapter, "is_dry_run", False),
+            planned_orders=planned_orders,
+        )
+        execution_plan = _execution_plan_with_placed_orders(
+            execution_plan,
+            planned_orders=planned_orders,
+            adapter_is_dry_run=getattr(execution_adapter, "is_dry_run", False),
+        )
+        lifecycle_trace = execution_plan.lifecycle_trace
+        return RealExecutionResult(
+            status=result_status,
+            signal_valid=True,
+            execution_allowed=True,
+            exchange=signal.exchange,
+            symbol=signal.symbol,
+            message=_real_execution_message(result_status),
+            technical_message=_real_execution_message(result_status),
+            risk_decision=prepared.result.risk_decision,
+            risk_decision_id=prepared.result.risk_decision_id,
+            execution_plan=execution_plan,
+            planned_orders=planned_orders,
+            idempotency_key=execution_plan.idempotency_key,
+            adapter=adapter_name,
+            warnings=prepared.result.warnings,
+            reason_code=ORDER_PLACEMENT_DRY_RUN_REASON_CODE if result_status == "dry_run" else None,
+            reason_codes=[ORDER_PLACEMENT_DRY_RUN_REASON_CODE] if result_status == "dry_run" else [],
+            environment=prepared.result.environment,
+            connection_id=prepared.result.connection_id,
+            order_placement_mode=prepared.result.order_placement_mode,
+            lifecycle_trace=lifecycle_trace,
+        )
+
+    async def preview_order_plan(
+        self,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        *,
+        connection_id: str | UUID | None = None,
+    ) -> RealExecutionResult:
+        return self._prepare_order_plan(
+            signal=signal,
+            request=request,
+            connection_id=connection_id,
+            preview=True,
+        ).result
+
+    def _prepare_order_plan(
+        self,
+        *,
+        signal: RadarSignal,
+        request: ManualConfirmRequest,
+        connection_id: str | UUID | None,
+        preview: bool,
+    ) -> _PreparedRealExecution:
         adapter_resolution = self._resolve_execution_adapter(
             signal=signal,
             request=request,
@@ -162,41 +241,44 @@ class RealExecutionService:
         execution_adapter = adapter_resolution.adapter
         if adapter_resolution.reason_code is not None:
             lifecycle_trace = _request_lifecycle_trace(signal, request)
-            return _blocked_real_execution_result(
-                signal=signal,
-                status="not_implemented",
-                message=adapter_resolution.message or "Real execution is not available.",
-                reason_code=adapter_resolution.reason_code,
-                reason_codes=adapter_resolution.reason_codes or [adapter_resolution.reason_code],
-                adapter=getattr(execution_adapter, "name", None),
-                connection=adapter_resolution.connection,
-                environment=adapter_resolution.environment,
-                order_placement_mode=adapter_resolution.order_placement_mode,
-                validation_errors=adapter_resolution.validation_errors,
-                lifecycle_trace=lifecycle_trace,
+            return _PreparedRealExecution(
+                result=_blocked_real_execution_result(
+                    signal=signal,
+                    status="not_implemented",
+                    message=adapter_resolution.message or "Real execution is not available.",
+                    reason_code=adapter_resolution.reason_code,
+                    reason_codes=adapter_resolution.reason_codes or [adapter_resolution.reason_code],
+                    adapter=getattr(execution_adapter, "name", None),
+                    connection=adapter_resolution.connection,
+                    environment=adapter_resolution.environment,
+                    order_placement_mode=adapter_resolution.order_placement_mode,
+                    validation_errors=adapter_resolution.validation_errors,
+                    lifecycle_trace=lifecycle_trace,
+                )
             )
         request = _request_with_connection_context(request, adapter_resolution.connection)
-        backend_configuration_blocker = _adapter_live_order_placement_safety_reason(
-            execution_adapter
-        )
-        if backend_configuration_blocker is not None:
+        placement_safety_blocker = _adapter_live_order_placement_safety_reason(execution_adapter)
+        if placement_safety_blocker is not None and not preview:
             lifecycle_trace = _request_lifecycle_trace(signal, request)
-            return RealExecutionResult(
-                status="not_implemented",
-                signal_valid=True,
-                execution_allowed=False,
-                exchange=signal.exchange,
-                symbol=signal.symbol,
-                message=backend_configuration_blocker,
-                technical_message=backend_configuration_blocker,
-                adapter=getattr(execution_adapter, "name", None),
-                validation_errors=[backend_configuration_blocker],
-                reason_code=_reason_code_for_adapter_safety_message(backend_configuration_blocker),
-                reason_codes=[_reason_code_for_adapter_safety_message(backend_configuration_blocker)],
-                environment=adapter_resolution.environment,
-                connection_id=_connection_id(adapter_resolution.connection),
-                order_placement_mode=adapter_resolution.order_placement_mode,
-                lifecycle_trace=lifecycle_trace,
+            return _PreparedRealExecution(
+                result=RealExecutionResult(
+                    status="not_implemented",
+                    signal_valid=True,
+                    execution_allowed=False,
+                    exchange=signal.exchange,
+                    symbol=signal.symbol,
+                    message=placement_safety_blocker,
+                    technical_message=placement_safety_blocker,
+                    adapter=getattr(execution_adapter, "name", None),
+                    blockers=[placement_safety_blocker],
+                    validation_errors=[placement_safety_blocker],
+                    reason_code=_reason_code_for_adapter_safety_message(placement_safety_blocker),
+                    reason_codes=[_reason_code_for_adapter_safety_message(placement_safety_blocker)],
+                    environment=adapter_resolution.environment,
+                    connection_id=_connection_id(adapter_resolution.connection),
+                    order_placement_mode=adapter_resolution.order_placement_mode,
+                    lifecycle_trace=lifecycle_trace,
+                )
             )
 
         risk_settings = self._risk_settings_provider(request.user_id)
@@ -285,7 +367,11 @@ class RealExecutionService:
             if self._risk_state is not None
             else None
         )
-        not_implemented_reason = _adapter_not_implemented_reason(execution_adapter)
+        not_implemented_reason = (
+            _adapter_capability_not_implemented_reason(execution_adapter)
+            if preview
+            else _adapter_not_implemented_reason(execution_adapter)
+        )
         live_adapter = (
             execution_adapter is not None
             and not bool(getattr(execution_adapter, "is_dry_run", False))
@@ -303,21 +389,25 @@ class RealExecutionService:
         account_snapshot_blockers = _live_account_snapshot_blockers(account_snapshot) if live_adapter else []
         if account_snapshot_blockers:
             lifecycle_trace = _request_lifecycle_trace(signal, request)
-            return RealExecutionResult(
-                status="risk_failed",
-                signal_valid=True,
-                execution_allowed=False,
-                exchange=signal.exchange,
-                symbol=signal.symbol,
-                message="Real execution account snapshot failed: " + "; ".join(account_snapshot_blockers),
-                technical_message="Real execution account snapshot failed: " + "; ".join(account_snapshot_blockers),
-                validation_errors=account_snapshot_blockers,
-                reason_code="ACCOUNT_SNAPSHOT_UNAVAILABLE",
-                reason_codes=["ACCOUNT_SNAPSHOT_UNAVAILABLE"],
-                environment=adapter_resolution.environment,
-                connection_id=_connection_id(adapter_resolution.connection),
-                order_placement_mode=adapter_resolution.order_placement_mode,
-                lifecycle_trace=lifecycle_trace,
+            message = "Real execution account snapshot failed: " + "; ".join(account_snapshot_blockers)
+            return _PreparedRealExecution(
+                result=RealExecutionResult(
+                    status="risk_failed",
+                    signal_valid=True,
+                    execution_allowed=False,
+                    exchange=signal.exchange,
+                    symbol=signal.symbol,
+                    message=message,
+                    technical_message=message,
+                    blockers=account_snapshot_blockers,
+                    validation_errors=account_snapshot_blockers,
+                    reason_code="ACCOUNT_SNAPSHOT_UNAVAILABLE",
+                    reason_codes=["ACCOUNT_SNAPSHOT_UNAVAILABLE"],
+                    environment=adapter_resolution.environment,
+                    connection_id=_connection_id(adapter_resolution.connection),
+                    order_placement_mode=adapter_resolution.order_placement_mode,
+                    lifecycle_trace=lifecycle_trace,
+                )
             )
         risk_decision = self._risk_gate_service.evaluate(
             context=self._risk_context_service.build_real_context(
@@ -398,19 +488,23 @@ class RealExecutionService:
         lifecycle_trace = _execution_lifecycle_trace(risk_decision, risk_decision_id)
         if not risk_decision.can_enter:
             message = _risk_rejection_message(risk_decision)
-            return RealExecutionResult(
-                status="risk_failed",
-                signal_valid=True,
-                execution_allowed=False,
-                exchange=signal.exchange,
-                symbol=signal.symbol,
-                message=message,
-                technical_message=message,
-                risk_decision=risk_decision,
-                risk_decision_id=risk_decision_id,
-                reason_code=risk_decision.reason_code or risk_decision.risk_check.reason_code or "RISK_GATE_BLOCKED",
-                reason_codes=risk_decision.reason_codes or risk_decision.risk_check.reason_codes or ["RISK_GATE_BLOCKED"],
-                lifecycle_trace=lifecycle_trace,
+            blockers = _dedupe([*risk_decision.blockers, *risk_decision.risk_check.blockers])
+            return _PreparedRealExecution(
+                result=RealExecutionResult(
+                    status="risk_failed",
+                    signal_valid=True,
+                    execution_allowed=False,
+                    exchange=signal.exchange,
+                    symbol=signal.symbol,
+                    message=message,
+                    technical_message=message,
+                    risk_decision=risk_decision,
+                    risk_decision_id=risk_decision_id,
+                    blockers=blockers,
+                    reason_code=risk_decision.reason_code or risk_decision.risk_check.reason_code or "RISK_GATE_BLOCKED",
+                    reason_codes=risk_decision.reason_codes or risk_decision.risk_check.reason_codes or ["RISK_GATE_BLOCKED"],
+                    lifecycle_trace=lifecycle_trace,
+                )
             )
         execution_plan = _build_execution_plan(
             signal=signal,
@@ -433,27 +527,30 @@ class RealExecutionService:
         validation_errors = _dedupe([*normalization.errors, *validation_errors])
         if validation_errors:
             reason_code = _validation_reason_code(validation_errors, live_adapter=live_adapter)
-            return RealExecutionResult(
-                status="risk_failed",
-                signal_valid=True,
-                execution_allowed=False,
-                exchange=signal.exchange,
-                symbol=signal.symbol,
-                message="Execution plan validation failed: " + "; ".join(validation_errors),
-                technical_message="Execution plan validation failed: " + "; ".join(validation_errors),
-                risk_decision=risk_decision,
-                risk_decision_id=risk_decision_id,
-                execution_plan=execution_plan,
-                planned_orders=execution_plan.planned_orders,
-                idempotency_key=execution_plan.idempotency_key,
-                warnings=normalization.warnings,
-                validation_errors=validation_errors,
-                reason_code=reason_code,
-                reason_codes=[reason_code],
-                environment=adapter_resolution.environment,
-                connection_id=_connection_id(adapter_resolution.connection),
-                order_placement_mode=adapter_resolution.order_placement_mode,
-                lifecycle_trace=execution_plan.lifecycle_trace,
+            return _PreparedRealExecution(
+                result=RealExecutionResult(
+                    status="risk_failed",
+                    signal_valid=True,
+                    execution_allowed=False,
+                    exchange=signal.exchange,
+                    symbol=signal.symbol,
+                    message="Execution plan validation failed: " + "; ".join(validation_errors),
+                    technical_message="Execution plan validation failed: " + "; ".join(validation_errors),
+                    risk_decision=risk_decision,
+                    risk_decision_id=risk_decision_id,
+                    execution_plan=execution_plan,
+                    planned_orders=execution_plan.planned_orders,
+                    idempotency_key=execution_plan.idempotency_key,
+                    warnings=normalization.warnings,
+                    blockers=validation_errors,
+                    validation_errors=validation_errors,
+                    reason_code=reason_code,
+                    reason_codes=[reason_code],
+                    environment=adapter_resolution.environment,
+                    connection_id=_connection_id(adapter_resolution.connection),
+                    order_placement_mode=adapter_resolution.order_placement_mode,
+                    lifecycle_trace=execution_plan.lifecycle_trace,
+                )
             )
         rollout_decision = _evaluate_rollout_after_risk(
             guard=self._rollout_guard,
@@ -466,50 +563,55 @@ class RealExecutionService:
         execution_plan = _execution_plan_with_rollout_decision(execution_plan, rollout_decision)
         if not rollout_decision.allowed:
             reason_code = rollout_decision.reason_codes[0]
-            return RealExecutionResult(
-                status="readiness_failed",
-                signal_valid=True,
-                execution_allowed=False,
-                exchange=signal.exchange,
-                symbol=signal.symbol,
-                message=_rollout_rejection_message(rollout_decision),
-                technical_message=_rollout_rejection_message(rollout_decision),
-                risk_decision=risk_decision,
-                risk_decision_id=risk_decision_id,
-                execution_plan=execution_plan,
-                planned_orders=execution_plan.planned_orders,
-                idempotency_key=execution_plan.idempotency_key,
-                warnings=normalization.warnings,
-                validation_errors=rollout_decision.blockers,
-                reason_code=reason_code,
-                reason_codes=rollout_decision.reason_codes,
-                environment=adapter_resolution.environment,
-                connection_id=_connection_id(adapter_resolution.connection),
-                order_placement_mode=adapter_resolution.order_placement_mode,
-                lifecycle_trace=execution_plan.lifecycle_trace,
+            return _PreparedRealExecution(
+                result=RealExecutionResult(
+                    status="readiness_failed",
+                    signal_valid=True,
+                    execution_allowed=False,
+                    exchange=signal.exchange,
+                    symbol=signal.symbol,
+                    message=_rollout_rejection_message(rollout_decision),
+                    technical_message=_rollout_rejection_message(rollout_decision),
+                    risk_decision=risk_decision,
+                    risk_decision_id=risk_decision_id,
+                    execution_plan=execution_plan,
+                    planned_orders=execution_plan.planned_orders,
+                    idempotency_key=execution_plan.idempotency_key,
+                    warnings=normalization.warnings,
+                    blockers=rollout_decision.blockers,
+                    validation_errors=rollout_decision.blockers,
+                    reason_code=reason_code,
+                    reason_codes=rollout_decision.reason_codes,
+                    environment=adapter_resolution.environment,
+                    connection_id=_connection_id(adapter_resolution.connection),
+                    order_placement_mode=adapter_resolution.order_placement_mode,
+                    lifecycle_trace=execution_plan.lifecycle_trace,
+                )
             )
         if not_implemented_reason is not None:
-            return RealExecutionResult(
-                status="not_implemented",
-                signal_valid=True,
-                execution_allowed=True,
-                exchange=signal.exchange,
-                symbol=signal.symbol,
-                message=not_implemented_reason,
-                technical_message=not_implemented_reason,
-                risk_decision=risk_decision,
-                risk_decision_id=risk_decision_id,
-                execution_plan=execution_plan,
-                planned_orders=execution_plan.planned_orders,
-                idempotency_key=execution_plan.idempotency_key,
-                adapter=getattr(execution_adapter, "name", None),
-                warnings=normalization.warnings,
-                reason_code="ADAPTER_NOT_IMPLEMENTED",
-                reason_codes=["ADAPTER_NOT_IMPLEMENTED"],
-                environment=adapter_resolution.environment,
-                connection_id=_connection_id(adapter_resolution.connection),
-                order_placement_mode=adapter_resolution.order_placement_mode,
-                lifecycle_trace=execution_plan.lifecycle_trace,
+            return _PreparedRealExecution(
+                result=RealExecutionResult(
+                    status="not_implemented",
+                    signal_valid=True,
+                    execution_allowed=True,
+                    exchange=signal.exchange,
+                    symbol=signal.symbol,
+                    message=not_implemented_reason,
+                    technical_message=not_implemented_reason,
+                    risk_decision=risk_decision,
+                    risk_decision_id=risk_decision_id,
+                    execution_plan=execution_plan,
+                    planned_orders=execution_plan.planned_orders,
+                    idempotency_key=execution_plan.idempotency_key,
+                    adapter=getattr(execution_adapter, "name", None),
+                    warnings=normalization.warnings,
+                    reason_code="ADAPTER_NOT_IMPLEMENTED",
+                    reason_codes=["ADAPTER_NOT_IMPLEMENTED"],
+                    environment=adapter_resolution.environment,
+                    connection_id=_connection_id(adapter_resolution.connection),
+                    order_placement_mode=adapter_resolution.order_placement_mode,
+                    lifecycle_trace=execution_plan.lifecycle_trace,
+                )
             )
 
         readiness = self._readiness_service.evaluate(
@@ -524,66 +626,90 @@ class RealExecutionService:
             adapter=execution_adapter,
         )
         execution_plan = _execution_plan_with_readiness(execution_plan, readiness)
+        readiness_warnings = _dedupe([*normalization.warnings, *readiness.warnings])
         if not readiness.ready:
-            return RealExecutionResult(
-                status="readiness_failed",
+            return _PreparedRealExecution(
+                result=RealExecutionResult(
+                    status="readiness_failed",
+                    signal_valid=True,
+                    execution_allowed=False,
+                    exchange=signal.exchange,
+                    symbol=signal.symbol,
+                    message=_readiness_rejection_message(readiness.blockers),
+                    technical_message=_readiness_rejection_message(readiness.blockers),
+                    risk_decision=risk_decision,
+                    risk_decision_id=risk_decision_id,
+                    execution_plan=execution_plan,
+                    planned_orders=execution_plan.planned_orders,
+                    idempotency_key=execution_plan.idempotency_key,
+                    warnings=readiness_warnings,
+                    blockers=readiness.blockers,
+                    validation_errors=readiness.blockers,
+                    reason_code="READINESS_FAILED",
+                    reason_codes=["READINESS_FAILED"],
+                    environment=adapter_resolution.environment,
+                    connection_id=_connection_id(adapter_resolution.connection),
+                    order_placement_mode=adapter_resolution.order_placement_mode,
+                    lifecycle_trace=execution_plan.lifecycle_trace,
+                )
+            )
+
+        if placement_safety_blocker is not None:
+            return _PreparedRealExecution(
+                result=RealExecutionResult(
+                    status="not_implemented",
+                    signal_valid=True,
+                    execution_allowed=False,
+                    exchange=signal.exchange,
+                    symbol=signal.symbol,
+                    message=placement_safety_blocker,
+                    technical_message=placement_safety_blocker,
+                    risk_decision=risk_decision,
+                    risk_decision_id=risk_decision_id,
+                    execution_plan=execution_plan,
+                    planned_orders=execution_plan.planned_orders,
+                    idempotency_key=execution_plan.idempotency_key,
+                    adapter=getattr(execution_adapter, "name", None),
+                    warnings=readiness_warnings,
+                    blockers=[placement_safety_blocker],
+                    validation_errors=[placement_safety_blocker],
+                    reason_code=_reason_code_for_adapter_safety_message(placement_safety_blocker),
+                    reason_codes=[_reason_code_for_adapter_safety_message(placement_safety_blocker)],
+                    environment=adapter_resolution.environment,
+                    connection_id=_connection_id(adapter_resolution.connection),
+                    order_placement_mode=adapter_resolution.order_placement_mode,
+                    lifecycle_trace=execution_plan.lifecycle_trace,
+                )
+            )
+
+        result_status: RealExecutionStatus = (
+            "dry_run" if bool(getattr(execution_adapter, "is_dry_run", False)) else "submitted"
+        )
+        return _PreparedRealExecution(
+            result=RealExecutionResult(
+                status=result_status,
                 signal_valid=True,
-                execution_allowed=False,
+                execution_allowed=True,
                 exchange=signal.exchange,
                 symbol=signal.symbol,
-                message=_readiness_rejection_message(readiness.blockers),
-                technical_message=_readiness_rejection_message(readiness.blockers),
+                message=_real_execution_preview_message(result_status),
+                technical_message=_real_execution_preview_message(result_status),
                 risk_decision=risk_decision,
                 risk_decision_id=risk_decision_id,
                 execution_plan=execution_plan,
                 planned_orders=execution_plan.planned_orders,
                 idempotency_key=execution_plan.idempotency_key,
-                warnings=_dedupe([*normalization.warnings, *readiness.warnings]),
-                validation_errors=readiness.blockers,
-                reason_code="READINESS_FAILED",
-                reason_codes=["READINESS_FAILED"],
+                adapter=getattr(execution_adapter, "name", "unknown"),
+                warnings=readiness_warnings,
+                reason_code=ORDER_PLACEMENT_DRY_RUN_REASON_CODE if result_status == "dry_run" else None,
+                reason_codes=[ORDER_PLACEMENT_DRY_RUN_REASON_CODE] if result_status == "dry_run" else [],
                 environment=adapter_resolution.environment,
                 connection_id=_connection_id(adapter_resolution.connection),
                 order_placement_mode=adapter_resolution.order_placement_mode,
                 lifecycle_trace=execution_plan.lifecycle_trace,
-            )
-
-        planned_orders = await _place_execution_plan(
-            execution_plan,
-            execution_adapter,
-        )
-        adapter_name = getattr(execution_adapter, "name", "unknown")
-        result_status = _real_execution_status_from_orders(
-            adapter_is_dry_run=getattr(execution_adapter, "is_dry_run", False),
-            planned_orders=planned_orders,
-        )
-        execution_plan = _execution_plan_with_placed_orders(
-            execution_plan,
-            planned_orders=planned_orders,
-            adapter_is_dry_run=getattr(execution_adapter, "is_dry_run", False),
-        )
-        lifecycle_trace = execution_plan.lifecycle_trace
-        return RealExecutionResult(
-            status=result_status,
-            signal_valid=True,
-            execution_allowed=True,
-            exchange=signal.exchange,
-            symbol=signal.symbol,
-            message=_real_execution_message(result_status),
-            technical_message=_real_execution_message(result_status),
-            risk_decision=risk_decision,
-            risk_decision_id=risk_decision_id,
-            execution_plan=execution_plan,
-            planned_orders=planned_orders,
-            idempotency_key=execution_plan.idempotency_key,
-            adapter=adapter_name,
-            warnings=_dedupe([*normalization.warnings, *readiness.warnings]),
-            reason_code=ORDER_PLACEMENT_DRY_RUN_REASON_CODE if result_status == "dry_run" else None,
-            reason_codes=[ORDER_PLACEMENT_DRY_RUN_REASON_CODE] if result_status == "dry_run" else [],
-            environment=adapter_resolution.environment,
-            connection_id=_connection_id(adapter_resolution.connection),
-            order_placement_mode=adapter_resolution.order_placement_mode,
-            lifecycle_trace=lifecycle_trace,
+            ),
+            execution_adapter=execution_adapter,
+            ready_for_placement=True,
         )
 
     def _record_real_attempt(
@@ -861,6 +987,7 @@ def _blocked_real_execution_result(
         message=message,
         technical_message=message,
         adapter=adapter,
+        blockers=validation_errors or [message],
         validation_errors=validation_errors or [message],
         reason_code=reason_code,
         reason_codes=reason_codes,
@@ -1280,13 +1407,17 @@ def _readiness_rejection_message(blockers: list[str]) -> str:
 
 
 def _adapter_not_implemented_reason(adapter: Any | None) -> str | None:
+    safety_reason = _adapter_live_order_placement_safety_reason(adapter)
+    if safety_reason is not None:
+        return safety_reason
+    return _adapter_capability_not_implemented_reason(adapter)
+
+
+def _adapter_capability_not_implemented_reason(adapter: Any | None) -> str | None:
     if adapter is None:
         return "Real trade execution adapter is not configured. No exchange order was sent."
     if bool(getattr(adapter, "is_dry_run", False)):
         return None
-    safety_reason = _adapter_live_order_placement_safety_reason(adapter)
-    if safety_reason is not None:
-        return safety_reason
     implemented = getattr(adapter, "live_order_placement_implemented", None)
     if implemented is False:
         adapter_name = getattr(adapter, "name", "unknown")
@@ -1329,6 +1460,12 @@ def _real_execution_message(result_status: RealExecutionStatus) -> str:
     if result_status == "failed":
         return "Real execution adapter returned a failed order placement result."
     return "Real execution adapter submitted the order plan."
+
+
+def _real_execution_preview_message(result_status: RealExecutionStatus) -> str:
+    if result_status == "dry_run":
+        return "Dry-run real execution preview plan built. No exchange order was sent."
+    return "Real execution preview plan built. No exchange order was sent."
 
 
 def _order_is_partially_filled(order: ExecutionPlannedOrder) -> bool:

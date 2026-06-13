@@ -41,7 +41,11 @@ from app.services.exchange_connection_service import (
 )
 from app.services.execution_service import real_execution_service
 from app.services.message_broker import publish_realtime_event_background, realtime_event_broker
-from app.services.pending_entry import pending_entry_intent_service
+from app.services.pending_entry import (
+    REAL_PENDING_NOT_IMPLEMENTED_MESSAGE,
+    REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE,
+    pending_entry_intent_service,
+)
 from app.services.realtime_events import signal_updated_event, trade_activated_event
 from app.services.risk_fee_rate import risk_fee_rate_service
 from app.services.risk_management import get_user_risk_management_settings
@@ -58,9 +62,6 @@ from app.services.virtual_execution_profile import (
 
 class SignalActionUnavailable(ValueError):
     pass
-
-
-REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE = "real_trading_disabled"
 
 
 @dataclass(frozen=True)
@@ -181,6 +182,8 @@ class SignalActionService:
                 )
             )
             can_reconfirm = active_intent.status == "requires_reconfirmation"
+        elif mode == "real" and context.blockers and _signal_can_arm_pending(signal):
+            blockers.insert(0, _real_pending_entry_not_implemented_blocker())
         elif context.blockers:
             can_enter_now = False
             can_arm_pending = False
@@ -202,13 +205,7 @@ class SignalActionService:
 
         if mode == "real" and can_arm_pending:
             can_arm_pending = False
-            blockers.append(
-                _blocker(
-                    REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE,
-                    "Real pending entry is disabled until tick-driven execution is available.",
-                    display_label="Real trading disabled",
-                )
-            )
+            blockers.append(_real_pending_entry_not_implemented_blocker())
 
         primary_action = _primary_action(
             can_enter_now=can_enter_now,
@@ -793,13 +790,7 @@ class SignalActionService:
                 blockers.extend(_gate_action_blockers(signal) or _signal_action_blockers(signal, mode=mode))
         if mode == "real" and can_arm_pending:
             can_arm_pending = False
-            blockers.append(
-                _blocker(
-                    REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE,
-                    "Real pending entry is disabled until tick-driven execution is available.",
-                    display_label="Real trading disabled",
-                )
-            )
+            blockers.append(_real_pending_entry_not_implemented_blocker())
         primary_action = _primary_action(
             can_enter_now=can_enter_now,
             can_arm_pending=can_arm_pending,
@@ -1206,6 +1197,20 @@ def _real_environment_blockers(environment: str) -> list[SignalActionBlocker]:
             },
         )
     ]
+
+
+def _signal_can_arm_pending(signal: RadarSignal) -> bool:
+    if signal.execution_gate is not None:
+        return signal.execution_gate.can_arm_pending
+    return is_waiting_entry_status(signal.status)
+
+
+def _real_pending_entry_not_implemented_blocker() -> SignalActionBlocker:
+    return _blocker(
+        REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE,
+        REAL_PENDING_NOT_IMPLEMENTED_MESSAGE,
+        display_label="Real pending entry unavailable",
+    )
 
 
 def _primary_action(

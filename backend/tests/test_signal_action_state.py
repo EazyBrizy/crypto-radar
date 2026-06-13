@@ -27,6 +27,30 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertEqual(state.disabled_reason_code, "status_not_execution_candidate")
         self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
 
+    def test_wait_for_pullback_can_arm_pending_only_in_virtual_mode(self) -> None:
+        connection = _exchange_connection()
+
+        virtual_state = _service().state_for_signal(
+            _signal(status="wait_for_pullback"),
+            mode="virtual",
+            user_id=USER_ID,
+        )
+        real_state = _service(connection=connection).state_for_signal(
+            _signal(status="wait_for_pullback"),
+            mode="real",
+            connection_id=str(connection.id),
+            user_id=USER_ID,
+        )
+
+        self.assertTrue(virtual_state.can_arm_pending)
+        self.assertEqual(virtual_state.primary_action, "arm_pending_entry")
+        self.assertFalse(real_state.can_arm_pending)
+        self.assertFalse(real_state.can_enter_now)
+        self.assertIsNone(real_state.primary_action)
+        self.assertEqual(real_state.disabled_reason_code, "REAL_PENDING_NOT_IMPLEMENTED")
+        self.assertEqual(real_state.blockers[0].code, "REAL_PENDING_NOT_IMPLEMENTED")
+        self.assertIn("not implemented", real_state.blockers[0].message.lower())
+
     def test_actionable_signal_can_enter_now(self) -> None:
         state = _service().state_for_signal(_signal(status="actionable"), mode="virtual", user_id=USER_ID)
 
@@ -96,8 +120,8 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertFalse(state.can_arm_pending)
         self.assertFalse(state.can_enter_now)
         self.assertEqual(state.primary_action, None)
-        self.assertEqual(REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE, "real_trading_disabled")
-        self.assertEqual(state.disabled_reason_code, "real_trading_disabled")
+        self.assertEqual(REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE, "REAL_PENDING_NOT_IMPLEMENTED")
+        self.assertEqual(state.disabled_reason_code, "REAL_PENDING_NOT_IMPLEMENTED")
         self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
 
 

@@ -19,6 +19,7 @@ def test_known_reason_codes_have_frontend_translations() -> None:
 def test_legacy_reason_messages_normalize_to_codes() -> None:
     assert normalize_reason_code("Required margin exceeds available balance.") == "margin_exceeds_balance"
     assert normalize_reason_code("Pending entry signal is missing.") == "pending_entry_signal_missing"
+    assert normalize_reason_code("REAL_PENDING_NOT_IMPLEMENTED") == "REAL_PENDING_NOT_IMPLEMENTED"
     assert normalize_reason_code("Signal is terminal at trigger time: expired.") == "signal_terminal_at_trigger"
     assert normalize_reason_codes([
         "spread_above_1_percent_market_order_blocked; expected_slippage_above_1_5_percent",

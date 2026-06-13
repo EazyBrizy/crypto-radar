@@ -5,6 +5,7 @@ from collections.abc import Iterable
 
 
 KNOWN_REASON_CODES = {
+    "REAL_PENDING_NOT_IMPLEMENTED",
     "account_snapshot_unavailable",
     "adapter_not_implemented",
     "available_balance_unavailable",
@@ -214,6 +215,8 @@ def normalize_reason_code(value: str | None) -> str | None:
     text = str(value or "").strip()
     if not text:
         return None
+    if text in KNOWN_REASON_CODES:
+        return text
     canonical = _slug(text)
     if canonical in KNOWN_REASON_CODES:
         return canonical

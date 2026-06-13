@@ -632,6 +632,7 @@ const typedDictionary = {
       pending_entry_exists: "Pending entry already exists for this signal",
       pending_entry_requires_reconfirmation: "Pending entry requires reconfirmation",
       real_trading_disabled: "Real trading is disabled",
+      REAL_PENDING_NOT_IMPLEMENTED: "Real pending entry is not implemented yet",
       real_trading_unlock_required: "Real trading requires explicit unlock",
       available_balance_unavailable: "Available balance is unavailable",
       max_account_drawdown_exceeded: "Account drawdown limit is exceeded",
@@ -1350,6 +1351,7 @@ const typedDictionary = {
       pending_entry_exists: "Pending entry уже существует для этого сигнала",
       pending_entry_requires_reconfirmation: "Pending entry требует повторного подтверждения",
       real_trading_disabled: "Real trading выключен",
+      REAL_PENDING_NOT_IMPLEMENTED: "Real pending entry пока не реализован",
       real_trading_unlock_required: "Real trading требует явного unlock",
       available_balance_unavailable: "Доступный баланс недоступен",
       max_account_drawdown_exceeded: "Лимит просадки аккаунта превышен",
@@ -2102,6 +2104,7 @@ export function normalizeReasonCode(value: string | null | undefined): ReasonCod
   if (value == null) return null;
   const text = String(value).trim();
   if (!text) return null;
+  if (text in typedDictionary.en.reasonCodes) return text as ReasonCode;
   const canonical = text
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[^A-Za-z0-9]+/g, "_")

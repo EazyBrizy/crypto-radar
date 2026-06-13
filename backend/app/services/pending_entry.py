@@ -52,13 +52,16 @@ TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON = (
     "Trade plan changed after acceptance; reconfirmation required."
 )
 REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE = "REAL_PENDING_NOT_IMPLEMENTED"
+REAL_PENDING_NOT_IMPLEMENTED_MESSAGE = (
+    "Real pending entry is not implemented yet; use virtual pending entry or enter manually in real mode."
+)
 
 
 class RealPendingEntryNotImplemented(ValueError):
     reason_code = REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE
 
     def __init__(self) -> None:
-        super().__init__("Tick-driven real pending entry execution is not implemented.")
+        super().__init__(REAL_PENDING_NOT_IMPLEMENTED_MESSAGE)
 
 logger = logging.getLogger(__name__)
 

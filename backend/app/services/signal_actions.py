@@ -76,6 +76,7 @@ class _ResolvedActionContext:
 
 @dataclass(frozen=True)
 class _MarketFeeContext:
+    blockers: list[SignalActionBlocker] = field(default_factory=list)
     warnings: list[SignalActionBlocker] = field(default_factory=list)
     request_updates: dict[str, Any] = field(default_factory=dict)
 
@@ -548,6 +549,7 @@ class SignalActionService:
                         )
                     )
         else:
+            blockers.extend(_real_decision_action_blockers(signal))
             connection = None
             if connection_id is None:
                 blockers.append(
@@ -606,6 +608,20 @@ class SignalActionService:
                             display_label="Exchange connection inactive",
                         )
                     )
+                if getattr(connection, "can_place_orders", False) is not True:
+                    blockers.append(
+                        _blocker(
+                            "real_order_placement_unavailable",
+                            "Exchange connection is not ready to place real orders.",
+                            display_label="Order placement unavailable",
+                            metadata={
+                                "connection_id": str(connection.id),
+                                "environment": connection.environment,
+                                "order_placement_mode": connection.order_placement_mode,
+                                "can_place_orders": connection.can_place_orders,
+                            },
+                        )
+                    )
                 for blocker_code in _real_connection_action_blockers(connection):
                     blockers.append(
                         _blocker(
@@ -624,9 +640,9 @@ class SignalActionService:
                     exchange=signal.exchange,
                     connection_id=connection_id,
                 )
-                if snapshot is not None and snapshot.account_equity is not None:
-                    account_balance = float(snapshot.account_equity)
                 if snapshot is not None:
+                    if snapshot.account_equity is not None:
+                        account_balance = float(snapshot.account_equity)
                     for warning in snapshot.warnings:
                         warnings.append(
                             _warning(
@@ -635,6 +651,7 @@ class SignalActionService:
                                 display_label="Account snapshot warning",
                             )
                         )
+                blockers.extend(_real_account_snapshot_blockers(snapshot))
             if connection is None:
                 blockers.extend(_real_environment_blockers(environment))
 
@@ -723,6 +740,7 @@ class SignalActionService:
             execution_profile=execution_profile,
             virtual_execution_profile=virtual_execution_profile,
         )
+        blockers.extend(market_fee_context.blockers)
         warnings.extend(market_fee_context.warnings)
         if market_fee_context.request_updates:
             request = request.model_copy(update=market_fee_context.request_updates)
@@ -831,6 +849,7 @@ class SignalActionService:
             return _MarketFeeContext()
         if mode == "virtual" and virtual_execution_profile == "deterministic_test":
             return _MarketFeeContext()
+        blockers: list[SignalActionBlocker] = []
         warnings: list[SignalActionBlocker] = []
         request_updates: dict[str, Any] = {}
         try:
@@ -845,13 +864,23 @@ class SignalActionService:
                 user_id=request.user_id,
             )
         except Exception as exc:
-            warnings.append(
-                _warning(
-                    "market_data_unavailable",
-                    f"Market data snapshot is unavailable: {exc}",
-                    display_label="Market data unavailable",
+            message = f"Market data snapshot is unavailable: {exc}"
+            if mode == "real" and risk_settings.real_requires_fresh_market_data:
+                blockers.append(
+                    _blocker(
+                        "real_market_data_required",
+                        message,
+                        display_label="Fresh market data required",
+                    )
                 )
-            )
+            else:
+                warnings.append(
+                    _warning(
+                        "market_data_unavailable",
+                        message,
+                        display_label="Market data unavailable",
+                    )
+                )
             market = None
         if market is not None:
             for message in market.warnings:
@@ -863,6 +892,7 @@ class SignalActionService:
                     )
                 )
             request_updates["slippage_bps"] = float(market.slippage_bps)
+            blockers.extend(_real_market_data_blockers(market, risk_settings=risk_settings, mode=mode))
 
         try:
             fee_rate = self._fee_rate_service.resolve(
@@ -890,9 +920,9 @@ class SignalActionService:
                         "fee_profile_warning",
                         message,
                         display_label="Fee profile warning",
-                    )
                 )
-        return _MarketFeeContext(warnings=warnings, request_updates=request_updates)
+            )
+        return _MarketFeeContext(blockers=blockers, warnings=warnings, request_updates=request_updates)
 
     def _real_account_snapshot(
         self,
@@ -1199,6 +1229,123 @@ def _real_environment_blockers(environment: str) -> list[SignalActionBlocker]:
     ]
 
 
+def _real_decision_action_blockers(signal: RadarSignal) -> list[SignalActionBlocker]:
+    decision = signal.decision
+    if decision is None:
+        return [
+            _blocker(
+                "real_decision_required",
+                "Signal decision snapshot is required before real execution.",
+                display_label="Decision snapshot required",
+            )
+        ]
+    if decision.execution_allowed_real is True:
+        return []
+    return [
+        _blocker(
+            "real_execution_not_allowed",
+            "Decision snapshot does not allow real execution.",
+            display_label="Real execution not allowed",
+            metadata=decision.model_dump(mode="json"),
+        )
+    ]
+
+
+def _real_account_snapshot_blockers(snapshot: Any | None) -> list[SignalActionBlocker]:
+    if snapshot is None:
+        return [
+            _blocker(
+                "real_account_snapshot_required",
+                "Fresh exchange account snapshot is required before real entry.",
+                display_label="Fresh account snapshot required",
+            )
+        ]
+    status = str(getattr(snapshot, "status", "") or "").strip().lower()
+    source = str(getattr(snapshot, "source", "") or "").strip().lower()
+    account_equity = getattr(snapshot, "account_equity", None)
+    available_balance = getattr(snapshot, "available_balance", None)
+    metadata = {
+        "status": status or None,
+        "source": source or None,
+        "fetched_at": (
+            snapshot.fetched_at.isoformat()
+            if getattr(snapshot, "fetched_at", None) is not None
+            else None
+        ),
+    }
+    blockers: list[SignalActionBlocker] = []
+    if status != "fresh" or source != "exchange":
+        blockers.append(
+            _blocker(
+                "real_account_snapshot_required",
+                "Fresh exchange account snapshot is required before real entry.",
+                display_label="Fresh account snapshot required",
+                metadata=metadata,
+            )
+        )
+    if _positive_number(account_equity) is None:
+        blockers.append(
+            _blocker(
+                "real_account_equity_missing",
+                "Exchange account equity is missing.",
+                display_label="Account equity missing",
+                metadata=metadata,
+            )
+        )
+    if _positive_number(available_balance) is None:
+        blockers.append(
+            _blocker(
+                "real_available_balance_missing",
+                "Exchange available balance is missing or depleted.",
+                display_label="Available balance missing",
+                metadata=metadata,
+            )
+        )
+    return blockers
+
+
+def _real_market_data_blockers(
+    market: Any,
+    *,
+    risk_settings: RiskManagementSettings,
+    mode: SignalActionMode,
+) -> list[SignalActionBlocker]:
+    if mode != "real" or not risk_settings.real_requires_fresh_market_data:
+        return []
+    status = str(getattr(market, "market_data_status", "") or "unknown").strip().lower()
+    if status == "fresh":
+        return []
+    return [
+        _blocker(
+            "real_market_data_not_fresh",
+            "Fresh market data is required before real entry.",
+            display_label="Fresh market data required",
+            metadata={
+                "market_data_status": status,
+                "market_data_source": getattr(market, "market_data_source", None),
+                "orderbook_freshness_status": _orderbook_freshness_status(market),
+            },
+        )
+    ]
+
+
+def _orderbook_freshness_status(market: Any) -> str | None:
+    status = getattr(market, "orderbook_freshness_status", None)
+    if status is not None:
+        return str(status)
+    orderbook = getattr(market, "orderbook_snapshot", None)
+    status = getattr(orderbook, "freshness_status", None)
+    return str(status) if status is not None else None
+
+
+def _positive_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 def _signal_can_arm_pending(signal: RadarSignal) -> bool:
     if signal.execution_gate is not None:
         return signal.execution_gate.can_arm_pending
@@ -1328,6 +1475,7 @@ def _blocker(
 ) -> SignalActionBlocker:
     return SignalActionBlocker(
         code=code,
+        reason_code=code,
         severity="blocker",
         message=message,
         display_label=display_label,
@@ -1344,6 +1492,7 @@ def _warning(
 ) -> SignalActionBlocker:
     return SignalActionBlocker(
         code=code,
+        reason_code=code,
         severity="warning",
         message=message,
         display_label=display_label,

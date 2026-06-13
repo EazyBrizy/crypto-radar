@@ -6,8 +6,9 @@ from uuid import UUID
 
 from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.exchange_connection import ExchangeConnectionResponse
-from app.schemas.risk import ResolvedExecutionProfile
-from app.schemas.signal import RadarSignal
+from app.schemas.risk import AccountRiskSnapshot, ResolvedExecutionProfile
+from app.schemas.decision import SignalDecisionSnapshot
+from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot
 from app.schemas.trade import VirtualAccount
 from app.schemas.user import RiskManagementSettings
 from app.services.signal_actions import REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE, SignalActionService
@@ -57,6 +58,55 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertTrue(state.can_enter_now)
         self.assertFalse(state.can_arm_pending)
         self.assertEqual(state.primary_action, "enter_now")
+
+    def test_real_enter_now_requires_real_context_even_when_signal_gate_passes(self) -> None:
+        connection = _exchange_connection()
+        signal = _signal(
+            status="actionable",
+            decision=_decision(execution_allowed_real=True),
+            execution_gate=_gate(can_enter_now=True),
+        )
+
+        virtual_state = _service().state_for_signal(signal, mode="virtual", user_id=USER_ID)
+        real_state = _service(connection=connection).state_for_signal(
+            signal,
+            mode="real",
+            connection_id=str(connection.id),
+            user_id=USER_ID,
+        )
+
+        self.assertTrue(virtual_state.can_enter_now)
+        self.assertEqual(virtual_state.primary_action, "enter_now")
+        self.assertFalse(real_state.can_enter_now)
+        self.assertIsNone(real_state.primary_action)
+        self.assertIn("real_order_placement_unavailable", {blocker.reason_code for blocker in real_state.blockers})
+        self.assertIn("real_account_snapshot_required", {blocker.reason_code for blocker in real_state.blockers})
+
+    def test_real_enter_now_requires_decision_allowed_real_true(self) -> None:
+        connection = _exchange_connection(
+            order_placement_mode="testnet_real_orders",
+            can_place_orders=True,
+            safety_blockers=[],
+            account_snapshot_status="fresh",
+        )
+        signal = _signal(
+            status="actionable",
+            decision=_decision(execution_allowed_real=None),
+            execution_gate=_gate(can_enter_now=True),
+        )
+
+        virtual_state = _service().state_for_signal(signal, mode="virtual", user_id=USER_ID)
+        real_state = _service(connection=connection, account_snapshot=_fresh_account_snapshot()).state_for_signal(
+            signal,
+            mode="real",
+            connection_id=str(connection.id),
+            user_id=USER_ID,
+        )
+
+        self.assertTrue(virtual_state.can_enter_now)
+        self.assertFalse(real_state.can_enter_now)
+        self.assertEqual(real_state.disabled_reason_code, "real_execution_not_allowed")
+        self.assertEqual(real_state.blockers[0].reason_code, "real_execution_not_allowed")
 
     def test_active_pending_can_cancel_and_blocks_enter(self) -> None:
         state = _service(intent=_pending_intent(status="pending")).state_for_signal(
@@ -129,6 +179,7 @@ def _service(
     intent: PendingEntryIntentRead | None = None,
     *,
     connection: ExchangeConnectionResponse | None = None,
+    account_snapshot: AccountRiskSnapshot | None = None,
 ) -> SignalActionService:
     return SignalActionService(
         signals=_FakeSignalService(),
@@ -138,7 +189,7 @@ def _service(
         market_data_service=_FakeMarketDataService(),
         fee_rate_service=_FakeFeeRateService(),
         exchange_connections=_FakeExchangeConnectionService(connection),
-        account_snapshots=_FakeAccountSnapshotService(),
+        account_snapshots=_FakeAccountSnapshotService(account_snapshot),
         realtime_broker=_FakeRealtimeBroker(),
     )
 
@@ -188,6 +239,8 @@ class _FakeMarketDataService:
             slippage_bps=0.0,
             liquidation_price=None,
             entry_price=kwargs["fallback_entry_price"],
+            market_data_status="fresh",
+            orderbook_freshness_status="fresh",
         )
 
 
@@ -207,7 +260,11 @@ class _FakeExchangeConnectionService:
 
 
 class _FakeAccountSnapshotService:
-    pass
+    def __init__(self, snapshot: AccountRiskSnapshot | None = None) -> None:
+        self.snapshot = snapshot
+
+    def get_snapshot(self, **_kwargs):
+        return self.snapshot
 
 
 class _FakeRealtimeBroker:
@@ -215,7 +272,13 @@ class _FakeRealtimeBroker:
         return None
 
 
-def _exchange_connection() -> ExchangeConnectionResponse:
+def _exchange_connection(
+    *,
+    order_placement_mode: str = "dry_run",
+    can_place_orders: bool = False,
+    safety_blockers: list[str] | None = None,
+    account_snapshot_status: str = "missing",
+) -> ExchangeConnectionResponse:
     now = datetime.now(timezone.utc)
     return ExchangeConnectionResponse(
         id=UUID("ba520631-d035-4f95-a4c0-3b40553dd540"),
@@ -229,13 +292,13 @@ def _exchange_connection() -> ExchangeConnectionResponse:
         permissions={"read": True, "trade": False},
         status="active",
         environment="testnet",
-        order_placement_mode="dry_run",
-        can_place_orders=False,
-        safety_blockers=["ORDER_PLACEMENT_DRY_RUN"],
+        order_placement_mode=order_placement_mode,
+        can_place_orders=can_place_orders,
+        safety_blockers=safety_blockers if safety_blockers is not None else ["ORDER_PLACEMENT_DRY_RUN"],
         mainnet_explicitly_enabled=False,
         last_sync_at=None,
         last_account_snapshot_at=None,
-        account_snapshot_status="missing",
+        account_snapshot_status=account_snapshot_status,
         revoked_at=None,
         deleted_at=None,
         deletion_reason=None,
@@ -244,7 +307,12 @@ def _exchange_connection() -> ExchangeConnectionResponse:
     )
 
 
-def _signal(*, status: str) -> RadarSignal:
+def _signal(
+    *,
+    status: str,
+    decision: SignalDecisionSnapshot | None = None,
+    execution_gate: SignalExecutionGateSnapshot | None = None,
+) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
         id=str(SIGNAL_UUID),
@@ -261,6 +329,43 @@ def _signal(*, status: str) -> RadarSignal:
         take_profit_1=110.0,
         created_at=now,
         updated_at=now,
+        decision=decision,
+        execution_gate=execution_gate,
+    )
+
+
+def _fresh_account_snapshot() -> AccountRiskSnapshot:
+    return AccountRiskSnapshot(
+        status="fresh",
+        fetched_at=datetime.now(timezone.utc),
+        account_equity=Decimal("10000"),
+        available_balance=Decimal("9000"),
+        wallet_balance=Decimal("10000"),
+        positions=[],
+        source="exchange",
+        warnings=[],
+    )
+
+
+def _decision(*, execution_allowed_real: bool | None = None) -> SignalDecisionSnapshot:
+    return SignalDecisionSnapshot(
+        setup_valid=True,
+        trade_plan_valid=True,
+        market_context_score=0.9,
+        signal_actionable=True,
+        execution_allowed_virtual=True,
+        execution_allowed_real=execution_allowed_real,
+    )
+
+
+def _gate(*, can_enter_now: bool = False, can_arm_pending: bool = False) -> SignalExecutionGateSnapshot:
+    return SignalExecutionGateSnapshot(
+        status="passed",
+        feed_kind="execution_signal" if can_enter_now else "watchlist",
+        can_notify=can_enter_now,
+        can_enter_now=can_enter_now,
+        can_arm_pending=can_arm_pending,
+        can_show_in_execution_feed=can_enter_now,
     )
 
 

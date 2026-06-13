@@ -145,6 +145,7 @@ const signalActionKindSchema = z.enum([
 ]);
 const signalActionBlockerSchema = z.object({
   code: z.string().min(1),
+  reason_code: z.string().nullable().optional(),
   severity: z.enum(["blocker", "warning", "info"]),
   message: z.string().nullable(),
   display_label: z.string().nullable(),
@@ -566,6 +567,7 @@ export function normalizeSignalActionState(value: unknown): SignalActionState {
     disabled_reason_code: state.disabled_reason_code,
     blockers: state.blockers.map((item) => ({
       code: item.code,
+      reason_code: item.reason_code ?? item.code,
       severity: item.severity,
       message: item.message,
       display_label: item.display_label,
@@ -573,6 +575,7 @@ export function normalizeSignalActionState(value: unknown): SignalActionState {
     })),
     warnings: state.warnings.map((item) => ({
       code: item.code,
+      reason_code: item.reason_code ?? item.code,
       severity: item.severity,
       message: item.message,
       display_label: item.display_label,

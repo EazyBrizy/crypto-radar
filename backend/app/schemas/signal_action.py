@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.signal import RadarSignal
@@ -20,10 +20,17 @@ SignalActionSeverity = Literal["blocker", "warning", "info"]
 
 class SignalActionBlocker(BaseModel):
     code: str = Field(..., min_length=1)
+    reason_code: str | None = None
     severity: SignalActionSeverity = "blocker"
     message: str | None = None
     display_label: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def default_reason_code(self) -> "SignalActionBlocker":
+        if self.reason_code is None:
+            self.reason_code = self.code
+        return self
 
 
 class SignalActionState(BaseModel):

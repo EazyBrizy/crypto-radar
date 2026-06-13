@@ -173,11 +173,11 @@ function mergeActionBlockers(
 ): UiBlocker[] {
   const actionItems = actionState
     ? (severity === "blocker" ? actionState.blockers : actionState.warnings).map((blocker) => ({
-        code: blocker.code,
+        code: blocker.reason_code ?? blocker.code,
         severity: blocker.severity,
-        category: categoryFromCode(blocker.code),
+        category: categoryFromCode(blocker.reason_code ?? blocker.code),
         userMessage: blocker.display_label ?? blocker.message ?? blocker.code,
-        debugMessages: [blocker.code]
+        debugMessages: [blocker.reason_code ?? blocker.code]
       }))
     : [];
   return dedupeBlockers([

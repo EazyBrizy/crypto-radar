@@ -15563,6 +15563,17 @@
             "minLength": 1,
             "title": "Code"
           },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
           "severity": {
             "type": "string",
             "enum": [

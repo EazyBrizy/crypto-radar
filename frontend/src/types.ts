@@ -407,6 +407,7 @@ export interface PendingEntryView {
 
 export interface SignalActionBlocker {
   code: string;
+  reason_code?: string | null;
   severity: SignalActionSeverity;
   message: string | null;
   display_label: string | null;

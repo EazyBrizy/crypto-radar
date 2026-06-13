@@ -4961,6 +4961,8 @@ export interface components {
         SignalActionBlocker: {
             /** Code */
             code: string;
+            /** Reason Code */
+            reason_code?: string | null;
             /**
              * Severity
              * @default blocker

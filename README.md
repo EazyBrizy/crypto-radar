@@ -23,6 +23,26 @@ Crypto Radar is a realtime crypto market radar and trading control plane. The ba
 - pnpm 10.x through Corepack
 - Docker Desktop for local infra
 
+## Run backend tests
+
+From the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\test_backend.ps1
+```
+
+If `make` is available, the equivalent wrapper is:
+
+```powershell
+make test-backend
+```
+
+Both commands install `backend/requirements-dev.txt` into the local `.venv` and run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend/tests
+```
+
 ## Local MVP Virtual Trading Runbook
 
 Use this order for a clean local check of scanner plus virtual trading. Keep the backend and frontend commands in separate PowerShell terminals once they start long-running servers.

@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Python = Join-Path $RootDir ".venv\Scripts\python.exe"
+$Requirements = Join-Path $RootDir "backend\requirements-dev.txt"
 
 function Ensure-Python3Command {
     param([string]$PythonPath)
@@ -17,30 +18,26 @@ function Ensure-Python3Command {
     Set-Content -LiteralPath $Python3Command -Value $Content -Encoding ascii -NoNewline
 }
 
-function Test-BackendPython {
-    param([string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return $false
-    }
-
-    try {
-        & $Path -c "import pytest, fastapi, sqlalchemy" *> $null
-        return $LASTEXITCODE -eq 0
-    }
-    catch {
-        return $false
-    }
+if (-not (Test-Path -LiteralPath $Python)) {
+    & (Join-Path $PSScriptRoot "setup_backend.ps1")
 }
 
-if (-not (Test-BackendPython -Path $Python)) {
-    & (Join-Path $PSScriptRoot "setup_backend.ps1")
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw "uv was not found. Install uv first and open a new PowerShell."
+}
+
+Push-Location $RootDir
+try {
+    uv pip install --python $Python -r $Requirements
+}
+finally {
+    Pop-Location
 }
 
 Ensure-Python3Command -PythonPath $Python
 
 if ($PytestArgs.Count -eq 0) {
-    $PytestArgs = @("backend/tests", "-q")
+    $PytestArgs = @("backend/tests")
 }
 
 Push-Location $RootDir

@@ -44,7 +44,8 @@ class FakeScanner:
 
 class RadarScannerStatusTest(unittest.IsolatedAsyncioTestCase):
     def test_scanner_status_preserves_disabled_flag(self) -> None:
-        status = _scanner_status(DummyRunner(), scanner_enabled=False)
+        with patch("app.api.v1.radar.radar_config_service", FakeRadarConfigService()):
+            status = _scanner_status(DummyRunner(), scanner_enabled=False)
 
         self.assertFalse(status["scanner_enabled"])
         self.assertFalse(status["scanner_running"])
@@ -61,7 +62,8 @@ class RadarScannerStatusTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        status = await start_scanner(request)
+        with patch("app.api.v1.radar.radar_config_service", FakeRadarConfigService()):
+            status = await start_scanner(request)
 
         self.assertTrue(runner.started)
         self.assertTrue(status["scanner_enabled"])
@@ -69,33 +71,27 @@ class RadarScannerStatusTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["market_data_status"], "waiting")
 
     def test_runner_status_before_tick_is_waiting_not_online(self) -> None:
-        runner = self._running_runner({
+        status = self._running_status({
             "stage": "warming_up",
             "last_tick_age_seconds": None,
         })
-
-        status = runner.scanner_status
 
         self.assertTrue(status["scanner_running"])
         self.assertEqual(status["market_data_status"], "waiting")
 
     def test_runner_status_after_recent_tick_is_online(self) -> None:
-        runner = self._running_runner({
+        status = self._running_status({
             "stage": "listening",
             "last_tick_age_seconds": 1.0,
         })
 
-        status = runner.scanner_status
-
         self.assertEqual(status["market_data_status"], "online")
 
     def test_runner_status_after_stale_tick_is_stale(self) -> None:
-        runner = self._running_runner({
+        status = self._running_status({
             "stage": "listening",
             "last_tick_age_seconds": 60.0,
         })
-
-        status = runner.scanner_status
 
         self.assertEqual(status["market_data_status"], "stale")
 
@@ -129,10 +125,11 @@ class RadarScannerStatusTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(status["scanner_universe_warning"])
         self.assertFalse(config.truncate_requested)
 
-    def _running_runner(self, stats: dict[str, object]) -> ScannerRunner:
-        runner = ScannerRunner(scanner=FakeScanner(stats))  # type: ignore[arg-type]
-        runner._task = FakeRunningTask()  # type: ignore[assignment]
-        return runner
+    def _running_status(self, stats: dict[str, object]) -> dict[str, object]:
+        with patch("app.workers.signal_worker.radar_config_service", FakeRadarConfigService()):
+            runner = ScannerRunner(scanner=FakeScanner(stats))  # type: ignore[arg-type]
+            runner._task = FakeRunningTask()  # type: ignore[assignment]
+            return runner.scanner_status
 
 
 class MainForwardStrategyTestWorkerWiringTest(unittest.IsolatedAsyncioTestCase):

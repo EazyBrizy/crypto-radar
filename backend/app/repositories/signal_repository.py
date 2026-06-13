@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.domain.signal_status import EXECUTION_CANDIDATE_STATUSES, OPEN_SIGNAL_STATUSES
+from app.domain.signal_status import (
+    EXECUTION_CANDIDATE_STATUSES,
+    OPEN_SIGNAL_STATUSES,
+    TERMINAL_SIGNAL_STATUSES,
+)
 from app.models.market import MarketExchange, MarketPair
 from app.models.outbox import OutboxEvent
 from app.models.signal import TradingSignal, TradingSignalEvent
@@ -401,7 +405,14 @@ class PostgresSignalRepository:
                 session.add(record)
                 session.flush()
             else:
-                snapshot = _merge_strategy_snapshot(record.features_snapshot, snapshot)
+                snapshot = _merge_strategy_snapshot(
+                    record.features_snapshot,
+                    snapshot,
+                    incoming_terminal=(
+                        db_status in TERMINAL_SIGNAL_STATUSES
+                        or signal.status in TERMINAL_SIGNAL_STATUSES
+                    ),
+                )
                 record.status = db_status
                 record.confidence = _decimal(signal.confidence) or Decimal("0")
                 record.score = _decimal(score) or Decimal("0")
@@ -1124,7 +1135,12 @@ def _snapshot_from_strategy_signal(
     }
 
 
-def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str, Any]) -> dict[str, Any]:
+def _merge_strategy_snapshot(
+    existing: dict[str, Any] | None,
+    incoming: dict[str, Any],
+    *,
+    incoming_terminal: bool = False,
+) -> dict[str, Any]:
     if not existing:
         return incoming
     merged = dict(incoming)
@@ -1132,10 +1148,88 @@ def _merge_strategy_snapshot(existing: dict[str, Any] | None, incoming: dict[str
         value = existing.get(key)
         if value is not None and key not in merged:
             merged[key] = value
-    for key in ("edge", "trigger"):
+    for key in ("edge",):
         if merged.get(key) is None and existing.get(key) is not None:
             merged[key] = existing[key]
+    existing_trigger = existing.get("trigger")
+    incoming_trigger = merged.get("trigger")
+    if incoming_trigger is None and existing_trigger is not None:
+        merged["trigger"] = existing_trigger
+    elif _should_keep_existing_closed_trigger(
+        existing_trigger,
+        incoming_trigger,
+        incoming_terminal=incoming_terminal,
+    ):
+        merged["trigger"] = existing_trigger
     return merged
+
+
+def _should_keep_existing_closed_trigger(
+    existing_trigger: Any,
+    incoming_trigger: Any,
+    *,
+    incoming_terminal: bool,
+) -> bool:
+    if not isinstance(existing_trigger, dict) or not isinstance(incoming_trigger, dict):
+        return False
+    if incoming_terminal or not _trigger_confirmed_on_closed_candle(existing_trigger):
+        return False
+
+    incoming_passed = incoming_trigger.get("passed")
+    incoming_candle_state = _trigger_candle_state(incoming_trigger)
+    if incoming_passed is True and incoming_candle_state == "closed":
+        return False
+    if (
+        incoming_passed is False
+        and incoming_candle_state == "closed"
+        and _trigger_has_explicit_failure(incoming_trigger)
+    ):
+        return False
+    return True
+
+
+def _trigger_confirmed_on_closed_candle(trigger: dict[str, Any]) -> bool:
+    if trigger.get("passed") is not True:
+        return False
+    metadata = _trigger_metadata(trigger)
+    if metadata.get("confirmed_on_closed_candle") is True:
+        return True
+    confirmed_at = trigger.get("confirmed_at")
+    return _trigger_candle_state(trigger) == "closed" and confirmed_at not in (None, "")
+
+
+def _trigger_has_explicit_failure(trigger: dict[str, Any]) -> bool:
+    metadata = _trigger_metadata(trigger)
+    failed_checks = metadata.get("failed_checks")
+    if (
+        trigger.get("reason")
+        or metadata.get("reason_code")
+        or (isinstance(failed_checks, list) and failed_checks)
+    ):
+        return True
+    checks = trigger.get("checks")
+    if not isinstance(checks, list):
+        return False
+    return any(
+        isinstance(check, dict)
+        and str(check.get("status") or "").strip().lower() == "failed"
+        for check in checks
+    )
+
+
+def _trigger_candle_state(trigger: dict[str, Any]) -> str:
+    metadata = _trigger_metadata(trigger)
+    value = (
+        metadata.get("trigger_candle_state")
+        or metadata.get("candle_state")
+        or trigger.get("candle_state")
+    )
+    return str(value or "").strip().lower()
+
+
+def _trigger_metadata(trigger: dict[str, Any]) -> dict[str, Any]:
+    metadata = trigger.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
 
 
 def _api_status_to_db(status: str) -> str:

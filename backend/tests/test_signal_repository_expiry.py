@@ -17,7 +17,8 @@ from app.repositories.signal_repository import (
     SIGNAL_EXPIRED_EVENT,
     PostgresSignalRepository,
 )
-from app.schemas.signal import StrategySignal
+from app.schemas.market import CandleState
+from app.schemas.signal import SignalTriggerSnapshot, StrategySignal
 from app.workers.signal_worker import SignalExpiryWorker
 
 
@@ -200,6 +201,55 @@ class SignalRepositoryExpiryTest(unittest.TestCase):
         self.assertEqual(expired_count, 0)
         self.assertEqual([signal.id for signal in visible], [result.signal.id])
 
+    def test_upsert_keeps_confirmed_closed_trigger_across_open_refresh(self) -> None:
+        detected_at = datetime.now(timezone.utc).replace(microsecond=0)
+        confirmed_trigger = SignalTriggerSnapshot(
+            trigger_type="closed_candle",
+            passed=True,
+            candle_state="closed",
+            confirmed_at=detected_at,
+            reason="Trigger confirmed on closed candle",
+            metadata={
+                "confirmed_on_closed_candle": True,
+                "trigger_candle_state": "closed",
+            },
+        )
+        forming_trigger = SignalTriggerSnapshot(
+            trigger_type="closed_candle",
+            passed=False,
+            candle_state="open",
+            reason="Trigger failed on forming candle refresh",
+            metadata={
+                "confirmed_on_closed_candle": False,
+                "trigger_candle_state": "open",
+                "reason_code": "forming_candle",
+                "failed_checks": ["forming_candle"],
+            },
+        )
+
+        created = self.repository.upsert_strategy_signal(
+            _strategy_signal(detected_at, trigger=confirmed_trigger, candle_state="closed")
+        )
+        refreshed = self.repository.upsert_strategy_signal(
+            _strategy_signal(
+                detected_at + timedelta(minutes=1),
+                trigger=forming_trigger,
+                candle_state="open",
+            )
+        )
+
+        self.assertTrue(created.created)
+        self.assertFalse(refreshed.created)
+        self.assertIsNotNone(refreshed.signal.trigger)
+        trigger = refreshed.signal.trigger
+        self.assertTrue(trigger.passed if trigger else False)
+        self.assertEqual(trigger.candle_state if trigger else None, "closed")
+        self.assertTrue(trigger.metadata.get("confirmed_on_closed_candle") if trigger else False)
+        self.assertEqual(
+            trigger.metadata.get("trigger_candle_state") if trigger else None,
+            "closed",
+        )
+
     def _seed_references(self) -> None:
         now = datetime.now(timezone.utc)
         self.exchange_id = uuid4()
@@ -333,7 +383,12 @@ class _FakeSignalExpiryService:
         return 3
 
 
-def _strategy_signal(detected_at: datetime) -> StrategySignal:
+def _strategy_signal(
+    detected_at: datetime,
+    *,
+    trigger: SignalTriggerSnapshot | None = None,
+    candle_state: CandleState = "closed",
+) -> StrategySignal:
     return StrategySignal(
         exchange="bybit",
         symbol="BTCUSDT",
@@ -343,12 +398,14 @@ def _strategy_signal(detected_at: datetime) -> StrategySignal:
         score=80,
         timestamp=int(detected_at.timestamp()),
         timeframe="15m",
+        candle_state=candle_state,
         status="actionable",
         entry_min=99.0,
         entry_max=101.0,
         stop_loss=95.0,
         take_profit_1=105.0,
         risk_reward=2.0,
+        trigger=trigger,
     )
 
 

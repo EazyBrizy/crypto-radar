@@ -367,6 +367,50 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["forward_account"]["unrealized_pnl"], "0")
         self.assertEqual(state["forward_account"]["equity"], "1012")
 
+    async def test_process_market_tick_persists_forward_close_trade_event_and_metrics(self) -> None:
+        scenarios = [
+            ("take_profit", "forward_wins", 115.0),
+            ("stop_loss", "forward_losses", 94.0),
+        ]
+        for close_reason, result_metric_code, close_price in scenarios:
+            with self.subTest(close_reason=close_reason):
+                run_store = _ForwardRunStore([_run()])
+                trade_store = _RecordingTradeStore()
+                runtime = ForwardStrategyTestRuntime(
+                    run_store=run_store,
+                    trade_store=trade_store,
+                    signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_enter_now=True))),
+                    virtual_trading=_VirtualTrading(),
+                )
+
+                open_result = await runtime.process_strategy_signal(_strategy_signal())
+                tick_result = await runtime.process_market_tick(
+                    MarketData(
+                        exchange="bybit",
+                        symbol="BTCUSDT",
+                        price=close_price,
+                        volume=1.0,
+                        timestamp=1_780_000_060,
+                    )
+                )
+
+                self.assertEqual(open_result.opened_trades, 1)
+                self.assertEqual(tick_result.ticks_processed, 1)
+                closed_trades = [trade for trade in trade_store.trades if trade.exit_time is not None]
+                close_events = [event for event in trade_store.signal_events if event.closed]
+                metric_codes = [row.metric_code for row in trade_store.metrics]
+                self.assertEqual(len(closed_trades), 1)
+                self.assertEqual(closed_trades[0].trade_id, "trade_1")
+                self.assertEqual(closed_trades[0].close_reason, close_reason)
+                self.assertEqual(len(close_events), 1)
+                self.assertEqual(close_events[0].signal_id, "sig_1")
+                self.assertEqual(close_events[0].outcome, close_reason)
+                self.assertEqual(close_events[0].funnel_stage, "closed")
+                self.assertIn("forward_closed_trades", metric_codes)
+                self.assertIn(result_metric_code, metric_codes)
+                self.assertIn("realized_pnl", metric_codes)
+                self.assertIn("pnl_percent", metric_codes)
+
     async def test_process_market_tick_partially_closes_first_forward_target(self) -> None:
         run = _run(runtime_state={
             "forward_account": {

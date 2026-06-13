@@ -103,6 +103,7 @@ class ForwardRuntimeResult:
     signals_processed: int = 0
     signals_skipped: int = 0
     opened_trades: int = 0
+    closed_trades: int = 0
     pending_entries_armed: int = 0
     trades_written: int = 0
     signal_events_written: int = 0
@@ -116,6 +117,7 @@ class ForwardRuntimeResult:
         self.signals_processed += other.signals_processed
         self.signals_skipped += other.signals_skipped
         self.opened_trades += other.opened_trades
+        self.closed_trades += other.closed_trades
         self.pending_entries_armed += other.pending_entries_armed
         self.trades_written += other.trades_written
         self.signal_events_written += other.signal_events_written
@@ -123,6 +125,13 @@ class ForwardRuntimeResult:
         self.runtime_state_updates += other.runtime_state_updates
         self.cancelled_runs += other.cancelled_runs
         self.errors.extend(other.errors)
+
+
+@dataclass
+class ForwardMarkToMarketResult:
+    runtime_state: dict[str, Any] = field(default_factory=dict)
+    updated_trades: list[VirtualTrade] = field(default_factory=list)
+    closed_trades: list[VirtualTrade] = field(default_factory=list)
 
 
 class ForwardStrategyTestRuntime:
@@ -157,6 +166,7 @@ class ForwardStrategyTestRuntime:
                 "processed_ticks": _counter(detail.run.runtime_state, "processed_ticks"),
                 "processed_signals": _counter(detail.run.runtime_state, "processed_signals"),
                 "opened_trades": _counter(detail.run.runtime_state, "opened_trades"),
+                "closed_trades": _counter(detail.run.runtime_state, "closed_trades"),
                 "pending_entries_armed": _counter(detail.run.runtime_state, "pending_entries_armed"),
                 "trades_written": _counter(detail.run.runtime_state, "trades_written"),
                 "signal_events_written": _counter(detail.run.runtime_state, "signal_events_written"),
@@ -188,6 +198,25 @@ class ForwardStrategyTestRuntime:
         for run in self._running_forward_runs():
             if not _run_matches_market(run, tick.exchange, tick.symbol):
                 continue
+            marked = _mark_to_market_forward_account(run, tick)
+            trades_written, signal_events_written, metrics_written = self._write_forward_close_records(
+                run,
+                marked.closed_trades,
+            )
+            result.closed_trades += len(marked.closed_trades)
+            result.trades_written += trades_written
+            result.signal_events_written += signal_events_written
+            result.metrics_written += metrics_written
+            persistence_counters: dict[str, Any] = {}
+            if marked.closed_trades:
+                persistence_counters = {
+                    "closed_trades": len(marked.closed_trades),
+                    "trades_written": trades_written,
+                    "signal_events_written": signal_events_written,
+                    "metrics_written": metrics_written,
+                    "last_closed_trade_id": marked.closed_trades[-1].id,
+                    "last_close_reason": marked.closed_trades[-1].close_reason,
+                }
             self._increment_runtime_state(
                 run,
                 {
@@ -196,7 +225,8 @@ class ForwardStrategyTestRuntime:
                     "last_symbol": tick.symbol.upper(),
                     "last_price": tick.price,
                     "last_tick_timestamp": tick.timestamp,
-                    **_mark_to_market_forward_account(run, tick),
+                    **marked.runtime_state,
+                    **persistence_counters,
                 },
             )
             result.runtime_state_updates += 1
@@ -458,6 +488,42 @@ class ForwardStrategyTestRuntime:
         )
         return 1
 
+    def _write_forward_close_records(
+        self,
+        run: StrategyTestRunResponse,
+        trades: Sequence[VirtualTrade],
+    ) -> tuple[int, int, int]:
+        if not trades:
+            return 0, 0, 0
+
+        trade_rows: list[StrategyTestTrade] = []
+        signal_events: list[StrategyTestSignalEvent] = []
+        metric_rows: list[StrategyTestMetricRow] = []
+        gate = _forward_close_gate()
+        for trade in trades:
+            signal = _forward_radar_signal_from_virtual_trade(trade)
+            trade_rows.append(
+                _strategy_test_trade_from_virtual_trade(run=run, signal=signal, trade=trade)
+            )
+            signal_events.append(
+                _strategy_test_signal_event_from_forward_signal(
+                    run=run,
+                    signal=signal,
+                    gate=gate,
+                    trade=trade,
+                    funnel_stage="closed",
+                    outcome=_forward_close_outcome(trade),
+                )
+            )
+            metric_rows.extend(
+                _strategy_test_close_metrics_from_virtual_trade(run=run, signal=signal, trade=trade)
+            )
+
+        self._trade_store.write_trades(trade_rows)
+        self._trade_store.write_signal_events(signal_events)
+        self._trade_store.write_metrics(metric_rows)
+        return len(trade_rows), len(signal_events), len(metric_rows)
+
     def _increment_runtime_state(
         self,
         run: StrategyTestRunResponse,
@@ -473,6 +539,7 @@ class ForwardStrategyTestRuntime:
                 "processed_ticks",
                 "processed_signals",
                 "opened_trades",
+                "closed_trades",
                 "pending_entries_armed",
                 "trades_written",
                 "signal_events_written",
@@ -571,6 +638,51 @@ def _forward_radar_signal_from_strategy_signal(
     )
 
 
+def _forward_radar_signal_from_virtual_trade(trade: VirtualTrade) -> RadarSignal:
+    take_profit = list(trade.take_profit)
+    created_at = trade.opened_at.astimezone(timezone.utc)
+    return RadarSignal(
+        id=trade.signal_id,
+        symbol=trade.symbol,
+        exchange=trade.exchange,
+        strategy=trade.strategy,
+        direction=trade.side,
+        confidence=0.0,
+        risk_reward=trade.risk_reward,
+        selected_rr=trade.risk_reward,
+        status="actionable",
+        score=0,
+        timeframe=trade.timeframe,
+        entry_min=trade.entry_price,
+        entry_max=trade.entry_price,
+        stop_loss=trade.stop_loss,
+        take_profit_1=take_profit[0] if len(take_profit) >= 1 else None,
+        take_profit_2=take_profit[1] if len(take_profit) >= 2 else None,
+        created_at=created_at,
+        updated_at=(trade.updated_at or created_at).astimezone(timezone.utc),
+    )
+
+
+def _forward_close_gate() -> SignalExecutionGateSnapshot:
+    return SignalExecutionGateSnapshot(
+        status="passed",
+        feed_kind="watchlist",
+        metadata={
+            "runtime": "forward_strategy_test",
+            "event": "position_closed",
+        },
+    )
+
+
+def _forward_close_outcome(trade: VirtualTrade) -> str:
+    reason = str(trade.close_reason or "").strip().lower()
+    if reason in {"take_profit", "stop_loss", "trailing_stop", "time_stop"}:
+        return reason
+    if reason == "breakeven_stop":
+        return "stop_loss"
+    return reason or str(trade.result or trade.status or "closed")
+
+
 def _strategy_test_signal_event_from_forward_signal(
     *,
     run: StrategyTestRunResponse,
@@ -580,7 +692,11 @@ def _strategy_test_signal_event_from_forward_signal(
     funnel_stage: str | None = None,
     outcome: str | None = None,
 ) -> StrategyTestSignalEvent:
-    event_time = signal.created_at.astimezone(timezone.utc)
+    event_time = (
+        trade.closed_at.astimezone(timezone.utc)
+        if trade is not None and trade.closed_at is not None
+        else signal.created_at.astimezone(timezone.utc)
+    )
     filled = trade is not None
     blocked_reason_code = _first_gate_reason_code(gate)
     stage = funnel_stage or ("filled" if filled else "signal")
@@ -699,10 +815,10 @@ def _apply_forward_trade_open(
 def _mark_to_market_forward_account(
     run: StrategyTestRunResponse,
     tick: MarketData,
-) -> dict[str, Any]:
+) -> ForwardMarkToMarketResult:
     positions = _forward_positions(run)
     if not positions:
-        return {}
+        return ForwardMarkToMarketResult()
 
     tick_exchange = tick.exchange.strip().lower()
     tick_symbol = tick.symbol.strip().upper()
@@ -712,6 +828,8 @@ def _mark_to_market_forward_account(
     closed_count = 0
     now = _signal_timestamp_to_utc(tick.timestamp)
     updated_positions: list[dict[str, Any]] = []
+    updated_trades: list[VirtualTrade] = []
+    closed_trades: list[VirtualTrade] = []
     for position in positions:
         current = dict(position)
         if (
@@ -726,9 +844,11 @@ def _mark_to_market_forward_account(
                 target_fill_price="mark",
             )
             current = _forward_position_from_virtual_trade(current, managed.trade)
+            updated_trades.append(managed.trade)
             realized_delta += _decimal(managed.realized_pnl_delta, Decimal("0"))
             if managed.closed:
                 closed_count += 1
+                closed_trades.append(managed.trade)
         if _forward_position_is_active(current):
             total_unrealized += _decimal(current.get("unrealized_pnl"), Decimal("0"))
         updated_positions.append(current)
@@ -739,10 +859,14 @@ def _mark_to_market_forward_account(
     account["open_positions"] = max(0, account["open_positions"] - closed_count)
     account["closed_positions"] += closed_count
     account["equity"] = account["balance"] + account["realized_pnl"] + total_unrealized
-    return {
-        "forward_account": _serialize_forward_account(account),
-        "forward_positions": updated_positions,
-    }
+    return ForwardMarkToMarketResult(
+        runtime_state={
+            "forward_account": _serialize_forward_account(account),
+            "forward_positions": updated_positions,
+        },
+        updated_trades=updated_trades,
+        closed_trades=closed_trades,
+    )
 
 
 def _forward_runs(details: Sequence[StrategyTestRunDetailResponse]) -> list[StrategyTestRunResponse]:
@@ -1042,7 +1166,7 @@ def _strategy_test_trade_from_virtual_trade(
         features_snapshot=signal.model_dump(mode="json", exclude={"card_view", "details_view"}),
         trade_plan=signal.trade_plan.model_dump(mode="json") if signal.trade_plan else {},
         tags=_run_tags(run),
-        created_at=entry_time,
+        created_at=exit_time or entry_time,
     )
 
 
@@ -1072,6 +1196,103 @@ def _strategy_test_metric_from_virtual_trade(
             "test_type": "forward_virtual",
         },
         created_at=trade.opened_at.astimezone(timezone.utc),
+    )
+
+
+def _strategy_test_close_metrics_from_virtual_trade(
+    *,
+    run: StrategyTestRunResponse,
+    signal: RadarSignal,
+    trade: VirtualTrade,
+) -> list[StrategyTestMetricRow]:
+    created_at = (trade.closed_at or trade.updated_at).astimezone(timezone.utc)
+    metadata = {
+        "signal_id": signal.id,
+        "trade_id": trade.id,
+        "test_type": "forward_virtual",
+        "close_reason": trade.close_reason,
+        "outcome": trade.result or trade.status,
+    }
+    rows = [
+        _strategy_test_forward_metric_row(
+            run=run,
+            signal=signal,
+            metric_code="forward_closed_trades",
+            metric_value=1.0,
+            created_at=created_at,
+            metadata=metadata,
+        ),
+        _strategy_test_forward_metric_row(
+            run=run,
+            signal=signal,
+            metric_code="realized_pnl",
+            metric_value=float(trade.realized_pnl),
+            created_at=created_at,
+            metadata=metadata,
+        ),
+    ]
+    result = str(trade.result or "").strip().lower()
+    if result == "win":
+        rows.append(
+            _strategy_test_forward_metric_row(
+                run=run,
+                signal=signal,
+                metric_code="forward_wins",
+                metric_value=1.0,
+                created_at=created_at,
+                metadata=metadata,
+            )
+        )
+    elif result == "loss":
+        rows.append(
+            _strategy_test_forward_metric_row(
+                run=run,
+                signal=signal,
+                metric_code="forward_losses",
+                metric_value=1.0,
+                created_at=created_at,
+                metadata=metadata,
+            )
+        )
+    if trade.pnl_percent is not None:
+        rows.append(
+            _strategy_test_forward_metric_row(
+                run=run,
+                signal=signal,
+                metric_code="pnl_percent",
+                metric_value=float(trade.pnl_percent),
+                created_at=created_at,
+                metadata=metadata,
+            )
+        )
+    return rows
+
+
+def _strategy_test_forward_metric_row(
+    *,
+    run: StrategyTestRunResponse,
+    signal: RadarSignal,
+    metric_code: str,
+    metric_value: float,
+    created_at: datetime,
+    metadata: dict[str, Any],
+) -> StrategyTestMetricRow:
+    return StrategyTestMetricRow(
+        run_id=run.run_id,
+        user_id=strategy_test_user_uuid(_matrix_user_id(run)),
+        mode=_matrix_mode(run),
+        strategy_code=signal.strategy,
+        exchange=signal.exchange,
+        symbol=signal.symbol,
+        timeframe=signal.timeframe,
+        market_regime=_market_regime(signal),
+        score_bucket=_score_bucket(signal.score),
+        direction=signal.direction,
+        metric_code=metric_code,
+        metric_value=metric_value,
+        sample_size=1,
+        metadata=dict(metadata),
+        created_at=created_at,
     )
 
 

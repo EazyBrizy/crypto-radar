@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.models.user import AppUser
 from app.schemas.pending_entry import PendingEntryIntentCreate, PendingEntryIntentRead
 from app.schemas.risk import ResolvedExecutionProfile
-from app.schemas.signal import RadarSignal
+from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
 from app.schemas.trade import ManualConfirmRequest
 from app.schemas.user import RiskManagementSettings
 from app.services.pending_entry import (
@@ -70,6 +70,24 @@ class PendingEntryServiceTest(unittest.TestCase):
         self.assertIn("material_change_policy", intent.accepted_trade_plan_snapshot)
         self.assertEqual(intent.request_snapshot["auto_enter_on_confirmation"], True)
         self.assertEqual(repository.create_calls, 1)
+
+    def test_arm_from_signal_persists_accepted_edge_snapshot(self) -> None:
+        repository = _FakePendingEntryRepository()
+        signal = _signal(edge=_positive_edge())
+        service = self._service(repository, signal_loader=lambda _signal_id: signal)
+
+        intent = service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+
+        accepted_edge = intent.accepted_trade_plan_snapshot["accepted_signal"]["edge"]
+        self.assertEqual(accepted_edge["status"], "positive")
+        self.assertEqual(accepted_edge["sample_size"], 80)
+        self.assertEqual(accepted_edge["source"], "outcome")
 
     def test_arm_from_signal_publishes_pending_entry_update(self) -> None:
         repository = _FakePendingEntryRepository()
@@ -671,6 +689,7 @@ def _signal(
     take_profit_1: float = 110.0,
     score: int = 82,
     confidence: float = 0.82,
+    edge: SignalEdgeSnapshot | None = None,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
@@ -687,8 +706,21 @@ def _signal(
         entry_max=entry_max,
         stop_loss=stop_loss,
         take_profit_1=take_profit_1,
+        edge=edge,
         created_at=now,
         updated_at=now,
+    )
+
+
+def _positive_edge() -> SignalEdgeSnapshot:
+    return SignalEdgeSnapshot(
+        status="positive",
+        sample_size=80,
+        min_sample_size=50,
+        expectancy_after_costs_r=0.18,
+        profit_factor=1.4,
+        confidence_score=0.8,
+        source="outcome",
     )
 
 

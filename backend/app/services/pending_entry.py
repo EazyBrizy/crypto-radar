@@ -686,7 +686,7 @@ def _accepted_execution_envelope(
 ) -> dict[str, Any]:
     envelope = dict(snapshot)
     material_policy = material_change_policy_from_snapshot(envelope)
-    signal_snapshot = {
+    signal_snapshot: dict[str, Any] = {
         "id": str(signal.id),
         "status": signal.status,
         "version": _signal_version(_trade_plan_from_signal(signal)),
@@ -703,6 +703,8 @@ def _accepted_execution_envelope(
         "selected_rr_target": signal.selected_rr_target,
         "min_rr_ratio": signal.min_rr_ratio,
     }
+    if signal.edge is not None:
+        signal_snapshot["edge"] = signal.edge.model_dump(mode="json")
     envelope.update(
         {
             "exchange": signal.exchange.strip().lower(),

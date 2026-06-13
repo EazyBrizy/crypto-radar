@@ -30,7 +30,7 @@ from app.models.pending_entry import PendingEntryIntent
 from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.pending_entry import PendingEntryIntentRead
 from app.schemas.risk import RiskOverride, StrategyExecutionSettings
-from app.schemas.signal import RadarSignal
+from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
 from app.schemas.trade import ManualConfirmRequest, RecentTradePrint, VirtualMarketSnapshot, VirtualTrade
 from app.schemas.trade_plan import TradePlan
 from app.services.pending_entry import (
@@ -588,12 +588,13 @@ def _execution_signal_from_accepted_snapshot(
 ) -> RadarSignal:
     trade_plan = _accepted_trade_plan_for_execution(intent)
     target_prices = _target_prices_for_signal(intent.targets_snapshot)
-    accepted_signal = (
+    accepted_signal_payload = (
         intent.accepted_trade_plan_snapshot.get("accepted_signal")
         if isinstance(intent.accepted_trade_plan_snapshot, dict)
         else None
     )
-    accepted_signal = accepted_signal if isinstance(accepted_signal, dict) else {}
+    accepted_signal: dict[str, Any] = accepted_signal_payload if isinstance(accepted_signal_payload, dict) else {}
+    accepted_edge = _accepted_edge_for_execution(accepted_signal)
     updates: dict[str, Any] = {
         "status": "entry_touched",
         "exchange": intent.exchange,
@@ -618,12 +619,24 @@ def _execution_signal_from_accepted_snapshot(
     ):
         if accepted_signal.get(field_name) is not None:
             updates[field_name] = accepted_signal[field_name]
+    if accepted_edge is not None:
+        updates["edge"] = accepted_edge
     execution_signal = signal.model_copy(update=updates)
-    if signal.execution_gate is not None:
+    if signal.execution_gate is not None or accepted_edge is not None:
         execution_signal = execution_signal.model_copy(
             update={"execution_gate": signal_execution_gate_service.evaluate(execution_signal)}
         )
     return execution_signal
+
+
+def _accepted_edge_for_execution(accepted_signal: dict[str, Any]) -> SignalEdgeSnapshot | None:
+    edge = accepted_signal.get("edge")
+    if edge is None:
+        return None
+    try:
+        return SignalEdgeSnapshot.model_validate(edge)
+    except ValueError as exc:
+        raise ValueError(f"Accepted pending-entry edge snapshot is invalid: {exc}") from exc
 
 
 def _accepted_trade_plan_for_execution(intent: PendingEntryIntentRead) -> TradePlan:

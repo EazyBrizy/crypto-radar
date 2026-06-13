@@ -17,7 +17,7 @@ from app.repositories.pending_entry_repository import PendingEntryIntentReposito
 from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.pending_entry import PendingEntryIntentCreate
 from app.schemas.risk import ResolvedExecutionProfile
-from app.schemas.signal import RadarSignal
+from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
 from app.schemas.trade import ExecutionQualityGate, ManualConfirmRequest, VirtualExecutionReport, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.pending_entry import (
@@ -347,6 +347,32 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(execution_signal.trade_plan.stop_loss if execution_signal.trade_plan else None, 95.0)
         self.assertEqual(execution_signal.trade_plan.targets[0].price if execution_signal.trade_plan else None, 110.0)
 
+    def test_entry_touch_uses_accepted_edge_snapshot_for_fresh_gate(self) -> None:
+        accepted_signal = _signal(confirmed_trigger=True, edge=_positive_edge())
+        pending_service = PendingEntryService(
+            repository=self.repository,
+            session_factory=self.SessionFactory,
+            signal_loader=lambda _signal_id: accepted_signal,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(),
+        )
+        pending_service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        self.signals.signal = _signal(confirmed_trigger=True, edge=_negative_edge())
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+
+        self.assertEqual(results[0].status, "filled")
+        self.assertEqual(len(self.virtual.calls), 1)
+        execution_signal = self.virtual.calls[0][0]
+        self.assertEqual(execution_signal.edge.status if execution_signal.edge else None, "positive")
+        self.assertIsNotNone(execution_signal.execution_gate)
+        self.assertTrue(execution_signal.execution_gate.can_enter_now if execution_signal.execution_gate else False)
+
     def test_requires_reconfirmation_intent_cannot_fill(self) -> None:
         created = self.repository.create_intent(_intent_create(side="long", status="requires_reconfirmation"))
 
@@ -499,6 +525,7 @@ def _signal(
     take_profit_1: float | None = None,
     take_profit_2: float | None = None,
     score: int = 82,
+    edge: SignalEdgeSnapshot | None = None,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
@@ -518,6 +545,7 @@ def _signal(
         stop_loss=stop_loss if stop_loss is not None else (95.0 if direction == "long" else 105.0),
         take_profit_1=take_profit_1 if take_profit_1 is not None else (110.0 if direction == "long" else 90.0),
         take_profit_2=take_profit_2 if take_profit_2 is not None else (115.0 if direction == "long" else 85.0),
+        edge=edge,
         created_at=now,
         updated_at=now,
         trigger=(
@@ -535,6 +563,30 @@ def _signal(
             if confirmed_trigger
             else None
         ),
+    )
+
+
+def _positive_edge() -> SignalEdgeSnapshot:
+    return SignalEdgeSnapshot(
+        status="positive",
+        sample_size=80,
+        min_sample_size=50,
+        expectancy_after_costs_r=0.18,
+        profit_factor=1.4,
+        confidence_score=0.8,
+        source="outcome",
+    )
+
+
+def _negative_edge() -> SignalEdgeSnapshot:
+    return SignalEdgeSnapshot(
+        status="negative",
+        sample_size=80,
+        min_sample_size=50,
+        expectancy_after_costs_r=-0.08,
+        profit_factor=0.9,
+        confidence_score=0.7,
+        source="outcome",
     )
 
 

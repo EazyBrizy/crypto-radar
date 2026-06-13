@@ -100,12 +100,6 @@ export function StrategyTestingPanel({
   const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps);
   const scenarioEstimate = effectiveStrategyCodes.length * selectedPairs.length * validTimeframes.length;
   const runs = runsQuery.data ?? [];
-  const selectedRun = runs.find((run) => run.run_id === selectedReportRunId) ?? null;
-  const mutationSelectedRun = runMutation.data?.run_id === selectedReportRunId ? runMutation.data : null;
-  const selectedRunForReport = selectedRun ?? mutationSelectedRun;
-  const funnelSummaryRun = selectedRunForReport ?? runs[0] ?? null;
-  const selectedRunStatus = selectedRunForReport?.status ?? null;
-  const selectedRunIsActive = isActiveStrategyTestRun(selectedRunStatus);
   const mutationRunIsMissingFromList = Boolean(
     runMutation.data && !runs.some((run) => run.run_id === runMutation.data?.run_id)
   );
@@ -114,6 +108,14 @@ export function StrategyTestingPanel({
     (mutationRunIsMissingFromList && isActiveStrategyTestRun(runMutation.data?.status) ? runMutation.data ?? null : null);
   const activeRunState = activeRunQuery.data ?? null;
   const activeRun = activeRunState?.active_run ?? fallbackActiveRun;
+  const selectedRun = runs.find((run) => run.run_id === selectedReportRunId) ?? null;
+  const mutationSelectedRun = runMutation.data?.run_id === selectedReportRunId ? runMutation.data : null;
+  const activeSelectedRun = activeRun?.run_id === selectedReportRunId ? activeRun : null;
+  const selectedRunForReport = selectedRun ?? mutationSelectedRun ?? activeSelectedRun;
+  const funnelSummaryRun = selectedRunForReport ?? runs[0] ?? null;
+  const selectedRunStatus = selectedRunForReport?.status ?? null;
+  const selectedRunIsActive = isActiveStrategyTestRun(selectedRunStatus);
+  const selectedReportIsReady = Boolean(selectedReportRunId && !selectedRunIsActive);
   const activeRunStateLoaded = activeRunState !== null;
   const activeRunBlocksRun = activeRunStateLoaded ? !activeRunState.can_run : Boolean(fallbackActiveRun);
   const activeRunIsStale = Boolean(activeRunState?.active_run && activeRunState.is_stale);
@@ -125,8 +127,8 @@ export function StrategyTestingPanel({
     !cancelRunMutation.isPending &&
     !activeRunBlocksRun;
   const reportQuery = useStrategyTestReport(selectedReportRunId, {
-    enabled: Boolean(selectedReportRunId),
-    refetchInterval: selectedRunIsActive ? STRATEGY_TEST_RUN_POLL_MS : false
+    enabled: selectedReportIsReady,
+    refetchInterval: false
   });
   const apiError = errorMessage(runMutation.error);
 
@@ -185,8 +187,8 @@ export function StrategyTestingPanel({
   return (
     <form className="strategy-testing-panel" onSubmit={handleRun}>
       <div className="strategy-test-status-strip">
-        <Badge tone="blue">{scenarioEstimate} scenarios</Badge>
-        <Badge tone="purple">{runs.length} recent runs</Badge>
+        <Badge tone="blue">{`${scenarioEstimate} scenarios`}</Badge>
+        <Badge tone="purple">{`${runs.length} recent runs`}</Badge>
         {runsQuery.isLoading ? <Badge tone="yellow">Loading runs</Badge> : null}
         {activeRunQuery.isLoading ? <Badge tone="yellow">Loading active run</Badge> : null}
         {showRunInProgress ? <Badge tone="yellow">Run in progress</Badge> : null}
@@ -369,12 +371,12 @@ function FunnelSummaryStrip({ run }: { run: StrategyTestRunResponse | null }) {
   if (signalsCount == null) return null;
   return (
     <div className="strategy-test-status-strip strategy-test-funnel-strip" aria-label="Strategy test funnel summary">
-      <Badge tone="blue">{signalsCount} signals</Badge>
-      <Badge tone="purple">{numericSummary(run, "execution_candidates") ?? 0} candidates</Badge>
-      <Badge tone="green">{numericSummary(run, "entry_touched") ?? 0} touched</Badge>
-      <Badge tone="blue">{numericSummary(run, "filled") ?? numericSummary(run, "trades_count") ?? 0} filled</Badge>
-      <Badge tone="green">{numericSummary(run, "closed") ?? numericSummary(run, "trades_count") ?? 0} closed</Badge>
-      <Badge tone="yellow">{numericSummary(run, "no_entry") ?? 0} no entry</Badge>
+      <Badge tone="blue">{`${signalsCount} signals`}</Badge>
+      <Badge tone="purple">{`${numericSummary(run, "execution_candidates") ?? 0} candidates`}</Badge>
+      <Badge tone="green">{`${numericSummary(run, "entry_touched") ?? 0} touched`}</Badge>
+      <Badge tone="blue">{`${numericSummary(run, "filled") ?? numericSummary(run, "trades_count") ?? 0} filled`}</Badge>
+      <Badge tone="green">{`${numericSummary(run, "closed") ?? numericSummary(run, "trades_count") ?? 0} closed`}</Badge>
+      <Badge tone="yellow">{`${numericSummary(run, "no_entry") ?? 0} no entry`}</Badge>
     </div>
   );
 }

@@ -24,6 +24,40 @@ describe("i18n locale helpers", () => {
     expect(translateText("Signals found: 12", "zh")).toBe("发现信号: 12");
   });
 
+  it("translates strategy testing controls and run badges in Russian", () => {
+    expect(translateText("Run strategy test", "ru")).toBe("Запустить тест стратегии");
+    expect(translateText("Research virtual", "ru")).toBe("Виртуальное исследование");
+    expect(translateText("Production-like", "ru")).toBe("Близко к боевому");
+    expect(translateText("Forward virtual", "ru")).toBe("Виртуальный форвард");
+    expect(translateText("Same candle", "ru")).toBe("Одна свеча");
+    expect(translateText("Stop first", "ru")).toBe("Сначала стоп");
+    expect(translateText("6 scenarios", "ru")).toBe("6 сценариев");
+    expect(translateText("10 recent runs", "ru")).toBe("10 недавних запусков");
+    expect(translateText("Run in progress", "ru")).toBe("Тест выполняется");
+    expect(translateText("Active run a153ea40", "ru")).toBe("Активный запуск a153ea40");
+    expect(
+      translateText(
+        "Strategy test run a153ea40-25c8-465d-a535-131b4117e997 is running; wait for it to finish or cancel it before starting another run.",
+        "ru"
+      )
+    ).toBe(
+      "Запуск теста стратегии a153ea40-25c8-465d-a535-131b4117e997 выполняется; дождитесь завершения или отмените его перед новым запуском."
+    );
+    expect(
+      translateText(
+        "All strategy test scenarios failed: no_historical_data: no closed candles were found for bybit:1000PEPEUSDT:5m",
+        "ru"
+      )
+    ).toBe(
+      "Все сценарии теста стратегии завершились ошибкой: no_historical_data: закрытые свечи не найдены для bybit:1000PEPEUSDT:5m"
+    );
+    expect(translateText("Open report for run a153ea40", "ru")).toBe("Открыть отчет по запуску a153ea40");
+    expect(translateText("3 strategies / 32 pairs / 2 timeframes", "ru")).toBe(
+      "3 стратегии / 32 пары / 2 таймфрейма"
+    );
+    expect(translateText("2 no entry", "ru")).toBe("2 без входа");
+  });
+
   it("normalizes Radar details labels in Russian", () => {
     expect(translateText("Waiting Entry", "ru")).toBe("Ждём вход");
     expect(translateText("Cancel waiting", "ru")).toBe("Отменить ожидание");

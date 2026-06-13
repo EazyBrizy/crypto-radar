@@ -1878,6 +1878,51 @@ const phrases: Record<string, TranslationMap> = Object.assign({
   "Select pair": { ru: "Выбрать пару", zh: "选择交易对" },
   "Series": { ru: "Серия", zh: "序列" },
   "Settings": { ru: "Настройки", zh: "设置" },
+  "Active run": { ru: "Активный запуск" },
+  "Active strategy test run": { ru: "Активный запуск теста стратегии" },
+  "A strategy test run is already in progress.": { ru: "Тест стратегии уже выполняется." },
+  "Cancel run": { ru: "Отменить запуск" },
+  "Conservative stop first": { ru: "Консервативно: стоп первым" },
+  "Created": { ru: "Создан" },
+  "Discovery": { ru: "Поиск" },
+  "End": { ru: "Окончание" },
+  "Fee rate": { ru: "Ставка комиссии" },
+  "Forward virtual": { ru: "Виртуальный форвард" },
+  "Historical": { ru: "Исторический" },
+  "Ignore ambiguous": { ru: "Игнорировать неоднозначные" },
+  "Initial capital": { ru: "Начальный капитал" },
+  "Intrabar unknown": { ru: "Внутри свечи неизвестно" },
+  "Loading active run": { ru: "Загружаем активный запуск" },
+  "Loading report": { ru: "Загружаем отчет" },
+  "Loading runs": { ru: "Загружаем запуски" },
+  "No enabled strategies": { ru: "Включенных стратегий нет" },
+  "No report metrics yet": { ru: "Метрик отчета пока нет" },
+  "No run selected": { ru: "Запуск не выбран" },
+  "No strategy test runs": { ru: "Запусков тестов стратегий нет" },
+  "Open report": { ru: "Открыть отчет" },
+  "Production-like": { ru: "Близко к боевому" },
+  "Refresh active run": { ru: "Обновить активный запуск" },
+  "Report": { ru: "Отчет" },
+  "Research virtual": { ru: "Виртуальное исследование" },
+  "Run": { ru: "Запуск" },
+  "Run ID": { ru: "ID запуска" },
+  "Run in progress": { ru: "Тест выполняется" },
+  "Run strategy test": { ru: "Запустить тест стратегии" },
+  "Same candle": { ru: "Одна свеча" },
+  "Scenarios": { ru: "Сценарии" },
+  "Select at least one strategy, pair, and timeframe.": { ru: "Выберите хотя бы одну стратегию, пару и таймфрейм." },
+  "Slippage bps": { ru: "Проскальзывание, б.п." },
+  "Stale active run": { ru: "Устаревший активный запуск" },
+  "Start": { ru: "Начало" },
+  "Started": { ru: "Запущен" },
+  "Stop first": { ru: "Сначала стоп" },
+  "Strategy test funnel summary": { ru: "Воронка теста стратегии" },
+  "Strategy test mode": { ru: "Режим теста стратегии" },
+  "Strategy test type": { ru: "Тип теста стратегии" },
+  "Summary": { ru: "Сводка" },
+  "Target first": { ru: "Сначала цель" },
+  "Unable to cancel strategy test run.": { ru: "Не удалось отменить запуск теста стратегии." },
+  "Unable to start strategy test.": { ru: "Не удалось запустить тест стратегии." },
   "Setup exists, wait for confirmation": { ru: "Setup есть, ждём подтверждение", zh: "Setup 已形成，等待确认" },
   "Show Chart": { ru: "Показать график", zh: "显示图表" },
   "Side": { ru: "Сторона", zh: "方向" },
@@ -2053,7 +2098,9 @@ const phrases: Record<string, TranslationMap> = Object.assign({
   "actionable": { ru: "можно входить", zh: "可入场" },
   "all": { ru: "все", zh: "全部" },
   "blocked": { ru: "заблокировано", zh: "已阻止" },
+  "cancelled": { ru: "отменено" },
   "closed": { ru: "закрыта", zh: "已关闭" },
+  "completed": { ru: "завершено" },
   "confirmed": { ru: "подтверждён", zh: "已确认" },
   "entry touched": { ru: "вход задет", zh: "触及入场" },
   "expired": { ru: "истёк", zh: "已过期" },
@@ -2074,13 +2121,16 @@ const phrases: Record<string, TranslationMap> = Object.assign({
   "passed": { ru: "пройдено", zh: "通过" },
   "pending": { ru: "ожидание", zh: "等待" },
   "poor": { ru: "слабое", zh: "差" },
+  "queued": { ru: "в очереди" },
   "ready": { ru: "готов", zh: "就绪" },
   "rejected": { ru: "отклонён", zh: "已拒绝" },
+  "running": { ru: "выполняется" },
   "risky": { ru: "рискованное", zh: "有风险" },
   "short": { ru: "SHORT", zh: "SHORT" },
   "long": { ru: "LONG", zh: "LONG" },
   "strong": { ru: "сильный", zh: "强" },
   "stub": { ru: "заглушка", zh: "占位" },
+  "stopping": { ru: "останавливается" },
   "unknown": { ru: "неизвестно", zh: "未知" },
   "virtual": { ru: "virtual", zh: "模拟" },
   "wait for pullback": { ru: "ждём pullback", zh: "等待回调" },
@@ -2200,6 +2250,12 @@ function translateDynamicText(value: string, locale: Locale): string {
   if (tradingText !== value) return tradingText;
 
   const replacements: Array<[RegExp, (match: RegExpMatchArray) => string]> = [
+    [/^All strategy test scenarios failed: (.+)$/u, (match) => (
+      locale === "ru"
+        ? `Все сценарии теста стратегии завершились ошибкой: ${translateText(match[1] ?? "", locale)}`
+        : value
+    )],
+    [/^Active run (.+)$/u, (match) => (locale === "ru" ? `Активный запуск ${match[1] ?? ""}` : value)],
     [/^Browser: (.+)$/u, (match) => `${translatePhrase("Browser", locale)}: ${translatePhrase(match[1] ?? "", locale)}`],
     [/^Current (.+)$/u, (match) => `${translatePhrase("Current", locale)} ${match[1] ?? ""}`],
     [/^Daily (.+)$/u, (match) => `${translatePhrase("Daily", locale)} ${match[1] ?? ""}`],
@@ -2208,10 +2264,15 @@ function translateDynamicText(value: string, locale: Locale): string {
     [/^Execution-ready inside (.+)$/u, (match) => (locale === "zh" ? `执行就绪，区间 ${match[1] ?? ""}` : locale === "ru" ? `Готово к входу в зоне ${match[1] ?? ""}` : value)],
     [/^Features built: (.+)$/u, (match) => `${translatePhrase("Features", locale)}: ${match[1] ?? ""}`],
     [/^Last update: (.+)$/u, (match) => `${translatePhrase("Last update", locale)}: ${translateAge(match[1] ?? "", locale)}`],
+    [/^Open report for run (.+)$/u, (match) => (locale === "ru" ? `Открыть отчет по запуску ${match[1] ?? ""}` : value)],
     [/^Open (.+)$/u, (match) => `${translatePhrase("Open", locale)} ${translateAge(match[1] ?? "", locale)}`],
     [/^Opened (.+)$/u, (match) => `${translatePhrase("Opened", locale)} ${translateAge(match[1] ?? "", locale)}`],
+    [/^no_historical_data: no closed candles were found for (.+)$/u, (match) => (
+      locale === "ru" ? `no_historical_data: закрытые свечи не найдены для ${match[1] ?? ""}` : value
+    )],
     [/^Pairs: (.+)$/u, (match) => `${translatePhrase("Pairs", locale)}: ${match[1] ?? ""}`],
     [/^Protection: (.+)$/u, (match) => `${translatePhrase("Protection", locale)}: ${translatePhrase(match[1] ?? "", locale)}`],
+    [/^Report (.+)$/u, (match) => (locale === "ru" ? `Отчет ${match[1] ?? ""}` : value)],
     [/^Risk: (Low|Medium|High|Speculative) \| Opened (.+) \| Updated (.+)$/u, (match) => (
       `${translatePhrase("Risk", locale)}: ${translatePhrase(match[1] ?? "", locale)} | ${translatePhrase("Opened", locale)} ${translateAge(match[2] ?? "", locale)} | ${translatePhrase("Updated", locale)} ${translateAge(match[3] ?? "", locale)}`
     )],
@@ -2221,6 +2282,11 @@ function translateDynamicText(value: string, locale: Locale): string {
     [/^Chart: (.+)$/u, (match) => `${translatePhrase("Chart", locale)}: ${translatePhrase(match[1] ?? "", locale)}`],
     [/^Execution: (.+)$/u, (match) => `${translatePhrase("Execution", locale)}: ${translatePhrase(match[1] ?? "", locale)}`],
     [/^Signals found: (.+)$/u, (match) => `${translatePhrase("Signals found", locale)}: ${match[1] ?? ""}`],
+    [/^Strategy test run (.+) is running; wait for it to finish or cancel it before starting another run\.$/u, (match) => (
+      locale === "ru"
+        ? `Запуск теста стратегии ${match[1] ?? ""} выполняется; дождитесь завершения или отмените его перед новым запуском.`
+        : value
+    )],
     [/^Strategy status: (.+)$/u, (match) => `${translatePhrase("Status", locale)} стратегии: ${translatePhrase(match[1] ?? "", locale)}`],
     [/^Timeframes: (.+)$/u, (match) => `${translatePhrase("Timeframes", locale)}: ${match[1] ?? ""}`],
     [/^TTL expired$/u, () => (locale === "zh" ? "TTL 已过期" : locale === "ru" ? "TTL истёк" : "TTL expired")],
@@ -2229,8 +2295,30 @@ function translateDynamicText(value: string, locale: Locale): string {
     [/^Updated (.+)$/u, (match) => `${translatePhrase("Updated", locale)} ${translateAge(match[1] ?? "", locale)}`],
     [/^Weekly (.+)$/u, (match) => `${translatePhrase("Weekly", locale)} ${match[1] ?? ""}`],
     [/^(\d+) candles$/u, (match) => (locale === "zh" ? `${match[1]} 根K线` : locale === "ru" ? `${match[1]} свечей` : value)],
+    [/^(\d+) candidates$/u, (match) => (locale === "ru" ? formatRuCount(match[1], ["кандидат", "кандидата", "кандидатов"]) : value)],
+    [/^(\d+) closed$/u, (match) => (locale === "ru" ? `${match[1]} закрыто` : value)],
+    [/^(\d+) done \/ (\d+) failed$/u, (match) => (
+      locale === "ru" ? `${match[1]} выполнено / ${formatRuCount(match[2], ["ошибка", "ошибки", "ошибок"])}` : value
+    )],
+    [/^(\d+) filled$/u, (match) => (locale === "ru" ? `${match[1]} исполнено` : value)],
+    [/^(\d+) no entry$/u, (match) => (locale === "ru" ? `${match[1]} без входа` : value)],
+    [/^(\d+) recent runs$/u, (match) => (locale === "ru" ? formatRuRecentRuns(match[1]) : value)],
+    [/^(\d+) rejections$/u, (match) => (locale === "ru" ? formatRuCount(match[1], ["отклонение", "отклонения", "отклонений"]) : value)],
     [/^(\d+) rows$/u, (match) => (locale === "zh" ? `${match[1]} 行` : locale === "ru" ? `${match[1]} строк` : value)],
+    [/^(\d+) scenarios$/u, (match) => (locale === "ru" ? formatRuCount(match[1], ["сценарий", "сценария", "сценариев"]) : value)],
     [/^(\d+) selected pairs$/u, (match) => (locale === "zh" ? `已选交易对: ${match[1]}` : locale === "ru" ? `Выбрано пар: ${match[1]}` : value)],
+    [/^(\d+) signals$/u, (match) => (locale === "ru" ? formatRuCount(match[1], ["сигнал", "сигнала", "сигналов"]) : value)],
+    [/^(\d+) strategies \/ (\d+) pairs \/ (\d+) timeframes$/u, (match) => (
+      locale === "ru"
+        ? `${formatRuCount(match[1], ["стратегия", "стратегии", "стратегий"])} / ${formatRuCount(match[2], ["пара", "пары", "пар"])} / ${formatRuCount(match[3], ["таймфрейм", "таймфрейма", "таймфреймов"])}`
+        : value
+    )],
+    [/^(\d+) touched$/u, (match) => (locale === "ru" ? formatRuCount(match[1], ["касание", "касания", "касаний"]) : value)],
+    [/^(\d+) trades$/u, (match) => (locale === "ru" ? formatRuCount(match[1], ["сделка", "сделки", "сделок"]) : value)],
+    [/^(\d+) warnings$/u, (match) => (locale === "ru" ? formatRuCount(match[1], ["предупреждение", "предупреждения", "предупреждений"]) : value)],
+    [/^(queued|running|completed|failed|cancelled|stopping) \/ (\d+) scenarios$/u, (match) => (
+      locale === "ru" ? `${translatePhrase(match[1] ?? "", locale)} / ${formatRuCount(match[2], ["сценарий", "сценария", "сценариев"])}` : value
+    )],
     [/^Page size (.+)$/u, (match) => (locale === "zh" ? `每页 ${match[1]}` : locale === "ru" ? `Размер страницы ${match[1]}` : value)],
     [/^Risk (Low|Medium|High|Speculative)$/u, (match) => `${translatePhrase("Risk", locale)} ${translatePhrase(match[1] ?? "", locale)}`],
     [/^(Low|Medium|High) \/ (Low|Medium|High) impact$/u, (match) => (
@@ -2251,6 +2339,33 @@ function translateDynamicText(value: string, locale: Locale): string {
   }
 
   return value;
+}
+
+function formatRuCount(rawCount: string | undefined, forms: readonly [string, string, string]): string {
+  const count = Number(rawCount ?? 0);
+  return `${rawCount ?? "0"} ${ruPlural(count, forms)}`;
+}
+
+function formatRuRecentRuns(rawCount: string | undefined): string {
+  const count = Number(rawCount ?? 0);
+  const adjective = ruPluralCategory(count) === "one" ? "недавний" : "недавних";
+  return `${rawCount ?? "0"} ${adjective} ${ruPlural(count, ["запуск", "запуска", "запусков"])}`;
+}
+
+function ruPlural(count: number, forms: readonly [string, string, string]): string {
+  const category = ruPluralCategory(count);
+  if (category === "one") return forms[0];
+  if (category === "few") return forms[1];
+  return forms[2];
+}
+
+function ruPluralCategory(count: number): "one" | "few" | "many" {
+  const abs = Math.abs(count);
+  const mod10 = abs % 10;
+  const mod100 = abs % 100;
+  if (mod10 === 1 && mod100 !== 11) return "one";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "few";
+  return "many";
 }
 
 function translateTradingText(value: string, locale: Locale): string {

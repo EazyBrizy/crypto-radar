@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MarketPairOption, StrategyConfig } from "@/features/server-state/types";
+import { I18nProvider } from "@/i18n";
 import { StrategyTestingPanel } from "./StrategyTestingPanel";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +11,10 @@ const mocks = vi.hoisted(() => ({
   cancelStrategyTest: vi.fn(),
   publishCalibration: vi.fn(),
   report: null as unknown,
+  reportQueries: [] as Array<{
+    options?: { enabled?: boolean; refetchInterval?: number | false };
+    runId: string | null;
+  }>,
   reportError: null as Error | null,
   runStrategyTest: vi.fn(),
   runs: [] as unknown[]
@@ -32,11 +37,17 @@ vi.mock("@/hooks/use-radar-queries", () => ({
     isPending: false,
     mutateAsync: mocks.runStrategyTest
   }),
-  useStrategyTestReport: () => ({
-    data: mocks.report,
-    error: mocks.reportError,
-    isLoading: false
-  }),
+  useStrategyTestReport: (
+    runId: string | null,
+    options?: { enabled?: boolean; refetchInterval?: number | false }
+  ) => {
+    mocks.reportQueries.push({ runId, options });
+    return {
+      data: mocks.report,
+      error: mocks.reportError,
+      isLoading: false
+    };
+  },
   useStrategyTestActiveRun: () => ({
     data: mocks.activeRun,
     error: null,
@@ -65,9 +76,11 @@ describe("StrategyTestingPanel", () => {
     mocks.cancelStrategyTest.mockReset();
     mocks.publishCalibration.mockReset();
     mocks.report = null;
+    mocks.reportQueries = [];
     mocks.reportError = null;
     mocks.runStrategyTest.mockReset();
     mocks.runs = [];
+    window.localStorage.removeItem("crypto-radar:locale");
   });
 
   it("renders the mode selector", () => {
@@ -76,6 +89,27 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("button", { name: "Research virtual" })).toHaveClass("active");
     expect(screen.getByRole("button", { name: "Production-like" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Forward virtual" })).toBeInTheDocument();
+  });
+
+  it("localizes strategy testing count badges through the DOM localizer", async () => {
+    window.localStorage.setItem("crypto-radar:locale", "ru");
+    mocks.runs = [
+      strategyTestRun({
+        run_id: "77777777-7777-4777-8777-777777777777",
+        status: "completed"
+      })
+    ];
+
+    render(
+      <I18nProvider>
+        <StrategyTestingPanel availablePairs={[marketPair()]} strategyConfigs={[strategyConfig()]} />
+      </I18nProvider>
+    );
+
+    expect(await screen.findByText("3 сценария")).toBeInTheDocument();
+    expect(screen.getByText("1 недавний запуск")).toBeInTheDocument();
+    expect(screen.queryByText("3 scenarios")).not.toBeInTheDocument();
+    expect(screen.queryByText("1 recent runs")).not.toBeInTheDocument();
   });
 
   it("disables Run when the matrix is missing", () => {
@@ -250,6 +284,50 @@ describe("StrategyTestingPanel", () => {
     expect(within(funnel).getByText("9 candidates")).toBeInTheDocument();
     expect(within(funnel).getByText("8 touched")).toBeInTheDocument();
     expect(within(funnel).getByText("2 no entry")).toBeInTheDocument();
+  });
+
+  it("does not request a report while the selected run is still active", async () => {
+    const user = userEvent.setup();
+    const runningRun = strategyTestRun({
+      run_id: "55555555-5555-4555-8555-555555555555",
+      status: "running"
+    });
+    mocks.runs = [runningRun];
+
+    renderPanel();
+
+    const notice = screen.getByLabelText("Active strategy test run");
+    await user.click(within(notice).getByRole("button", { name: "Open report" }));
+
+    const selectedReportQuery = mocks.reportQueries.find((query) => query.runId === runningRun.run_id);
+    expect(selectedReportQuery?.options).toEqual({
+      enabled: false,
+      refetchInterval: false
+    });
+  });
+
+  it("does not request a report for an active run before it appears in the runs list", async () => {
+    const user = userEvent.setup();
+    const activeRun = strategyTestRun({
+      run_id: "66666666-6666-4666-8666-666666666666",
+      status: "running"
+    });
+    mocks.activeRun = activeRunState({
+      active_run: activeRun,
+      can_run: false,
+      is_stale: false
+    });
+
+    renderPanel();
+
+    const notice = screen.getByLabelText("Active strategy test run");
+    await user.click(within(notice).getByRole("button", { name: "Open report" }));
+
+    const selectedReportQuery = mocks.reportQueries.find((query) => query.runId === activeRun.run_id);
+    expect(selectedReportQuery?.options).toEqual({
+      enabled: false,
+      refetchInterval: false
+    });
   });
 });
 

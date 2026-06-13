@@ -38,6 +38,7 @@ from app.services.pending_entry import (
     pending_entry_service,
 )
 from app.services.pending_entry_events import PendingEntryUpdatePublisher, pending_entry_update_publisher
+from app.services.signal_execution_gate import signal_execution_gate_service
 from app.services.signal_risk_reward import StrategyRiskRewardBlocked
 from app.services.signal_service import signal_service
 from app.services.trade_plan_fingerprint import (
@@ -617,7 +618,12 @@ def _execution_signal_from_accepted_snapshot(
     ):
         if accepted_signal.get(field_name) is not None:
             updates[field_name] = accepted_signal[field_name]
-    return signal.model_copy(update=updates)
+    execution_signal = signal.model_copy(update=updates)
+    if signal.execution_gate is not None:
+        execution_signal = execution_signal.model_copy(
+            update={"execution_gate": signal_execution_gate_service.evaluate(execution_signal)}
+        )
+    return execution_signal
 
 
 def _accepted_trade_plan_for_execution(intent: PendingEntryIntentRead) -> TradePlan:

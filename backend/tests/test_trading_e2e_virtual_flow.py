@@ -29,7 +29,13 @@ from app.schemas.risk import (
     TakeProfitTarget,
     TrailingStopPlan,
 )
-from app.schemas.signal import RadarSignal
+from app.schemas.signal import (
+    RadarSignal,
+    SignalEdgeSnapshot,
+    SignalExecutionGateReason,
+    SignalExecutionGateSnapshot,
+    SignalTriggerSnapshot,
+)
 from app.schemas.trade import ManualConfirmRequest, RealTrade, TradeJournalEntry, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.market_scanner import MarketScanner
@@ -180,6 +186,39 @@ class TradingE2EVirtualFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(account.realized_pnl, closed_trade.realized_pnl)
         self.assertAlmostEqual(account.balance, 100.0 + closed_trade.realized_pnl)
         self.assertTrue(any(event.get("type") == "trade.closed" for event in self.realtime_broker.events))
+
+    def test_pending_fill_recomputes_stale_execution_gate_before_virtual_confirm(self) -> None:
+        accepted_signal = _signal().model_copy(
+            update={
+                "risk_reward": 3.0,
+                "selected_rr": 3.0,
+                "selected_rr_target": "final",
+                "min_rr_ratio": 2.0,
+                "edge": _positive_edge(),
+                "trigger": _confirmed_entry_trigger(),
+                "execution_gate": _stale_blocked_gate(),
+            }
+        )
+        self.signals.signal = accepted_signal
+        intent = self._arm_pending_entry()
+
+        results = self.trigger_service.process_market_tick(
+            "bybit",
+            "BTCUSDT",
+            _market_tick(price=100.5, timestamp=1_780_000_060),
+        )
+        filled_intent = self.pending_repository.get_by_id(intent.id)
+        opened_trade = self.virtual_trading.get_virtual_trade(str(VIRTUAL_TRADE_ID))
+
+        self.assertEqual(results[0].status, "filled")
+        self.assertEqual(filled_intent.status if filled_intent else None, "filled")
+        self.assertIsNotNone(opened_trade)
+        assert opened_trade is not None
+        self.assertEqual(opened_trade.status, "open")
+        self.assertEqual(opened_trade.pending_entry_intent_id, str(intent.id))
+        self.assertEqual(opened_trade.accepted_trade_plan_hash, intent.accepted_trade_plan_hash)
+        self.assertEqual(opened_trade.stop_loss, 95.0)
+        self.assertEqual(opened_trade.take_profit, [110.0])
 
     def test_non_material_signal_update_does_not_require_reconfirmation(self) -> None:
         intent = self._arm_pending_entry()
@@ -641,6 +680,53 @@ def _market_tick(*, price: float, timestamp: int) -> MarketData:
         price=price,
         volume=1.0,
         timestamp=timestamp,
+    )
+
+
+def _positive_edge() -> SignalEdgeSnapshot:
+    return SignalEdgeSnapshot(
+        status="positive",
+        sample_size=80,
+        min_sample_size=50,
+        expectancy_after_costs_r=0.18,
+        profit_factor=1.4,
+        confidence_score=0.8,
+        source="outcome",
+    )
+
+
+def _confirmed_entry_trigger() -> SignalTriggerSnapshot:
+    return SignalTriggerSnapshot(
+        passed=True,
+        trigger_type="pullback_touch",
+        price=100.5,
+        candle_state="closed",
+        confirmed_at=TEST_TRIGGER_NOW,
+        metadata={
+            "confirmed_on_closed_candle": True,
+            "trigger_candle_state": "closed",
+            "source": "pending_entry_test",
+        },
+    )
+
+
+def _stale_blocked_gate() -> SignalExecutionGateSnapshot:
+    return SignalExecutionGateSnapshot(
+        status="blocked",
+        feed_kind="blocked",
+        can_notify=False,
+        can_enter_now=False,
+        can_arm_pending=False,
+        can_show_in_execution_feed=False,
+        reasons=[
+            SignalExecutionGateReason(
+                code="stale_pending_blocker",
+                severity="blocker",
+                source="test",
+                message="Old pending gate blocker should not survive entry touch.",
+            )
+        ],
+        metadata={"status": "wait_for_pullback"},
     )
 
 

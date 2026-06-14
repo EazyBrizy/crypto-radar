@@ -465,6 +465,44 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(data["disabled_reason_code"], None)
         self.assertEqual(data["active_run"]["run_id"], str(active.run_id))
 
+    def test_active_run_endpoint_allows_orphaned_stopping_run_after_cancel_refresh(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        cancel_requested_at = datetime.now(timezone.utc)
+        stale_started_at = cancel_requested_at - timedelta(hours=1)
+        active = StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="stopping",
+            test_type="historical_backtest",
+            requested_matrix={"user_id": "demo_user", "scenario_count": 1},
+            summary={},
+            runtime_state={
+                "last_error": None,
+                "last_progress_at": cancel_requested_at.isoformat(),
+            },
+            created_at=stale_started_at,
+            started_at=stale_started_at,
+            last_heartbeat_at=cancel_requested_at,
+        )
+        store.upsert(active)
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            response = client.get("/api/v1/strategy-tests/runs/active?user_id=demo_user")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["can_run"])
+        self.assertTrue(data["is_stale"])
+        self.assertEqual(data["disabled_reason_code"], None)
+        self.assertEqual(data["active_run"]["run_id"], str(active.run_id))
+
     def test_active_run_endpoint_blocks_when_stopping_run_is_fresh(self) -> None:
         store = _EphemeralStrategyTestRunStore()
         heartbeat = datetime.now(timezone.utc)
@@ -529,6 +567,37 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "stopping")
         self.assertEqual(store.get_run(active.run_id).run.status, "stopping")  # type: ignore[union-attr]
+
+    def test_cancel_run_endpoint_marks_stale_running_run_cancelled(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        stale_heartbeat = _now() - timedelta(hours=1)
+        active = StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="running",
+            test_type="historical_backtest",
+            requested_matrix={"user_id": "demo_user", "scenario_count": 1},
+            summary={},
+            runtime_state={},
+            created_at=stale_heartbeat,
+            started_at=stale_heartbeat,
+            last_heartbeat_at=stale_heartbeat,
+        )
+        store.upsert(active)
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            response = client.post(f"/api/v1/strategy-tests/runs/{active.run_id}/cancel")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "cancelled")
+        self.assertEqual(store.get_run(active.run_id).run.status, "cancelled")  # type: ignore[union-attr]
 
     def test_signal_events_and_funnel_endpoints_return_run_signal_funnel(self) -> None:
         store = _EphemeralStrategyTestRunStore()

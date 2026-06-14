@@ -361,15 +361,37 @@ class StrategyTestingService:
         if detail.run.status not in {"queued", "running", "stopping"}:
             raise ValueError(f"Strategy test run cannot be cancelled from status {detail.run.status}")
         if detail.run.status == "running":
+            if _is_stale_run(detail.run):
+                self._run_store.update_runtime_state(
+                    run_id,
+                    {
+                        "phase": "cancelled",
+                        "last_progress_at": _now_iso(),
+                        "last_error": None,
+                    },
+                )
+                return self._run_store.mark_cancelled(run_id).run
             self._run_store.update_runtime_state(
                 run_id,
                 {
+                    "phase": "stopping",
+                    "cancel_requested_at": _now_iso(),
                     "last_progress_at": _now_iso(),
                     "last_error": None,
                 },
             )
             return self._run_store.mark_stopping(run_id).run
         if detail.run.status == "stopping":
+            if _is_stale_run(detail.run):
+                self._run_store.update_runtime_state(
+                    run_id,
+                    {
+                        "phase": "cancelled",
+                        "last_progress_at": _now_iso(),
+                        "last_error": None,
+                    },
+                )
+                return self._run_store.mark_cancelled(run_id).run
             return detail.run
         self._run_store.update_runtime_state(
             run_id,
@@ -927,8 +949,19 @@ def _run_sort_time(run: StrategyTestRunResponse) -> datetime:
 def _is_stale_run(run: StrategyTestRunResponse) -> bool:
     if run.status not in STRATEGY_TEST_ACTIVE_STATUSES:
         return False
-    heartbeat_at = run.last_heartbeat_at or run.started_at or run.created_at
+    heartbeat_at = _stale_reference_time(run)
     if heartbeat_at is None:
         return False
     age_seconds = (datetime.now(timezone.utc) - heartbeat_at.astimezone(timezone.utc)).total_seconds()
     return age_seconds > STRATEGY_TEST_STALE_THRESHOLD_SECONDS
+
+
+def _stale_reference_time(run: StrategyTestRunResponse) -> datetime | None:
+    if run.status == "stopping" and not _has_worker_runtime_phase(run):
+        return run.started_at or run.created_at
+    return run.last_heartbeat_at or run.started_at or run.created_at
+
+
+def _has_worker_runtime_phase(run: StrategyTestRunResponse) -> bool:
+    phase = run.runtime_state.get("phase")
+    return isinstance(phase, str) and bool(phase.strip())

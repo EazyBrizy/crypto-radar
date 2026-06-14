@@ -141,11 +141,17 @@ class _E2ERunStore:
             last_heartbeat_at=NOW + timedelta(seconds=5),
         )
 
-    def mark_failed(self, run_id: UUID, error: str) -> StrategyTestRunDetailResponse:
+    def mark_failed(
+        self,
+        run_id: UUID,
+        error: str,
+        summary: dict[str, Any] | None = None,
+    ) -> StrategyTestRunDetailResponse:
         return self._update_run(
             run_id,
             status="failed",
             error=error,
+            summary=dict(summary or {}),
             finished_at=NOW + timedelta(seconds=5),
             last_heartbeat_at=NOW + timedelta(seconds=5),
         )

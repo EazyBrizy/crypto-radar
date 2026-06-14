@@ -79,13 +79,38 @@ class StrategyTestMatrixResult:
         summary_signals_seen = sum(_int_from_summary(item, "signals_seen") for item in self.scenario_summaries)
         signals_count = len(self.signal_events) or summary_signals_seen
         signals_seen = signals_count
-        execution_candidates = sum(1 for event in self.signal_events if event.execution_candidate)
-        entry_touched = sum(1 for event in self.signal_events if event.entry_touched)
-        filled = sum(1 for event in self.signal_events if event.filled)
-        closed = sum(1 for event in self.signal_events if event.closed)
+        execution_candidates = (
+            sum(1 for event in self.signal_events if event.execution_candidate)
+            if self.signal_events
+            else sum(_int_from_summary(item, "execution_candidates") for item in self.scenario_summaries)
+        )
+        pending_armed = (
+            sum(1 for event in self.signal_events if _event_has_stage(event, "pending_armed"))
+            if self.signal_events
+            else sum(_int_from_summary(item, "pending_armed") for item in self.scenario_summaries)
+        )
+        entry_touched = (
+            sum(1 for event in self.signal_events if event.entry_touched)
+            if self.signal_events
+            else sum(_summary_touched(item) for item in self.scenario_summaries)
+        )
+        filled = (
+            sum(1 for event in self.signal_events if event.filled)
+            if self.signal_events
+            else sum(_int_from_summary(item, "filled") for item in self.scenario_summaries)
+        )
+        closed = (
+            sum(1 for event in self.signal_events if event.closed)
+            if self.signal_events
+            else sum(_int_from_summary(item, "closed") for item in self.scenario_summaries)
+        )
         wins = sum(1 for event in self.signal_events if _normalized_outcome(event.outcome) == "win")
         losses = sum(1 for event in self.signal_events if _normalized_outcome(event.outcome) == "loss")
-        no_entry = sum(1 for event in self.signal_events if event.no_entry)
+        no_entry = (
+            sum(1 for event in self.signal_events if event.no_entry)
+            if self.signal_events
+            else sum(_int_from_summary(item, "no_entry") for item in self.scenario_summaries)
+        )
         risk_rejections = (
             sum(1 for event in self.signal_events if event.risk_rejected)
             if self.signal_events
@@ -105,6 +130,8 @@ class StrategyTestMatrixResult:
             "signals_seen": signals_seen,
             "signals_count": signals_count,
             "execution_candidates": execution_candidates,
+            "pending_armed": pending_armed,
+            "touched": entry_touched,
             "entry_touched": entry_touched,
             "filled": filled,
             "closed": closed,
@@ -346,6 +373,20 @@ def _int_from_summary(summary: dict[str, Any], key: str) -> int:
         return int(summary.get(key) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _summary_touched(summary: dict[str, Any]) -> int:
+    touched = _int_from_summary(summary, "touched")
+    if touched:
+        return touched
+    return _int_from_summary(summary, "entry_touched")
+
+
+def _event_has_stage(event: StrategyTestSignalEvent, stage: str) -> bool:
+    stages = event.metadata.get("funnel_stages") if isinstance(event.metadata, dict) else None
+    if isinstance(stages, list):
+        return stage in {str(item) for item in stages}
+    return event.funnel_stage == stage
 
 
 def _slowest_scenarios(scenario_summaries: Sequence[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:

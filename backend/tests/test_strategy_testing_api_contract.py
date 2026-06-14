@@ -685,9 +685,20 @@ class _EphemeralStrategyTestRunStore:
         self._runs[run_id] = detail
         return detail
 
-    def mark_failed(self, run_id: UUID, error: str) -> StrategyTestRunDetailResponse:
+    def mark_failed(
+        self,
+        run_id: UUID,
+        error: str,
+        summary: dict[str, Any] | None = None,
+    ) -> StrategyTestRunDetailResponse:
         _ = error
-        return self._mark(run_id, "failed")
+        detail = self._mark(run_id, "failed")
+        if summary is None:
+            return detail
+        updated = detail.run.model_copy(update={"summary": summary})
+        detail = StrategyTestRunDetailResponse(run=updated)
+        self._runs[run_id] = detail
+        return detail
 
     def mark_stopping(self, run_id: UUID) -> StrategyTestRunDetailResponse:
         return self._mark(run_id, "stopping")

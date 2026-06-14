@@ -14,7 +14,8 @@ import type {
   StrategyTestMetricValue,
   StrategyTestReport as StrategyTestReportData,
   StrategyTestReportSection,
-  StrategyTestRunResponse
+  StrategyTestRunResponse,
+  StrategyTestRunSummary
 } from "./types";
 
 interface StrategyTestReportProps {
@@ -51,12 +52,14 @@ export function StrategyTestReport({
   report,
   run
 }: StrategyTestReportProps) {
-  const summaryMetrics = report?.summary_metrics ?? summaryMetricsFromRun(run);
+  const fallbackSummary = report?.summary ?? summaryFromRun(run);
+  const summaryMetrics = report?.summary_metrics?.length ? report.summary_metrics : summaryMetricsFromSummary(fallbackSummary);
   const adjustments = report?.candidate_adjustments ?? [];
   const calibrationRunId = report?.run_id ?? run?.run_id ?? null;
   const calibrationStatus = report?.status ?? run?.status ?? null;
   const canPublishCalibration = Boolean(onPublishCalibration && calibrationRunId && calibrationStatus === "completed");
   const activeRunWithoutReport = Boolean(run && ACTIVE_RUN_STATUSES.has(run.status) && !report);
+  const selectedRunWithoutReport = Boolean(run && !report && !activeRunWithoutReport);
 
   return (
     <section className="strategy-test-report-panel strategy-test-report-full" aria-live="polite">
@@ -91,8 +94,8 @@ export function StrategyTestReport({
       {!loading && !error ? (
         <>
           <div className="strategy-test-report-strip">
-            <Badge tone="blue">{metricNumber(report?.summary.signals_count ?? run?.summary.signals_count)} signals</Badge>
-            <Badge tone="blue">{report?.trades_count ?? metricNumber(run?.summary.trades_count)} trades</Badge>
+            <Badge tone="blue">{metricNumber(fallbackSummary.signals_count ?? fallbackSummary.signals_seen)} signals</Badge>
+            <Badge tone="blue">{report?.trades_count ?? metricNumber(fallbackSummary.trades_count)} trades</Badge>
             <Badge tone={report?.warnings?.length ? "yellow" : "green"}>{report?.warnings?.length ?? 0} warnings</Badge>
             <Badge tone={report?.rejections?.length ? "red" : "neutral"}>{report?.rejections?.length ?? 0} rejections</Badge>
             {report ? <Badge tone="purple">{report.sections.length} sections</Badge> : null}
@@ -122,12 +125,49 @@ export function StrategyTestReport({
               <TradeListSection report={report} />
               <CandidateAdjustmentsSection adjustments={adjustments} />
             </div>
-          ) : activeRunWithoutReport ? null : (
+          ) : activeRunWithoutReport ? null : selectedRunWithoutReport && run ? (
+            <RunSummaryFallback run={run} summary={fallbackSummary} />
+          ) : (
             <div className="empty-state compact-empty">No report selected</div>
           )}
         </>
       ) : null}
     </section>
+  );
+}
+
+function RunSummaryFallback({
+  run,
+  summary
+}: {
+  run: StrategyTestRunResponse;
+  summary: StrategyTestRunSummary;
+}) {
+  const message = fallbackReportMessage(run, summary);
+  const completed = summaryNumberValue(summary, "completed_scenarios");
+  const total = summaryNumberValue(summary, "scenario_count") ?? requestedScenarioCount(run);
+  const failed = summaryNumberValue(summary, "failed_scenarios");
+  return (
+    <div className="strategy-test-report-sections">
+      {message ? <p className={run.status === "failed" ? "form-error" : "empty-state compact-empty"}>{message}</p> : null}
+      {run.error ? <p className="form-error">{run.error}</p> : null}
+      <ReportSection name={run.status === "completed" ? "Summary" : "Partial summary"}>
+        <div className="strategy-test-summary-grid" aria-label="Strategy test run summary">
+          {summaryItem("Status", run.status)}
+          {summaryItem("Scenarios", total != null ? `${completed ?? 0} / ${total}` : completed)}
+          {summaryItem("Failed scenarios", failed ?? 0)}
+          {summaryItem("Signals", summaryNumberValue(summary, "signals_count") ?? summaryNumberValue(summary, "signals_seen") ?? 0)}
+          {summaryItem("Execution candidates", summaryNumberValue(summary, "execution_candidates") ?? 0)}
+          {summaryItem("Pending armed", summaryNumberValue(summary, "pending_armed") ?? 0)}
+          {summaryItem("Touched", summaryNumberValue(summary, "touched") ?? summaryNumberValue(summary, "entry_touched") ?? 0)}
+          {summaryItem("Filled", summaryNumberValue(summary, "filled") ?? 0)}
+          {summaryItem("Closed", summaryNumberValue(summary, "closed") ?? 0)}
+          {summaryItem("No entry", summaryNumberValue(summary, "no_entry") ?? 0)}
+          {summaryItem("Risk rejections", summaryNumberValue(summary, "risk_rejections") ?? 0)}
+          {summaryItem("Execution rejections", summaryNumberValue(summary, "execution_rejections") ?? 0)}
+        </div>
+      </ReportSection>
+    </div>
   );
 }
 
@@ -368,12 +408,35 @@ function summaryItem(label: string, value: unknown) {
   );
 }
 
-function summaryMetricsFromRun(run: StrategyTestRunResponse | null): StrategyTestMetric[] {
-  if (!run) return [];
-  return Object.entries(run.summary)
+function summaryFromRun(run: StrategyTestRunResponse | null): StrategyTestRunSummary {
+  if (!run) return {};
+  const partialSummary = run.runtime_state.partial_summary;
+  const partial = isRecord(partialSummary) ? partialSummary : {};
+  return {
+    ...partial,
+    ...run.summary
+  } as StrategyTestRunSummary;
+}
+
+function summaryMetricsFromSummary(summary: StrategyTestRunSummary): StrategyTestMetric[] {
+  return Object.entries(summary)
     .filter((entry): entry is [string, StrategyTestMetricValue] => isMetricValue(entry[1]))
     .slice(0, 9)
     .map(([name, value]) => ({ name, value }));
+}
+
+function fallbackReportMessage(run: StrategyTestRunResponse, summary: StrategyTestRunSummary): string {
+  if (run.status === "failed") return "Report failed";
+  if (run.status === "cancelled") return "Report cancelled with partial summary";
+  if (run.status === "completed" && (summaryNumberValue(summary, "trades_count") ?? 0) === 0) {
+    return "No trades, but test completed";
+  }
+  return "Report is not final yet";
+}
+
+function summaryNumberValue(summary: StrategyTestRunSummary, key: keyof StrategyTestRunSummary): number | null {
+  const value = summary[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function findSection(report: StrategyTestReportData, code: string): StrategyTestReportSection | null {

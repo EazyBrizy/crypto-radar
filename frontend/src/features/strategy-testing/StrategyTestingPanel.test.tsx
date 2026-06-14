@@ -81,9 +81,14 @@ vi.mock("@/hooks/use-radar-queries", () => ({
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: () => ({
-    getTotalSize: () => 128,
-    getVirtualItems: () => [],
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getTotalSize: () => count * 70,
+    getVirtualItems: () => Array.from({ length: count }, (_value, index) => ({
+      index,
+      key: index,
+      size: 70,
+      start: index * 70
+    })),
     measureElement: vi.fn()
   })
 }));
@@ -391,6 +396,70 @@ describe("StrategyTestingPanel", () => {
     expect(within(progress).getByText("15m")).toBeInTheDocument();
     expect(screen.queryByText("No report selected")).not.toBeInTheDocument();
     expect(screen.queryByText("No summary metrics")).not.toBeInTheDocument();
+  });
+
+  it("renders selected completed zero-trade run instead of an empty report state", async () => {
+    const user = userEvent.setup();
+    const completedRun = strategyTestRun({
+      run_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      status: "completed",
+      summary: {
+        completed_scenarios: 1,
+        execution_candidates: 0,
+        failed_scenarios: 0,
+        filled: 0,
+        no_entry: 0,
+        scenario_count: 1,
+        signals_count: 0,
+        signals_seen: 0,
+        trades_count: 0
+      },
+      test_type: "historical_backtest"
+    });
+    mocks.runs = [completedRun];
+    mocks.report = null;
+
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: `Open report for run ${completedRun.run_id}` }));
+
+    expect(screen.getByText("No trades, but test completed")).toBeInTheDocument();
+    expect(screen.queryByText("No report selected")).not.toBeInTheDocument();
+    const selectedReportQuery = mocks.reportQueries.find((query) => query.runId === completedRun.run_id);
+    expect(selectedReportQuery?.options).toEqual({
+      enabled: true,
+      refetchInterval: false
+    });
+  });
+
+  it("renders selected failed run error instead of an empty report state", async () => {
+    const user = userEvent.setup();
+    const failedRun = strategyTestRun({
+      error: "ClickHouse write failed",
+      run_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      runtime_state: {
+        partial_summary: {
+          completed_scenarios: 1,
+          failed_scenarios: 1,
+          scenario_count: 2,
+          signals_seen: 5,
+          trades_count: 0
+        }
+      },
+      status: "failed",
+      summary: {},
+      test_type: "historical_backtest"
+    });
+    mocks.runs = [failedRun];
+    mocks.report = null;
+
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: `Open report for run ${failedRun.run_id}` }));
+
+    expect(screen.getByText("Report failed")).toBeInTheDocument();
+    expect(screen.getAllByText("ClickHouse write failed").length).toBeGreaterThan(0);
+    expect(screen.queryByText("No report selected")).not.toBeInTheDocument();
   });
 
   it("polls active run detail while a historical run is active", () => {

@@ -154,13 +154,20 @@ class StrategyTestReportBuilder:
 
     def _build_report(self, run_detail: StrategyTestRunDetailResponse) -> StrategyTestReport:
         run = run_detail.run
-        trades = self._analytics_store.list_trades(run.run_id)
-        signal_events = _list_signal_events(self._analytics_store, run.run_id)
+        analytics_warnings: list[str] = []
+        trades = _list_trades_or_empty(self._analytics_store, run.run_id, analytics_warnings)
+        signal_events = _list_signal_events_or_empty(self._analytics_store, run.run_id, analytics_warnings)
+        source_summary = _run_summary_source(run_detail)
         metric_results = build_report_metric_results(
             trades,
             signal_events=signal_events,
             registry=self._metric_registry,
         )
+        if not trades and not signal_events and source_summary:
+            metric_results = _merge_metric_results(
+                _summary_metric_results(source_summary),
+                metric_results,
+            )
         metric_sections = metric_results_to_summary_sections(metric_results)
         summary_metrics = metric_sections["summary_metrics"]
         grouped_metrics = metric_sections["grouped_metrics"]
@@ -170,8 +177,16 @@ class StrategyTestReportBuilder:
             mode=_run_mode(run.requested_matrix),
         )
         warnings = _report_warnings(metric_results, trades)
+        warnings = _dedupe_strings([*warnings, *analytics_warnings, *_summary_warning_codes(source_summary)])
         rejections = _report_rejections(trades)
-        summary = _build_summary(run_detail, trades, metric_results, signal_events)
+        summary = _build_summary(
+            run_detail,
+            trades,
+            metric_results,
+            signal_events,
+            source_summary=source_summary,
+            analytics_warnings=analytics_warnings,
+        )
         sections = _build_sections(
             trades=trades,
             signal_events=signal_events,
@@ -195,7 +210,7 @@ class StrategyTestReportBuilder:
             generated_at=datetime.now(timezone.utc),
             summary_metrics=summary_metrics,
             grouped_metrics=grouped_metrics,
-            trades_count=len(trades),
+            trades_count=_summary_int(summary, "trades_count", len(trades)),
             warnings=warnings,
             rejections=rejections,
         )
@@ -336,14 +351,85 @@ def build_signal_funnel_response(
     )
 
 
-def _list_signal_events(
+def _signal_funnel_from_summary(
+    run_id: UUID,
+    summary: dict[str, Any],
+) -> StrategyTestFunnelResponse:
+    nested = summary.get("signal_funnel")
+    nested_summary = nested if isinstance(nested, dict) else {}
+    signals_count = _summary_int(nested_summary, "signals_count", _summary_int(summary, "signals_count", _summary_int(summary, "signals_seen", 0)))
+    execution_candidates = _summary_int(
+        nested_summary,
+        "execution_candidates",
+        _summary_int(summary, "execution_candidates", 0),
+    )
+    entry_touched = _summary_int(
+        nested_summary,
+        "entry_touched",
+        _summary_int(summary, "entry_touched", _summary_int(summary, "touched", 0)),
+    )
+    filled = _summary_int(nested_summary, "filled", _summary_int(summary, "filled", 0))
+    closed = _summary_int(nested_summary, "closed", _summary_int(summary, "closed", 0))
+    wins = _summary_int(nested_summary, "wins", _summary_int(summary, "wins", 0))
+    losses = _summary_int(nested_summary, "losses", _summary_int(summary, "losses", 0))
+    no_entry = _summary_int(nested_summary, "no_entry", _summary_int(summary, "no_entry", 0))
+    risk_rejected = _summary_int(nested_summary, "risk_rejected", _summary_int(summary, "risk_rejections", 0))
+    execution_rejected = _summary_int(
+        nested_summary,
+        "execution_rejected",
+        _summary_int(summary, "execution_rejections", 0),
+    )
+    stages = _summary_stages(summary, nested_summary, signals_count=signals_count)
+    return StrategyTestFunnelResponse(
+        run_id=run_id,
+        signals_count=signals_count,
+        execution_candidates=execution_candidates,
+        entry_touched=entry_touched,
+        filled=filled,
+        closed=closed,
+        wins=wins,
+        losses=losses,
+        no_entry=no_entry,
+        risk_rejected=risk_rejected,
+        execution_rejected=execution_rejected,
+        entry_touch_rate=_summary_float(nested_summary, "entry_touch_rate", _safe_rate(entry_touched, signals_count)),
+        no_entry_rate=_summary_float(nested_summary, "no_entry_rate", _safe_rate(no_entry, signals_count)),
+        risk_rejection_rate=_summary_float(nested_summary, "risk_rejection_rate", _safe_rate(risk_rejected, signals_count)),
+        execution_rejection_rate=_summary_float(
+            nested_summary,
+            "execution_rejection_rate",
+            _safe_rate(execution_rejected, execution_candidates),
+        ),
+        false_signal_rate=_summary_float(nested_summary, "false_signal_rate", _safe_rate(no_entry, signals_count)),
+        stages=stages,
+    )
+
+
+def _list_trades_or_empty(
     analytics_store: ReportAnalyticsStore,
     run_id: UUID,
+    warnings: list[str],
+) -> list[StrategyTestTrade]:
+    try:
+        return analytics_store.list_trades(run_id)
+    except Exception as exc:
+        warnings.append(f"analytics_trades_unavailable:{exc}")
+        return []
+
+
+def _list_signal_events_or_empty(
+    analytics_store: ReportAnalyticsStore,
+    run_id: UUID,
+    warnings: list[str],
 ) -> list[StrategyTestSignalEvent]:
     list_events = getattr(analytics_store, "list_signal_events", None)
     if not callable(list_events):
         return []
-    return list_events(run_id, limit=10000, offset=0)
+    try:
+        return list_events(run_id, limit=10000, offset=0)
+    except Exception as exc:
+        warnings.append(f"analytics_signal_events_unavailable:{exc}")
+        return []
 
 
 def build_candidate_adjustments(
@@ -424,21 +510,93 @@ def metric_result_to_dict(result: MetricResult) -> dict[str, Any]:
     }
 
 
+def _summary_metric_results(summary: dict[str, Any]) -> list[MetricResult]:
+    if not summary:
+        return []
+    signals_count = _summary_int(summary, "signals_count", _summary_int(summary, "signals_seen", 0))
+    trades_count = _summary_int(summary, "trades_count", 0)
+    execution_candidates = _summary_int(summary, "execution_candidates", 0)
+    touched = _summary_int(summary, "entry_touched", _summary_int(summary, "touched", 0))
+    no_entry = _summary_int(summary, "no_entry", 0)
+    risk_rejections = _summary_int(summary, "risk_rejections", 0)
+    execution_rejections = _summary_int(summary, "execution_rejections", 0)
+    metric_values: list[tuple[str, str, float | int | None, int]] = [
+        ("signals_count", "Signals Count", signals_count, signals_count),
+        ("trades_count", "Trades Count", trades_count, trades_count),
+        ("entry_touch_rate", "Entry Touch Rate", _summary_float(summary, "entry_touch_rate", _safe_rate(touched, signals_count)), signals_count),
+        ("no_entry_rate", "No Entry Rate", _summary_float(summary, "no_entry_rate", _safe_rate(no_entry, signals_count)), signals_count),
+        ("risk_rejection_rate", "Risk Rejection Rate", _safe_rate(risk_rejections, signals_count), signals_count),
+        (
+            "execution_rejection_rate",
+            "Execution Rejection Rate",
+            _safe_rate(execution_rejections, execution_candidates),
+            execution_candidates,
+        ),
+    ]
+    return [
+        MetricResult(
+            code=code,
+            label=label,
+            value=value,
+            sample_size=max(0, sample_size),
+            group={"all": "all"},
+            warnings=[],
+        )
+        for code, label, value, sample_size in metric_values
+    ]
+
+
+def _merge_metric_results(
+    preferred: Sequence[MetricResult],
+    fallback: Sequence[MetricResult],
+) -> list[MetricResult]:
+    merged: list[MetricResult] = []
+    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+    for result in [*preferred, *fallback]:
+        key = (result.code, tuple(sorted(result.group.items())))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(result)
+    return merged
+
+
 def _build_summary(
     run_detail: StrategyTestRunDetailResponse,
     trades: Sequence[StrategyTestTrade],
     metrics: Sequence[MetricResult],
     signal_events: Sequence[StrategyTestSignalEvent],
+    *,
+    source_summary: dict[str, Any] | None = None,
+    analytics_warnings: Sequence[str] = (),
 ) -> dict[str, Any]:
     run = run_detail.run
     requested = run.requested_matrix
     all_metrics = _metric_map_for_group(metrics, {"all": "all"})
-    funnel = build_signal_funnel_response(run.run_id, signal_events)
-    return {
+    source = source_summary or {}
+    funnel = (
+        build_signal_funnel_response(run.run_id, signal_events)
+        if signal_events
+        else _signal_funnel_from_summary(run.run_id, source)
+    )
+    trades_count = _metric_value(all_metrics, "trades_count")
+    signals_seen = (
+        _summary_int(source, "signals_seen", funnel.signals_count)
+        if not signal_events
+        else funnel.signals_count
+    )
+    signals_count = (
+        _summary_int(source, "signals_count", funnel.signals_count)
+        if not signal_events
+        else funnel.signals_count
+    )
+    summary = {
         "run_id": str(run.run_id),
         "status": run.status,
         "mode": _run_mode(requested),
-        "scenario_count": requested.get("scenario_count"),
+        "scenario_count": _summary_value(source, "scenario_count", requested.get("scenario_count")),
+        "completed_scenarios": _summary_int(source, "completed_scenarios", 0),
+        "failed_scenarios": _summary_int(source, "failed_scenarios", 0),
         "strategies": list(_list_value(requested.get("strategies"))),
         "pairs": list(_list_value(requested.get("pairs"))),
         "timeframes": list(_list_value(requested.get("timeframes"))),
@@ -446,8 +604,11 @@ def _build_summary(
         "end_at": requested.get("end_at"),
         "started_at": run.started_at,
         "finished_at": run.finished_at,
-        "signals_count": funnel.signals_count,
+        "signals_seen": signals_seen,
+        "signals_count": signals_count,
         "execution_candidates": funnel.execution_candidates,
+        "pending_armed": _summary_int(source, "pending_armed", 0),
+        "touched": funnel.entry_touched,
         "entry_touched": funnel.entry_touched,
         "filled": funnel.filled,
         "closed": funnel.closed,
@@ -459,7 +620,7 @@ def _build_summary(
         "false_signal_rate": funnel.false_signal_rate,
         "signal_funnel": funnel.model_dump(mode="json"),
         "total_trades": len(trades),
-        "trades_count": _metric_value(all_metrics, "trades_count"),
+        "trades_count": trades_count if trades_count is not None else _summary_int(source, "trades_count", len(trades)),
         "winrate": _metric_value(all_metrics, "winrate"),
         "expectancy_r": _metric_value(all_metrics, "expectancy_r"),
         "expectancy_after_costs_r": _metric_value(all_metrics, "expectancy_after_costs_r"),
@@ -473,6 +634,22 @@ def _build_summary(
             funnel.execution_rejected if signal_events else sum(1 for trade in trades if trade.execution_rejected)
         ),
     }
+    if not signal_events and source:
+        summary["risk_rejections"] = _summary_int(source, "risk_rejections", summary["risk_rejections"])
+        summary["execution_rejections"] = _summary_int(
+            source,
+            "execution_rejections",
+            summary["execution_rejections"],
+        )
+    if run.error:
+        summary["error"] = run.error
+    elif isinstance(run.runtime_state.get("last_error"), str) and run.runtime_state["last_error"]:
+        summary["error"] = run.runtime_state["last_error"]
+    if source and run.status in {"failed", "cancelled", "running", "stopping"}:
+        summary["partial_summary"] = dict(source)
+    if analytics_warnings:
+        summary["analytics_warnings"] = list(analytics_warnings)
+    return summary
 
 
 def _build_sections(
@@ -548,8 +725,16 @@ def _build_sections(
             code="rejection_analysis",
             name="Rejection analysis",
             summary={
-                "risk_rejections": sum(1 for trade in trades if trade.risk_rejected),
-                "execution_rejections": sum(1 for trade in trades if trade.execution_rejected),
+                "risk_rejections": _summary_int(
+                    summary,
+                    "risk_rejections",
+                    sum(1 for trade in trades if trade.risk_rejected),
+                ),
+                "execution_rejections": _summary_int(
+                    summary,
+                    "execution_rejections",
+                    sum(1 for trade in trades if trade.execution_rejected),
+                ),
                 "warning_counts": _warning_count_rows(trades),
                 "rejections": list(rejections),
             },
@@ -1042,6 +1227,112 @@ def _scenario_assumptions(summary: dict[str, Any]) -> list[dict[str, Any]]:
         seen.add(key)
         result.append(dict(assumptions))
     return result
+
+
+def _run_summary_source(run_detail: StrategyTestRunDetailResponse) -> dict[str, Any]:
+    runtime_summary = run_detail.run.runtime_state.get("partial_summary")
+    source: dict[str, Any] = dict(runtime_summary) if isinstance(runtime_summary, dict) else {}
+    source.update(run_detail.run.summary)
+    return _normalize_summary_source(source)
+
+
+def _normalize_summary_source(summary: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(summary)
+    if "signals_count" not in normalized and "signals_seen" in normalized:
+        normalized["signals_count"] = normalized["signals_seen"]
+    if "signals_seen" not in normalized and "signals_count" in normalized:
+        normalized["signals_seen"] = normalized["signals_count"]
+    if "touched" not in normalized and "entry_touched" in normalized:
+        normalized["touched"] = normalized["entry_touched"]
+    if "entry_touched" not in normalized and "touched" in normalized:
+        normalized["entry_touched"] = normalized["touched"]
+    for key in (
+        "scenario_count",
+        "completed_scenarios",
+        "failed_scenarios",
+        "trades_count",
+        "signals_seen",
+        "signals_count",
+        "execution_candidates",
+        "pending_armed",
+        "touched",
+        "entry_touched",
+        "filled",
+        "closed",
+        "wins",
+        "losses",
+        "no_entry",
+        "risk_rejections",
+        "execution_rejections",
+    ):
+        if key not in normalized:
+            normalized[key] = 0
+    errors = normalized.get("errors")
+    normalized["errors"] = list(errors) if isinstance(errors, list) else []
+    return normalized
+
+
+def _summary_int(summary: dict[str, Any], key: str, default: int = 0) -> int:
+    try:
+        return int(summary.get(key, default) or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _summary_float(summary: dict[str, Any], key: str, default: float | None = None) -> float | None:
+    value = summary.get(key)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _summary_value(summary: dict[str, Any], key: str, default: Any = None) -> Any:
+    value = summary.get(key)
+    return default if value is None else value
+
+
+def _summary_stages(
+    summary: dict[str, Any],
+    nested_summary: dict[str, Any],
+    *,
+    signals_count: int,
+) -> list[dict[str, Any]]:
+    nested_stages = nested_summary.get("stages")
+    if isinstance(nested_stages, list):
+        return [dict(stage) for stage in nested_stages if isinstance(stage, dict)]
+    stage_keys = (
+        ("signal", "signals_count"),
+        ("pending_armed", "pending_armed"),
+        ("entry_touched", "entry_touched"),
+        ("filled", "filled"),
+        ("closed", "closed"),
+        ("no_entry", "no_entry"),
+    )
+    if signals_count <= 0 and all(_summary_int(summary, key, 0) <= 0 for _stage, key in stage_keys):
+        return []
+    stages: list[dict[str, Any]] = []
+    for stage, key in stage_keys:
+        count = _summary_int(summary, key, 0)
+        if count <= 0 and signals_count > 0:
+            continue
+        stages.append({"stage": stage, "count": count, "rate": _safe_rate(count, signals_count)})
+    return stages
+
+
+def _summary_warning_codes(summary: dict[str, Any]) -> list[str]:
+    warnings = summary.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    codes: list[str] = []
+    for warning in warnings:
+        if isinstance(warning, dict) and warning.get("code"):
+            codes.append(str(warning["code"]))
+        elif isinstance(warning, str):
+            codes.append(warning)
+    return codes
 
 
 def _run_mode(requested_matrix: dict[str, Any]) -> StrategyTestMode:

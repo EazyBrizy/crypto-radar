@@ -190,7 +190,12 @@ class StrategyTestRunStore(Protocol):
     ) -> StrategyTestRunDetailResponse:
         ...
 
-    def mark_failed(self, run_id: UUID, error: str) -> StrategyTestRunDetailResponse:
+    def mark_failed(
+        self,
+        run_id: UUID,
+        error: str,
+        summary: dict[str, Any] | None = None,
+    ) -> StrategyTestRunDetailResponse:
         ...
 
     def mark_stopping(self, run_id: UUID) -> StrategyTestRunDetailResponse:
@@ -670,7 +675,12 @@ class PostgresStrategyTestRunStore:
             session.commit()
             return detail
 
-    def mark_failed(self, run_id: UUID, error: str) -> StrategyTestRunDetailResponse:
+    def mark_failed(
+        self,
+        run_id: UUID,
+        error: str,
+        summary: dict[str, Any] | None = None,
+    ) -> StrategyTestRunDetailResponse:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
             now = datetime.now(timezone.utc)
@@ -678,6 +688,8 @@ class PostgresStrategyTestRunStore:
             run.finished_at = now
             run.last_heartbeat_at = now
             run.error = error
+            if summary is not None:
+                run.summary = dict(summary)
             session.flush()
             detail = _run_to_detail(run)
             session.commit()

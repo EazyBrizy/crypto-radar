@@ -108,14 +108,16 @@ class StrategyTestingService:
     def execute_run(self, run_id: UUID, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
         if request.test_type == "forward_virtual":
             return self._forward_runtime.start_run(run_id, request).run
+        last_summary = _empty_partial_summary(_scenario_total(request))
         existing = self._run_store.get_run(run_id)
         if existing is not None and existing.run.status in {"cancelled", "stopping"}:
+            last_summary = _summary_from_run(existing.run) or last_summary
             self._run_store.update_runtime_state(
                 run_id,
                 _terminal_runtime_state(
                     request=request,
                     phase="cancelled",
-                    partial_summary=existing.run.summary,
+                    partial_summary=last_summary,
                 ),
             )
             return self._run_store.mark_cancelled(run_id).run
@@ -125,9 +127,6 @@ class StrategyTestingService:
             _initial_historical_runtime_state(request, phase="running"),
         )
         try:
-            ensure_schema = getattr(self._trade_store, "ensure_schema", None)
-            if callable(ensure_schema):
-                ensure_schema()
             user_uuid = strategy_test_user_uuid(request.user_id)
 
             def is_cancelled() -> bool:
@@ -203,33 +202,36 @@ class StrategyTestingService:
                 is_cancelled=is_cancelled,
             )
             if matrix_result.cancelled or is_cancelled():
+                last_summary = _normalize_summary(matrix_result.summary())
                 self._run_store.update_runtime_state(
                     run_id,
                     _terminal_runtime_state(
                         request=request,
                         phase="cancelled",
-                        partial_summary=matrix_result.summary(),
+                        partial_summary=last_summary,
                     ),
                 )
                 return self._run_store.mark_cancelled(run_id).run
             if matrix_result.all_failed:
                 message = _failure_message(matrix_result)
+                last_summary = _normalize_summary(matrix_result.summary())
                 self._run_store.update_runtime_state(
                     run_id,
                     _terminal_runtime_state(
                         request=request,
                         phase="failed",
-                        partial_summary=matrix_result.summary(),
+                        partial_summary=last_summary,
                         last_error=message,
                     ),
                 )
-                return self._run_store.mark_failed(run_id, message).run
+                return self._run_store.mark_failed(run_id, message, summary=last_summary).run
             metric_results = matrix_result.metrics or build_matrix_metric_results(
                 matrix_result.trades,
                 signal_events=matrix_result.signal_events,
                 metric_set=request.metric_set,
             )
-            summary = matrix_result.summary(metrics=metric_results)
+            summary = _normalize_summary(matrix_result.summary(metrics=metric_results))
+            last_summary = summary
             self._run_store.update_runtime_state(
                 run_id,
                 _terminal_runtime_state(
@@ -238,9 +240,10 @@ class StrategyTestingService:
                     partial_summary=summary,
                 ),
             )
-            self._trade_store.write_trades(matrix_result.trades)
+            _write_trades(self._trade_store, matrix_result.trades)
             _write_signal_events(self._trade_store, matrix_result.signal_events)
-            self._trade_store.write_metrics(
+            _write_metrics(
+                self._trade_store,
                 metric_results_to_rows(
                     run_id=run_id,
                     user_id=user_uuid,
@@ -280,19 +283,25 @@ class StrategyTestingService:
         except StrategyTestRunCancelled:
             self._run_store.update_runtime_state(
                 run_id,
-                _terminal_runtime_state(request=request, phase="cancelled"),
+                _terminal_runtime_state(
+                    request=request,
+                    phase="cancelled",
+                    partial_summary=last_summary,
+                ),
             )
             return self._run_store.mark_cancelled(run_id).run
         except Exception as exc:
+            last_summary = _normalize_summary(last_summary)
             self._run_store.update_runtime_state(
                 run_id,
                 _terminal_runtime_state(
                     request=request,
                     phase="failed",
+                    partial_summary=last_summary,
                     last_error=str(exc),
                 ),
             )
-            return self._run_store.mark_failed(run_id, str(exc)).run
+            return self._run_store.mark_failed(run_id, str(exc), summary=last_summary).run
 
     def list_runs(
         self,
@@ -529,6 +538,7 @@ def _runtime_state_base(
     last_error: str | None,
 ) -> dict[str, Any]:
     normalized_phase = _runtime_phase(phase, fallback="running")
+    partial_summary = _normalize_summary(partial_summary)
     scenario_total = _summary_int(partial_summary, "scenario_count", _scenario_total(request))
     return {
         "phase": normalized_phase,
@@ -540,6 +550,13 @@ def _runtime_state_base(
         "current_symbol": None,
         "current_timeframe": None,
         "signals_seen": _summary_int(partial_summary, "signals_seen", 0),
+        "execution_candidates": _summary_int(partial_summary, "execution_candidates", 0),
+        "pending_armed": _summary_int(partial_summary, "pending_armed", 0),
+        "touched": _summary_int(partial_summary, "touched", 0),
+        "entry_touched": _summary_int(partial_summary, "entry_touched", 0),
+        "filled": _summary_int(partial_summary, "filled", 0),
+        "closed": _summary_int(partial_summary, "closed", 0),
+        "no_entry": _summary_int(partial_summary, "no_entry", 0),
         "trades_count": _summary_int(partial_summary, "trades_count", 0),
         "risk_rejections": _summary_int(partial_summary, "risk_rejections", 0),
         "execution_rejections": _summary_int(partial_summary, "execution_rejections", 0),
@@ -557,6 +574,13 @@ def _partial_summary_with_progress(
     counter_keys = (
         "signals_seen",
         "signals_count",
+        "execution_candidates",
+        "pending_armed",
+        "touched",
+        "entry_touched",
+        "filled",
+        "closed",
+        "no_entry",
         "trades_count",
         "risk_rejections",
         "execution_rejections",
@@ -567,7 +591,7 @@ def _partial_summary_with_progress(
             combined[key] = _summary_int(combined, key, 0) + progress_value
     if "signals_count" not in combined and "signals_seen" in combined:
         combined["signals_count"] = combined["signals_seen"]
-    return combined
+    return _normalize_summary(combined)
 
 
 def _empty_partial_summary(scenario_total: int) -> dict[str, Any]:
@@ -578,11 +602,62 @@ def _empty_partial_summary(scenario_total: int) -> dict[str, Any]:
         "trades_count": 0,
         "signals_seen": 0,
         "signals_count": 0,
+        "execution_candidates": 0,
+        "pending_armed": 0,
+        "touched": 0,
+        "entry_touched": 0,
+        "filled": 0,
+        "closed": 0,
+        "no_entry": 0,
         "risk_rejections": 0,
         "execution_rejections": 0,
         "errors": [],
         "scenarios": [],
     }
+
+
+def _normalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(summary)
+    for key in (
+        "scenario_count",
+        "completed_scenarios",
+        "failed_scenarios",
+        "trades_count",
+        "signals_seen",
+        "signals_count",
+        "execution_candidates",
+        "pending_armed",
+        "touched",
+        "entry_touched",
+        "filled",
+        "closed",
+        "no_entry",
+        "risk_rejections",
+        "execution_rejections",
+    ):
+        normalized[key] = _summary_int(normalized, key, 0)
+    if normalized["signals_count"] == 0 and normalized["signals_seen"]:
+        normalized["signals_count"] = normalized["signals_seen"]
+    if normalized["signals_seen"] == 0 and normalized["signals_count"]:
+        normalized["signals_seen"] = normalized["signals_count"]
+    if normalized["touched"] == 0 and normalized["entry_touched"]:
+        normalized["touched"] = normalized["entry_touched"]
+    if normalized["entry_touched"] == 0 and normalized["touched"]:
+        normalized["entry_touched"] = normalized["touched"]
+    errors = normalized.get("errors")
+    normalized["errors"] = list(errors) if isinstance(errors, list) else []
+    scenarios = normalized.get("scenarios")
+    normalized["scenarios"] = list(scenarios) if isinstance(scenarios, list) else []
+    return normalized
+
+
+def _summary_from_run(run: StrategyTestRunResponse) -> dict[str, Any] | None:
+    if run.summary:
+        return _normalize_summary(run.summary)
+    partial_summary = run.runtime_state.get("partial_summary")
+    if isinstance(partial_summary, dict):
+        return _normalize_summary(partial_summary)
+    return None
 
 
 def _scenario_total(request: StrategyTestRunRequest) -> int:
@@ -619,10 +694,33 @@ def _write_signal_events(
 ) -> None:
     if not signal_events:
         return
+    _ensure_trade_store_schema(trade_store)
     write_events = getattr(trade_store, "write_signal_events", None)
     if not callable(write_events):
         raise RuntimeError("strategy_test_signal_event_store_not_available")
     write_events(signal_events)
+
+
+def _write_trades(
+    trade_store: StrategyTestTradeStore,
+    trades: Sequence[StrategyTestTrade],
+) -> None:
+    _ensure_trade_store_schema(trade_store)
+    trade_store.write_trades(trades)
+
+
+def _write_metrics(
+    trade_store: StrategyTestTradeStore,
+    rows: Sequence[StrategyTestMetricRow],
+) -> None:
+    _ensure_trade_store_schema(trade_store)
+    trade_store.write_metrics(rows)
+
+
+def _ensure_trade_store_schema(trade_store: StrategyTestTradeStore) -> None:
+    ensure_schema = getattr(trade_store, "ensure_schema", None)
+    if callable(ensure_schema):
+        ensure_schema()
 
 
 def _append_summary_warning(summary: dict[str, object], code: str, message: str) -> None:

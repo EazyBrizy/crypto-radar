@@ -306,6 +306,68 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         self.assertEqual(response.status, "failed")
         self.assertIn("historical data unavailable", response.error or "")
 
+    def test_service_calls_ensure_schema_before_each_result_write(self) -> None:
+        trade_store = _SchemaRecordingTradeStore()
+        service = StrategyTestingService(
+            run_store=_EphemeralRunStore(),
+            trade_store=trade_store,
+            matrix_runner=_StaticMatrixRunner(
+                StrategyTestMatrixResult(
+                    run_id=RUN_ID,
+                    scenario_count=1,
+                    completed_scenarios=1,
+                    failed_scenarios=0,
+                    scenario_summaries=[{"signals_seen": 1, "risk_rejections": 0, "execution_rejections": 0}],
+                    trades=[_trade()],
+                    signal_events=[_signal_event("signal-1", entry_touched=True, filled=True)],
+                )
+            ),  # type: ignore[arg-type]
+        )
+
+        response = service.create_run(_matrix_request())
+
+        self.assertEqual(response.status, "completed")
+        self.assertEqual(
+            trade_store.calls,
+            [
+                "ensure_schema",
+                "write_trades",
+                "ensure_schema",
+                "write_signal_events",
+                "ensure_schema",
+                "write_metrics",
+            ],
+        )
+
+    def test_service_marks_failed_and_keeps_partial_summary_when_result_write_fails(self) -> None:
+        run_store = _EphemeralRunStore()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_FailingTradeStore(fail_on="write_metrics"),
+            matrix_runner=_StaticMatrixRunner(
+                StrategyTestMatrixResult(
+                    run_id=RUN_ID,
+                    scenario_count=1,
+                    completed_scenarios=1,
+                    failed_scenarios=0,
+                    scenario_summaries=[{"signals_seen": 2, "risk_rejections": 0, "execution_rejections": 0}],
+                    trades=[],
+                )
+            ),  # type: ignore[arg-type]
+        )
+
+        response = service.create_run(_matrix_request())
+
+        self.assertEqual(response.status, "failed")
+        self.assertIn("ClickHouse write failed", response.error or "")
+        self.assertEqual(response.summary["completed_scenarios"], 1)
+        self.assertEqual(response.summary["signals_seen"], 2)
+        self.assertEqual(response.summary["trades_count"], 0)
+        self.assertEqual(run_store.detail.run.runtime_state["phase"], "failed")  # type: ignore[union-attr]
+        partial = run_store.detail.run.runtime_state["partial_summary"]  # type: ignore[union-attr]
+        self.assertEqual(partial["completed_scenarios"], 1)
+        self.assertEqual(partial["signals_seen"], 2)
+
     def test_service_completes_when_eligibility_profile_update_fails(self) -> None:
         run_store = _EphemeralRunStore()
         trade_store = _RecordingTradeStore()
@@ -590,6 +652,48 @@ class _RecordingTradeStore:
         self.metrics.extend(rows)
 
 
+class _SchemaRecordingTradeStore(_RecordingTradeStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def ensure_schema(self) -> None:
+        self.calls.append("ensure_schema")
+
+    def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
+        self.calls.append("write_trades")
+        super().write_trades(trades)
+
+    def write_signal_events(self, signal_events: Sequence[StrategyTestSignalEvent]) -> None:
+        self.calls.append("write_signal_events")
+        super().write_signal_events(signal_events)
+
+    def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
+        self.calls.append("write_metrics")
+        super().write_metrics(rows)
+
+
+class _FailingTradeStore(_RecordingTradeStore):
+    def __init__(self, *, fail_on: str) -> None:
+        super().__init__()
+        self._fail_on = fail_on
+
+    def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
+        if self._fail_on == "write_trades":
+            raise RuntimeError("ClickHouse write failed")
+        super().write_trades(trades)
+
+    def write_signal_events(self, signal_events: Sequence[StrategyTestSignalEvent]) -> None:
+        if self._fail_on == "write_signal_events":
+            raise RuntimeError("ClickHouse write failed")
+        super().write_signal_events(signal_events)
+
+    def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
+        if self._fail_on == "write_metrics":
+            raise RuntimeError("ClickHouse write failed")
+        super().write_metrics(rows)
+
+
 class _FailingEligibilityProfileUpdater:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -642,10 +746,15 @@ class _EphemeralRunStore:
         self.transitions.append("completed")
         return self._mark("completed", summary=summary)
 
-    def mark_failed(self, run_id: UUID, error: str) -> StrategyTestRunDetailResponse:
+    def mark_failed(
+        self,
+        run_id: UUID,
+        error: str,
+        summary: dict[str, Any] | None = None,
+    ) -> StrategyTestRunDetailResponse:
         _ = run_id
         self.transitions.append("failed")
-        return self._mark("failed", error=error)
+        return self._mark("failed", summary=summary, error=error)
 
     def mark_stopping(self, run_id: UUID) -> StrategyTestRunDetailResponse:
         _ = run_id

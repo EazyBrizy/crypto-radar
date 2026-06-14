@@ -97,6 +97,73 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertIn("insufficient_data", report.warnings)
         self.assertEqual(report.candidate_adjustments, [])
 
+    def test_empty_analytics_report_uses_run_summary_funnel(self) -> None:
+        report = _builder(
+            [],
+            summary={
+                "scenario_count": 3,
+                "completed_scenarios": 3,
+                "failed_scenarios": 0,
+                "trades_count": 0,
+                "signals_seen": 4,
+                "signals_count": 4,
+                "execution_candidates": 3,
+                "pending_armed": 2,
+                "touched": 1,
+                "entry_touched": 1,
+                "filled": 0,
+                "closed": 0,
+                "no_entry": 3,
+                "risk_rejections": 1,
+                "execution_rejections": 1,
+                "errors": [],
+            },
+        ).build_report(RUN_ID)
+
+        self.assertEqual(report.trades_count, 0)
+        self.assertEqual(report.summary["trades_count"], 0)
+        self.assertEqual(report.summary["signals_count"], 4)
+        self.assertEqual(report.summary["completed_scenarios"], 3)
+        self.assertEqual(report.summary["pending_armed"], 2)
+        self.assertEqual(report.summary["touched"], 1)
+        self.assertEqual(report.summary["signal_funnel"]["signals_count"], 4)
+        self.assertEqual(report.summary["signal_funnel"]["no_entry"], 3)
+        self.assertTrue(any(metric["code"] == "trades_count" for metric in report.summary_metrics))
+
+    def test_failed_run_report_uses_runtime_partial_summary_and_error(self) -> None:
+        report = _builder(
+            [],
+            status="failed",
+            error="ClickHouse write failed",
+            runtime_state={
+                "partial_summary": {
+                    "scenario_count": 2,
+                    "completed_scenarios": 1,
+                    "failed_scenarios": 1,
+                    "trades_count": 0,
+                    "signals_seen": 5,
+                    "signals_count": 5,
+                    "execution_candidates": 4,
+                    "pending_armed": 2,
+                    "touched": 1,
+                    "filled": 0,
+                    "closed": 0,
+                    "no_entry": 4,
+                    "risk_rejections": 1,
+                    "execution_rejections": 0,
+                    "errors": [{"strategy": "s2", "error": "boom"}],
+                },
+                "last_error": "ClickHouse write failed",
+            },
+        ).build_report(RUN_ID)
+
+        self.assertEqual(report.status, "failed")
+        self.assertEqual(report.summary["error"], "ClickHouse write failed")
+        self.assertEqual(report.summary["partial_summary"]["completed_scenarios"], 1)
+        self.assertEqual(report.summary["completed_scenarios"], 1)
+        self.assertEqual(report.summary["failed_scenarios"], 1)
+        self.assertEqual(report.summary["signals_count"], 5)
+
     def test_signal_funnel_section_lists_no_entry_signals(self) -> None:
         report = _builder(
             [],
@@ -215,13 +282,17 @@ class _CrashingReportService:
 def _builder(
     trades: Sequence[StrategyTestTrade],
     *,
+    error: str | None = None,
     signal_events: Sequence[StrategyTestSignalEvent] = (),
     registry: MetricRegistry | _SpyMetricRegistry | None = None,
+    runtime_state: dict[str, Any] | None = None,
+    status: StrategyTestRunStatus = "completed",
+    summary: dict[str, Any] | None = None,
 ) -> StrategyTestReportBuilder:
     detail = StrategyTestRunDetailResponse(
         run=StrategyTestRunResponse(
             run_id=RUN_ID,
-            status="completed",
+            status=status,
             requested_matrix={
                 "user_id": "demo_user",
                 "mode": "research_virtual",
@@ -237,6 +308,9 @@ def _builder(
                 "params": {},
                 "scenario_count": 2,
             },
+            summary=dict(summary or {}),
+            runtime_state=dict(runtime_state or {}),
+            error=error,
         )
     )
     return StrategyTestReportBuilder(

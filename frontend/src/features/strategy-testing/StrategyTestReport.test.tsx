@@ -26,6 +26,61 @@ describe("StrategyTestReport", () => {
     expect(screen.getByText("1 warnings")).toBeInTheDocument();
   });
 
+  it("renders completed zero-trade run summary when report is absent", () => {
+    render(
+      <StrategyTestReport
+        report={null}
+        run={run({
+          summary: {
+            completed_scenarios: 1,
+            execution_candidates: 0,
+            failed_scenarios: 0,
+            filled: 0,
+            no_entry: 0,
+            scenario_count: 1,
+            signals_count: 0,
+            signals_seen: 0,
+            trades_count: 0
+          }
+        })}
+      />
+    );
+
+    expect(screen.getByText("No trades, but test completed")).toBeInTheDocument();
+    expect(screen.getByText("0 signals")).toBeInTheDocument();
+    expect(screen.getByText("0 trades")).toBeInTheDocument();
+    expect(screen.queryByText("No report selected")).not.toBeInTheDocument();
+    expect(screen.queryByText("No summary metrics")).not.toBeInTheDocument();
+  });
+
+  it("renders failed run error and partial summary when report is absent", () => {
+    render(
+      <StrategyTestReport
+        report={null}
+        run={run({
+          error: "ClickHouse write failed",
+          runtime_state: {
+            partial_summary: {
+              completed_scenarios: 1,
+              failed_scenarios: 1,
+              scenario_count: 2,
+              signals_seen: 5,
+              trades_count: 0
+            }
+          },
+          status: "failed",
+          summary: {}
+        })}
+      />
+    );
+
+    expect(screen.getByText("Report failed")).toBeInTheDocument();
+    expect(screen.getByText("ClickHouse write failed")).toBeInTheDocument();
+    expect(screen.getByText("Partial summary")).toBeInTheDocument();
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+    expect(screen.queryByText("No report selected")).not.toBeInTheDocument();
+  });
+
   it("renders signal funnel stages and no-entry signals", () => {
     render(<StrategyTestReport report={report()} run={null} />);
 

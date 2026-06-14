@@ -87,6 +87,36 @@ describe("SignalDetails", () => {
     expect(onAcceptPendingEntry).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps virtual pending enabled while showing learning edge warning", () => {
+    render(
+      <SignalDetails
+        actionState={actionState({
+          can_enter_now: false,
+          can_arm_pending: true,
+          primary_action: "arm_pending_entry",
+          warnings: [
+            {
+              code: "edge_unknown",
+              severity: "warning",
+              message: "Edge is not calibrated yet.",
+              display_label: "Edge learning mode",
+              metadata: { virtual_pending_learning_mode: true }
+            }
+          ]
+        })}
+        busy={false}
+        executionPreview={null}
+        onAcceptPendingEntry={vi.fn()}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        signal={baseSignal({ details_view: detailsView({ primary_status: "waiting_entry", can_enter_now: false }) })}
+      />
+    );
+
+    expect(screen.getByText("Learning mode: edge is not calibrated yet. Virtual pending is allowed; real execution still requires positive edge.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Virtual wait entry/u })).toBeEnabled();
+  });
+
   it("renders backend pending-entry view and cancel intent state", () => {
     const onCancelPendingEntry = vi.fn();
     render(
@@ -221,7 +251,7 @@ describe("SignalDetails", () => {
     expect(screen.getByText("Pending entry expired before entry touch")).toBeInTheDocument();
   });
 
-  it("uses real action-state for the real confirmation modal", () => {
+  it("uses real enter-now action-state for the real confirmation modal", () => {
     const onConfirmRealTrade = vi.fn();
     render(
       <SignalDetails
@@ -234,9 +264,9 @@ describe("SignalDetails", () => {
         realActionState={actionState({
           mode: "real",
           environment: "testnet",
-          can_enter_now: false,
-          can_arm_pending: true,
-          primary_action: "arm_pending_entry",
+          can_enter_now: true,
+          can_arm_pending: false,
+          primary_action: "enter_now",
           warnings: [
             {
               code: "dry_run",
@@ -262,6 +292,42 @@ describe("SignalDetails", () => {
     fireEvent.click(buttons[1] as HTMLButtonElement);
 
     expect(onConfirmRealTrade).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps real pending disabled when backend reports it is not implemented", () => {
+    render(
+      <SignalDetails
+        actionState={actionState()}
+        busy={false}
+        executionPreview={null}
+        onConfirmRealTrade={vi.fn()}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        realActionState={actionState({
+          mode: "real",
+          environment: "testnet",
+          can_enter_now: false,
+          can_arm_pending: true,
+          primary_action: "arm_pending_entry",
+          disabled_reason_code: "REAL_PENDING_NOT_IMPLEMENTED",
+          blockers: [
+            {
+              code: "REAL_PENDING_NOT_IMPLEMENTED",
+              severity: "blocker",
+              message: "Real pending entry is not implemented yet.",
+              display_label: "Real pending entry unavailable",
+              metadata: {}
+            }
+          ]
+        })}
+        realTradeContext={realTradeContext()}
+        signal={baseSignal()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /Real wait entry/u })).toBeDisabled();
+    expect(screen.getByText("Real pending entry is not implemented yet")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("shows the dedicated real execution preview in the real confirmation modal", () => {

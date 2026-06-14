@@ -199,8 +199,6 @@ class SignalActionService:
             if signal.execution_gate is not None:
                 can_enter_now = can_enter_now and signal.execution_gate.can_enter_now
                 can_arm_pending = signal.execution_gate.can_arm_pending
-            if mode == "virtual" and not can_enter_now and can_arm_pending:
-                blockers.append(_status_not_execution_candidate_blocker(signal))
             if not can_enter_now and not can_arm_pending:
                 blockers.extend(_gate_action_blockers(signal) or _signal_action_blockers(signal, mode=mode))
 
@@ -802,8 +800,6 @@ class SignalActionService:
             if signal.execution_gate is not None:
                 can_enter_now = can_enter_now and signal.execution_gate.can_enter_now
                 can_arm_pending = signal.execution_gate.can_arm_pending
-            if mode == "virtual" and not can_enter_now and can_arm_pending:
-                blockers.append(_status_not_execution_candidate_blocker(signal))
             if not can_enter_now and not can_arm_pending:
                 blockers.extend(_gate_action_blockers(signal) or _signal_action_blockers(signal, mode=mode))
         if mode == "real" and can_arm_pending:

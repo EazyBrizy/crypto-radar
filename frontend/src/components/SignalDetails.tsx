@@ -123,10 +123,11 @@ export function SignalDetails({
   const activePendingEntry = viewModel.activePendingEntry;
   const terminalPendingEntry = viewModel.terminalPendingEntry;
   const backendDisabledReason = actionStateDisabledReason(actionState ?? null, tReason);
+  const realDisabledReason = actionStateDisabledReason(realActionState ?? null, tReason);
   const entryActionDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_enter_now !== true;
   const acceptPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || pendingEntryLoading || actionState?.can_arm_pending !== true;
   const cancelPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_cancel !== true;
-  const realActionAvailable = Boolean(realActionState?.can_enter_now || realActionState?.can_arm_pending);
+  const realActionAvailable = Boolean(realActionState?.can_enter_now);
   const realActionDisabled = busy || tradingActionsDisabled || !realActionAvailable || !onConfirmRealTrade;
   const rejectDisabled = busy || tradingActionsDisabled || signal.details_view?.primary_status === "cancelled" || signal.details_view?.primary_status === "expired";
 
@@ -157,6 +158,7 @@ export function SignalDetails({
         topBlockers={viewModel.topBlockers.slice(0, 3)}
       />
 
+      <LearningEdgeWarning signal={signal} actionState={actionState ?? null} />
       <TriggerCompact signal={signal} />
       <ExecutionEvidenceCompact signal={signal} />
       <ActivePendingEntryCompact
@@ -188,6 +190,7 @@ export function SignalDetails({
         setRealConfirmationOpen={setRealConfirmationOpen}
         tradingActionsDisabled={tradingActionsDisabled}
         backendDisabledReason={backendDisabledReason}
+        realDisabledReason={realDisabledReason}
         canEnterNow={viewModel.canEnterNow}
       />
 
@@ -326,6 +329,16 @@ function ExecutionEvidenceCompact({ signal }: { signal: RadarSignal }) {
       ) : null}
     </div>
   );
+}
+
+function LearningEdgeWarning({ signal, actionState }: { signal: RadarSignal; actionState: SignalActionState | null }) {
+  const { tKey } = useI18n();
+  const hasLearningEdgeWarning = [
+    ...(signal.execution_gate?.warnings ?? []),
+    ...(actionState?.warnings ?? [])
+  ].some((item) => isLearningEdgeWarning(item.code));
+  if (!hasLearningEdgeWarning) return null;
+  return <div className="warning-banner">{tKey("signalDetails.edgeLearningWarning")}</div>;
 }
 
 function TerminalPendingEntryCompact({ pendingEntry }: { pendingEntry: PendingEntryIntent | null }) {
@@ -475,6 +488,7 @@ function ActionsBlock({
   setRealConfirmationOpen,
   tradingActionsDisabled,
   backendDisabledReason,
+  realDisabledReason,
   canEnterNow
 }: {
   acceptPendingDisabled: boolean;
@@ -493,6 +507,7 @@ function ActionsBlock({
   setRealConfirmationOpen: (open: boolean) => void;
   tradingActionsDisabled: boolean;
   backendDisabledReason: string | null;
+  realDisabledReason: string | null;
   canEnterNow: boolean | null;
 }) {
   const { tKey } = useI18n();
@@ -532,6 +547,8 @@ function ActionsBlock({
         <p className="compact-action-note">{tKey("signalDetails.tradingDisabled")}</p>
       ) : backendDisabledReason ? (
         <p className="compact-action-note">{backendDisabledReason}</p>
+      ) : realActionDisabled && realDisabledReason ? (
+        <p className="compact-action-note">{realDisabledReason}</p>
       ) : null}
     </div>
   );
@@ -752,7 +769,7 @@ function RealTradeConfirmationModal({
   onConfirm: () => void;
 }) {
   const { t, tKey, tReason } = useI18n();
-  const confirmDisabled = busy || !(actionState?.can_enter_now || actionState?.can_arm_pending);
+  const confirmDisabled = busy || actionState?.can_enter_now !== true;
   const blockers = actionState?.blockers ?? [];
   const warnings = actionState?.warnings ?? [];
   const riskCheck = execution?.risk_decision?.risk_check ?? null;
@@ -914,6 +931,10 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function isLearningEdgeWarning(code: string | null | undefined): boolean {
+  return code === "edge_unknown" || code === "edge_missing" || code === "edge_insufficient_sample";
 }
 
 function formatOptionalText(value: string | null | undefined): string {

@@ -263,6 +263,8 @@ export const SignalExecutionGateSnapshotSchema = z.object({
   can_notify: z.boolean(),
   can_enter_now: z.boolean(),
   can_arm_pending: z.boolean(),
+  can_arm_virtual_pending: z.boolean().optional(),
+  can_arm_real_pending: z.boolean().optional(),
   can_show_in_execution_feed: z.boolean(),
   reasons: z.array(SignalExecutionGateReasonSchema).default([]),
   warnings: z.array(SignalExecutionGateReasonSchema).default([]),

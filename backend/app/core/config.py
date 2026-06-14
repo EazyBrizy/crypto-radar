@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     scanner_open_candle_previews_enabled: bool = True
     execution_closed_candle_only: bool = True
     execution_min_score: int = 70
+    virtual_pending_min_score: int = 60
     radar_min_market_idea_score: int = 50
     execution_dedup_window_seconds: int = 300
     notification_dedup_window_seconds: int = 300

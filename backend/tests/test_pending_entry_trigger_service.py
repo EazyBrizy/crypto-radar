@@ -404,6 +404,31 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertIsNotNone(execution_signal.execution_gate)
         self.assertTrue(execution_signal.execution_gate.can_enter_now if execution_signal.execution_gate else False)
 
+    def test_entry_touch_with_unknown_current_edge_fills_virtual_pending_learning(self) -> None:
+        accepted_signal = _signal(confirmed_trigger=True, edge=_positive_edge())
+        pending_service = PendingEntryService(
+            repository=self.repository,
+            session_factory=self.SessionFactory,
+            signal_loader=lambda _signal_id: accepted_signal,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(),
+        )
+        pending_service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        self.signals.signal = _signal(confirmed_trigger=True, edge=_unknown_edge())
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(results[0].intent_id)
+
+        self.assertEqual(results[0].status, "filled")
+        self.assertEqual(current.status if current else None, "filled")
+        self.assertEqual(results[0].virtual_trade_id, str(TRADE_ID))
+        self.assertEqual(len(self.virtual.calls), 1)
+
     def test_entry_touch_blocks_current_hard_no_trade_filter_after_acceptance(self) -> None:
         accepted_signal = _signal(confirmed_trigger=True, edge=_positive_edge())
         pending_service = PendingEntryService(
@@ -652,6 +677,18 @@ def _negative_edge() -> SignalEdgeSnapshot:
         expectancy_after_costs_r=-0.08,
         profit_factor=0.9,
         confidence_score=0.7,
+        source="outcome",
+    )
+
+
+def _unknown_edge() -> SignalEdgeSnapshot:
+    return SignalEdgeSnapshot(
+        status="unknown",
+        sample_size=0,
+        min_sample_size=50,
+        expectancy_after_costs_r=None,
+        profit_factor=None,
+        confidence_score=0.0,
         source="outcome",
     )
 

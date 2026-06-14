@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -11,6 +12,7 @@ from app.schemas.decision import SignalDecisionSnapshot
 from app.schemas.signal import RadarSignal, SignalExecutionGateSnapshot
 from app.schemas.trade import VirtualAccount
 from app.schemas.user import RiskManagementSettings
+from app.schemas.signal_action import SignalActionRequest
 from app.services.signal_actions import REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE, SignalActionService
 
 USER_ID = "usr_demo"
@@ -25,8 +27,8 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertTrue(state.can_arm_pending)
         self.assertFalse(state.can_enter_now)
         self.assertEqual(state.primary_action, "arm_pending_entry")
-        self.assertEqual(state.disabled_reason_code, "status_not_execution_candidate")
-        self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
+        self.assertIsNone(state.disabled_reason_code)
+        self.assertEqual(state.blockers, [])
 
     def test_wait_for_pullback_can_arm_pending_only_in_virtual_mode(self) -> None:
         connection = _exchange_connection(
@@ -55,6 +57,8 @@ class SignalActionStateTest(unittest.TestCase):
 
         self.assertTrue(virtual_state.can_arm_pending)
         self.assertEqual(virtual_state.primary_action, "arm_pending_entry")
+        self.assertIsNone(virtual_state.disabled_reason_code)
+        self.assertEqual(virtual_state.blockers, [])
         self.assertFalse(real_state.can_arm_pending)
         self.assertFalse(real_state.can_enter_now)
         self.assertIsNone(real_state.primary_action)
@@ -212,16 +216,38 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertEqual(state.disabled_reason_code, "REAL_PENDING_NOT_IMPLEMENTED")
         self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
 
+    def test_virtual_armable_waiting_setup_executes_arm_pending_entry(self) -> None:
+        signal = _signal(
+            status="wait_for_pullback",
+            execution_gate=_gate(can_arm_pending=True, can_arm_virtual_pending=True),
+        )
+        pending_entries = _FakePendingEntryService(None)
+        service = _service(signal=signal, pending_entries=pending_entries)
+
+        response = asyncio.run(
+            service.execute_action(
+                signal.id,
+                SignalActionRequest(kind="arm_pending_entry", mode="virtual"),
+                user_id=USER_ID,
+            )
+        )
+
+        self.assertEqual(response.message, "Pending entry armed; waiting for accepted entry zone")
+        self.assertEqual(response.pending_entry_intent.status if response.pending_entry_intent else None, "pending")
+        self.assertEqual(pending_entries.armed_signal_ids, [signal.id])
+
 
 def _service(
     intent: PendingEntryIntentRead | None = None,
     *,
+    signal: RadarSignal | None = None,
+    pending_entries: "_FakePendingEntryService | None" = None,
     connection: ExchangeConnectionResponse | None = None,
     account_snapshot: AccountRiskSnapshot | None = None,
 ) -> SignalActionService:
     return SignalActionService(
-        signals=_FakeSignalService(),
-        pending_entries=_FakePendingEntryService(intent),
+        signals=_FakeSignalService(signal),
+        pending_entries=pending_entries or _FakePendingEntryService(intent),
         virtual_trading=_FakeVirtualTradingService(),
         risk_settings_provider=lambda _user_id: RiskManagementSettings(),
         market_data_service=_FakeMarketDataService(),
@@ -233,15 +259,26 @@ def _service(
 
 
 class _FakeSignalService:
-    def get_signal(self, _signal_id: str):
-        return None
+    def __init__(self, signal: RadarSignal | None = None) -> None:
+        self.signal = signal
+
+    def get_signal(self, signal_id: str):
+        if self.signal is None or self.signal.id != signal_id:
+            return None
+        return self.signal
 
 
 class _FakePendingEntryService:
     def __init__(self, intent: PendingEntryIntentRead | None) -> None:
         self.intent = intent
+        self.armed_signal_ids: list[str] = []
 
     def get_active_for_signal(self, **_kwargs):
+        return self.intent
+
+    def arm_signal_workflow(self, *, signal_id, request):
+        self.armed_signal_ids.append(str(signal_id))
+        self.intent = _pending_intent(status="pending")
         return self.intent
 
     def resolve_execution_profile(self, _signal, _request, *, mode):
@@ -396,13 +433,21 @@ def _decision(*, execution_allowed_real: bool | None = None) -> SignalDecisionSn
     )
 
 
-def _gate(*, can_enter_now: bool = False, can_arm_pending: bool = False) -> SignalExecutionGateSnapshot:
+def _gate(
+    *,
+    can_enter_now: bool = False,
+    can_arm_pending: bool = False,
+    can_arm_virtual_pending: bool | None = None,
+    can_arm_real_pending: bool | None = None,
+) -> SignalExecutionGateSnapshot:
     return SignalExecutionGateSnapshot(
         status="passed",
         feed_kind="execution_signal" if can_enter_now else "watchlist",
         can_notify=can_enter_now,
         can_enter_now=can_enter_now,
         can_arm_pending=can_arm_pending,
+        can_arm_virtual_pending=can_arm_pending if can_arm_virtual_pending is None else can_arm_virtual_pending,
+        can_arm_real_pending=can_arm_pending if can_arm_real_pending is None else can_arm_real_pending,
         can_show_in_execution_feed=can_enter_now,
     )
 

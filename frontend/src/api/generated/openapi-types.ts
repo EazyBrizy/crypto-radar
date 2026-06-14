@@ -5410,6 +5410,16 @@ export interface components {
              */
             can_arm_pending: boolean;
             /**
+             * Can Arm Virtual Pending
+             * @default false
+             */
+            can_arm_virtual_pending: boolean;
+            /**
+             * Can Arm Real Pending
+             * @default false
+             */
+            can_arm_real_pending: boolean;
+            /**
              * Can Show In Execution Feed
              * @default false
              */

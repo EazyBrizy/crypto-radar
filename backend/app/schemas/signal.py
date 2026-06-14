@@ -67,6 +67,8 @@ class SignalExecutionGateSnapshot(BaseModel):
     can_notify: bool = False
     can_enter_now: bool = False
     can_arm_pending: bool = False
+    can_arm_virtual_pending: bool = False
+    can_arm_real_pending: bool = False
     can_show_in_execution_feed: bool = False
     reasons: list[SignalExecutionGateReason] = Field(default_factory=list)
     warnings: list[SignalExecutionGateReason] = Field(default_factory=list)

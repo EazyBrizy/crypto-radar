@@ -25,6 +25,12 @@ SignalLike: TypeAlias = RadarSignal | StrategySignal
 
 EXECUTION_SCORE_THRESHOLD = 70
 WATCHLIST_STATUSES = {"watchlist", "ready", "wait_for_pullback", "active", "new"}
+VIRTUAL_PENDING_STATUSES = {"watchlist", "ready", "wait_for_pullback"}
+VIRTUAL_PENDING_LEARNING_EDGE_CODES = {
+    "edge_missing",
+    "edge_unknown",
+    "edge_insufficient_sample",
+}
 
 
 class SignalExecutionGateService:
@@ -122,6 +128,8 @@ class SignalExecutionGateService:
         decision = signal.decision
         if execution_candidate:
             hard_blockers.extend(_decision_blockers(decision))
+        elif status in VIRTUAL_PENDING_STATUSES:
+            hard_blockers.extend(_virtual_pending_decision_blockers(decision))
 
         rr_reason = _rr_failed_reason(signal)
         if rr_reason is not None:
@@ -168,6 +176,21 @@ class SignalExecutionGateService:
                 )
             )
 
+        virtual_pending_score_threshold = int(settings.virtual_pending_min_score)
+        if status in VIRTUAL_PENDING_STATUSES and score < virtual_pending_score_threshold:
+            reasons.append(
+                _reason(
+                    "score_below_virtual_pending_threshold",
+                    "info",
+                    "score",
+                    f"Score {score} is below virtual pending threshold {virtual_pending_score_threshold}.",
+                    {
+                        "score": score,
+                        "virtual_pending_score_threshold": virtual_pending_score_threshold,
+                    },
+                )
+            )
+
         if not execution_candidate:
             reasons.append(
                 _reason(
@@ -184,6 +207,16 @@ class SignalExecutionGateService:
             or open_entry_candle_allowed
             or not settings.execution_closed_candle_only
         )
+        virtual_pending_hard_blockers = [
+            reason for reason in hard_blockers if not _is_virtual_pending_learning_edge_reason(reason)
+        ]
+        can_arm_virtual_pending = (
+            status in VIRTUAL_PENDING_STATUSES
+            and score >= virtual_pending_score_threshold
+            and candle_allows_execution
+            and not virtual_pending_hard_blockers
+            and _has_valid_execution_plan(signal)
+        )
         execution_ready = (
             execution_candidate
             and score >= score_threshold
@@ -193,15 +226,25 @@ class SignalExecutionGateService:
             and _has_valid_execution_plan(signal)
             and not _decision_blocks_virtual(decision)
         )
-        pending_candidate = is_waiting_entry_status(status) or execution_ready
-        can_arm_pending = (
-            pending_candidate
+        can_arm_real_pending = (
+            (is_waiting_entry_status(status) or execution_ready)
             and score >= score_threshold
             and candle_allows_execution
             and not hard_blockers
             and _edge_allows_execution(signal.edge)
             and _has_valid_execution_plan(signal)
         )
+        can_arm_pending = can_arm_virtual_pending or can_arm_real_pending
+        display_hard_blockers = list(hard_blockers)
+        if can_arm_virtual_pending:
+            display_hard_blockers = [
+                reason for reason in hard_blockers if not _is_virtual_pending_learning_edge_reason(reason)
+            ]
+            warnings.extend(
+                _virtual_pending_learning_edge_warning(reason)
+                for reason in hard_blockers
+                if _is_virtual_pending_learning_edge_reason(reason)
+            )
 
         feed_kind = (
             "execution_signal"
@@ -209,12 +252,13 @@ class SignalExecutionGateService:
             else _non_execution_feed_kind(
                 status,
                 score,
-                hard_blockers,
+                display_hard_blockers,
                 execution_score_threshold=score_threshold,
                 market_idea_score_threshold=market_idea_score_threshold,
             )
         )
-        gate_status = "blocked" if hard_blockers else "warning" if warnings or reasons else "passed"
+        warnings = _dedupe_gate_reasons(warnings)
+        gate_status = "blocked" if display_hard_blockers else "warning" if warnings or reasons else "passed"
         can_enter_now = execution_ready and gate_status in {"passed", "warning"}
         can_show = can_enter_now
         return SignalExecutionGateSnapshot(
@@ -223,17 +267,22 @@ class SignalExecutionGateService:
             can_notify=can_show,
             can_enter_now=can_enter_now,
             can_arm_pending=can_arm_pending,
+            can_arm_virtual_pending=can_arm_virtual_pending,
+            can_arm_real_pending=can_arm_real_pending,
             can_show_in_execution_feed=can_show,
-            reasons=[*hard_blockers, *reasons],
+            reasons=[*display_hard_blockers, *reasons],
             warnings=warnings,
             metadata={
                 "status": status,
                 "score": score,
                 "execution_score_threshold": score_threshold,
+                "virtual_pending_score_threshold": virtual_pending_score_threshold,
                 "market_idea_score_threshold": market_idea_score_threshold,
                 "execution_candidate_status": execution_candidate,
                 "strict_edge_mode": strict_edge_mode,
                 "open_entry_candle_allowed": open_entry_candle_allowed,
+                "can_arm_virtual_pending": can_arm_virtual_pending,
+                "can_arm_real_pending": can_arm_real_pending,
             },
         )
 
@@ -272,6 +321,54 @@ def _decision_blockers(decision: SignalDecisionSnapshot | None) -> list[SignalEx
                 "blocker",
                 "decision",
                 "Decision snapshot marks the signal as not actionable.",
+                decision.model_dump(mode="json"),
+            )
+        )
+    if decision.execution_allowed_virtual is False:
+        blockers.append(
+            _reason(
+                "virtual_execution_blocked",
+                "blocker",
+                "decision",
+                "Decision snapshot blocks virtual execution.",
+                decision.model_dump(mode="json"),
+            )
+        )
+    for blocker in decision.blockers:
+        if blocker.scope in {"virtual", "discovery"}:
+            blockers.append(
+                _reason(
+                    "virtual_execution_blocked" if blocker.scope == "virtual" else "decision_not_actionable",
+                    "blocker",
+                    blocker.source,
+                    blocker.message,
+                    blocker.model_dump(mode="json"),
+                )
+            )
+    return blockers
+
+
+def _virtual_pending_decision_blockers(decision: SignalDecisionSnapshot | None) -> list[SignalExecutionGateReason]:
+    if decision is None:
+        return []
+    blockers: list[SignalExecutionGateReason] = []
+    if decision.setup_valid is False:
+        blockers.append(
+            _reason(
+                "setup_invalid",
+                "blocker",
+                "decision",
+                "Decision snapshot marks the setup as invalid.",
+                decision.model_dump(mode="json"),
+            )
+        )
+    if decision.trade_plan_valid is False:
+        blockers.append(
+            _reason(
+                "trade_plan_invalid",
+                "blocker",
+                "decision",
+                "Decision snapshot marks the trade plan as invalid.",
                 decision.model_dump(mode="json"),
             )
         )
@@ -525,6 +622,37 @@ def _edge_reasons(
 
 def _edge_allows_execution(edge: SignalEdgeSnapshot | None) -> bool:
     return not settings.execution_edge_gate_enabled or (edge is not None and edge.status == "positive")
+
+
+def _is_virtual_pending_learning_edge_reason(reason: SignalExecutionGateReason) -> bool:
+    return reason.source == "edge" and reason.code in VIRTUAL_PENDING_LEARNING_EDGE_CODES
+
+
+def _virtual_pending_learning_edge_warning(reason: SignalExecutionGateReason) -> SignalExecutionGateReason:
+    metadata = {
+        **reason.metadata,
+        "virtual_pending_learning_mode": True,
+        "strict_real_execution_still_requires_positive_edge": True,
+    }
+    return _reason(
+        reason.code,
+        "warning",
+        reason.source,
+        "Virtual pending entry is in learning mode; edge is not calibrated yet.",
+        metadata,
+    )
+
+
+def _dedupe_gate_reasons(items: list[SignalExecutionGateReason]) -> list[SignalExecutionGateReason]:
+    seen: set[tuple[str, str, str]] = set()
+    result: list[SignalExecutionGateReason] = []
+    for item in items:
+        key = (item.code, item.severity, item.source)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 def _strategy_eligibility_reason(edge: SignalEdgeSnapshot | None) -> SignalExecutionGateReason | None:

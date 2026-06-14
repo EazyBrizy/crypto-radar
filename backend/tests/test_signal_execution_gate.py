@@ -175,6 +175,24 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertFalse(gate.can_show_in_execution_feed)
         self.assertIn("edge_unknown", _reason_codes(gate))
 
+    def test_wait_for_pullback_with_unknown_edge_can_arm_virtual_pending_learning(self) -> None:
+        signal = _signal(
+            status="wait_for_pullback",
+            score=settings.virtual_pending_min_score,
+            edge=_edge("unknown", sample_size=0, expectancy=0.0),
+        )
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.feed_kind, "watchlist")
+        self.assertEqual(gate.status, "warning")
+        self.assertFalse(gate.can_enter_now)
+        self.assertTrue(gate.can_arm_pending)
+        self.assertTrue(gate.can_arm_virtual_pending)
+        self.assertFalse(gate.can_arm_real_pending)
+        self.assertNotIn("edge_unknown", _reason_codes(gate))
+        self.assertIn("edge_unknown", _warning_codes(gate))
+
     def test_wait_for_pullback_with_complete_trade_plan_can_arm_pending_without_enter_now(self) -> None:
         signal = _signal(status="wait_for_pullback")
 
@@ -187,7 +205,7 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertFalse(gate.can_show_in_execution_feed)
 
     def test_low_score_wait_for_pullback_cannot_arm_pending(self) -> None:
-        signal = _signal(status="wait_for_pullback", score=60)
+        signal = _signal(status="wait_for_pullback", score=settings.virtual_pending_min_score - 1)
 
         gate = SignalExecutionGateService().evaluate(signal)
 
@@ -196,6 +214,21 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertFalse(gate.can_arm_pending)
         self.assertFalse(gate.can_show_in_execution_feed)
         self.assertIn("score_below_execution_threshold", _reason_codes(gate))
+
+    def test_negative_edge_blocks_virtual_pending_learning(self) -> None:
+        signal = _signal(
+            status="wait_for_pullback",
+            score=settings.virtual_pending_min_score,
+            edge=_edge("negative", sample_size=80, expectancy=-0.12),
+        )
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.status, "blocked")
+        self.assertFalse(gate.can_enter_now)
+        self.assertFalse(gate.can_arm_pending)
+        self.assertFalse(gate.can_arm_virtual_pending)
+        self.assertIn("edge_negative", _reason_codes(gate))
 
     def test_rr_hard_block_blocks_enter_now_and_pending(self) -> None:
         signal = _signal(status="wait_for_pullback")

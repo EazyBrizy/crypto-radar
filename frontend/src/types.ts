@@ -508,6 +508,8 @@ export interface SignalExecutionGateSnapshot {
   can_notify: boolean;
   can_enter_now: boolean;
   can_arm_pending: boolean;
+  can_arm_virtual_pending?: boolean;
+  can_arm_real_pending?: boolean;
   can_show_in_execution_feed: boolean;
   reasons: SignalExecutionGateReason[];
   warnings: SignalExecutionGateReason[];

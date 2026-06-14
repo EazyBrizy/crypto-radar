@@ -16678,6 +16678,16 @@
             "title": "Can Arm Pending",
             "default": false
           },
+          "can_arm_virtual_pending": {
+            "type": "boolean",
+            "title": "Can Arm Virtual Pending",
+            "default": false
+          },
+          "can_arm_real_pending": {
+            "type": "boolean",
+            "title": "Can Arm Real Pending",
+            "default": false
+          },
           "can_show_in_execution_feed": {
             "type": "boolean",
             "title": "Can Show In Execution Feed",

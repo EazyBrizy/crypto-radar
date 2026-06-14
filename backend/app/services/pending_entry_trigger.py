@@ -1011,8 +1011,10 @@ def _fresh_hard_block_after_acceptance(signal: RadarSignal) -> tuple[str, str, d
 def _current_edge_degradation_reason(edge: SignalEdgeSnapshot) -> str | None:
     if edge.status == "negative":
         return "current edge status is negative."
-    if edge.status == "insufficient_sample" or edge.sample_size < edge.min_sample_size:
-        return f"edge sample size {edge.sample_size} is below required {edge.min_sample_size}."
+    if edge.status in {"unknown", "insufficient_sample"}:
+        return None
+    if edge.sample_size < edge.min_sample_size:
+        return None
     expectancy = edge.expectancy_after_costs_r
     if expectancy is not None and expectancy < settings.execution_edge_min_expectancy_after_costs_r:
         return (

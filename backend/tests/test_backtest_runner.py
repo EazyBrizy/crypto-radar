@@ -129,6 +129,41 @@ class RepeatingStrategyEngine:
         return [signal.model_copy(update={"status": "actionable"})]
 
 
+class DualPendingStrategyEngine:
+    def __init__(self, trigger_timestamp: int) -> None:
+        self.trigger_timestamp = trigger_timestamp
+
+    async def generate_signals(self, features: Features, **_: object):
+        if features.timestamp != self.trigger_timestamp:
+            return []
+        first = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            reasons=["synthetic first pending setup"],
+            score=90,
+            entry=features.close,
+            stop_loss=features.close - 1.0,
+            take_profit_1=features.close + 10.0,
+            take_profit_2=features.close + 20.0,
+        )
+        second = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            reasons=["synthetic second pending setup"],
+            score=89,
+            entry=features.close + 0.2,
+            stop_loss=features.close - 1.0,
+            take_profit_1=features.close + 10.0,
+            take_profit_2=features.close + 20.0,
+        )
+        return [
+            first.model_copy(update={"status": "actionable"}),
+            second.model_copy(update={"status": "actionable"}),
+        ]
+
+
 class MissedRetestStrategyEngine:
     def __init__(self, trigger_timestamp: int) -> None:
         self.trigger_timestamp = trigger_timestamp
@@ -339,6 +374,55 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertEqual(trade.entry_time, _datetime_from_ms(entry_candle.open_time))
         self.assertEqual(trade.exit_time, _datetime_from_ms(entry_candle.close_time))
         self.assertEqual(trade.close_reason, "stop_loss")
+
+    def test_pending_entries_keep_conservative_bar_level_sequencing_before_same_bar_close(self) -> None:
+        """Bar-level backtests intentionally gate pending entries before same-candle exits."""
+        candles = _candles()
+        signal_candle = candles[3]
+        entry_candle = candles[4].model_copy(
+            update={
+                "open": 100.0,
+                "high": 100.2,
+                "low": 98.0,
+                "close": 99.2,
+            }
+        )
+        candles[4] = entry_candle
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=DualPendingStrategyEngine(signal_candle.close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "signal_selection_policy": "all_signals",
+                    "max_concurrent_positions": 1,
+                }
+            }
+        )
+
+        result = runner.run_detailed(request, mode="production_like")
+
+        self.assertEqual(result.assumptions["entry_timing"], "next_candle_open")
+        self.assertEqual(
+            result.assumptions["bar_level_sequencing_policy"],
+            "pending_entries_before_position_management",
+        )
+        self.assertEqual(len(result.trades), 1)
+        self.assertEqual(result.risk_rejections, 1)
+        trade = result.trades[0]
+        self.assertEqual(trade.entry_time, _datetime_from_ms(entry_candle.open_time))
+        self.assertEqual(trade.exit_time, _datetime_from_ms(entry_candle.close_time))
+        self.assertEqual(trade.close_reason, "stop_loss")
+        rejected_events = [
+            event
+            for event in result.signal_events
+            if event.rejection_reason_code == "position_constraints_blocked"
+        ]
+        self.assertEqual(len(rejected_events), 1)
+        self.assertTrue(rejected_events[0].risk_rejected)
 
     def test_runner_does_not_include_future_candles_in_feature_window(self) -> None:
         candles = _candles()

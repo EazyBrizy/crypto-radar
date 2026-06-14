@@ -1176,6 +1176,7 @@ def _assumptions_for_backtest(
     values = dict(options or {})
     values.setdefault("mode", mode)
     values["entry_timing"] = _entry_timing_for_backtest(mode, values)
+    values.setdefault("bar_level_sequencing_policy", "pending_entries_before_position_management")
     values.setdefault("fee_rate", str(request.fee_rate))
     values.setdefault("slippage_bps", str(request.slippage_bps))
     values.setdefault("initial_capital", str(request.initial_capital))

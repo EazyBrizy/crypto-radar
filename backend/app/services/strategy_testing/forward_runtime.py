@@ -135,6 +135,12 @@ class ForwardMarkToMarketResult:
     closed_trades: list[VirtualTrade] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _ForwardPendingEntryTouch:
+    price: Decimal
+    source: Literal["ask", "bid", "last", "price"]
+
+
 class ForwardStrategyTestRuntime:
     def __init__(
         self,
@@ -495,7 +501,7 @@ class ForwardStrategyTestRuntime:
                 continue
 
             try:
-                touch_price = _forward_pending_entry_touch_price(pending, tick)
+                touch = _forward_pending_entry_touch(pending, tick)
             except ValueError as exc:
                 updated_entries.append(
                     _terminal_forward_pending_entry(
@@ -508,14 +514,14 @@ class ForwardStrategyTestRuntime:
                 )
                 changed = True
                 continue
-            if touch_price is None:
+            if touch is None:
                 updated_entries.append(pending)
                 continue
 
             try:
                 signal = _forward_radar_signal_from_pending_entry(pending, tick)
                 gate = signal.execution_gate or _forward_pending_entry_fill_gate(pending)
-                request = _pending_entry_manual_confirm_request(current_run, pending, touch_price)
+                request = _pending_entry_manual_confirm_request(current_run, pending, touch)
                 portfolio_decision = _forward_portfolio_decision(current_run, signal, request)
                 if not portfolio_decision.can_enter:
                     blocked_gate = _gate_blocked_by_portfolio(gate, portfolio_decision)
@@ -536,7 +542,7 @@ class ForwardStrategyTestRuntime:
                             now=now,
                             reason_code=portfolio_decision.reason_code,
                             reason=portfolio_decision.message,
-                            touch_price=touch_price,
+                            touch=touch,
                         )
                     )
                     last_patch.update(
@@ -563,7 +569,7 @@ class ForwardStrategyTestRuntime:
                         now=now,
                         reason_code="pending_entry_execution_invalid",
                         reason=str(exc),
-                        touch_price=touch_price,
+                        touch=touch,
                     )
                 )
                 changed = True
@@ -599,7 +605,7 @@ class ForwardStrategyTestRuntime:
                     status="filled",
                     now=now,
                     trade_id=opened.id,
-                    touch_price=touch_price,
+                    touch=touch,
                 )
             )
             last_patch.update(
@@ -1065,8 +1071,8 @@ def _forward_pending_entry_is_expired(entry: dict[str, Any], now: datetime) -> b
     return expires_at is not None and expires_at <= now
 
 
-def _forward_pending_entry_touch_price(entry: dict[str, Any], tick: MarketData) -> Decimal | None:
-    price = _decimal(tick.price, Decimal("0"))
+def _forward_pending_entry_touch(entry: dict[str, Any], tick: MarketData) -> _ForwardPendingEntryTouch | None:
+    price, source = _forward_pending_entry_touch_candidate(entry, tick)
     if price <= 0:
         return None
     lower = _decimal(entry.get("entry_min"), Decimal("0"))
@@ -1075,7 +1081,33 @@ def _forward_pending_entry_touch_price(entry: dict[str, Any], tick: MarketData) 
         raise ValueError("Pending forward entry requires a positive entry zone.")
     if upper < lower:
         lower, upper = upper, lower
-    return price if lower <= price <= upper else None
+    return _ForwardPendingEntryTouch(price=price, source=source) if lower <= price <= upper else None
+
+
+def _forward_pending_entry_touch_candidate(
+    entry: dict[str, Any],
+    tick: MarketData,
+) -> tuple[Decimal, Literal["ask", "bid", "last", "price"]]:
+    side = str(entry.get("side") or "").strip().lower()
+    candidates: tuple[tuple[Literal["ask", "bid", "last", "price"], tuple[str, ...]], ...]
+    if side == "short":
+        candidates = (
+            ("bid", ("bid", "best_bid")),
+            ("last", ("last",)),
+            ("price", ("price",)),
+        )
+    else:
+        candidates = (
+            ("ask", ("ask", "best_ask")),
+            ("last", ("last",)),
+            ("price", ("price",)),
+        )
+    for source, field_names in candidates:
+        for field_name in field_names:
+            price = _decimal(getattr(tick, field_name, None), Decimal("0"))
+            if price > 0:
+                return price, source
+    return Decimal("0"), "price"
 
 
 def _terminal_forward_pending_entry(
@@ -1086,7 +1118,7 @@ def _terminal_forward_pending_entry(
     reason_code: str | None = None,
     reason: str | None = None,
     trade_id: str | None = None,
-    touch_price: Decimal | None = None,
+    touch: _ForwardPendingEntryTouch | None = None,
 ) -> dict[str, Any]:
     updated = dict(entry)
     updated["status"] = status
@@ -1099,9 +1131,9 @@ def _terminal_forward_pending_entry(
         updated["reason_code"] = reason_code
     if reason is not None:
         updated["reason"] = reason
-    if touch_price is not None:
-        updated["touch_price"] = float(touch_price)
-        updated["touch_price_source"] = "last"
+    if touch is not None:
+        updated["touch_price"] = float(touch.price)
+        updated["touch_price_source"] = touch.source
     return updated
 
 
@@ -1163,7 +1195,7 @@ def _forward_pending_entry_fill_gate(entry: dict[str, Any]) -> SignalExecutionGa
 def _pending_entry_manual_confirm_request(
     run: StrategyTestRunResponse,
     entry: dict[str, Any],
-    touch_price: Decimal,
+    touch: _ForwardPendingEntryTouch,
 ) -> ManualConfirmRequest:
     request = _manual_confirm_request(run, auto_enter_on_confirmation=True)
     metadata = dict(request.metadata or {})
@@ -1172,10 +1204,10 @@ def _pending_entry_manual_confirm_request(
             "trigger_source": "pending_entry",
             "accepted_trade_plan_hash": entry.get("trade_plan_hash"),
             "pending_entry_trigger": {
-                "touch_price": str(touch_price),
-                "trigger_price": str(touch_price),
+                "touch_price": str(touch.price),
+                "trigger_price": str(touch.price),
                 "trigger_reason": "entry_zone_touched",
-                "touch_price_source": "last",
+                "touch_price_source": touch.source,
             },
         }
     )

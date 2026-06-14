@@ -64,6 +64,11 @@ class MarketData(BaseModel):
     price: float
     volume: float
     timestamp: int
+    bid: Optional[float] = Field(default=None, gt=0)
+    ask: Optional[float] = Field(default=None, gt=0)
+    best_bid: Optional[float] = Field(default=None, gt=0)
+    best_ask: Optional[float] = Field(default=None, gt=0)
+    last: Optional[float] = Field(default=None, gt=0)
     side: Optional[TradeSide] = None
     trade_id: Optional[str] = None
     is_buyer_maker: Optional[bool] = None

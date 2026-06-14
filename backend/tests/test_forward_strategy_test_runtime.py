@@ -256,6 +256,82 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trade_store.trades[0].entry_price, Decimal("100.25"))
         runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
         self.assertEqual(runtime_state["pending_entries"][0]["touch_price"], 100.25)
+        self.assertEqual(runtime_state["pending_entries"][0]["touch_price_source"], "price")
+
+    async def test_forward_long_pending_touch_uses_best_ask(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_arm_pending=True))),
+        )
+
+        await runtime.process_strategy_signal(_strategy_signal(direction="LONG"))
+        fill_result = await runtime.process_market_tick(
+            MarketData(
+                exchange="bybit",
+                symbol="BTCUSDT",
+                price=99.75,
+                best_ask=100.25,
+                volume=1.0,
+                timestamp=1_780_000_060,
+            )
+        )
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+
+        self.assertEqual(fill_result.errors, [])
+        self.assertEqual(fill_result.opened_trades, 1)
+        self.assertEqual(trade_store.trades[0].entry_price, Decimal("100.25"))
+        self.assertEqual(runtime_state["pending_entries"][0]["touch_price"], 100.25)
+        self.assertEqual(runtime_state["pending_entries"][0]["touch_price_source"], "ask")
+
+    async def test_forward_short_pending_touch_uses_best_bid(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(
+                _radar_signal(
+                    direction="short",
+                    entry_min=99.0,
+                    entry_max=100.0,
+                    stop_loss=105.0,
+                    take_profit_1=90.0,
+                    take_profit_2=85.0,
+                    execution_gate=_gate(can_arm_pending=True),
+                )
+            ),
+        )
+
+        await runtime.process_strategy_signal(
+            _strategy_signal(
+                direction="SHORT",
+                entry_min=99.0,
+                entry_max=100.0,
+                stop_loss=105.0,
+                take_profit_1=90.0,
+                take_profit_2=85.0,
+            )
+        )
+        fill_result = await runtime.process_market_tick(
+            MarketData(
+                exchange="bybit",
+                symbol="BTCUSDT",
+                price=100.75,
+                best_bid=99.75,
+                volume=1.0,
+                timestamp=1_780_000_060,
+            )
+        )
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+
+        self.assertEqual(fill_result.errors, [])
+        self.assertEqual(fill_result.opened_trades, 1)
+        self.assertEqual(trade_store.trades[0].entry_price, Decimal("99.75"))
+        self.assertEqual(runtime_state["pending_entries"][0]["touch_price"], 99.75)
+        self.assertEqual(runtime_state["pending_entries"][0]["touch_price_source"], "bid")
 
     async def test_execution_policy_pending_retest_records_forward_pending_event(self) -> None:
         run_store = _ForwardRunStore(
@@ -740,23 +816,32 @@ def _strategy_signal(
     )
 
 
-def _radar_signal(*, execution_gate: SignalExecutionGateSnapshot) -> RadarSignal:
+def _radar_signal(
+    *,
+    direction: Literal["long", "short"] = "long",
+    entry_min: float | None = 100.0,
+    entry_max: float | None = 101.0,
+    stop_loss: float | None = 95.0,
+    take_profit_1: float | None = 110.0,
+    take_profit_2: float | None = 115.0,
+    execution_gate: SignalExecutionGateSnapshot,
+) -> RadarSignal:
     return RadarSignal(
         id="sig_1",
         symbol="BTCUSDT",
         exchange="bybit",
         strategy="trend_pullback_continuation",
-        direction="long",
+        direction=direction,
         confidence=0.82,
         risk_reward=2.0,
         status="actionable",
         score=82,
         timeframe="15m",
-        entry_min=100.0,
-        entry_max=101.0,
-        stop_loss=95.0,
-        take_profit_1=110.0,
-        take_profit_2=115.0,
+        entry_min=entry_min,
+        entry_max=entry_max,
+        stop_loss=stop_loss,
+        take_profit_1=take_profit_1,
+        take_profit_2=take_profit_2,
         created_at=NOW,
         updated_at=NOW,
         execution_gate=execution_gate,

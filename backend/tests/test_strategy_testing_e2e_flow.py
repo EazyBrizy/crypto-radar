@@ -225,7 +225,9 @@ class _DeterministicBacktestMatrixRunner:
         request: StrategyTestRunRequest,
         run_id: UUID,
         user_uuid: UUID,
+        **kwargs: Any,
     ) -> StrategyTestMatrixResult:
+        _ = kwargs
         trades = _profitable_trade_sample(
             run_id=run_id,
             user_uuid=user_uuid,

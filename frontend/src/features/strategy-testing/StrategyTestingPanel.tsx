@@ -10,6 +10,7 @@ import {
   usePublishStrategyTestCalibration,
   useRunStrategyTest,
   useStrategyTestActiveRun,
+  useStrategyTestRun,
   useStrategyTestReport,
   useStrategyTestRuns
 } from "@/hooks/use-radar-queries";
@@ -107,7 +108,12 @@ export function StrategyTestingPanel({
   const fallbackActiveRun = recentActiveRun ??
     (mutationRunIsMissingFromList && isActiveStrategyTestRun(runMutation.data?.status) ? runMutation.data ?? null : null);
   const activeRunState = activeRunQuery.data ?? null;
-  const activeRun = activeRunState?.active_run ?? fallbackActiveRun;
+  const activeRunFromState = activeRunState?.active_run ?? fallbackActiveRun;
+  const activeRunDetailQuery = useStrategyTestRun(activeRunFromState?.run_id ?? null, {
+    enabled: Boolean(activeRunFromState && isActiveStrategyTestRun(activeRunFromState.status)),
+    refetchInterval: STRATEGY_TEST_RUN_POLL_MS
+  });
+  const activeRun = activeRunDetailQuery.data ?? activeRunFromState;
   const selectedRun = runs.find((run) => run.run_id === selectedReportRunId) ?? null;
   const mutationSelectedRun = runMutation.data?.run_id === selectedReportRunId ? runMutation.data : null;
   const activeSelectedRun = activeRun?.run_id === selectedReportRunId ? activeRun : null;
@@ -424,8 +430,15 @@ function isActiveStrategyTestRun(status: StrategyTestRunStatus | null | undefine
 }
 
 function numericSummary(run: StrategyTestRunResponse | null, key: keyof StrategyTestRunResponse["summary"]): number | null {
-  const value = run?.summary[key];
+  const keyText = String(key);
+  const value = run?.summary[key] ?? runtimePartialValue(run, keyText) ?? run?.runtime_state[keyText];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function runtimePartialValue(run: StrategyTestRunResponse | null, key: string): unknown {
+  const partialSummary = run?.runtime_state.partial_summary;
+  if (!partialSummary || typeof partialSummary !== "object" || Array.isArray(partialSummary)) return null;
+  return (partialSummary as Record<string, unknown>)[key];
 }
 
 function validateDateRange(startAt: string, endAt: string): string | null {
@@ -543,6 +556,7 @@ function ActiveRunNotice({
   run: StrategyTestRunResponse;
 }) {
   const allowedActions = new Set(activeRunState?.allowed_actions ?? ["refresh"]);
+  const stopping = cancelPending || run.status === "stopping";
   return (
     <section aria-label="Active strategy test run" className="strategy-test-active-run">
       <div className="strategy-test-active-run-header">
@@ -579,12 +593,12 @@ function ActiveRunNotice({
         {allowedActions.has("cancel") ? (
           <button
             className="secondary-action"
-            disabled={cancelPending}
+            disabled={stopping}
             onClick={() => onCancel(run.run_id)}
             type="button"
           >
             <XCircle size={16} />
-            Cancel run
+            {stopping ? "Stopping..." : "Cancel run"}
           </button>
         ) : null}
       </div>

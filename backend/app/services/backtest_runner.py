@@ -295,6 +295,10 @@ class BacktestDetailedRunResult:
     signal_events: list[BacktestSignalEvent] = field(default_factory=list)
 
 
+class BacktestRunCancelled(Exception):
+    """Raised when a backtest cancellation predicate becomes true."""
+
+
 class BacktestExecutionSimulator:
     def __init__(self, execution_engine: VirtualExecutionEngine | None = None) -> None:
         self._execution_engine = execution_engine or VirtualExecutionEngine()
@@ -391,8 +395,20 @@ class ProductionBacktestRunner:
         *,
         mode: str = "production_like",
         options: dict[str, Any] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+        progress_interval_bars: int = 250,
     ) -> BacktestDetailedRunResult:
-        return _run_awaitable_sync(self._run_detailed_async(request, mode=mode, options=options))
+        return _run_awaitable_sync(
+            self._run_detailed_async(
+                request,
+                mode=mode,
+                options=options,
+                is_cancelled=is_cancelled,
+                on_progress=on_progress,
+                progress_interval_bars=progress_interval_bars,
+            )
+        )
 
     async def _run_async(self, request: BacktestRunRequest) -> BacktestRunResult:
         return (
@@ -409,11 +425,25 @@ class ProductionBacktestRunner:
         *,
         mode: str,
         options: dict[str, Any] | None,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+        progress_interval_bars: int = 250,
     ) -> BacktestDetailedRunResult:
         normalized_mode = _normalize_backtest_mode(mode)
         assumptions = _assumptions_for_backtest(request, normalized_mode, options)
         execution_policy = _execution_policy_for_backtest(normalized_mode, assumptions)
         request = _request_with_mode_options(request, normalized_mode, assumptions)
+        _raise_if_cancelled(is_cancelled)
+        _emit_backtest_progress(
+            on_progress,
+            phase="loading_candles",
+            bars_processed=0,
+            bars_total=0,
+            signals_seen=0,
+            trades_count=0,
+            risk_rejections=0,
+            execution_rejections=0,
+        )
         loaded_candles = await self._historical_candle_provider.load_candles(
             exchange=request.exchange,
             symbol=request.symbol,
@@ -421,6 +451,7 @@ class ProductionBacktestRunner:
             start_at=request.start_at,
             end_at=request.end_at,
         )
+        _raise_if_cancelled(is_cancelled)
         candles = sorted(
             [candle.model_copy(update={"is_closed": True}) for candle in loaded_candles if candle.is_closed],
             key=lambda candle: candle.open_time,
@@ -447,7 +478,22 @@ class ProductionBacktestRunner:
         )
 
         pending_entries: list[_PendingSignalEntry] = []
+        bars_total = max(0, len(candles) - warmup)
+        progress_interval = max(1, progress_interval_bars)
         for index in range(warmup, len(candles)):
+            bars_processed = index - warmup + 1
+            if bars_processed == 1 or bars_processed % progress_interval == 0:
+                _raise_if_cancelled(is_cancelled)
+                _emit_backtest_progress(
+                    on_progress,
+                    phase="running_scenario",
+                    bars_processed=bars_processed,
+                    bars_total=bars_total,
+                    signals_seen=state.signals_seen,
+                    trades_count=len(state.closed_positions) + len(state.open_positions),
+                    risk_rejections=state.risk_rejections,
+                    execution_rejections=state.execution_rejections,
+                )
             candle = candles[index]
             if pending_entries:
                 ready_entries = pending_entries
@@ -613,6 +659,17 @@ class ProductionBacktestRunner:
                 _equity_point(candles[-1], state.cash_equity, float(request.initial_capital))
             )
 
+        _raise_if_cancelled(is_cancelled)
+        _emit_backtest_progress(
+            on_progress,
+            phase="running_scenario",
+            bars_processed=bars_total,
+            bars_total=bars_total,
+            signals_seen=state.signals_seen,
+            trades_count=len(state.closed_positions),
+            risk_rejections=state.risk_rejections,
+            execution_rejections=state.execution_rejections,
+        )
         state.signal_events = _closed_signal_events(state.signal_events, state.closed_positions)
         metrics = _metrics_from_state(state)
         assumptions = _assumptions_with_runtime_diagnostics(assumptions, state)
@@ -2638,6 +2695,37 @@ def _trade_plan_time_stop_metadata(signal: RadarSignal) -> dict[str, Any] | None
 
 def _datetime_from_ms(timestamp_ms: int) -> datetime:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+
+
+def _raise_if_cancelled(is_cancelled: Callable[[], bool] | None) -> None:
+    if is_cancelled is not None and is_cancelled():
+        raise BacktestRunCancelled("backtest_run_cancelled")
+
+
+def _emit_backtest_progress(
+    on_progress: Callable[[dict[str, Any]], None] | None,
+    *,
+    phase: str,
+    bars_processed: int,
+    bars_total: int,
+    signals_seen: int,
+    trades_count: int,
+    risk_rejections: int,
+    execution_rejections: int,
+) -> None:
+    if on_progress is None:
+        return
+    on_progress(
+        {
+            "phase": phase,
+            "bars_processed": bars_processed,
+            "bars_total": bars_total,
+            "signals_seen": signals_seen,
+            "trades_count": trades_count,
+            "risk_rejections": risk_rejections,
+            "execution_rejections": execution_rejections,
+        }
+    )
 
 
 def _decimal(value: float) -> Decimal:

@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable
 from uuid import NAMESPACE_DNS, UUID, uuid5
 
 from app.schemas.backtest import BacktestRunRequest
 from app.services.backtest_runner import (
+    BacktestRunCancelled,
     BacktestDetailedRunResult,
     BacktestSignalEvent,
     BacktestSimulatedTrade,
@@ -34,6 +35,13 @@ class StrategyTestScenarioResult:
     assumptions: dict[str, Any] = field(default_factory=dict)
 
 
+class StrategyTestRunCancelled(Exception):
+    """Raised when a strategy test run cancellation is observed by a runner."""
+
+
+StrategyTestScenarioProgressCallback = Callable[[dict[str, Any]], None]
+
+
 class StrategyTestScenarioRunner:
     def __init__(self, backtest_runner: ProductionBacktestRunner | None = None) -> None:
         self._backtest_runner = backtest_runner or ProductionBacktestRunner()
@@ -47,7 +55,11 @@ class StrategyTestScenarioRunner:
         strategy: str,
         pair: StrategyTestPair,
         timeframe: str,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_progress: StrategyTestScenarioProgressCallback | None = None,
     ) -> StrategyTestScenarioResult:
+        if _is_cancelled(is_cancelled):
+            raise StrategyTestRunCancelled("strategy_test_run_cancelled")
         assumptions = build_strategy_test_assumptions(
             mode=request.mode,
             fee_rate=request.fee_rate,
@@ -56,16 +68,23 @@ class StrategyTestScenarioRunner:
             initial_capital=request.initial_capital,
             params=request.params,
         )
-        detailed = self._backtest_runner.run_detailed(
-            _backtest_request_from_scenario(
-                request=request,
-                strategy=strategy,
-                pair=pair,
-                timeframe=timeframe,
-            ),
-            mode=request.mode,
-            options=assumptions.model_dump(mode="json"),
-        )
+        try:
+            detailed = self._backtest_runner.run_detailed(
+                _backtest_request_from_scenario(
+                    request=request,
+                    strategy=strategy,
+                    pair=pair,
+                    timeframe=timeframe,
+                ),
+                mode=request.mode,
+                options=assumptions.model_dump(mode="json"),
+                is_cancelled=is_cancelled,
+                on_progress=on_progress,
+            )
+        except BacktestRunCancelled as exc:
+            raise StrategyTestRunCancelled(str(exc) or "strategy_test_run_cancelled") from exc
+        if _is_cancelled(is_cancelled):
+            raise StrategyTestRunCancelled("strategy_test_run_cancelled")
         trades = [
             _strategy_test_trade_from_backtest_trade(
                 run_id=run_id,
@@ -94,6 +113,10 @@ class StrategyTestScenarioRunner:
             signal_events=signal_events,
             assumptions=detailed.assumptions,
         )
+
+
+def _is_cancelled(is_cancelled: Callable[[], bool] | None) -> bool:
+    return bool(is_cancelled is not None and is_cancelled())
 
 
 def strategy_test_user_uuid(user_id: str | UUID) -> UUID:

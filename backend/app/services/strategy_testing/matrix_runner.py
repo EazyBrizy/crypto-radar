@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 from uuid import UUID
 
 from app.services.strategy_testing.metrics import MetricResult
@@ -9,7 +9,12 @@ from app.services.strategy_testing.report_builder import (
     build_matrix_metric_results,
     metric_results_to_summary_sections,
 )
-from app.services.strategy_testing.runner import StrategyTestScenarioResult, StrategyTestScenarioRunner
+from app.services.strategy_testing.runner import (
+    StrategyTestRunCancelled,
+    StrategyTestScenarioProgressCallback,
+    StrategyTestScenarioResult,
+    StrategyTestScenarioRunner,
+)
 from app.services.strategy_testing.schemas import (
     StrategyTestPair,
     StrategyTestRunRequest,
@@ -28,8 +33,27 @@ class ScenarioRunner(Protocol):
         strategy: str,
         pair: StrategyTestPair,
         timeframe: str,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_progress: StrategyTestScenarioProgressCallback | None = None,
     ) -> StrategyTestScenarioResult:
         ...
+
+
+@dataclass(frozen=True)
+class StrategyTestScenarioContext:
+    index: int
+    total: int
+    strategy: str
+    pair: StrategyTestPair
+    timeframe: str
+
+    @property
+    def exchange(self) -> str:
+        return self.pair.exchange
+
+    @property
+    def symbol(self) -> str:
+        return self.pair.symbol
 
 
 @dataclass(frozen=True)
@@ -43,6 +67,7 @@ class StrategyTestMatrixResult:
     trades: list[StrategyTestTrade] = field(default_factory=list)
     signal_events: list[StrategyTestSignalEvent] = field(default_factory=list)
     metrics: list[MetricResult] = field(default_factory=list)
+    cancelled: bool = False
 
     @property
     def all_failed(self) -> bool:
@@ -102,6 +127,23 @@ class StrategyTestMatrixRunner:
         request: StrategyTestRunRequest,
         run_id: UUID,
         user_uuid: UUID,
+        on_scenario_started: Callable[[StrategyTestScenarioContext], None] | None = None,
+        on_scenario_completed: Callable[
+            [StrategyTestScenarioContext, StrategyTestScenarioResult, dict[str, Any]],
+            None,
+        ]
+        | None = None,
+        on_scenario_failed: Callable[
+            [StrategyTestScenarioContext, Exception, dict[str, Any]],
+            None,
+        ]
+        | None = None,
+        on_scenario_progress: Callable[
+            [StrategyTestScenarioContext, dict[str, Any], dict[str, Any]],
+            None,
+        ]
+        | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> StrategyTestMatrixResult:
         scenario_count = len(request.strategies) * len(request.pairs) * len(request.timeframes)
         completed = 0
@@ -110,10 +152,51 @@ class StrategyTestMatrixRunner:
         errors: list[dict[str, Any]] = []
         trades: list[StrategyTestTrade] = []
         signal_events: list[StrategyTestSignalEvent] = []
+        scenario_index = 0
 
         for strategy in request.strategies:
             for pair in request.pairs:
                 for timeframe in request.timeframes:
+                    scenario_index += 1
+                    context = StrategyTestScenarioContext(
+                        index=scenario_index,
+                        total=scenario_count,
+                        strategy=strategy,
+                        pair=pair,
+                        timeframe=timeframe,
+                    )
+                    if is_cancelled is not None and is_cancelled():
+                        return _matrix_result(
+                            run_id=run_id,
+                            scenario_count=scenario_count,
+                            completed=completed,
+                            failed=failed,
+                            scenario_summaries=scenario_summaries,
+                            errors=errors,
+                            trades=trades,
+                            signal_events=signal_events,
+                            cancelled=True,
+                            metric_set=request.metric_set,
+                        )
+                    if on_scenario_started is not None:
+                        on_scenario_started(context)
+
+                    def handle_progress(progress: dict[str, Any]) -> None:
+                        if on_scenario_progress is None:
+                            return
+                        partial_summary = _partial_summary(
+                            run_id=run_id,
+                            scenario_count=scenario_count,
+                            completed=completed,
+                            failed=failed,
+                            scenario_summaries=scenario_summaries,
+                            errors=errors,
+                            trades=trades,
+                            signal_events=signal_events,
+                            metric_set=request.metric_set,
+                        )
+                        on_scenario_progress(context, progress, partial_summary)
+
                     try:
                         result = self._scenario_runner.run_scenario(
                             run_id=run_id,
@@ -122,6 +205,21 @@ class StrategyTestMatrixRunner:
                             strategy=strategy,
                             pair=pair,
                             timeframe=timeframe,
+                            is_cancelled=is_cancelled,
+                            on_progress=handle_progress,
+                        )
+                    except StrategyTestRunCancelled:
+                        return _matrix_result(
+                            run_id=run_id,
+                            scenario_count=scenario_count,
+                            completed=completed,
+                            failed=failed,
+                            scenario_summaries=scenario_summaries,
+                            errors=errors,
+                            trades=trades,
+                            signal_events=signal_events,
+                            cancelled=True,
+                            metric_set=request.metric_set,
                         )
                     except Exception as exc:
                         failed += 1
@@ -134,28 +232,106 @@ class StrategyTestMatrixRunner:
                                 "error": str(exc),
                             }
                         )
+                        partial_summary = _partial_summary(
+                            run_id=run_id,
+                            scenario_count=scenario_count,
+                            completed=completed,
+                            failed=failed,
+                            scenario_summaries=scenario_summaries,
+                            errors=errors,
+                            trades=trades,
+                            signal_events=signal_events,
+                            metric_set=request.metric_set,
+                        )
+                        if on_scenario_failed is not None:
+                            on_scenario_failed(context, exc, partial_summary)
                         continue
 
                     completed += 1
                     scenario_summaries.append(result.summary)
                     trades.extend(result.trades)
                     signal_events.extend(result.signal_events)
+                    partial_summary = _partial_summary(
+                        run_id=run_id,
+                        scenario_count=scenario_count,
+                        completed=completed,
+                        failed=failed,
+                        scenario_summaries=scenario_summaries,
+                        errors=errors,
+                        trades=trades,
+                        signal_events=signal_events,
+                        metric_set=request.metric_set,
+                    )
+                    if on_scenario_completed is not None:
+                        on_scenario_completed(context, result, partial_summary)
 
-        return StrategyTestMatrixResult(
+        return _matrix_result(
             run_id=run_id,
             scenario_count=scenario_count,
-            completed_scenarios=completed,
-            failed_scenarios=failed,
+            completed=completed,
+            failed=failed,
             scenario_summaries=scenario_summaries,
             errors=errors,
             trades=trades,
             signal_events=signal_events,
-            metrics=build_matrix_metric_results(
-                trades,
-                signal_events=signal_events,
-                metric_set=request.metric_set,
-            ),
+            metric_set=request.metric_set,
         )
+
+
+def _partial_summary(
+    *,
+    run_id: UUID,
+    scenario_count: int,
+    completed: int,
+    failed: int,
+    scenario_summaries: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+    trades: list[StrategyTestTrade],
+    signal_events: list[StrategyTestSignalEvent],
+    metric_set: Sequence[str],
+) -> dict[str, Any]:
+    return _matrix_result(
+        run_id=run_id,
+        scenario_count=scenario_count,
+        completed=completed,
+        failed=failed,
+        scenario_summaries=scenario_summaries,
+        errors=errors,
+        trades=trades,
+        signal_events=signal_events,
+        metric_set=metric_set,
+    ).summary()
+
+
+def _matrix_result(
+    *,
+    run_id: UUID,
+    scenario_count: int,
+    completed: int,
+    failed: int,
+    scenario_summaries: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+    trades: list[StrategyTestTrade],
+    signal_events: list[StrategyTestSignalEvent],
+    metric_set: Sequence[str],
+    cancelled: bool = False,
+) -> StrategyTestMatrixResult:
+    return StrategyTestMatrixResult(
+        run_id=run_id,
+        scenario_count=scenario_count,
+        completed_scenarios=completed,
+        failed_scenarios=failed,
+        scenario_summaries=list(scenario_summaries),
+        errors=list(errors),
+        trades=list(trades),
+        signal_events=list(signal_events),
+        metrics=build_matrix_metric_results(
+            trades,
+            signal_events=signal_events,
+            metric_set=metric_set,
+        ),
+        cancelled=cancelled,
+    )
 
 
 def _int_from_summary(summary: dict[str, Any], key: str) -> int:

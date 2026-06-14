@@ -274,6 +274,16 @@ export function useStrategyTestActiveRun(userId?: string | null, options: Planne
   });
 }
 
+export function useStrategyTestRun(runId: string | null, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestRunResponse>({
+    queryKey: serverStateKeys.strategyTests.run(runId ?? "none"),
+    queryFn: () => api.strategyTests.getRun(runId as string),
+    enabled: options.enabled ?? Boolean(runId),
+    refetchInterval: options.refetchInterval,
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
 export function useRunStrategyTest() {
   const queryClient = useQueryClient();
 

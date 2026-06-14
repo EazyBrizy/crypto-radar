@@ -121,7 +121,9 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "queued")
         self.assertEqual(data["test_type"], "historical_backtest")
-        self.assertEqual(data["runtime_state"], {})
+        self.assertEqual(data["runtime_state"]["phase"], "queued")
+        self.assertEqual(data["runtime_state"]["scenario_total"], 12)
+        self.assertEqual(data["runtime_state"]["scenario_completed"], 0)
         self.assertIsNone(data["last_heartbeat_at"])
         self.assertIn("run_id", data)
         self.assertEqual(
@@ -497,7 +499,7 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(data["disabled_reason_code"], "active_strategy_test_run")
         self.assertEqual(data["active_run"]["run_id"], str(active.run_id))
 
-    def test_cancel_run_endpoint_marks_active_run_cancelled(self) -> None:
+    def test_cancel_run_endpoint_marks_running_run_stopping(self) -> None:
         store = _EphemeralStrategyTestRunStore()
         heartbeat = datetime.now(timezone.utc)
         active = StrategyTestRunResponse(
@@ -525,8 +527,8 @@ class StrategyTestingApiContractTest(unittest.TestCase):
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "cancelled")
-        self.assertEqual(store.get_run(active.run_id).run.status, "cancelled")  # type: ignore[union-attr]
+        self.assertEqual(response.json()["status"], "stopping")
+        self.assertEqual(store.get_run(active.run_id).run.status, "stopping")  # type: ignore[union-attr]
 
     def test_signal_events_and_funnel_endpoints_return_run_signal_funnel(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -752,8 +754,9 @@ class _NoopStrategyTestMatrixRunner:
         request: StrategyTestRunRequest,
         run_id: UUID,
         user_uuid: UUID,
+        **kwargs: Any,
     ) -> StrategyTestMatrixResult:
-        _ = user_uuid
+        _ = user_uuid, kwargs
         return StrategyTestMatrixResult(
             run_id=run_id,
             scenario_count=len(request.strategies) * len(request.pairs) * len(request.timeframes),
@@ -771,8 +774,9 @@ class _MetricStrategyTestMatrixRunner:
         request: StrategyTestRunRequest,
         run_id: UUID,
         user_uuid: UUID,
+        **kwargs: Any,
     ) -> StrategyTestMatrixResult:
-        _ = request, user_uuid
+        _ = request, user_uuid, kwargs
         group = {
             "strategy": "trend_pullback_continuation",
             "exchange": "bybit",
@@ -807,8 +811,9 @@ class _InsufficientSampleStrategyTestMatrixRunner:
         request: StrategyTestRunRequest,
         run_id: UUID,
         user_uuid: UUID,
+        **kwargs: Any,
     ) -> StrategyTestMatrixResult:
-        _ = request, user_uuid
+        _ = request, user_uuid, kwargs
         group = {
             "strategy": "trend_pullback_continuation",
             "exchange": "bybit",
@@ -842,8 +847,9 @@ class _FailingStrategyTestMatrixRunner:
         request: StrategyTestRunRequest,
         run_id: UUID,
         user_uuid: UUID,
+        **kwargs: Any,
     ) -> StrategyTestMatrixResult:
-        _ = request, run_id, user_uuid
+        _ = request, run_id, user_uuid, kwargs
         raise AssertionError("forward_virtual must not use historical matrix runner")
 
 

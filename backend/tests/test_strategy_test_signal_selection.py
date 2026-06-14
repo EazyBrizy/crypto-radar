@@ -97,7 +97,9 @@ class _RecordingBacktestRunner:
         *,
         mode: str = "production_like",
         options: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> BacktestDetailedRunResult:
+        _ = kwargs
         self.requests.append(request)
         self.modes.append(mode)
         return BacktestDetailedRunResult(

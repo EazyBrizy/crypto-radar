@@ -8,7 +8,11 @@ from uuid import UUID
 from app.core.config import settings
 from app.services.strategy_testing.eligibility_profiles import StrategyExecutionEligibilityProfileUpdater
 from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
-from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
+from app.services.strategy_testing.matrix_runner import (
+    StrategyTestMatrixResult,
+    StrategyTestMatrixRunner,
+    StrategyTestScenarioContext,
+)
 from app.services.strategy_testing.metrics import MetricResult
 from app.services.strategy_testing.report_builder import (
     StrategyTestReportBuilder,
@@ -16,7 +20,7 @@ from app.services.strategy_testing.report_builder import (
     build_signal_funnel_response,
     metric_results_to_rows,
 )
-from app.services.strategy_testing.runner import strategy_test_user_uuid
+from app.services.strategy_testing.runner import StrategyTestRunCancelled, strategy_test_user_uuid
 from app.services.strategy_testing.schemas import (
     StrategyTestCalibrationDecision,
     StrategyTestCalibrationProfile,
@@ -92,27 +96,148 @@ class StrategyTestingService:
         return self.execute_run(created.run.run_id, request)
 
     def enqueue_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
-        return self._run_store.create_run(request).run
+        created = self._run_store.create_run(request)
+        if request.test_type == "historical_backtest":
+            return self._run_store.update_runtime_state(
+                created.run.run_id,
+                _initial_historical_runtime_state(request, phase="queued"),
+                heartbeat=False,
+            ).run
+        return created.run
 
     def execute_run(self, run_id: UUID, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
         if request.test_type == "forward_virtual":
             return self._forward_runtime.start_run(run_id, request).run
+        existing = self._run_store.get_run(run_id)
+        if existing is not None and existing.run.status in {"cancelled", "stopping"}:
+            self._run_store.update_runtime_state(
+                run_id,
+                _terminal_runtime_state(
+                    request=request,
+                    phase="cancelled",
+                    partial_summary=existing.run.summary,
+                ),
+            )
+            return self._run_store.mark_cancelled(run_id).run
         self._run_store.mark_running(run_id)
+        self._run_store.update_runtime_state(
+            run_id,
+            _initial_historical_runtime_state(request, phase="running"),
+        )
         try:
+            ensure_schema = getattr(self._trade_store, "ensure_schema", None)
+            if callable(ensure_schema):
+                ensure_schema()
             user_uuid = strategy_test_user_uuid(request.user_id)
+
+            def is_cancelled() -> bool:
+                detail = self._run_store.get_run(run_id)
+                return bool(detail is not None and detail.run.status in {"cancelled", "stopping"})
+
+            def on_started(context: StrategyTestScenarioContext) -> None:
+                self._run_store.update_runtime_state(
+                    run_id,
+                    _scenario_runtime_state(
+                        context=context,
+                        request=request,
+                        phase="loading_candles",
+                        partial_summary=None,
+                    ),
+                )
+
+            def on_progress(
+                context: StrategyTestScenarioContext,
+                progress: dict[str, Any],
+                partial_summary: dict[str, Any],
+            ) -> None:
+                self._run_store.update_runtime_state(
+                    run_id,
+                    _scenario_runtime_state(
+                        context=context,
+                        request=request,
+                        phase=_runtime_phase(progress.get("phase"), fallback="running_scenario"),
+                        partial_summary=_partial_summary_with_progress(partial_summary, progress),
+                        progress=progress,
+                    ),
+                )
+
+            def on_completed(
+                context: StrategyTestScenarioContext,
+                _result: Any,
+                partial_summary: dict[str, Any],
+            ) -> None:
+                self._run_store.update_runtime_state(
+                    run_id,
+                    _scenario_runtime_state(
+                        context=context,
+                        request=request,
+                        phase="running_scenario",
+                        partial_summary=partial_summary,
+                    ),
+                )
+
+            def on_failed(
+                context: StrategyTestScenarioContext,
+                exc: Exception,
+                partial_summary: dict[str, Any],
+            ) -> None:
+                self._run_store.update_runtime_state(
+                    run_id,
+                    _scenario_runtime_state(
+                        context=context,
+                        request=request,
+                        phase="running_scenario",
+                        partial_summary=partial_summary,
+                        last_error=str(exc),
+                    ),
+                )
+
             matrix_result = self._matrix_runner.run_matrix(
                 request=request,
                 run_id=run_id,
                 user_uuid=user_uuid,
+                on_scenario_started=on_started,
+                on_scenario_completed=on_completed,
+                on_scenario_failed=on_failed,
+                on_scenario_progress=on_progress,
+                is_cancelled=is_cancelled,
             )
+            if matrix_result.cancelled or is_cancelled():
+                self._run_store.update_runtime_state(
+                    run_id,
+                    _terminal_runtime_state(
+                        request=request,
+                        phase="cancelled",
+                        partial_summary=matrix_result.summary(),
+                    ),
+                )
+                return self._run_store.mark_cancelled(run_id).run
             if matrix_result.all_failed:
-                return self._run_store.mark_failed(run_id, _failure_message(matrix_result)).run
+                message = _failure_message(matrix_result)
+                self._run_store.update_runtime_state(
+                    run_id,
+                    _terminal_runtime_state(
+                        request=request,
+                        phase="failed",
+                        partial_summary=matrix_result.summary(),
+                        last_error=message,
+                    ),
+                )
+                return self._run_store.mark_failed(run_id, message).run
             metric_results = matrix_result.metrics or build_matrix_metric_results(
                 matrix_result.trades,
                 signal_events=matrix_result.signal_events,
                 metric_set=request.metric_set,
             )
             summary = matrix_result.summary(metrics=metric_results)
+            self._run_store.update_runtime_state(
+                run_id,
+                _terminal_runtime_state(
+                    request=request,
+                    phase="writing_results",
+                    partial_summary=summary,
+                ),
+            )
             self._trade_store.write_trades(matrix_result.trades)
             _write_signal_events(self._trade_store, matrix_result.signal_events)
             self._trade_store.write_metrics(
@@ -143,8 +268,30 @@ class StrategyTestingService:
                         "eligibility_profile_update_failed",
                         message,
                     )
+            self._run_store.update_runtime_state(
+                run_id,
+                _terminal_runtime_state(
+                    request=request,
+                    phase="completed",
+                    partial_summary=summary,
+                ),
+            )
             return self._run_store.mark_completed(run_id, summary=summary).run
+        except StrategyTestRunCancelled:
+            self._run_store.update_runtime_state(
+                run_id,
+                _terminal_runtime_state(request=request, phase="cancelled"),
+            )
+            return self._run_store.mark_cancelled(run_id).run
         except Exception as exc:
+            self._run_store.update_runtime_state(
+                run_id,
+                _terminal_runtime_state(
+                    request=request,
+                    phase="failed",
+                    last_error=str(exc),
+                ),
+            )
             return self._run_store.mark_failed(run_id, str(exc)).run
 
     def list_runs(
@@ -204,6 +351,25 @@ class StrategyTestingService:
             return detail.run
         if detail.run.status not in {"queued", "running", "stopping"}:
             raise ValueError(f"Strategy test run cannot be cancelled from status {detail.run.status}")
+        if detail.run.status == "running":
+            self._run_store.update_runtime_state(
+                run_id,
+                {
+                    "last_progress_at": _now_iso(),
+                    "last_error": None,
+                },
+            )
+            return self._run_store.mark_stopping(run_id).run
+        if detail.run.status == "stopping":
+            return detail.run
+        self._run_store.update_runtime_state(
+            run_id,
+            {
+                "phase": "cancelled",
+                "last_progress_at": _now_iso(),
+                "last_error": None,
+            },
+        )
         return self._run_store.mark_cancelled(run_id).run
 
     def publish_calibration(self, run_id: UUID) -> StrategyTestCalibrationResponse:
@@ -272,6 +438,179 @@ def _failure_message(matrix_result: StrategyTestMatrixResult) -> str:
     if matrix_result.errors:
         return f"All strategy test scenarios failed: {matrix_result.errors[0]['error']}"
     return "All strategy test scenarios failed"
+
+
+_HISTORICAL_RUNTIME_PHASES = {
+    "queued",
+    "running",
+    "loading_candles",
+    "running_scenario",
+    "writing_results",
+    "completed",
+    "failed",
+    "cancelled",
+}
+
+
+def _initial_historical_runtime_state(
+    request: StrategyTestRunRequest,
+    *,
+    phase: str,
+) -> dict[str, Any]:
+    partial_summary = _empty_partial_summary(_scenario_total(request))
+    return _runtime_state_base(
+        request=request,
+        phase=phase,
+        partial_summary=partial_summary,
+        last_error=None,
+    )
+
+
+def _scenario_runtime_state(
+    *,
+    context: StrategyTestScenarioContext,
+    request: StrategyTestRunRequest,
+    phase: str,
+    partial_summary: dict[str, Any] | None,
+    progress: dict[str, Any] | None = None,
+    last_error: str | None = None,
+) -> dict[str, Any]:
+    summary = partial_summary or _empty_partial_summary(_scenario_total(request))
+    state = _runtime_state_base(
+        request=request,
+        phase=phase,
+        partial_summary=summary,
+        last_error=last_error,
+    )
+    state.update(
+        {
+            "current_strategy": context.strategy,
+            "current_exchange": context.exchange,
+            "current_symbol": context.symbol,
+            "current_timeframe": context.timeframe,
+        }
+    )
+    if progress:
+        state["bars_processed"] = _int_value(progress.get("bars_processed"))
+        state["bars_total"] = _int_value(progress.get("bars_total"))
+    return state
+
+
+def _terminal_runtime_state(
+    *,
+    request: StrategyTestRunRequest,
+    phase: str,
+    partial_summary: dict[str, Any] | None = None,
+    last_error: str | None = None,
+) -> dict[str, Any]:
+    summary = partial_summary or _empty_partial_summary(_scenario_total(request))
+    state = _runtime_state_base(
+        request=request,
+        phase=phase,
+        partial_summary=summary,
+        last_error=last_error,
+    )
+    state.update(
+        {
+            "current_strategy": None,
+            "current_exchange": None,
+            "current_symbol": None,
+            "current_timeframe": None,
+        }
+    )
+    return state
+
+
+def _runtime_state_base(
+    *,
+    request: StrategyTestRunRequest,
+    phase: str,
+    partial_summary: dict[str, Any],
+    last_error: str | None,
+) -> dict[str, Any]:
+    normalized_phase = _runtime_phase(phase, fallback="running")
+    scenario_total = _summary_int(partial_summary, "scenario_count", _scenario_total(request))
+    return {
+        "phase": normalized_phase,
+        "scenario_total": scenario_total,
+        "scenario_completed": _summary_int(partial_summary, "completed_scenarios", 0),
+        "scenario_failed": _summary_int(partial_summary, "failed_scenarios", 0),
+        "current_strategy": None,
+        "current_exchange": None,
+        "current_symbol": None,
+        "current_timeframe": None,
+        "signals_seen": _summary_int(partial_summary, "signals_seen", 0),
+        "trades_count": _summary_int(partial_summary, "trades_count", 0),
+        "risk_rejections": _summary_int(partial_summary, "risk_rejections", 0),
+        "execution_rejections": _summary_int(partial_summary, "execution_rejections", 0),
+        "last_progress_at": _now_iso(),
+        "last_error": last_error,
+        "partial_summary": dict(partial_summary),
+    }
+
+
+def _partial_summary_with_progress(
+    partial_summary: dict[str, Any],
+    progress: dict[str, Any],
+) -> dict[str, Any]:
+    combined = dict(partial_summary)
+    counter_keys = (
+        "signals_seen",
+        "signals_count",
+        "trades_count",
+        "risk_rejections",
+        "execution_rejections",
+    )
+    for key in counter_keys:
+        progress_value = _int_value(progress.get(key))
+        if progress_value:
+            combined[key] = _summary_int(combined, key, 0) + progress_value
+    if "signals_count" not in combined and "signals_seen" in combined:
+        combined["signals_count"] = combined["signals_seen"]
+    return combined
+
+
+def _empty_partial_summary(scenario_total: int) -> dict[str, Any]:
+    return {
+        "scenario_count": scenario_total,
+        "completed_scenarios": 0,
+        "failed_scenarios": 0,
+        "trades_count": 0,
+        "signals_seen": 0,
+        "signals_count": 0,
+        "risk_rejections": 0,
+        "execution_rejections": 0,
+        "errors": [],
+        "scenarios": [],
+    }
+
+
+def _scenario_total(request: StrategyTestRunRequest) -> int:
+    return len(request.strategies) * len(request.pairs) * len(request.timeframes)
+
+
+def _runtime_phase(value: object, *, fallback: str) -> str:
+    phase = str(value or "").strip()
+    if phase in _HISTORICAL_RUNTIME_PHASES:
+        return phase
+    return fallback
+
+
+def _summary_int(summary: dict[str, Any], key: str, default: int = 0) -> int:
+    if key not in summary:
+        return default
+    return _int_value(summary.get(key), default=default)
+
+
+def _int_value(value: object, *, default: int = 0) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _write_signal_events(

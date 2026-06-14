@@ -38,6 +38,7 @@ const SECTION_TABLE_COLUMNS: Record<string, string[]> = {
   score_bucket_breakdown: ["strategy", "score_bucket", "trades_count", "winrate", "expectancy_r", "expectancy_after_costs_r", "sample_size"],
   strategy_comparison: ["strategy", "trades_count", "winrate", "expectancy_r", "expectancy_after_costs_r", "profit_factor", "max_drawdown_r", "sample_size"]
 };
+const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "stopping"]);
 
 export function StrategyTestReport({
   calibrationError,
@@ -55,6 +56,7 @@ export function StrategyTestReport({
   const calibrationRunId = report?.run_id ?? run?.run_id ?? null;
   const calibrationStatus = report?.status ?? run?.status ?? null;
   const canPublishCalibration = Boolean(onPublishCalibration && calibrationRunId && calibrationStatus === "completed");
+  const activeRunWithoutReport = Boolean(run && ACTIVE_RUN_STATUSES.has(run.status) && !report);
 
   return (
     <section className="strategy-test-report-panel strategy-test-report-full" aria-live="polite">
@@ -99,7 +101,11 @@ export function StrategyTestReport({
           {calibrationError ? <p className="form-error">{calibrationError.message}</p> : null}
           {calibrationResult ? <CalibrationPublicationResult result={calibrationResult} /> : null}
 
-          <StrategyTestMetricGrid emptyLabel="No summary metrics" limit={9} metrics={summaryMetrics} />
+          {activeRunWithoutReport && run ? (
+            <ActiveRunProgress run={run} />
+          ) : (
+            <StrategyTestMetricGrid emptyLabel="No summary metrics" limit={9} metrics={summaryMetrics} />
+          )}
 
           {report ? (
             <div className="strategy-test-report-sections">
@@ -116,12 +122,41 @@ export function StrategyTestReport({
               <TradeListSection report={report} />
               <CandidateAdjustmentsSection adjustments={adjustments} />
             </div>
-          ) : (
+          ) : activeRunWithoutReport ? null : (
             <div className="empty-state compact-empty">No report selected</div>
           )}
         </>
       ) : null}
     </section>
+  );
+}
+
+function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
+  const phase = runtimeText(run, "phase") ?? run.status;
+  const scenarioCompleted = runtimeNumber(run, "scenario_completed") ?? summaryNumber(run, "completed_scenarios") ?? 0;
+  const scenarioTotal = runtimeNumber(run, "scenario_total") ?? requestedScenarioCount(run) ?? summaryNumber(run, "scenario_count") ?? 0;
+  const currentPair = currentPairLabel(run);
+  const lastError = runtimeText(run, "last_error") ?? run.error;
+  return (
+    <ReportSection name="Progress">
+      <section aria-label="Active run progress">
+        <div className="strategy-test-summary-grid">
+          {summaryItem("Status", run.status)}
+          {summaryItem("Phase", phase)}
+          {summaryItem("Heartbeat age", heartbeatAgeLabel(run.last_heartbeat_at))}
+          {summaryItem("Scenarios", scenarioTotal ? `${scenarioCompleted} / ${scenarioTotal}` : scenarioCompleted)}
+          {summaryItem("Strategy", runtimeText(run, "current_strategy") ?? "-")}
+          {summaryItem("Pair", currentPair)}
+          {summaryItem("Timeframe", runtimeText(run, "current_timeframe") ?? "-")}
+          {summaryItem("Signals", runtimeNumber(run, "signals_seen") ?? summaryNumber(run, "signals_seen") ?? 0)}
+          {summaryItem("Trades", runtimeNumber(run, "trades_count") ?? summaryNumber(run, "trades_count") ?? 0)}
+          {summaryItem("Risk rejections", runtimeNumber(run, "risk_rejections") ?? summaryNumber(run, "risk_rejections") ?? 0)}
+          {summaryItem("Execution rejections", runtimeNumber(run, "execution_rejections") ?? summaryNumber(run, "execution_rejections") ?? 0)}
+          {summaryItem("Last progress", runtimeText(run, "last_progress_at") ?? "-")}
+        </div>
+        {lastError ? <p className="form-error">{lastError}</p> : null}
+      </section>
+    </ReportSection>
   );
 }
 
@@ -399,6 +434,57 @@ function countDecision(result: StrategyTestCalibrationResponse, decision: Strate
 
 function metricNumber(value: unknown): number {
   return typeof value === "number" ? value : 0;
+}
+
+function runtimeText(run: StrategyTestRunResponse, key: string): string | null {
+  const value = run.runtime_state[key];
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text || null;
+}
+
+function runtimeNumber(run: StrategyTestRunResponse, key: string): number | null {
+  const value = run.runtime_state[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function summaryNumber(run: StrategyTestRunResponse, key: keyof StrategyTestRunResponse["summary"]): number | null {
+  const value = run.summary[key] ?? partialSummaryValue(run, String(key));
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function partialSummaryValue(run: StrategyTestRunResponse, key: string): unknown {
+  const partialSummary = run.runtime_state.partial_summary;
+  if (!partialSummary || typeof partialSummary !== "object" || Array.isArray(partialSummary)) return null;
+  return (partialSummary as Record<string, unknown>)[key];
+}
+
+function requestedScenarioCount(run: StrategyTestRunResponse): number | null {
+  const value = run.requested_matrix.scenario_count;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function currentPairLabel(run: StrategyTestRunResponse): string {
+  const exchange = runtimeText(run, "current_exchange");
+  const symbol = runtimeText(run, "current_symbol");
+  if (exchange && symbol) return `${exchange}:${symbol}`;
+  return exchange ?? symbol ?? "-";
+}
+
+function heartbeatAgeLabel(value: string | null): string {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  const seconds = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 function columnLabel(column: string): string {

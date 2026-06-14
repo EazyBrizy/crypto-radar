@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
     runId: string | null;
   }>,
   reportError: null as Error | null,
+  runDetail: null as unknown,
+  runDetailQueries: [] as Array<{
+    options?: { enabled?: boolean; refetchInterval?: number | false };
+    runId: string | null;
+  }>,
   runStrategyTest: vi.fn(),
   runs: [] as unknown[]
 }));
@@ -48,6 +53,19 @@ vi.mock("@/hooks/use-radar-queries", () => ({
       isLoading: false
     };
   },
+  useStrategyTestRun: (
+    runId: string | null,
+    options?: { enabled?: boolean; refetchInterval?: number | false }
+  ) => {
+    mocks.runDetailQueries.push({ runId, options });
+    return {
+      data: mocks.runDetail,
+      error: null,
+      isFetching: false,
+      isLoading: false,
+      refetch: vi.fn()
+    };
+  },
   useStrategyTestActiveRun: () => ({
     data: mocks.activeRun,
     error: null,
@@ -78,6 +96,8 @@ describe("StrategyTestingPanel", () => {
     mocks.report = null;
     mocks.reportQueries = [];
     mocks.reportError = null;
+    mocks.runDetail = null;
+    mocks.runDetailQueries = [];
     mocks.runStrategyTest.mockReset();
     mocks.runs = [];
     window.localStorage.removeItem("crypto-radar:locale");
@@ -328,6 +348,86 @@ describe("StrategyTestingPanel", () => {
       enabled: false,
       refetchInterval: false
     });
+  });
+
+  it("renders selected active run progress instead of an empty report state", async () => {
+    const user = userEvent.setup();
+    const activeRun = strategyTestRun({
+      run_id: "77777777-7777-4777-8777-777777777777",
+      runtime_state: {
+        current_exchange: "bybit",
+        current_strategy: "trend_pullback_continuation",
+        current_symbol: "BTCUSDT",
+        current_timeframe: "15m",
+        execution_rejections: 1,
+        last_progress_at: "2026-06-02T00:01:30.000Z",
+        phase: "running_scenario",
+        risk_rejections: 2,
+        scenario_completed: 2,
+        scenario_total: 6,
+        signals_seen: 11,
+        trades_count: 0
+      },
+      status: "running",
+      test_type: "historical_backtest"
+    });
+    mocks.activeRun = activeRunState({
+      active_run: activeRun,
+      can_run: false,
+      is_stale: false
+    });
+    mocks.runDetail = activeRun;
+
+    renderPanel();
+
+    await user.click(within(screen.getByLabelText("Active strategy test run")).getByRole("button", { name: "Open report" }));
+
+    const progress = screen.getByLabelText("Active run progress");
+    expect(progress).toBeInTheDocument();
+    expect(within(progress).getByText("running_scenario")).toBeInTheDocument();
+    expect(within(progress).getByText("2 / 6")).toBeInTheDocument();
+    expect(within(progress).getByText("trend_pullback_continuation")).toBeInTheDocument();
+    expect(within(progress).getByText("bybit:BTCUSDT")).toBeInTheDocument();
+    expect(within(progress).getByText("15m")).toBeInTheDocument();
+    expect(screen.queryByText("No report selected")).not.toBeInTheDocument();
+    expect(screen.queryByText("No summary metrics")).not.toBeInTheDocument();
+  });
+
+  it("polls active run detail while a historical run is active", () => {
+    const activeRun = strategyTestRun({
+      run_id: "88888888-8888-4888-8888-888888888888",
+      status: "running",
+      test_type: "historical_backtest"
+    });
+    mocks.activeRun = activeRunState({
+      active_run: activeRun,
+      can_run: false,
+      is_stale: false
+    });
+
+    renderPanel();
+
+    const activeRunDetailQuery = mocks.runDetailQueries.find((query) => query.runId === activeRun.run_id);
+    expect(activeRunDetailQuery?.options).toEqual({
+      enabled: true,
+      refetchInterval: 2500
+    });
+  });
+
+  it("labels cancel as stopping for a stopping active run", () => {
+    mocks.activeRun = activeRunState({
+      active_run: strategyTestRun({
+        run_id: "99999999-9999-4999-8999-999999999999",
+        status: "stopping"
+      }),
+      allowed_actions: ["refresh", "cancel"],
+      can_run: false,
+      is_stale: false
+    });
+
+    renderPanel();
+
+    expect(screen.getByRole("button", { name: /Stopping/u })).toBeDisabled();
   });
 });
 

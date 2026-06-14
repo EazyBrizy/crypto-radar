@@ -93,6 +93,51 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         self.assertEqual(summary_metrics["signals_count"]["value"], 2)
         self.assertAlmostEqual(summary_metrics["entry_touch_rate"]["value"], 0.5)
 
+    def test_matrix_reports_progress_after_each_scenario(self) -> None:
+        request = _matrix_request(strategies=["s1", "s2", "s3"])
+        scenario_runner = _RecordingScenarioRunner()
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+        completed: list[tuple[str, int, int]] = []
+
+        result = matrix_runner.run_matrix(
+            request=request,
+            run_id=RUN_ID,
+            user_uuid=USER_ID,
+            on_scenario_completed=lambda context, _result, partial_summary: completed.append(
+                (
+                    context.strategy,
+                    partial_summary["completed_scenarios"],
+                    partial_summary["signals_seen"],
+                )
+            ),
+        )
+
+        self.assertEqual(result.completed_scenarios, 3)
+        self.assertEqual(
+            completed,
+            [
+                ("s1", 1, 1),
+                ("s2", 2, 2),
+                ("s3", 3, 3),
+            ],
+        )
+
+    def test_matrix_stops_before_next_scenario_when_cancelled(self) -> None:
+        request = _matrix_request(strategies=["s1", "s2", "s3"])
+        scenario_runner = _RecordingScenarioRunner()
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+
+        result = matrix_runner.run_matrix(
+            request=request,
+            run_id=RUN_ID,
+            user_uuid=USER_ID,
+            is_cancelled=lambda: len(scenario_runner.calls) >= 1,
+        )
+
+        self.assertTrue(result.cancelled)
+        self.assertEqual(result.completed_scenarios, 1)
+        self.assertEqual(len(scenario_runner.calls), 1)
+
 
 class StrategyTestAssumptionsTest(unittest.TestCase):
     def test_discovery_mode_disables_hard_risk_assumptions(self) -> None:
@@ -255,6 +300,58 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         self.assertIn("eligibility profile store unavailable", warnings[-1]["message"])
         self.assertIn("eligibility profile store unavailable", logs.output[0])
 
+    def test_service_updates_runtime_state_after_each_matrix_scenario(self) -> None:
+        run_store = _EphemeralRunStore()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            matrix_runner=_CallbackMatrixRunner(),
+        )
+
+        response = service.create_run(_matrix_request(strategies=["s1", "s2", "s3"]))
+
+        self.assertEqual(response.status, "completed")
+        scenario_updates = [
+            update
+            for update in run_store.runtime_updates
+            if update.get("phase") == "running_scenario" and update.get("scenario_completed")
+        ]
+        self.assertEqual([update["scenario_completed"] for update in scenario_updates], [1, 2, 3])
+        self.assertEqual(scenario_updates[-1]["signals_seen"], 3)
+        self.assertIsNotNone(scenario_updates[-1]["last_progress_at"])
+
+    def test_cancel_running_run_moves_to_stopping_then_runner_marks_cancelled(self) -> None:
+        run_store = _EphemeralRunStore()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            matrix_runner=_CancellingMatrixRunner(run_store),
+        )
+        created = run_store.create_run(_matrix_request())
+        run_store.mark_running(created.run.run_id)
+
+        stopping = service.cancel_run(created.run.run_id)
+
+        self.assertEqual(stopping.status, "stopping")
+        cancelled = service.execute_run(created.run.run_id, _matrix_request())
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertEqual(run_store.detail.run.runtime_state["phase"], "cancelled")  # type: ignore[union-attr]
+
+    def test_service_marks_failed_with_runtime_last_error_when_scenario_errors(self) -> None:
+        run_store = _EphemeralRunStore()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            matrix_runner=StrategyTestMatrixRunner(_RecordingScenarioRunner(fail_on={0})),
+        )
+
+        response = service.create_run(_matrix_request())
+
+        self.assertEqual(response.status, "failed")
+        self.assertIn("scenario 0 failed", response.error or "")
+        self.assertEqual(run_store.detail.run.runtime_state["phase"], "failed")  # type: ignore[union-attr]
+        self.assertIn("scenario 0 failed", run_store.detail.run.runtime_state["last_error"])  # type: ignore[union-attr]
+
 
 @dataclass(frozen=True)
 class _BacktestCall:
@@ -273,7 +370,9 @@ class _FakeBacktestRunner:
         *,
         mode: str = "production_like",
         options: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> BacktestDetailedRunResult:
+        _ = kwargs
         self.calls.append(_BacktestCall(request=request, mode=mode, options=options or {}))
         return BacktestDetailedRunResult(
             run_result=BacktestRunResult(status="completed", result=None),
@@ -304,8 +403,10 @@ class _RecordingScenarioRunner:
         strategy: str,
         pair: StrategyTestPair,
         timeframe: str,
+        is_cancelled: Any = None,
+        on_progress: Any = None,
     ) -> StrategyTestScenarioResult:
-        _ = run_id, user_id, request
+        _ = run_id, user_id, request, is_cancelled, on_progress
         index = len(self.calls)
         self.calls.append((strategy, pair.exchange, pair.symbol, timeframe))
         if index in self._fail_on:
@@ -339,9 +440,92 @@ class _StaticMatrixRunner:
         request: StrategyTestRunRequest,
         run_id: UUID,
         user_uuid: UUID,
+        **kwargs: Any,
     ) -> StrategyTestMatrixResult:
-        _ = request, run_id, user_uuid
+        _ = request, run_id, user_uuid, kwargs
         return self.result
+
+
+class _CallbackMatrixRunner:
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+        on_scenario_started: Any = None,
+        on_scenario_completed: Any = None,
+        on_scenario_failed: Any = None,
+        on_scenario_progress: Any = None,
+        is_cancelled: Any = None,
+    ) -> StrategyTestMatrixResult:
+        _ = user_uuid, on_scenario_started, on_scenario_failed, on_scenario_progress, is_cancelled
+        completed = 0
+        summaries: list[dict[str, Any]] = []
+        for strategy in request.strategies:
+            summary = {
+                "strategy": strategy,
+                "exchange": request.pairs[0].exchange,
+                "symbol": request.pairs[0].symbol,
+                "timeframe": request.timeframes[0],
+                "signals_seen": 1,
+                "risk_rejections": 0,
+                "execution_rejections": 0,
+            }
+            completed += 1
+            summaries.append(summary)
+            partial = StrategyTestMatrixResult(
+                run_id=run_id,
+                scenario_count=len(request.strategies),
+                completed_scenarios=completed,
+                failed_scenarios=0,
+                scenario_summaries=list(summaries),
+            ).summary()
+            if on_scenario_completed is not None:
+                context = type(
+                    "ScenarioContext",
+                    (),
+                    {
+                        "strategy": strategy,
+                        "exchange": request.pairs[0].exchange,
+                        "symbol": request.pairs[0].symbol,
+                        "timeframe": request.timeframes[0],
+                    },
+                )()
+                on_scenario_completed(context, None, partial)
+        return StrategyTestMatrixResult(
+            run_id=run_id,
+            scenario_count=len(request.strategies),
+            completed_scenarios=completed,
+            failed_scenarios=0,
+            scenario_summaries=summaries,
+        )
+
+
+class _CancellingMatrixRunner:
+    def __init__(self, run_store: "_EphemeralRunStore") -> None:
+        self._run_store = run_store
+
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+        is_cancelled: Any = None,
+        **kwargs: Any,
+    ) -> StrategyTestMatrixResult:
+        _ = request, user_uuid, kwargs
+        self._run_store.mark_stopping(run_id)
+        if is_cancelled is not None and is_cancelled():
+            return StrategyTestMatrixResult(
+                run_id=run_id,
+                scenario_count=1,
+                completed_scenarios=0,
+                failed_scenarios=0,
+                cancelled=True,
+            )
+        raise AssertionError("runner did not observe cancellation")
 
 
 class _RecordingTradeStore:
@@ -373,6 +557,7 @@ class _EphemeralRunStore:
     def __init__(self) -> None:
         self.detail: StrategyTestRunDetailResponse | None = None
         self.transitions: list[str] = []
+        self.runtime_updates: list[dict[str, Any]] = []
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunDetailResponse:
         run = StrategyTestRunResponse(
@@ -415,6 +600,32 @@ class _EphemeralRunStore:
         _ = run_id
         self.transitions.append("failed")
         return self._mark("failed", error=error)
+
+    def mark_stopping(self, run_id: UUID) -> StrategyTestRunDetailResponse:
+        _ = run_id
+        self.transitions.append("stopping")
+        return self._mark("stopping")
+
+    def mark_cancelled(self, run_id: UUID) -> StrategyTestRunDetailResponse:
+        _ = run_id
+        self.transitions.append("cancelled")
+        return self._mark("cancelled")
+
+    def update_runtime_state(
+        self,
+        run_id: UUID,
+        runtime_state: dict[str, Any],
+        *,
+        heartbeat: bool = True,
+    ) -> StrategyTestRunDetailResponse:
+        _ = run_id, heartbeat
+        assert self.detail is not None
+        self.runtime_updates.append(dict(runtime_state))
+        run = self.detail.run.model_copy(
+            update={"runtime_state": {**self.detail.run.runtime_state, **runtime_state}}
+        )
+        self.detail = StrategyTestRunDetailResponse(run=run)
+        return self.detail
 
     def _mark(
         self,

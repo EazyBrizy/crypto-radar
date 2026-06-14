@@ -62,9 +62,12 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertFalse(real_state.can_arm_pending)
         self.assertFalse(real_state.can_enter_now)
         self.assertIsNone(real_state.primary_action)
-        self.assertEqual(real_state.disabled_reason_code, "REAL_PENDING_NOT_IMPLEMENTED")
-        self.assertEqual(real_state.blockers[0].code, "REAL_PENDING_NOT_IMPLEMENTED")
-        self.assertIn("not implemented", real_state.blockers[0].message.lower())
+        self.assertEqual(real_state.disabled_reason_code, "real_pending_not_implemented")
+        self.assertEqual(real_state.blockers[0].code, "real_pending_not_implemented")
+        self.assertEqual(
+            real_state.blockers[0].message,
+            "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.",
+        )
 
     def test_real_pending_not_implemented_does_not_mask_connection_required(self) -> None:
         state = _service().state_for_signal(
@@ -83,7 +86,7 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertFalse(state.can_enter_now)
         self.assertEqual(state.disabled_reason_code, "exchange_connection_required")
         self.assertEqual(blocker_codes[0], "exchange_connection_required")
-        self.assertIn("REAL_PENDING_NOT_IMPLEMENTED", blocker_codes[1:])
+        self.assertIn("real_pending_not_implemented", blocker_codes[1:])
 
     def test_actionable_signal_can_enter_now(self) -> None:
         state = _service().state_for_signal(_signal(status="actionable"), mode="virtual", user_id=USER_ID)
@@ -190,7 +193,7 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertEqual(request.slippage_bps, 0.0)
         self.assertEqual(request.max_open_positions, 3)
 
-    def test_real_waiting_signal_cannot_arm_pending_until_tick_driven_execution_exists(self) -> None:
+    def test_real_waiting_signal_returns_human_readable_pending_not_implemented_blocker(self) -> None:
         connection = _exchange_connection(
             order_placement_mode="testnet_real_orders",
             can_place_orders=True,
@@ -212,9 +215,15 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertFalse(state.can_arm_pending)
         self.assertFalse(state.can_enter_now)
         self.assertEqual(state.primary_action, None)
-        self.assertEqual(REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE, "REAL_PENDING_NOT_IMPLEMENTED")
-        self.assertEqual(state.disabled_reason_code, "REAL_PENDING_NOT_IMPLEMENTED")
+        self.assertEqual(REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE, "real_pending_not_implemented")
+        self.assertEqual(state.disabled_reason_code, "real_pending_not_implemented")
         self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
+        self.assertEqual(
+            state.blockers[0].message,
+            "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.",
+        )
+        self.assertEqual(state.blockers[0].display_label, "Real pending unavailable")
+        self.assertEqual(state.display_labels["disabled_reason"], "Real pending unavailable")
 
     def test_virtual_armable_waiting_setup_executes_arm_pending_entry(self) -> None:
         signal = _signal(

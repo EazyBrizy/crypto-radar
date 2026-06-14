@@ -282,7 +282,7 @@ describe("SignalDetails", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Real wait entry/u }));
+    fireEvent.click(screen.getByRole("button", { name: /Confirm real entry/u }));
     const dialog = screen.getByRole("dialog");
 
     expect(within(dialog).getByText("Real execution availability is backend-owned. Confirm only sends the selected intent.")).toBeInTheDocument();
@@ -294,7 +294,7 @@ describe("SignalDetails", () => {
     expect(onConfirmRealTrade).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps real pending disabled when backend reports it is not implemented", () => {
+  it("does not show active real pending button when backend reports it is not implemented", () => {
     render(
       <SignalDetails
         actionState={actionState()}
@@ -307,15 +307,15 @@ describe("SignalDetails", () => {
           mode: "real",
           environment: "testnet",
           can_enter_now: false,
-          can_arm_pending: true,
-          primary_action: "arm_pending_entry",
-          disabled_reason_code: "REAL_PENDING_NOT_IMPLEMENTED",
+          can_arm_pending: false,
+          primary_action: null,
+          disabled_reason_code: "real_pending_not_implemented",
           blockers: [
             {
-              code: "REAL_PENDING_NOT_IMPLEMENTED",
+              code: "real_pending_not_implemented",
               severity: "blocker",
-              message: "Real pending entry is not implemented yet.",
-              display_label: "Real pending entry unavailable",
+              message: "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.",
+              display_label: "Real pending unavailable",
               metadata: {}
             }
           ]
@@ -325,9 +325,55 @@ describe("SignalDetails", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: /Real wait entry/u })).toBeDisabled();
-    expect(screen.getByText("Real pending entry is not implemented yet")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Real wait entry/u })).not.toBeInTheDocument();
+    expect(screen.getByText("Real pending unavailable")).toBeInTheDocument();
+    expect(screen.getByTitle("Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps virtual pending enabled when real pending is not implemented", () => {
+    const onAcceptPendingEntry = vi.fn();
+    render(
+      <SignalDetails
+        actionState={actionState({
+          can_enter_now: false,
+          can_arm_pending: true,
+          primary_action: "arm_pending_entry",
+          display_labels: { primary_action: "Wait for entry" }
+        })}
+        busy={false}
+        executionPreview={null}
+        onAcceptPendingEntry={onAcceptPendingEntry}
+        onConfirmRealTrade={vi.fn()}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        realActionState={actionState({
+          mode: "real",
+          environment: "testnet",
+          can_enter_now: false,
+          can_arm_pending: false,
+          primary_action: null,
+          disabled_reason_code: "real_pending_not_implemented",
+          blockers: [
+            {
+              code: "real_pending_not_implemented",
+              severity: "blocker",
+              message: "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.",
+              display_label: "Real pending unavailable",
+              metadata: {}
+            }
+          ]
+        })}
+        realTradeContext={realTradeContext()}
+        signal={baseSignal({ details_view: detailsView({ primary_status: "waiting_entry", primary_action_label: "Wait for entry", can_enter_now: false }) })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Virtual wait entry/u }));
+
+    expect(onAcceptPendingEntry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /Real wait entry/u })).not.toBeInTheDocument();
+    expect(screen.getByText("Real pending unavailable")).toBeInTheDocument();
   });
 
   it("shows the dedicated real execution preview in the real confirmation modal", () => {
@@ -355,7 +401,7 @@ describe("SignalDetails", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Real wait entry/u }));
+    fireEvent.click(screen.getByRole("button", { name: /Confirm real entry/u }));
     const dialog = screen.getByRole("dialog");
 
     expect(within(dialog).getByText("Real execution preview")).toBeInTheDocument();

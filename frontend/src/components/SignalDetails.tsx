@@ -124,6 +124,9 @@ export function SignalDetails({
   const terminalPendingEntry = viewModel.terminalPendingEntry;
   const backendDisabledReason = actionStateDisabledReason(actionState ?? null, tReason);
   const realDisabledReason = actionStateDisabledReason(realActionState ?? null, tReason);
+  const realPendingUnavailable = realPendingUnavailableBlocker(realActionState ?? null);
+  const realPendingUnavailableLabel = realPendingUnavailable?.display_label ?? tKey("pendingEntry.realPendingUnavailable");
+  const realPendingUnavailableTitle = realPendingUnavailable?.message ?? realDisabledReason ?? null;
   const entryActionDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_enter_now !== true;
   const acceptPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || pendingEntryLoading || actionState?.can_arm_pending !== true;
   const cancelPendingDisabled = busy || tradingActionsDisabled || actionStateLoading || actionState?.can_cancel !== true;
@@ -186,6 +189,9 @@ export function SignalDetails({
         onToggleChart={() => setChartOpen((open) => !open)}
         realActionDisabled={realActionDisabled}
         realExecutionEnvironment={realActionState?.environment ?? realTradeContext?.connection?.environment ?? tKey("signalDetails.noExchangeConnection")}
+        realPendingUnavailable={Boolean(realPendingUnavailable)}
+        realPendingUnavailableLabel={realPendingUnavailableLabel}
+        realPendingUnavailableTitle={realPendingUnavailableTitle}
         rejectDisabled={rejectDisabled}
         setRealConfirmationOpen={setRealConfirmationOpen}
         tradingActionsDisabled={tradingActionsDisabled}
@@ -484,6 +490,9 @@ function ActionsBlock({
   onToggleChart,
   realActionDisabled,
   realExecutionEnvironment,
+  realPendingUnavailable,
+  realPendingUnavailableLabel,
+  realPendingUnavailableTitle,
   rejectDisabled,
   setRealConfirmationOpen,
   tradingActionsDisabled,
@@ -503,6 +512,9 @@ function ActionsBlock({
   onToggleChart: () => void;
   realActionDisabled: boolean;
   realExecutionEnvironment: string;
+  realPendingUnavailable: boolean;
+  realPendingUnavailableLabel: string;
+  realPendingUnavailableTitle: string | null;
   rejectDisabled: boolean;
   setRealConfirmationOpen: (open: boolean) => void;
   tradingActionsDisabled: boolean;
@@ -525,9 +537,15 @@ function ActionsBlock({
         <button className="secondary-action" onClick={onAcceptPendingEntry} disabled={acceptPendingDisabled} type="button">
           <FileCheck2 size={17} /> {tKey("signalDetails.virtualWaitEntry")}
         </button>
-        <button className="real-action" onClick={() => setRealConfirmationOpen(true)} disabled={realActionDisabled} type="button">
-          <ShieldAlert size={17} /> {tKey("signalDetails.realWaitEntry")}
-        </button>
+        {realPendingUnavailable ? (
+          <span className="badge badge-neutral" title={realPendingUnavailableTitle ?? undefined}>
+            {realPendingUnavailableLabel}
+          </span>
+        ) : (
+          <button className="real-action" onClick={() => setRealConfirmationOpen(true)} disabled={realActionDisabled} type="button">
+            <ShieldAlert size={17} /> {tKey("execution.confirmReal")}
+          </button>
+        )}
         <button className="primary-action" onClick={onPaperTrade} disabled={entryActionDisabled} type="button">
           <FileCheck2 size={17} /> {canEnterNow === true ? tKey("signalDetails.virtualEntryNow") : tKey("signalDetails.virtualEntryLocked")}
         </button>
@@ -1038,6 +1056,27 @@ function realExecutionPreviewStatusTone(status: RealExecutionResultDto["status"]
   if (status === "dry_run") return "yellow";
   if (status === "submitted" || status === "partially_filled") return "green";
   return "red";
+}
+
+function realPendingUnavailableBlocker(state: SignalActionState | null): SignalActionState["blockers"][number] | null {
+  if (!state) return null;
+  const blocker = state.blockers.find((item) => isRealPendingUnavailableReason(item.code ?? item.reason_code));
+  if (blocker) return blocker;
+  if (!isRealPendingUnavailableReason(state.disabled_reason_code)) return null;
+  return {
+    code: state.disabled_reason_code ?? "real_pending_not_implemented",
+    reason_code: state.disabled_reason_code,
+    severity: "blocker",
+    message: null,
+    display_label: null,
+    metadata: {}
+  };
+}
+
+function isRealPendingUnavailableReason(code: string | null | undefined): boolean {
+  return code === "real_pending_not_implemented"
+    || code === "real_pending_execution_not_enabled"
+    || code === "REAL_PENDING_NOT_IMPLEMENTED";
 }
 
 function actionStateDisabledReason(state: SignalActionState | null, tReason: TReason): string | null {

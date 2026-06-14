@@ -68,7 +68,7 @@ describe("signalsApi.confirmReal", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sends an explicit real confirmation without account balance override", async () => {
+  it("sends real confirmation without arming real pending entry", async () => {
     const fetchSpy = vi.fn(async (...args: Parameters<typeof fetch>) => {
       void args;
       return new Response(JSON.stringify({
@@ -91,7 +91,7 @@ describe("signalsApi.confirmReal", () => {
     const [, init] = fetchSpy.mock.calls[0];
     const body = JSON.parse(String(init?.body));
     expect(body).toMatchObject({
-      kind: "arm_pending_entry",
+      kind: "enter_now",
       mode: "real",
       connection_id: "conn_1"
     });

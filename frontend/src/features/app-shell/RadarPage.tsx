@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { ChevronDown, ChevronRight, EyeOff, FileCheck2, Filter, RadioTower, RefreshCw, XCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, EyeOff, FileCheck2, Filter, RadioTower, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 
 import { Metric } from "@/components/Metric";
 import { SignalDetails, type RealTradeContext } from "@/components/SignalDetails";
@@ -310,7 +310,8 @@ function PendingEntriesQueue({
   selectedSignalId: string | null;
 }) {
   const { tKey } = useI18n();
-  const active = activeEntries.filter((intent) => isActivePendingEntryStatus(intent.status));
+  const active = activeEntries.filter((intent) => intent.mode !== "real" && isActivePendingEntryStatus(intent.status));
+  const unsupportedReal = activeEntries.filter((intent) => intent.mode === "real" && isActivePendingEntryStatus(intent.status));
   const history = historyEntries.filter((intent) => isTerminalPendingEntryStatus(intent.status));
   const hiddenCount = hiddenHistoryEntryIds.size;
   const collapseLabel = collapsed ? tKey("pendingEntry.expandQueue") : tKey("pendingEntry.collapseQueue");
@@ -358,6 +359,28 @@ function PendingEntriesQueue({
           ) : (
             <div className="empty-state compact-empty">{tKey("pendingEntry.noActive")}</div>
           )}
+          {unsupportedReal.length ? (
+            <div className="pending-entry-list unsupported-real-pending-list">
+              <div className="section-title compact-section-title">
+                <ShieldAlert size={18} />
+                <h3>{tKey("pendingEntry.unsupportedRealPending")}</h3>
+                <span className="badge badge-yellow">{tKey("pendingEntry.diagnosticOnly")}</span>
+              </div>
+              <p className="compact-action-note">{tKey("pendingEntry.realPendingUnavailable")}</p>
+              {unsupportedReal.map((intent) => (
+                <PendingEntryQueueItem
+                  busy={busy}
+                  diagnosticOnly
+                  intent={intent}
+                  key={intent.id}
+                  onCancelPendingEntry={onCancelPendingEntry}
+                  onReconfirmPendingEntry={onReconfirmPendingEntry}
+                  onSelectPendingEntrySignal={onSelectPendingEntrySignal}
+                  selected={isPendingEntrySelected(intent, selectedPendingEntryId, selectedSignalId)}
+                />
+              ))}
+            </div>
+          ) : null}
           <details className="pending-entry-history-queue">
             <summary>
               <span>{tKey("pendingEntry.history")}</span>
@@ -406,8 +429,9 @@ function PendingEntryDetailsPanel({
   const reason = reasonCode
     ? tReason(reasonCode)
     : tReason(pendingEntry.view?.reason ?? pendingEntry.failure_reason ?? tKey("pendingEntry.noBackendReason"));
-  const canCancel = isActivePendingEntryStatus(pendingEntry.status);
-  const canReconfirm = pendingEntry.status === "requires_reconfirmation";
+  const unsupportedReal = pendingEntry.mode === "real";
+  const canCancel = isActivePendingEntryStatus(pendingEntry.status) && !unsupportedReal;
+  const canReconfirm = pendingEntry.status === "requires_reconfirmation" && !unsupportedReal;
 
   return (
     <section className="details-panel pending-entry-details-panel">
@@ -423,6 +447,7 @@ function PendingEntryDetailsPanel({
       </div>
 
       {missingSignalId ? <div className="warning-banner">{tKey("pendingEntry.originalSignalMissing")}</div> : null}
+      {unsupportedReal ? <div className="warning-banner">{tKey("pendingEntry.realPendingDiagnostic")}</div> : null}
 
       <div className="pending-entry-block">
         <div className="section-title">
@@ -462,6 +487,7 @@ function PendingEntryDetailsPanel({
 
 function PendingEntryQueueItem({
   busy,
+  diagnosticOnly = false,
   intent,
   onCancelPendingEntry,
   onDismissHistoryEntry,
@@ -470,6 +496,7 @@ function PendingEntryQueueItem({
   selected
 }: {
   busy: boolean;
+  diagnosticOnly?: boolean;
   intent: PendingEntryIntent;
   onCancelPendingEntry: (intent: PendingEntryIntent) => void;
   onDismissHistoryEntry?: (intent: PendingEntryIntent) => void;
@@ -533,7 +560,9 @@ function PendingEntryQueueItem({
         <button className="secondary-action compact-action" onClick={(event) => handleActionClick(event, handleSelect)} type="button">
           <FileCheck2 size={15} /> {tKey("pendingEntry.selectSignal")}
         </button>
-        {active ? (
+        {diagnosticOnly ? (
+          <span className="badge badge-yellow">{tKey("pendingEntry.diagnosticOnly")}</span>
+        ) : active ? (
           <>
             <button
               className="secondary-action compact-action"

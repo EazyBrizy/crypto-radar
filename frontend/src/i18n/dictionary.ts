@@ -266,7 +266,10 @@ const typedDictionary = {
       ttlUnknown: "TTL unknown",
       minutesLeft: "{count}m left",
       hoursLeft: "{count}h left",
-      realPendingUnavailable: "Real pending entry is not available yet."
+      realPendingUnavailable: "Real pending entry is not available yet.",
+      unsupportedRealPending: "Unsupported real pending",
+      diagnosticOnly: "Diagnostic only",
+      realPendingDiagnostic: "Historical real pending entries are diagnostic-only until real conditional execution is implemented."
     },
     trades: {
       eyebrow: "Trades",
@@ -648,7 +651,7 @@ const typedDictionary = {
       pending_entry_exists: "Pending entry already exists for this signal",
       pending_entry_requires_reconfirmation: "Pending entry requires reconfirmation",
       real_trading_disabled: "Real trading is disabled",
-      REAL_PENDING_NOT_IMPLEMENTED: "Real pending entry is not implemented yet",
+      REAL_PENDING_NOT_IMPLEMENTED: "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.",
       real_trading_unlock_required: "Real trading requires explicit unlock",
       available_balance_unavailable: "Available balance is unavailable",
       max_account_drawdown_exceeded: "Account drawdown limit is exceeded",
@@ -744,7 +747,7 @@ const typedDictionary = {
       real_execution_submitted: "Real execution adapter submitted the order plan",
       real_execution_partially_filled: "Real execution adapter returned a partial fill",
       real_execution_failed: "Real execution adapter returned a failed order placement result",
-      real_pending_not_implemented: "Tick-driven real pending entry execution is not implemented",
+      real_pending_not_implemented: "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.",
       pending_entry_signal_missing: "Pending entry signal is missing",
       pending_entry_expired_before_touch: "Pending entry expired before entry touch",
       signal_terminal_at_trigger: "Signal is terminal at trigger time",
@@ -1011,7 +1014,10 @@ const typedDictionary = {
       ttlUnknown: "TTL неизвестен",
       minutesLeft: "{count}м осталось",
       hoursLeft: "{count}ч осталось",
-      realPendingUnavailable: "Real pending entry пока недоступен."
+      realPendingUnavailable: "Real pending entry пока недоступен.",
+      unsupportedRealPending: "Unsupported real pending",
+      diagnosticOnly: "Diagnostic only",
+      realPendingDiagnostic: "Historical real pending entries are diagnostic-only until real conditional execution is implemented."
     },
     trades: {
       eyebrow: "Сделки",
@@ -1381,7 +1387,7 @@ const typedDictionary = {
       pending_entry_exists: "Pending entry уже существует для этого сигнала",
       pending_entry_requires_reconfirmation: "Pending entry требует повторного подтверждения",
       real_trading_disabled: "Real trading выключен",
-      REAL_PENDING_NOT_IMPLEMENTED: "Real pending entry пока не реализован",
+      REAL_PENDING_NOT_IMPLEMENTED: "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.",
       real_trading_unlock_required: "Real trading требует явного unlock",
       available_balance_unavailable: "Доступный баланс недоступен",
       max_account_drawdown_exceeded: "Лимит просадки аккаунта превышен",
@@ -1470,7 +1476,7 @@ const typedDictionary = {
       real_execution_submitted: "Адаптер real execution отправил план ордеров",
       real_execution_partially_filled: "Адаптер real execution вернул частичное исполнение",
       real_execution_failed: "Адаптер real execution вернул ошибку выставления ордера",
-      real_pending_not_implemented: "Tick-driven real pending entry пока не реализован",
+      real_pending_not_implemented: "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.",
       pending_entry_signal_missing: "Сигнал ожидающего входа отсутствует",
       pending_entry_expired_before_touch: "Ожидающий вход истек до касания зоны входа",
       signal_terminal_at_trigger: "Сигнал стал terminal в момент trigger",

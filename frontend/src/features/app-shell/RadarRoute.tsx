@@ -287,25 +287,18 @@ export function RadarRoute() {
       setActionError(null);
       const connection = selectRealTradeConnection(exchangeConnectionsQuery.data ?? [], signal);
       const state = realActionStateQuery.data ?? null;
-      const kind = state?.can_enter_now
-        ? "enter_now"
-        : state?.can_arm_pending
-          ? "arm_pending_entry"
-          : null;
-      if (!kind) {
+      if (!state?.can_enter_now) {
         setActionError(actionStateErrorMessage(state, "Real trade was rejected by execution safeguards."));
         return;
       }
       await signalActionMutation.mutateAsync({
         signalId: signal.id,
-        kind,
+        kind: "enter_now",
         mode: "real",
         connectionId: connection?.id ?? null,
       });
       await refreshData();
-      if (kind === "enter_now") {
-        router.push("/dashboard/trades/active");
-      }
+      router.push("/dashboard/trades/active");
     } catch (exc) {
       setActionError(errorMessage(exc, "Real trade was rejected by execution safeguards."));
     }

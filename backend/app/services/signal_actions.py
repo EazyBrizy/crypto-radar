@@ -263,7 +263,7 @@ class SignalActionService:
             connection_id=_metadata_connection_id(request),
             request=request,
         )
-        if request.auto_enter_on_confirmation and not state.can_enter_now:
+        if mode != "real" and request.auto_enter_on_confirmation and not state.can_enter_now:
             kind: SignalActionKind = "arm_pending_entry"
         else:
             kind = "enter_now"
@@ -1352,7 +1352,7 @@ def _real_pending_entry_not_implemented_blocker() -> SignalActionBlocker:
     return _blocker(
         REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE,
         REAL_PENDING_NOT_IMPLEMENTED_MESSAGE,
-        display_label="Real pending entry unavailable",
+        display_label="Real pending unavailable",
     )
 
 

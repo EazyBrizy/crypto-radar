@@ -275,6 +275,61 @@ describe("RadarPage", () => {
     expect(onCancelPendingEntry).toHaveBeenCalledWith(intent);
   });
 
+  it("shows active real pending entries separately as unsupported diagnostics", () => {
+    const realIntent = pendingIntent({
+      id: "real_pending_1",
+      mode: "real",
+      status: "requires_reconfirmation",
+      reason_code: "real_pending_not_implemented",
+      view: {
+        status_label: "Requires reconfirmation",
+        status_tone: "yellow",
+        reason_code: "real_pending_not_implemented",
+        reason: "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution.",
+        entry_zone: "2100 - 2105",
+        current_price: 2_101
+      }
+    });
+
+    render(
+      <RadarPage
+        busy={false}
+        filter="all"
+        radarDisplayMode="all_market_opportunities"
+        signalView="open"
+        statusFilter="all"
+        health={null}
+        loading={false}
+        onFilterChange={vi.fn()}
+        onAcceptPendingEntry={vi.fn()}
+        onCancelPendingEntry={vi.fn()}
+        onReconfirmPendingEntry={vi.fn()}
+        onRadarDisplayModeChange={vi.fn()}
+        onSignalViewChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        onConfirmRealTrade={vi.fn()}
+        onPaperTrade={vi.fn()}
+        onRefresh={vi.fn()}
+        onReject={vi.fn()}
+        onSelectLatestSignal={vi.fn()}
+        onSelectPendingEntrySignal={vi.fn()}
+        onSelectSignal={vi.fn()}
+        radarStatus={null}
+        selectedSignal={null}
+        selectedSignalId={null}
+        pendingEntries={[realIntent]}
+        pendingEntryHistory={[]}
+        signalIds={[]}
+        signals={[]}
+      />
+    );
+
+    expect(screen.getByText("Unsupported real pending")).toBeInTheDocument();
+    expect(screen.getAllByText("Diagnostic only").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Real pending entry is not implemented yet/u)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reconfirm" })).not.toBeInTheDocument();
+  });
+
   it("selects a pending entry from the whole card", () => {
     const onSelectPendingEntrySignal = vi.fn();
     const intent = pendingIntent({

@@ -52,9 +52,9 @@ UserProfileProvider = Callable[[str], Any]
 TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON = (
     "Trade plan changed after acceptance; reconfirmation required."
 )
-REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE = "REAL_PENDING_NOT_IMPLEMENTED"
+REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE = "real_pending_not_implemented"
 REAL_PENDING_NOT_IMPLEMENTED_MESSAGE = (
-    "Real pending entry is not implemented yet; use virtual pending entry or enter manually in real mode."
+    "Real pending entry is not implemented yet. Use virtual waiting entry or manual real execution."
 )
 PENDING_ENTRY_EXPIRED_BEFORE_TOUCH_MESSAGE = "Pending entry intent expired before entry touch."
 

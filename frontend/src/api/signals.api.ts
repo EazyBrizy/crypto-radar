@@ -136,7 +136,7 @@ export const signalsApi = {
   },
   async confirmReal(input: RealConfirmInput) {
     return signalsApi.sendSignalAction(input.signalId, {
-      kind: input.waitForConfirmation ? "arm_pending_entry" : "enter_now",
+      kind: "enter_now",
       mode: "real",
       connectionId: input.connectionId
     });

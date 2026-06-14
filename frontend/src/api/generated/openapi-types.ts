@@ -4019,7 +4019,7 @@ export interface components {
              * @default not_implemented
              * @enum {string}
              */
-            status: "risk_failed" | "readiness_failed" | "not_implemented" | "dry_run" | "submitted" | "partially_filled" | "failed";
+            status: "preview" | "risk_failed" | "readiness_failed" | "not_implemented" | "dry_run" | "submitted" | "partially_filled" | "failed";
             /**
              * Signal Valid
              * @default true
@@ -4048,6 +4048,8 @@ export interface components {
             idempotency_key?: string | null;
             /** Adapter */
             adapter?: string | null;
+            /** Blockers */
+            blockers?: string[];
             /** Connection Id */
             connection_id?: string | null;
             /** Environment */
@@ -10046,7 +10048,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["VirtualExecutionReport"];
+                    "application/json": components["schemas"]["VirtualExecutionReport"] | components["schemas"]["RealExecutionResult"];
                 };
             };
             /** @description Validation Error */

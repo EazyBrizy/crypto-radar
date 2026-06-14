@@ -3230,7 +3230,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/VirtualExecutionReport"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/VirtualExecutionReport"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RealExecutionResult"
+                    }
+                  ],
+                  "title": "Response Preview Virtual Execution Api V1 Signals  Signal Id  Execution Preview Post"
                 }
               }
             }
@@ -12496,6 +12504,7 @@
           "status": {
             "type": "string",
             "enum": [
+              "preview",
               "risk_failed",
               "readiness_failed",
               "not_implemented",
@@ -12599,6 +12608,13 @@
               }
             ],
             "title": "Adapter"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blockers"
           },
           "connection_id": {
             "anyOf": [

@@ -1000,9 +1000,10 @@ class RealExecutionServiceTest(unittest.IsolatedAsyncioTestCase):
 
         result = await service.preview_order_plan(_signal(), _request())
 
-        self.assertEqual(result.status, "submitted")
+        self.assertEqual(result.status, "preview")
         self.assertTrue(result.signal_valid)
         self.assertTrue(result.execution_allowed)
+        self.assertIn("No exchange order was sent", result.message)
         self.assertIsNotNone(result.risk_decision)
         self.assertIsNotNone(result.execution_plan)
         self.assertEqual(adapter.calls, [])

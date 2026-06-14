@@ -711,7 +711,7 @@ class RealExecutionService:
             )
 
         result_status: RealExecutionStatus = (
-            "dry_run" if bool(getattr(execution_adapter, "is_dry_run", False)) else "submitted"
+            "dry_run" if bool(getattr(execution_adapter, "is_dry_run", False)) else "preview"
         )
         return _PreparedRealExecution(
             result=RealExecutionResult(

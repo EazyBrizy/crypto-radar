@@ -78,6 +78,7 @@ ExecutionOrderStatus = Literal[
     "unknown",
 ]
 RealExecutionStatus = Literal[
+    "preview",
     "risk_failed",
     "readiness_failed",
     "not_implemented",

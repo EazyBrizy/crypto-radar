@@ -498,6 +498,31 @@ describe("StrategyTestingPanel", () => {
 
     expect(screen.getByRole("button", { name: /Stopping/u })).toBeDisabled();
   });
+
+  it("allows cancelling a stale stopping active run", async () => {
+    const user = userEvent.setup();
+    mocks.activeRun = activeRunState({
+      active_run: strategyTestRun({
+        run_id: "abababab-abab-4bab-8bab-abababababab",
+        status: "stopping"
+      }),
+      allowed_actions: ["refresh", "cancel"],
+      can_run: true,
+      is_stale: true
+    });
+    mocks.cancelStrategyTest.mockResolvedValue(strategyTestRun({
+      run_id: "abababab-abab-4bab-8bab-abababababab",
+      status: "cancelled"
+    }));
+
+    renderPanel();
+
+    const cancelButton = screen.getByRole("button", { name: /Cancel run/u });
+    expect(cancelButton).toBeEnabled();
+    await user.click(cancelButton);
+
+    expect(mocks.cancelStrategyTest).toHaveBeenCalledWith("abababab-abab-4bab-8bab-abababababab");
+  });
 });
 
 function renderPanel({

@@ -556,7 +556,7 @@ function ActiveRunNotice({
   run: StrategyTestRunResponse;
 }) {
   const allowedActions = new Set(activeRunState?.allowed_actions ?? ["refresh"]);
-  const stopping = cancelPending || run.status === "stopping";
+  const stopping = cancelPending || (run.status === "stopping" && !activeRunState?.is_stale);
   return (
     <section aria-label="Active strategy test run" className="strategy-test-active-run">
       <div className="strategy-test-active-run-header">

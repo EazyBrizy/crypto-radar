@@ -17,7 +17,11 @@ from app.repositories.pending_entry_repository import PendingEntryIntentReposito
 from app.schemas.lifecycle import LifecycleTrace
 from app.schemas.pending_entry import PendingEntryIntentCreate
 from app.schemas.risk import ResolvedExecutionProfile
-from app.schemas.signal import RadarSignal, SignalEdgeSnapshot
+from app.domain.pending_entry_reason import (
+    EDGE_DEGRADED_AFTER_ACCEPTANCE,
+    NO_TRADE_HARD_BLOCK_AFTER_ACCEPTANCE,
+)
+from app.schemas.signal import NoTradeFilterResult, RadarSignal, SignalEdgeSnapshot
 from app.schemas.trade import ExecutionQualityGate, ManualConfirmRequest, VirtualExecutionReport, VirtualTrade
 from app.schemas.user import RiskManagementSettings
 from app.services.pending_entry import (
@@ -347,7 +351,7 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(execution_signal.trade_plan.stop_loss if execution_signal.trade_plan else None, 95.0)
         self.assertEqual(execution_signal.trade_plan.targets[0].price if execution_signal.trade_plan else None, 110.0)
 
-    def test_entry_touch_uses_accepted_edge_snapshot_for_fresh_gate(self) -> None:
+    def test_entry_touch_blocks_when_current_edge_degraded_after_acceptance(self) -> None:
         accepted_signal = _signal(confirmed_trigger=True, edge=_positive_edge())
         pending_service = PendingEntryService(
             repository=self.repository,
@@ -365,6 +369,33 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.signals.signal = _signal(confirmed_trigger=True, edge=_negative_edge())
 
         results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(results[0].intent_id)
+
+        self.assertEqual(results[0].status, "requires_reconfirmation")
+        self.assertEqual(results[0].reason_code, EDGE_DEGRADED_AFTER_ACCEPTANCE)
+        self.assertEqual(current.status if current else None, "requires_reconfirmation")
+        self.assertEqual(current.reason_code if current else None, EDGE_DEGRADED_AFTER_ACCEPTANCE)
+        self.assertEqual(self.virtual.calls, [])
+        self.assertEqual(self.events.statuses(), ["requires_reconfirmation"])
+
+    def test_entry_touch_with_missing_current_edge_keeps_accepted_snapshot_behavior(self) -> None:
+        accepted_signal = _signal(confirmed_trigger=True, edge=_positive_edge())
+        pending_service = PendingEntryService(
+            repository=self.repository,
+            session_factory=self.SessionFactory,
+            signal_loader=lambda _signal_id: accepted_signal,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(),
+        )
+        pending_service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        self.signals.signal = _signal(confirmed_trigger=True, edge=None)
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
 
         self.assertEqual(results[0].status, "filled")
         self.assertEqual(len(self.virtual.calls), 1)
@@ -372,6 +403,39 @@ class PendingEntryTriggerServiceTest(unittest.TestCase):
         self.assertEqual(execution_signal.edge.status if execution_signal.edge else None, "positive")
         self.assertIsNotNone(execution_signal.execution_gate)
         self.assertTrue(execution_signal.execution_gate.can_enter_now if execution_signal.execution_gate else False)
+
+    def test_entry_touch_blocks_current_hard_no_trade_filter_after_acceptance(self) -> None:
+        accepted_signal = _signal(confirmed_trigger=True, edge=_positive_edge())
+        pending_service = PendingEntryService(
+            repository=self.repository,
+            session_factory=self.SessionFactory,
+            signal_loader=lambda _signal_id: accepted_signal,
+            risk_settings_provider=lambda _user_id: RiskManagementSettings(),
+        )
+        pending_service.arm_from_signal(
+            user_id=USER_ID,
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id=str(USER_ID), auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        self.signals.signal = _signal(
+            confirmed_trigger=True,
+            edge=_positive_edge(),
+            no_trade_filter=NoTradeFilterResult(
+                blocked=True,
+                hard_block=True,
+                blockers=["Funding event hard block."],
+            ),
+        )
+
+        results = self.service.process_market_tick("bybit", "BTCUSDT", {"ask": 100.5})
+        current = self.repository.get_by_id(results[0].intent_id)
+
+        self.assertEqual(results[0].status, "requires_reconfirmation")
+        self.assertEqual(results[0].reason_code, NO_TRADE_HARD_BLOCK_AFTER_ACCEPTANCE)
+        self.assertEqual(current.reason_code if current else None, NO_TRADE_HARD_BLOCK_AFTER_ACCEPTANCE)
+        self.assertEqual(self.virtual.calls, [])
 
     def test_requires_reconfirmation_intent_cannot_fill(self) -> None:
         created = self.repository.create_intent(_intent_create(side="long", status="requires_reconfirmation"))
@@ -526,6 +590,7 @@ def _signal(
     take_profit_2: float | None = None,
     score: int = 82,
     edge: SignalEdgeSnapshot | None = None,
+    no_trade_filter: NoTradeFilterResult | None = None,
 ) -> RadarSignal:
     now = datetime.now(timezone.utc)
     return RadarSignal(
@@ -546,6 +611,7 @@ def _signal(
         take_profit_1=take_profit_1 if take_profit_1 is not None else (110.0 if direction == "long" else 90.0),
         take_profit_2=take_profit_2 if take_profit_2 is not None else (115.0 if direction == "long" else 85.0),
         edge=edge,
+        no_trade_filter=no_trade_filter,
         created_at=now,
         updated_at=now,
         trigger=(

@@ -12,6 +12,8 @@ VIRTUAL_EXECUTION_REJECTED = "virtual_execution_rejected"
 TEMPORARY_EXECUTION_FAILURE = "temporary_execution_failure"
 REAL_PENDING_EXECUTION_NOT_ENABLED = "real_pending_execution_not_enabled"
 PENDING_ENTRY_EXECUTION_INVALID = "pending_entry_execution_invalid"
+EDGE_DEGRADED_AFTER_ACCEPTANCE = "edge_degraded_after_acceptance"
+NO_TRADE_HARD_BLOCK_AFTER_ACCEPTANCE = "no_trade_hard_block_after_acceptance"
 
 PENDING_ENTRY_LAST_REASON_KEY = "pending_entry_last_reason_code"
 PENDING_ENTRY_TERMINAL_REASON_KEY = "pending_entry_terminal_reason_code"

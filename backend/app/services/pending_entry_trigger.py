@@ -10,7 +10,9 @@ from uuid import UUID
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.pending_entry_reason import (
+    EDGE_DEGRADED_AFTER_ACCEPTANCE,
     ENTRY_ZONE_NOT_TOUCHED,
+    NO_TRADE_HARD_BLOCK_AFTER_ACCEPTANCE,
     PENDING_ENTRY_EXECUTION_INVALID,
     PENDING_ENTRY_EXPIRED_BEFORE_TOUCH,
     PENDING_ENTRY_GATE_SNAPSHOT_KEY,
@@ -24,6 +26,7 @@ from app.domain.pending_entry_reason import (
     TRADE_PLAN_RECONFIRMATION_REQUIRED,
     VIRTUAL_EXECUTION_REJECTED,
 )
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.domain.signal_status import is_terminal_signal_status
 from app.models.pending_entry import PendingEntryIntent
@@ -277,6 +280,32 @@ class PendingEntryTriggerService:
                     lifecycle_trace=LifecycleTrace(
                         signal_id=str(record.signal_id),
                         pending_entry_intent_id=str(record.id),
+                    ),
+                )
+
+            fresh_hard_block = _fresh_hard_block_after_acceptance(signal)
+            if fresh_hard_block is not None:
+                reason_code, reason, gate_snapshot = fresh_hard_block
+                _mark_fresh_hard_block_requires_reconfirmation_locked(
+                    record,
+                    current_signal=signal,
+                    reason=reason,
+                    reason_code=reason_code,
+                    gate_snapshot=gate_snapshot,
+                    now=now,
+                )
+                session.commit()
+                self._publish_locked_update(record)
+                return _result(
+                    record,
+                    touched=True,
+                    reason=record.failure_reason,
+                    current_price=touch.price,
+                    entry_zone_distance_bps=_entry_zone_distance_bps(
+                        record.side,
+                        record.entry_min,
+                        record.entry_max,
+                        touch.price,
                     ),
                 )
 
@@ -895,6 +924,113 @@ def _mark_requires_reconfirmation_locked(
         now=now,
     )
     record.request_snapshot = snapshot
+
+
+def _mark_fresh_hard_block_requires_reconfirmation_locked(
+    record: PendingEntryIntent,
+    *,
+    current_signal: RadarSignal,
+    reason: str,
+    reason_code: str,
+    gate_snapshot: dict[str, Any],
+    now: datetime,
+) -> None:
+    _transition_locked(
+        record,
+        status="requires_reconfirmation",
+        failure_reason=reason,
+        reason_code=reason_code,
+        gate_snapshot=gate_snapshot,
+        now=now,
+    )
+    snapshot = dict(record.request_snapshot or {})
+    raw_events = snapshot.get("pending_entry_lifecycle_events")
+    lifecycle_events = list(raw_events) if isinstance(raw_events, list) else []
+    lifecycle_events.append(
+        {
+            "event": "pending_entry.requires_reconfirmation",
+            "created_at": now.isoformat(),
+            "intent_id": str(record.id),
+            "signal_id": str(record.signal_id),
+            "reason": reason,
+            "reason_code": reason_code,
+            "accepted_trade_plan_hash": record.accepted_trade_plan_hash,
+            "accepted_trade_plan_snapshot": record.accepted_trade_plan_snapshot,
+            "current_edge": _model_snapshot(current_signal.edge),
+            "current_no_trade_filter": _model_snapshot(current_signal.no_trade_filter),
+        }
+    )
+    snapshot["pending_entry_lifecycle_events"] = lifecycle_events[-20:]
+    snapshot["current_market_snapshot"] = {
+        "observed_at": now.isoformat(),
+        "signal_id": str(current_signal.id),
+        "status": current_signal.status,
+        "hard_block_reason_code": reason_code,
+        "edge": _model_snapshot(current_signal.edge),
+        "no_trade_filter": _model_snapshot(current_signal.no_trade_filter),
+    }
+    raw_warnings = snapshot.get("pending_entry_warnings")
+    warnings = list(raw_warnings) if isinstance(raw_warnings, list) else []
+    warnings.append(reason)
+    snapshot["pending_entry_warnings"] = _dedupe_strings(warnings)[-20:]
+    record.request_snapshot = snapshot
+
+
+def _fresh_hard_block_after_acceptance(signal: RadarSignal) -> tuple[str, str, dict[str, Any]] | None:
+    no_trade = signal.no_trade_filter
+    if no_trade is not None and (no_trade.hard_block or no_trade.blocked):
+        blockers = _dedupe_strings([str(value) for value in no_trade.blockers])
+        detail = "; ".join(blockers) if blockers else "Current no-trade filter blocks execution."
+        reason = f"Pending entry requires reconfirmation because current no-trade filter blocks execution: {detail}"
+        return (
+            NO_TRADE_HARD_BLOCK_AFTER_ACCEPTANCE,
+            reason,
+            {
+                "reason_code": NO_TRADE_HARD_BLOCK_AFTER_ACCEPTANCE,
+                "no_trade_filter": no_trade.model_dump(mode="json", exclude_none=True),
+            },
+        )
+
+    edge = signal.edge
+    if edge is None:
+        return None
+    edge_reason = _current_edge_degradation_reason(edge)
+    if edge_reason is None:
+        return None
+    reason = f"Pending entry requires reconfirmation because current signal edge degraded after acceptance: {edge_reason}"
+    return (
+        EDGE_DEGRADED_AFTER_ACCEPTANCE,
+        reason,
+        {
+            "reason_code": EDGE_DEGRADED_AFTER_ACCEPTANCE,
+            "edge": edge.model_dump(mode="json", exclude_none=True),
+        },
+    )
+
+
+def _current_edge_degradation_reason(edge: SignalEdgeSnapshot) -> str | None:
+    if edge.status == "negative":
+        return "current edge status is negative."
+    if edge.status == "insufficient_sample" or edge.sample_size < edge.min_sample_size:
+        return f"edge sample size {edge.sample_size} is below required {edge.min_sample_size}."
+    expectancy = edge.expectancy_after_costs_r
+    if expectancy is not None and expectancy < settings.execution_edge_min_expectancy_after_costs_r:
+        return (
+            f"expectancy after costs {expectancy:.4f} is below required "
+            f"{settings.execution_edge_min_expectancy_after_costs_r:.4f}."
+        )
+    profit_factor = edge.profit_factor
+    if profit_factor is not None and profit_factor < settings.execution_edge_min_profit_factor:
+        return f"profit factor {profit_factor:.4f} is below required {settings.execution_edge_min_profit_factor:.4f}."
+    return None
+
+
+def _model_snapshot(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True)
+    return value if isinstance(value, dict) else None
 
 
 def _record_market_review_locked(

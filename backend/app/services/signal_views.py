@@ -9,6 +9,11 @@ from app.domain.signal_status import (
     is_terminal_signal_status,
     is_waiting_entry_status,
 )
+from app.domain.pending_entry_reason import (
+    PENDING_ENTRY_GATE_SNAPSHOT_KEY,
+    PENDING_ENTRY_LAST_REASON_KEY,
+    PENDING_ENTRY_TERMINAL_REASON_KEY,
+)
 from app.schemas.pending_entry import PendingEntryIntentRead, PendingEntryView
 from app.schemas.signal import (
     RadarSignal,
@@ -733,10 +738,23 @@ def _pending_status_tone(status: str) -> ViewTone:
 
 
 def _pending_entry_reason_code(intent: PendingEntryIntentRead) -> str | None:
-    for key in ("reason_code", "code"):
-        value = _snapshot_string(intent.request_snapshot, key)
-        if value:
-            return normalize_reason_code(value) or value
+    reason_code = _normalized_or_raw_reason_code(intent.reason_code)
+    if reason_code is not None:
+        return reason_code
+    for key in (
+        PENDING_ENTRY_LAST_REASON_KEY,
+        PENDING_ENTRY_TERMINAL_REASON_KEY,
+        "reason_code",
+        "code",
+    ):
+        reason_code = _normalized_or_raw_reason_code(_snapshot_string(intent.request_snapshot, key))
+        if reason_code is not None:
+            return reason_code
+    for key in (PENDING_ENTRY_GATE_SNAPSHOT_KEY, "gate_snapshot"):
+        gate_snapshot = _snapshot_mapping(intent.request_snapshot, key)
+        reason_code = _normalized_or_raw_reason_code(_snapshot_string(gate_snapshot, "reason_code") if gate_snapshot else None)
+        if reason_code is not None:
+            return reason_code
     return normalize_reason_code(intent.failure_reason)
 
 
@@ -753,6 +771,20 @@ def _trade_status_tone(status: str) -> ViewTone:
 def _snapshot_string(snapshot: Mapping[str, Any], key: str) -> str | None:
     value = snapshot.get(key)
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _snapshot_mapping(snapshot: Mapping[str, Any], key: str) -> Mapping[str, Any] | None:
+    value = snapshot.get(key)
+    return value if isinstance(value, Mapping) else None
+
+
+def _normalized_or_raw_reason_code(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text or text in {"-", "no_backend_reason"}:
+        return None
+    return normalize_reason_code(text) or text
 
 
 def _snapshot_decimal(snapshot: Mapping[str, Any], key: str) -> Decimal | None:

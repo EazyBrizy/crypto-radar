@@ -32,6 +32,18 @@ type PendingEntryInput = {
   connectionId?: string | null;
 };
 
+type CancelPendingEntryInput = {
+  intentId: string;
+  userId?: string | null;
+  mode?: SignalActionMode;
+  connectionId?: string | null;
+};
+
+type ReconfirmPendingEntryInput = {
+  intentId: string;
+  request?: Record<string, unknown>;
+};
+
 type PendingEntryListScope = "active" | "history";
 
 type RealConfirmInput = {
@@ -161,23 +173,29 @@ export const signalsApi = {
     if (!response.pending_entry_intent) throw new Error("API returned no pending entry intent");
     return response.pending_entry_intent;
   },
-  async cancelPendingEntry(input: { signalId: string; mode?: SignalActionMode; connectionId?: string | null }): Promise<PendingEntryIntent> {
-    const response = await signalsApi.sendSignalAction(input.signalId, {
-      kind: "cancel_pending_entry",
-      mode: input.mode ?? "virtual",
-      connectionId: input.connectionId
-    });
-    if (!response.pending_entry_intent) throw new Error("API returned no pending entry intent");
-    return response.pending_entry_intent;
+  async cancelPendingEntry(input: CancelPendingEntryInput): Promise<PendingEntryIntent> {
+    const body: Record<string, unknown> = {};
+    if (input.userId) body.user_id = input.userId;
+    if (input.mode) body.mode = input.mode;
+    if (input.connectionId) body.connection_id = input.connectionId;
+    const response = await requestJson<PendingEntryIntentReadDto>(
+      `/api/v1/pending-entry/${encodeURIComponent(input.intentId)}/cancel`,
+      {
+        method: "POST",
+        body: JSON.stringify(body)
+      }
+    );
+    return normalizePendingEntryIntent(response);
   },
-  async reconfirmPendingEntry(input: { signalId: string; mode?: SignalActionMode; connectionId?: string | null }): Promise<PendingEntryIntent> {
-    const response = await signalsApi.sendSignalAction(input.signalId, {
-      kind: "reconfirm_pending_entry",
-      mode: input.mode ?? "virtual",
-      connectionId: input.connectionId
-    });
-    if (!response.pending_entry_intent) throw new Error("API returned no pending entry intent");
-    return response.pending_entry_intent;
+  async reconfirmPendingEntry(input: ReconfirmPendingEntryInput): Promise<PendingEntryIntent> {
+    const response = await requestJson<PendingEntryIntentReadDto>(
+      `/api/v1/pending-entry/${encodeURIComponent(input.intentId)}/reconfirm`,
+      {
+        method: "POST",
+        body: JSON.stringify(input.request ?? {})
+      }
+    );
+    return normalizePendingEntryIntent(response);
   },
   async executionPreview(signalId: string): Promise<VirtualExecutionReport> {
     const response = await requestJson<unknown>(

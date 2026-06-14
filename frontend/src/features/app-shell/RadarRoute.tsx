@@ -6,16 +6,17 @@ import { useRouter } from "next/navigation";
 import { RadarPage } from "@/features/app-shell/RadarPage";
 import { useAuthSessionQuery } from "@/auth/use-auth";
 import {
+  useCancelPendingEntryMutation,
   useExchangeConnectionAccountSnapshotsQuery,
   useExchangeConnectionsQuery,
   useHealthQuery,
   useHistoricalSignalsQuery,
   usePendingEntriesQuery,
-  usePendingEntryActionStatesQuery,
   usePendingEntryHistoryQuery,
   usePendingEntryQuery,
   useRadarQuery,
   useRadarStatusQuery,
+  useReconfirmPendingEntryMutation,
   useRejectSignalMutation,
   useRiskStateQuery,
   useSendSignalActionMutation,
@@ -44,6 +45,7 @@ export function RadarRoute() {
   const [signalView, setSignalView] = useState<"open" | "history">("open");
   const [radarDisplayMode, setRadarDisplayMode] = useState<RadarDisplayMode>("all_market_opportunities");
   const [hasUserSelectedSignal, setHasUserSelectedSignal] = useState(false);
+  const [selectedPendingEntryId, setSelectedPendingEntryId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const hasAutoSelectedSignalRef = useRef(false);
   const pendingArmInFlightRef = useRef(false);
@@ -62,6 +64,8 @@ export function RadarRoute() {
   const userProfileQuery = useUserProfileQuery({ enabled: true });
   const riskStateQuery = useRiskStateQuery();
   const signalActionMutation = useSendSignalActionMutation();
+  const cancelPendingEntryMutation = useCancelPendingEntryMutation();
+  const reconfirmPendingEntryMutation = useReconfirmPendingEntryMutation();
   const rejectSignalMutation = useRejectSignalMutation();
 
   useEffect(() => {
@@ -151,12 +155,23 @@ export function RadarRoute() {
     enabled: true,
     limit: 25
   });
-  const pendingEntryActionStates = usePendingEntryActionStatesQuery(pendingEntriesQuery.data ?? [], {
-    enabled: Boolean(pendingEntriesQuery.data?.length)
-  });
   const selectedPendingEntry = useMemo(
-    () => selectPendingEntryForDetails(pendingEntryQuery.data ?? null, pendingEntryHistoryQuery.data ?? []),
-    [pendingEntryHistoryQuery.data, pendingEntryQuery.data]
+    () => selectPendingEntryForDetails(
+      pendingEntryQuery.data ?? null,
+      pendingEntryHistoryQuery.data ?? [],
+      selectedPendingEntryId,
+      [
+        ...(pendingEntriesQuery.data ?? []),
+        ...(pendingEntryQueueHistoryQuery.data ?? [])
+      ]
+    ),
+    [
+      pendingEntriesQuery.data,
+      pendingEntryHistoryQuery.data,
+      pendingEntryQuery.data,
+      pendingEntryQueueHistoryQuery.data,
+      selectedPendingEntryId
+    ]
   );
   const selectedAccountSnapshot = selectedRealConnection
     ? accountSnapshotsQuery.dataByConnectionId[selectedRealConnection.id] ?? null
@@ -187,6 +202,8 @@ export function RadarRoute() {
   const loading = [healthQuery, radarStatusQuery, radarQuery].some((query) => query.isLoading)
     || (signalView === "history" && historicalSignalsQuery.isLoading);
   const busy = signalActionMutation.isPending
+    || cancelPendingEntryMutation.isPending
+    || reconfirmPendingEntryMutation.isPending
     || rejectSignalMutation.isPending
     || tradingActionsDisabled;
 
@@ -210,6 +227,7 @@ export function RadarRoute() {
   const handleSelectSignal = useCallback((signal: RadarSignal) => {
     setActionError(null);
     setHasUserSelectedSignal(true);
+    setSelectedPendingEntryId(null);
     setSelectedSignalId(signal.id);
   }, [setSelectedSignalId]);
 
@@ -218,12 +236,14 @@ export function RadarRoute() {
     if (!latestSignal) return;
     setActionError(null);
     setHasUserSelectedSignal(true);
+    setSelectedPendingEntryId(null);
     setSelectedSignalId(latestSignal.id);
   }, [setSelectedSignalId, visibleSignals]);
 
   const handleSelectPendingEntrySignal = useCallback((intent: PendingEntryIntent) => {
     setActionError(null);
     setHasUserSelectedSignal(true);
+    setSelectedPendingEntryId(intent.id);
     setSelectedSignalId(intent.signal_id);
   }, [setSelectedSignalId]);
 
@@ -312,19 +332,14 @@ export function RadarRoute() {
   async function handleCancelPendingEntry(intent: PendingEntryIntent) {
     try {
       if (tradingActionsDisabled) return;
-      const state = pendingActionState(intent, pendingEntryActionStates.dataByIntentId, {
-        real: realActionStateQuery.data ?? null,
-        selectedSignalId,
-        virtual: virtualActionStateQuery.data ?? null
-      });
-      if (!state?.can_cancel) {
-        setActionError(actionStateErrorMessage(state, "Pending entry cancel failed."));
+      if (!isActivePendingEntryStatus(intent.status)) {
+        setActionError("Only active pending entries can be cancelled.");
         return;
       }
       setActionError(null);
-      await signalActionMutation.mutateAsync({
-        signalId: intent.signal_id,
-        kind: "cancel_pending_entry",
+      await cancelPendingEntryMutation.mutateAsync({
+        intentId: intent.id,
+        userId,
         mode: intent.mode,
         connectionId: pendingEntryConnectionId(intent)
       });
@@ -337,21 +352,22 @@ export function RadarRoute() {
   async function handleReconfirmPendingEntry(intent: PendingEntryIntent) {
     try {
       if (tradingActionsDisabled) return;
-      const state = pendingActionState(intent, pendingEntryActionStates.dataByIntentId, {
-        real: realActionStateQuery.data ?? null,
-        selectedSignalId,
-        virtual: virtualActionStateQuery.data ?? null
-      });
-      if (!state?.can_reconfirm) {
-        setActionError(actionStateErrorMessage(state, "Pending entry reconfirmation failed."));
+      if (intent.status !== "requires_reconfirmation") {
+        setActionError("Only pending entries requiring reconfirmation can be reconfirmed.");
+        return;
+      }
+      if (!signalsById[intent.signal_id]) {
+        setActionError("Cannot reconfirm this pending entry because the original signal is not in the current feed. Cancel is still available.");
         return;
       }
       setActionError(null);
-      await signalActionMutation.mutateAsync({
-        signalId: intent.signal_id,
-        kind: "reconfirm_pending_entry",
-        mode: intent.mode,
-        connectionId: pendingEntryConnectionId(intent)
+      await reconfirmPendingEntryMutation.mutateAsync({
+        intentId: intent.id,
+        request: {
+          mode: intent.mode,
+          ...(userId ? { user_id: userId } : {}),
+          ...(pendingEntryConnectionId(intent) ? { connection_id: pendingEntryConnectionId(intent) } : {})
+        }
       });
       await refreshData();
     } catch (exc) {
@@ -395,8 +411,6 @@ export function RadarRoute() {
       pendingEntries={pendingEntriesQuery.data ?? []}
       pendingEntryHistory={pendingEntryQueueHistoryQuery.data ?? []}
       pendingEntriesLoading={pendingEntriesQuery.isFetching || pendingEntryQueueHistoryQuery.isFetching}
-      pendingEntryActionStates={pendingEntryActionStates.dataByIntentId}
-      pendingEntryActionStatesLoading={pendingEntryActionStates.pendingByIntentId}
       tradingActionsDisabled={tradingActionsDisabled}
       filter={filter}
       radarDisplayMode={radarDisplayMode}
@@ -417,6 +431,7 @@ export function RadarRoute() {
       onReject={handleReject}
       realTradeContext={realTradeContext}
       realTradeBusy={signalActionMutation.isPending}
+      selectedPendingEntryId={selectedPendingEntryId}
       selectedSignalId={selectedSignalId}
       missingSelectedSignalId={missingSelectedSignalId}
       signalIds={visibleSignalIds}
@@ -463,8 +478,15 @@ export function selectRealTradeConnection(
 
 export function selectPendingEntryForDetails(
   activeIntent: PendingEntryIntent | null,
-  historyIntents: PendingEntryIntent[] = []
+  historyIntents: PendingEntryIntent[] = [],
+  selectedPendingEntryId: string | null = null,
+  queueIntents: PendingEntryIntent[] = []
 ): PendingEntryIntent | null {
+  if (selectedPendingEntryId) {
+    const selected = [...queueIntents, activeIntent, ...historyIntents]
+      .find((intent): intent is PendingEntryIntent => intent?.id === selectedPendingEntryId) ?? null;
+    if (selected) return selected;
+  }
   if (activeIntent && isActivePendingEntryIntent(activeIntent)) return activeIntent;
   return latestTerminalPendingEntryIntent(historyIntents);
 }
@@ -481,21 +503,6 @@ function actionStateErrorMessage(state: SignalActionState | null, fallback: stri
     ?? blocker?.message
     ?? state.disabled_reason_code
     ?? fallback;
-}
-
-function pendingActionState(
-  intent: PendingEntryIntent,
-  actionStatesByIntentId: Record<string, SignalActionState | null>,
-  selected: {
-    real: SignalActionState | null;
-    selectedSignalId: string | null;
-    virtual: SignalActionState | null;
-  }
-): SignalActionState | null {
-  const queuedState = actionStatesByIntentId[intent.id] ?? null;
-  if (queuedState) return queuedState;
-  if (selected.selectedSignalId !== intent.signal_id) return null;
-  return intent.mode === "real" ? selected.real : selected.virtual;
 }
 
 function pendingEntryConnectionId(intent: PendingEntryIntent): string | null {

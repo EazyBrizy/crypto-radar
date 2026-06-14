@@ -225,6 +225,73 @@ describe("signalsApi.pendingEntries", () => {
   });
 });
 
+describe("signalsApi.cancelPendingEntry", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("posts cancel by pending-entry intent id", async () => {
+    const fetchSpy = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      void args;
+      return new Response(JSON.stringify(pendingEntryIntentDto({
+        id: "intent_42",
+        status: "cancelled"
+      })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await signalsApi.cancelPendingEntry({
+      intentId: "intent_42",
+      userId: "user_1",
+      mode: "virtual"
+    });
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toContain("/api/v1/pending-entry/intent_42/cancel");
+    expect(String(url)).not.toContain("/signals/");
+    expect(init?.method).toBe("POST");
+    expect(result).toMatchObject({ id: "intent_42", status: "cancelled" });
+  });
+});
+
+describe("signalsApi.reconfirmPendingEntry", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("posts reconfirm by pending-entry intent id", async () => {
+    const fetchSpy = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      void args;
+      return new Response(JSON.stringify(pendingEntryIntentDto({
+        id: "intent_43",
+        status: "pending"
+      })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await signalsApi.reconfirmPendingEntry({
+      intentId: "intent_43",
+      request: { mode: "virtual", user_id: "user_1" }
+    });
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(String(init?.body));
+    expect(String(url)).toContain("/api/v1/pending-entry/intent_43/reconfirm");
+    expect(String(url)).not.toContain("/signals/");
+    expect(init?.method).toBe("POST");
+    expect(body).toEqual({ mode: "virtual", user_id: "user_1" });
+    expect(result).toMatchObject({ id: "intent_43", status: "pending" });
+  });
+});
+
 function actionState(overrides: Record<string, unknown> = {}) {
   return {
     can_enter_now: false,

@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -18,6 +18,7 @@ from app.services.pending_entry import (
     TRADE_PLAN_RECONFIRMATION_REQUIRED_REASON,
     PendingEntryService,
 )
+from app.services.signal_views import annotate_pending_entry_view
 
 USER_ID = UUID("ba520631-d035-4f95-a4c0-3b40553dd524")
 SIGNAL_ID = UUID("ba520631-d035-4f95-a4c0-3b40553dd527")
@@ -334,6 +335,34 @@ class PendingEntryServiceTest(unittest.TestCase):
         self.assertEqual(active_queue, [])
         self.assertEqual([intent.id for intent in history], [cancelled.id])
 
+    def test_list_active_for_user_sweeps_expired_intents_to_history(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = self._service(repository)
+        created = service.arm_from_signal(
+            user_id="demo_user",
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id="demo_user", auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        expired_active = created.model_copy(
+            update={
+                "status": "requires_reconfirmation",
+                "expires_at": datetime.now(timezone.utc) - timedelta(minutes=1),
+            }
+        )
+        repository.records = [expired_active]
+        repository.active = expired_active
+
+        active_queue = service.list_active_for_user(user_id="usr_demo")
+        history = service.list_history_for_user(user_id="usr_demo")
+
+        self.assertEqual(active_queue, [])
+        self.assertEqual([intent.id for intent in history], [created.id])
+        self.assertEqual(history[0].status, "expired")
+        self.assertEqual(history[0].reason_code, "pending_entry_expired_before_touch")
+        self.assertEqual(repository.transitions[0][1], "expired")
+
     def test_cancel_accepts_usr_demo_alias(self) -> None:
         repository = _FakePendingEntryRepository()
         service = self._service(repository)
@@ -366,6 +395,38 @@ class PendingEntryServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(reconfirmed.id, created.id)
+
+    def test_pending_entry_view_preserves_specific_reason_code_over_placeholder_snapshot(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = self._service(repository)
+        created = service.arm_from_signal(
+            user_id="demo_user",
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id="demo_user", auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        requires = service.transition_status(
+            created.id,
+            status="requires_reconfirmation",
+            failure_reason="Edge degraded after acceptance.",
+            reason_code="edge_degraded_after_acceptance",
+        )
+        assert requires is not None
+        poisoned = requires.model_copy(
+            update={
+                "request_snapshot": {
+                    **requires.request_snapshot,
+                    "reason_code": "no_backend_reason",
+                    "code": "-",
+                }
+            }
+        )
+
+        annotated = annotate_pending_entry_view(poisoned)
+
+        self.assertEqual(annotated.view.reason_code if annotated.view else None, "edge_degraded_after_acceptance")
+        self.assertEqual(annotated.view.reason if annotated.view else None, "edge_degraded_after_acceptance")
 
     def test_reconfirm_updates_existing_intent_with_current_trade_plan(self) -> None:
         repository = _FakePendingEntryRepository()

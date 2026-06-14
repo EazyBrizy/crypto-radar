@@ -1,6 +1,7 @@
 "use client";
 
-import { FileCheck2, Filter, RadioTower, RefreshCw, XCircle } from "lucide-react";
+import { useCallback, useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { ChevronDown, ChevronRight, EyeOff, FileCheck2, Filter, RadioTower, RefreshCw, XCircle } from "lucide-react";
 
 import { Metric } from "@/components/Metric";
 import { SignalDetails, type RealTradeContext } from "@/components/SignalDetails";
@@ -44,8 +45,6 @@ interface RadarPageProps {
   pendingEntries: PendingEntryIntent[];
   pendingEntryHistory: PendingEntryIntent[];
   pendingEntriesLoading?: boolean;
-  pendingEntryActionStates?: Record<string, SignalActionState | null>;
-  pendingEntryActionStatesLoading?: Record<string, boolean>;
   signalIds: string[];
   signals: RadarSignal[];
   actionError?: string | null;
@@ -62,10 +61,13 @@ interface RadarPageProps {
   realTradeContext?: RealTradeContext;
   realTradeBusy?: boolean;
   tradingActionsDisabled?: boolean;
+  selectedPendingEntryId?: string | null;
 }
 
 export function RadarPage(props: RadarPageProps) {
   const { t, tKey } = useI18n();
+  const [pendingEntriesCollapsed, setPendingEntriesCollapsed] = useState(false);
+  const [hiddenHistoryEntryIds, setHiddenHistoryEntryIds] = useState(() => readHiddenPendingEntryIds());
   const summary = props.radarSummary;
   const scannerPairCount = props.radarStatus?.scanner_pairs_count ?? props.health?.scanner_pairs_count ?? props.radarStatus?.symbols.length ?? 0;
   const scannerUniverse = props.radarStatus?.scanner_universe_source ?? props.health?.scanner_universe_source ?? "default";
@@ -81,6 +83,18 @@ export function RadarPage(props: RadarPageProps) {
   const latestSeries = Object.entries(props.radarStatus?.candle_history ?? {})
     .sort(([, left], [, right]) => right - left)
     .slice(0, 6);
+  const visiblePendingEntryHistory = useMemo(
+    () => props.pendingEntryHistory.filter((intent) => !hiddenHistoryEntryIds.has(intent.id)),
+    [hiddenHistoryEntryIds, props.pendingEntryHistory]
+  );
+  const handleDismissPendingEntryHistory = useCallback((intent: PendingEntryIntent) => {
+    setHiddenHistoryEntryIds((current) => {
+      const next = new Set(current);
+      next.add(intent.id);
+      writeHiddenPendingEntryIds(next);
+      return next;
+    });
+  }, []);
 
   return (
     <div className="page-grid">
@@ -137,14 +151,17 @@ export function RadarPage(props: RadarPageProps) {
 
         <PendingEntriesQueue
           activeEntries={props.pendingEntries}
-          actionStates={props.pendingEntryActionStates ?? {}}
-          actionStatesLoading={props.pendingEntryActionStatesLoading ?? {}}
           busy={props.busy || Boolean(props.tradingActionsDisabled)}
-          historyEntries={props.pendingEntryHistory}
+          collapsed={pendingEntriesCollapsed}
+          hiddenHistoryEntryIds={hiddenHistoryEntryIds}
+          historyEntries={visiblePendingEntryHistory}
           loading={props.pendingEntriesLoading ?? false}
           onCancelPendingEntry={props.onCancelPendingEntry}
+          onDismissHistoryEntry={handleDismissPendingEntryHistory}
           onReconfirmPendingEntry={props.onReconfirmPendingEntry}
           onSelectPendingEntrySignal={props.onSelectPendingEntrySignal}
+          onToggleCollapsed={() => setPendingEntriesCollapsed((collapsed) => !collapsed)}
+          selectedPendingEntryId={props.selectedPendingEntryId ?? null}
           selectedSignalId={props.selectedSignalId}
         />
 
@@ -223,62 +240,80 @@ export function RadarPage(props: RadarPageProps) {
         />
       </section>
 
-      <SignalDetails
-        signal={props.selectedSignal}
-        onPaperTrade={props.onPaperTrade}
-        onConfirmRealTrade={props.onConfirmRealTrade}
-        onAcceptPendingEntry={props.onAcceptPendingEntry}
-        onCancelPendingEntry={props.onCancelPendingEntry}
-        onReconfirmPendingEntry={props.onReconfirmPendingEntry}
-        onReject={props.onReject}
-        busy={props.busy}
-        pendingEntry={props.selectedPendingEntry ?? null}
-        pendingEntryLoading={props.pendingEntryLoading ?? false}
-        executionPreview={props.executionPreview ?? null}
-        executionPreviewError={props.executionPreviewError ?? null}
-        executionPreviewLoading={props.executionPreviewLoading ?? false}
-        realExecutionPreview={props.realExecutionPreview ?? null}
-        realExecutionPreviewError={props.realExecutionPreviewError ?? null}
-        realExecutionPreviewLoading={props.realExecutionPreviewLoading ?? false}
-        actionState={props.actionState}
-        actionStateLoading={props.actionStateLoading ?? false}
-        realActionState={props.realActionState}
-        realTradeContext={props.realTradeContext}
-        realTradeBusy={props.realTradeBusy ?? false}
-        tradingActionsDisabled={props.tradingActionsDisabled}
-        missingSignalId={props.missingSelectedSignalId ?? null}
-        onSelectLatestSignal={props.onSelectLatestSignal}
-      />
+      {props.selectedSignal || !props.selectedPendingEntry ? (
+        <SignalDetails
+          signal={props.selectedSignal}
+          onPaperTrade={props.onPaperTrade}
+          onConfirmRealTrade={props.onConfirmRealTrade}
+          onAcceptPendingEntry={props.onAcceptPendingEntry}
+          onCancelPendingEntry={props.onCancelPendingEntry}
+          onReconfirmPendingEntry={props.onReconfirmPendingEntry}
+          onReject={props.onReject}
+          busy={props.busy}
+          pendingEntry={props.selectedPendingEntry ?? null}
+          pendingEntryLoading={props.pendingEntryLoading ?? false}
+          executionPreview={props.executionPreview ?? null}
+          executionPreviewError={props.executionPreviewError ?? null}
+          executionPreviewLoading={props.executionPreviewLoading ?? false}
+          realExecutionPreview={props.realExecutionPreview ?? null}
+          realExecutionPreviewError={props.realExecutionPreviewError ?? null}
+          realExecutionPreviewLoading={props.realExecutionPreviewLoading ?? false}
+          actionState={props.actionState}
+          actionStateLoading={props.actionStateLoading ?? false}
+          realActionState={props.realActionState}
+          realTradeContext={props.realTradeContext}
+          realTradeBusy={props.realTradeBusy ?? false}
+          tradingActionsDisabled={props.tradingActionsDisabled}
+          missingSignalId={props.missingSelectedSignalId ?? null}
+          onSelectLatestSignal={props.onSelectLatestSignal}
+        />
+      ) : (
+        <PendingEntryDetailsPanel
+          busy={props.busy || Boolean(props.tradingActionsDisabled)}
+          missingSignalId={props.missingSelectedSignalId ?? null}
+          onCancelPendingEntry={props.onCancelPendingEntry}
+          onReconfirmPendingEntry={props.onReconfirmPendingEntry}
+          pendingEntry={props.selectedPendingEntry}
+        />
+      )}
     </div>
   );
 }
 
 function PendingEntriesQueue({
   activeEntries,
-  actionStates,
-  actionStatesLoading,
   busy,
+  collapsed,
+  hiddenHistoryEntryIds,
   historyEntries,
   loading,
   onCancelPendingEntry,
+  onDismissHistoryEntry,
   onReconfirmPendingEntry,
   onSelectPendingEntrySignal,
+  onToggleCollapsed,
+  selectedPendingEntryId,
   selectedSignalId
 }: {
   activeEntries: PendingEntryIntent[];
-  actionStates: Record<string, SignalActionState | null>;
-  actionStatesLoading: Record<string, boolean>;
   busy: boolean;
+  collapsed: boolean;
+  hiddenHistoryEntryIds: Set<string>;
   historyEntries: PendingEntryIntent[];
   loading: boolean;
   onCancelPendingEntry: (intent: PendingEntryIntent) => void;
+  onDismissHistoryEntry: (intent: PendingEntryIntent) => void;
   onReconfirmPendingEntry: (intent: PendingEntryIntent) => void;
   onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
+  onToggleCollapsed: () => void;
+  selectedPendingEntryId: string | null;
   selectedSignalId: string | null;
 }) {
   const { tKey } = useI18n();
   const active = activeEntries.filter((intent) => isActivePendingEntryStatus(intent.status));
   const history = historyEntries.filter((intent) => isTerminalPendingEntryStatus(intent.status));
+  const hiddenCount = hiddenHistoryEntryIds.size;
+  const collapseLabel = collapsed ? tKey("pendingEntry.expandQueue") : tKey("pendingEntry.collapseQueue");
 
   return (
     <section className="pending-entries-panel">
@@ -287,73 +322,157 @@ function PendingEntriesQueue({
           <span className="muted">{tKey("pendingEntry.queueEyebrow")}</span>
           <h3>{tKey("pendingEntry.selectedEntries")}</h3>
         </div>
-        <span className="badge badge-blue">{tKey("pendingEntry.activeCount", { count: active.length })}</span>
-      </div>
-      {loading && !active.length ? (
-        <div className="empty-state compact-empty">{tKey("pendingEntry.loading")}</div>
-      ) : active.length ? (
-        <div className="pending-entry-list">
-          {active.map((intent) => (
-            <PendingEntryQueueItem
-              actionState={actionStates[intent.id] ?? null}
-              actionStateLoading={Boolean(actionStatesLoading[intent.id])}
-              busy={busy}
-              intent={intent}
-              key={intent.id}
-              onCancelPendingEntry={onCancelPendingEntry}
-              onReconfirmPendingEntry={onReconfirmPendingEntry}
-              onSelectPendingEntrySignal={onSelectPendingEntrySignal}
-              selected={selectedSignalId === intent.signal_id}
-            />
-          ))}
+        <div className="pending-entries-head-actions">
+          <span className="badge badge-blue">{tKey("pendingEntry.activeCount", { count: active.length })}</span>
+          {hiddenCount ? <span className="badge">{tKey("pendingEntry.hiddenCount", { count: hiddenCount })}</span> : null}
+          <button
+            aria-expanded={!collapsed}
+            aria-label={collapseLabel}
+            className="icon-button compact-icon-button"
+            onClick={onToggleCollapsed}
+            title={collapseLabel}
+            type="button"
+          >
+            {collapsed ? <ChevronRight size={17} /> : <ChevronDown size={17} />}
+          </button>
         </div>
-      ) : (
-        <div className="empty-state compact-empty">{tKey("pendingEntry.noActive")}</div>
+      </div>
+      {collapsed ? null : (
+        <>
+          {loading && !active.length ? (
+            <div className="empty-state compact-empty">{tKey("pendingEntry.loading")}</div>
+          ) : active.length ? (
+            <div className="pending-entry-list">
+              {active.map((intent) => (
+                <PendingEntryQueueItem
+                  busy={busy}
+                  intent={intent}
+                  key={intent.id}
+                  onCancelPendingEntry={onCancelPendingEntry}
+                  onReconfirmPendingEntry={onReconfirmPendingEntry}
+                  onSelectPendingEntrySignal={onSelectPendingEntrySignal}
+                  selected={isPendingEntrySelected(intent, selectedPendingEntryId, selectedSignalId)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact-empty">{tKey("pendingEntry.noActive")}</div>
+          )}
+          <details className="pending-entry-history-queue">
+            <summary>
+              <span>{tKey("pendingEntry.history")}</span>
+              <span className="badge">{history.length}</span>
+            </summary>
+            {history.length ? (
+              <div className="pending-entry-list history">
+                {history.map((intent) => (
+                  <PendingEntryQueueItem
+                    busy={busy}
+                    intent={intent}
+                    key={intent.id}
+                    onCancelPendingEntry={onCancelPendingEntry}
+                    onDismissHistoryEntry={onDismissHistoryEntry}
+                    onReconfirmPendingEntry={onReconfirmPendingEntry}
+                    onSelectPendingEntrySignal={onSelectPendingEntrySignal}
+                    selected={isPendingEntrySelected(intent, selectedPendingEntryId, selectedSignalId)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state compact-empty">{tKey("pendingEntry.noHistory")}</div>
+            )}
+          </details>
+        </>
       )}
-      <details className="pending-entry-history-queue">
-        <summary>
-          <span>{tKey("pendingEntry.history")}</span>
-          <span className="badge">{history.length}</span>
-        </summary>
-        {history.length ? (
-          <div className="pending-entry-list history">
-            {history.map((intent) => (
-              <PendingEntryQueueItem
-                actionState={actionStates[intent.id] ?? null}
-                actionStateLoading={Boolean(actionStatesLoading[intent.id])}
-                busy={busy}
-                intent={intent}
-                key={intent.id}
-                onCancelPendingEntry={onCancelPendingEntry}
-                onReconfirmPendingEntry={onReconfirmPendingEntry}
-                onSelectPendingEntrySignal={onSelectPendingEntrySignal}
-                selected={selectedSignalId === intent.signal_id}
-              />
-            ))}
-          </div>
+    </section>
+  );
+}
+
+function PendingEntryDetailsPanel({
+  busy,
+  missingSignalId,
+  onCancelPendingEntry,
+  onReconfirmPendingEntry,
+  pendingEntry
+}: {
+  busy: boolean;
+  missingSignalId: string | null;
+  onCancelPendingEntry: (intent: PendingEntryIntent) => void;
+  onReconfirmPendingEntry: (intent: PendingEntryIntent) => void;
+  pendingEntry: PendingEntryIntent;
+}) {
+  const { t, tKey, tReason } = useI18n();
+  const reasonCode = pendingEntry.view?.reason_code ?? pendingEntry.reason_code ?? null;
+  const reason = reasonCode
+    ? tReason(reasonCode)
+    : tReason(pendingEntry.view?.reason ?? pendingEntry.failure_reason ?? tKey("pendingEntry.noBackendReason"));
+  const canCancel = isActivePendingEntryStatus(pendingEntry.status);
+  const canReconfirm = pendingEntry.status === "requires_reconfirmation";
+
+  return (
+    <section className="details-panel pending-entry-details-panel">
+      <div className="details-header">
+        <div>
+          <span className="muted">{tKey("pendingEntry.detailsTitle")}</span>
+          <h2>{pendingEntry.symbol}</h2>
+        </div>
+        <div className="details-badges">
+          <span className={`badge badge-${pendingEntryTone(pendingEntry.status)}`}>{t(pendingEntry.status.replaceAll("_", " "))}</span>
+          <span className="badge badge-purple">{pendingEntry.mode}</span>
+        </div>
+      </div>
+
+      {missingSignalId ? <div className="warning-banner">{tKey("pendingEntry.originalSignalMissing")}</div> : null}
+
+      <div className="pending-entry-block">
+        <div className="section-title">
+          <FileCheck2 size={18} />
+          <h3>{tKey("pendingEntry.acceptedSnapshot")}</h3>
+        </div>
+        <p>{reason}</p>
+        <div className="risk-reward-detail-grid">
+          <MetricLine label={tKey("pendingEntry.entryZone")} value={pendingEntry.view?.entry_zone ?? `${formatPrice(pendingEntry.entry_min)} - ${formatPrice(pendingEntry.entry_max)}`} />
+          <MetricLine label={tKey("pendingEntry.stop")} value={formatPrice(pendingEntry.stop_loss)} />
+          <MetricLine label={tKey("pendingEntry.reasonCode")} value={reasonCode ?? "-"} />
+          <MetricLine label={tKey("pendingEntry.currentPrice")} value={formatPrice(pendingEntry.view?.current_price ?? pendingEntry.current_price ?? null)} />
+          <MetricLine label={tKey("pendingEntry.expires")} value={formatPendingEntryTtl(pendingEntry.expires_at, tKey)} />
+          <MetricLine label={tKey("pendingEntry.acceptedStatus")} value={t(pendingEntry.accepted_signal_status.replaceAll("_", " "))} />
+          <MetricLine label={tKey("pendingEntry.targets")} value={formatPendingEntryTargets(pendingEntry.targets_snapshot)} />
+          <MetricLine label={tKey("pendingEntry.updated")} value={formatPendingEntryTimestamp(pendingEntry.updated_at)} />
+        </div>
+      </div>
+
+      <div className="detail-actions">
+        {canReconfirm ? (
+          <button className="secondary-action" disabled={busy} onClick={() => onReconfirmPendingEntry(pendingEntry)} type="button">
+            <RefreshCw size={17} /> {tKey("pendingEntry.reconfirmPlan")}
+          </button>
         ) : (
-          <div className="empty-state compact-empty">{tKey("pendingEntry.noHistory")}</div>
+          null
         )}
-      </details>
+        {canCancel ? (
+          <button className="secondary-action" disabled={busy} onClick={() => onCancelPendingEntry(pendingEntry)} type="button">
+            <XCircle size={17} /> {tKey("pendingEntry.cancel")}
+          </button>
+        ) : null}
+      </div>
     </section>
   );
 }
 
 function PendingEntryQueueItem({
-  actionState,
-  actionStateLoading,
   busy,
   intent,
   onCancelPendingEntry,
+  onDismissHistoryEntry,
   onReconfirmPendingEntry,
   onSelectPendingEntrySignal,
   selected
 }: {
-  actionState: SignalActionState | null;
-  actionStateLoading: boolean;
   busy: boolean;
   intent: PendingEntryIntent;
   onCancelPendingEntry: (intent: PendingEntryIntent) => void;
+  onDismissHistoryEntry?: (intent: PendingEntryIntent) => void;
   onReconfirmPendingEntry: (intent: PendingEntryIntent) => void;
   onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
   selected: boolean;
@@ -364,9 +483,35 @@ function PendingEntryQueueItem({
     ? tReason(reasonCode)
     : tReason(intent.view?.reason ?? intent.failure_reason ?? tKey("pendingEntry.noReasonFromBackend"));
   const currentPrice = intent.view?.current_price == null ? formatPrice(intent.current_price) : formatPrice(intent.view.current_price);
+  const active = isActivePendingEntryStatus(intent.status);
+  const terminal = isTerminalPendingEntryStatus(intent.status);
+  const canCancel = active;
+  const canReconfirm = intent.status === "requires_reconfirmation";
+  const openLabel = tKey("pendingEntry.openQueueItem", { id: intent.id, symbol: intent.symbol });
+  const handleSelect = () => onSelectPendingEntrySignal(intent);
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.target instanceof Element) {
+      const nestedControl = event.target.closest("button,a,input,select,textarea,[role='button'],[tabindex]");
+      if (nestedControl && nestedControl !== event.currentTarget) return;
+    }
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    handleSelect();
+  };
+  const handleActionClick = (event: MouseEvent<HTMLButtonElement>, action: () => void) => {
+    event.stopPropagation();
+    action();
+  };
 
   return (
-    <article className={selected ? "pending-entry-item selected" : "pending-entry-item"}>
+    <article
+      aria-label={openLabel}
+      className={selected ? "pending-entry-item selected" : "pending-entry-item"}
+      onClick={handleSelect}
+      onKeyDown={handleKeyDown}
+      role="button"
+      tabIndex={0}
+    >
       <div className="pending-entry-main">
         <div>
           <strong>{intent.symbol}</strong>
@@ -385,25 +530,39 @@ function PendingEntryQueueItem({
       </div>
       <p className="pending-entry-reason">{reason}</p>
       <div className="pending-entry-actions">
-        <button className="secondary-action compact-action" onClick={() => onSelectPendingEntrySignal(intent)} type="button">
+        <button className="secondary-action compact-action" onClick={(event) => handleActionClick(event, handleSelect)} type="button">
           <FileCheck2 size={15} /> {tKey("pendingEntry.selectSignal")}
         </button>
-        <button
-          className="secondary-action compact-action"
-          disabled={busy || actionStateLoading || !actionState?.can_reconfirm}
-          onClick={() => onReconfirmPendingEntry(intent)}
-          type="button"
-        >
-          <RefreshCw size={15} /> {tKey("pendingEntry.reconfirm")}
-        </button>
-        <button
-          className="secondary-action compact-action"
-          disabled={busy || actionStateLoading || !actionState?.can_cancel}
-          onClick={() => onCancelPendingEntry(intent)}
-          type="button"
-        >
-          <XCircle size={15} /> {tKey("pendingEntry.cancel")}
-        </button>
+        {active ? (
+          <>
+            <button
+              className="secondary-action compact-action"
+              disabled={busy || !canReconfirm}
+              onClick={(event) => handleActionClick(event, () => onReconfirmPendingEntry(intent))}
+              type="button"
+            >
+              <RefreshCw size={15} /> {tKey("pendingEntry.reconfirm")}
+            </button>
+            <button
+              className="secondary-action compact-action"
+              disabled={busy || !canCancel}
+              onClick={(event) => handleActionClick(event, () => onCancelPendingEntry(intent))}
+              type="button"
+            >
+              <XCircle size={15} /> {tKey("pendingEntry.cancel")}
+            </button>
+          </>
+        ) : null}
+        {terminal && onDismissHistoryEntry ? (
+          <button
+            aria-label={tKey("pendingEntry.hideQueueItem", { id: intent.id })}
+            className="secondary-action compact-action"
+            onClick={(event) => handleActionClick(event, () => onDismissHistoryEntry(intent))}
+            type="button"
+          >
+            <EyeOff size={15} /> {tKey("pendingEntry.hide")}
+          </button>
+        ) : null}
       </div>
     </article>
   );
@@ -416,6 +575,20 @@ function MetricLine({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function isPendingEntrySelected(
+  intent: PendingEntryIntent,
+  selectedPendingEntryId: string | null,
+  selectedSignalId: string | null
+): boolean {
+  return selectedPendingEntryId ? selectedPendingEntryId === intent.id : selectedSignalId === intent.signal_id;
+}
+
+function formatPendingEntryTargets(targets: PendingEntryIntent["targets_snapshot"]): string {
+  if (Array.isArray(targets)) return String(targets.length);
+  const values = Object.values(targets);
+  return values.length ? String(values.length) : "-";
 }
 
 function pendingEntryTone(status: PendingEntryIntent["status"]): "green" | "red" | "yellow" | "blue" | "purple" | "neutral" {
@@ -435,6 +608,30 @@ function formatPendingEntryTtl(value: string | null, tKey: (key: I18nKey, params
   const diffMinutes = Math.ceil(diffMs / 60_000);
   if (diffMinutes < 60) return tKey("pendingEntry.minutesLeft", { count: diffMinutes });
   return tKey("pendingEntry.hoursLeft", { count: Math.ceil(diffMinutes / 60) });
+}
+
+function formatPendingEntryTimestamp(value: string | null | undefined): string {
+  if (!value) return "-";
+  return value.replace("T", " ").replace(".000Z", "Z");
+}
+
+const HIDDEN_PENDING_ENTRY_HISTORY_KEY = "crypto-radar:hidden-pending-entry-history";
+
+function readHiddenPendingEntryIds(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_PENDING_ENTRY_HISTORY_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((value): value is string => typeof value === "string" && value.trim().length > 0));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeHiddenPendingEntryIds(values: Set<string>): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(HIDDEN_PENDING_ENTRY_HISTORY_KEY, JSON.stringify([...values]));
 }
 
 type ScannerRuntimeStatus = Pick<HealthStatus | RadarStatus, "market_data_status" | "stage">;

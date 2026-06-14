@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import SessionLocal
 from app.domain.pending_entry_intent import is_terminal_pending_entry_intent_status
+from app.domain.pending_entry_reason import PENDING_ENTRY_EXPIRED_BEFORE_TOUCH
 from app.domain.signal_status import is_market_opportunity_status, is_terminal_signal_status
 from app.models.pending_entry import PendingEntryIntent
 from app.repositories.pending_entry_repository import PendingEntryIntentRepository
@@ -55,6 +56,7 @@ REAL_PENDING_NOT_IMPLEMENTED_REASON_CODE = "REAL_PENDING_NOT_IMPLEMENTED"
 REAL_PENDING_NOT_IMPLEMENTED_MESSAGE = (
     "Real pending entry is not implemented yet; use virtual pending entry or enter manually in real mode."
 )
+PENDING_ENTRY_EXPIRED_BEFORE_TOUCH_MESSAGE = "Pending entry intent expired before entry touch."
 
 
 class RealPendingEntryNotImplemented(ValueError):
@@ -110,7 +112,20 @@ class PendingEntryService:
         list_active = getattr(self._repository, "list_active_for_user", None)
         if list_active is None:
             return []
-        return list_active(user_id=user_uuid, mode=mode, limit=limit)
+        active = list_active(user_id=user_uuid, mode=mode, limit=limit)
+        now = datetime.now(timezone.utc)
+        expired = [intent for intent in active if _pending_entry_expired_before_touch(intent, now)]
+        for intent in expired:
+            self.transition_status(
+                intent.id,
+                status="expired",
+                failure_reason=PENDING_ENTRY_EXPIRED_BEFORE_TOUCH_MESSAGE,
+                reason_code=PENDING_ENTRY_EXPIRED_BEFORE_TOUCH,
+                now=now,
+            )
+        if expired:
+            return list_active(user_id=user_uuid, mode=mode, limit=limit)
+        return active
 
     def list_history_for_user(
         self,
@@ -884,6 +899,20 @@ def _manual_confirm_request(request: ManualConfirmRequest | dict[str, Any] | Non
 
 def _pending_entry_mode(value: str) -> PendingEntryIntentMode:
     return "real" if str(value).strip().lower() == "real" else "virtual"
+
+
+def _pending_entry_expired_before_touch(
+    intent: PendingEntryIntentRead,
+    now: datetime,
+) -> bool:
+    if intent.status not in {"pending", "requires_reconfirmation"}:
+        return False
+    expires_at = intent.expires_at
+    if expires_at is None:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= now
 
 
 def _snapshot_hash(snapshot: dict[str, Any]) -> str:

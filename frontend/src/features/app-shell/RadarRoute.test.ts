@@ -129,6 +129,7 @@ vi.mock("./RadarPage", async () => {
       onSelectSignal: (signal: RadarSignal) => void;
       missingSelectedSignalId: string | null;
       pendingEntries: PendingEntryIntent[];
+      selectedPendingEntry?: PendingEntryIntent | null;
       selectedSignal: RadarSignal | null;
       selectedSignalId: string | null;
       signalIds: string[];
@@ -138,6 +139,7 @@ vi.mock("./RadarPage", async () => {
       { "data-testid": "radar-page" },
       React.createElement("div", { "data-testid": "selected-signal" }, props.selectedSignal?.id ?? "none"),
       React.createElement("div", { "data-testid": "selected-card" }, props.selectedSignalId ?? "none"),
+      React.createElement("div", { "data-testid": "selected-pending-entry" }, props.selectedPendingEntry?.id ?? "none"),
       React.createElement("div", { "data-testid": "missing-signal" }, props.missingSelectedSignalId ?? "none"),
       React.createElement("div", { "data-testid": "signal-ids" }, props.signalIds.join(",")),
       React.createElement("div", { "data-testid": "pending-statuses" }, props.pendingEntries.map((intent) => `${intent.id}:${intent.status}`).join(",")),
@@ -466,6 +468,25 @@ describe("RadarRoute selection", () => {
 
     await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_b"));
     expect(useUiStore.getState().selectedSignalId).toBe("sig_b");
+  });
+
+  it("selects pending-entry details when the related signal is absent from the feed", async () => {
+    radarRouteMockState.radarResponse = { signals: [] };
+    radarRouteMockState.pendingEntries = [pendingIntent({
+      id: "intent_missing_signal",
+      signal_id: "sig_missing",
+      symbol: "MISSINGUSDT",
+      status: "requires_reconfirmation"
+    })];
+
+    render(createElement(RadarRoute));
+
+    fireEvent.click(await screen.findByRole("button", { name: "select pending intent_missing_signal" }));
+
+    await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("none"));
+    expect(screen.getByTestId("selected-card")).toHaveTextContent("sig_missing");
+    expect(screen.getByTestId("missing-signal")).toHaveTextContent("sig_missing");
+    expect(screen.getByTestId("selected-pending-entry")).toHaveTextContent("intent_missing_signal");
   });
 
   it("requests real execution preview for the selected real exchange connection", async () => {

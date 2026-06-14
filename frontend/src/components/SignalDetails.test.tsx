@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { RealExecutionResultDto } from "@/api/generated/schemas";
 import type { PendingEntryIntent, RadarSignal, SignalActionState, SignalDetailsView } from "@/types";
-import { SignalDetails, type RealTradeContext } from "./SignalDetails";
+import { realExecutionPreviewStatusLabel, SignalDetails, type RealTradeContext } from "./SignalDetails";
 
 vi.mock("next/dynamic", () => ({
   default: () => () => null
@@ -263,6 +264,49 @@ describe("SignalDetails", () => {
     expect(onConfirmRealTrade).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the dedicated real execution preview in the real confirmation modal", () => {
+    render(
+      <SignalDetails
+        actionState={actionState()}
+        busy={false}
+        executionPreview={null}
+        onConfirmRealTrade={vi.fn()}
+        onPaperTrade={vi.fn()}
+        onReject={vi.fn()}
+        realActionState={actionState({
+          mode: "real",
+          environment: "testnet",
+          can_enter_now: true,
+          can_arm_pending: false,
+          primary_action: "enter_now"
+        })}
+        realExecutionPreview={realExecutionResult({
+          message: "Real execution plan is ready.",
+          status: "preview"
+        })}
+        realTradeContext={realTradeContext()}
+        signal={baseSignal()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Real wait entry/u }));
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).getByText("Real execution preview")).toBeInTheDocument();
+    expect(within(dialog).getByText("Plan ready")).toBeInTheDocument();
+    expect(within(dialog).getByText("Real execution plan is ready.")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Submitted")).not.toBeInTheDocument();
+  });
+
+  it("maps real preview status codes to explicit user-facing labels", () => {
+    expect(realExecutionPreviewStatusLabel("preview")).toBe("Plan ready");
+    expect(realExecutionPreviewStatusLabel("risk_failed")).toBe("Risk failed");
+    expect(realExecutionPreviewStatusLabel("readiness_failed")).toBe("Readiness failed");
+    expect(realExecutionPreviewStatusLabel("not_implemented")).toBe("Not implemented");
+    expect(realExecutionPreviewStatusLabel("dry_run")).toBe("Dry-run");
+    expect(realExecutionPreviewStatusLabel("submitted")).toBe("Submitted");
+  });
+
   it("shows an API contract error when SignalDetailsView is missing", () => {
     render(
       <SignalDetails
@@ -507,6 +551,34 @@ function realTradeContext(overrides: Partial<RealTradeContext> = {}): RealTradeC
     riskState: null,
     realExecutionEnabled: true,
     loading: false,
+    ...overrides
+  };
+}
+
+function realExecutionResult(overrides: Partial<RealExecutionResultDto> = {}): RealExecutionResultDto {
+  return {
+    mode: "real",
+    status: "preview",
+    signal_valid: true,
+    execution_allowed: true,
+    exchange: "bybit",
+    symbol: "ETHUSDT",
+    message: "Real execution preview is ready.",
+    technical_message: null,
+    risk_decision: null,
+    risk_decision_id: null,
+    execution_plan: null,
+    planned_orders: [],
+    idempotency_key: "real-preview:sig_1",
+    adapter: "bybit",
+    blockers: [],
+    connection_id: "conn_1",
+    environment: "testnet",
+    order_placement_mode: "dry_run",
+    reason_code: null,
+    reason_codes: [],
+    warnings: [],
+    validation_errors: [],
     ...overrides
   };
 }

@@ -43,6 +43,7 @@ export const api = {
   cancelPendingEntry: signalsApi.cancelPendingEntry,
   reconfirmPendingEntry: signalsApi.reconfirmPendingEntry,
   executionPreview: signalsApi.executionPreview,
+  realExecutionPreview: signalsApi.realExecutionPreview,
   rejectSignal: signalsApi.reject,
   strategyTests: strategyTestsApi,
   trades: tradesApi.list,

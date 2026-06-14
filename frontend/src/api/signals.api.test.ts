@@ -99,6 +99,46 @@ describe("signalsApi.confirmReal", () => {
   });
 });
 
+describe("signalsApi.realExecutionPreview", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("posts real preview mode and connection id without using the virtual preview contract", async () => {
+    const fetchSpy = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      void args;
+      return new Response(JSON.stringify(realExecutionResultDto({
+        connection_id: "conn_1",
+        status: "preview"
+      })), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await signalsApi.realExecutionPreview({
+      signalId: "sig_1",
+      connectionId: "conn_1"
+    });
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(String(init?.body));
+    expect(String(url)).toContain("/api/v1/signals/sig_1/execution-preview");
+    expect(init?.method).toBe("POST");
+    expect(body).toEqual({
+      mode: "real",
+      connection_id: "conn_1"
+    });
+    expect(result).toMatchObject({
+      mode: "real",
+      status: "preview",
+      connection_id: "conn_1"
+    });
+  });
+});
+
 describe("signalsApi.pendingEntry", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -260,6 +300,44 @@ function pendingEntryIntentDto(overrides: Record<string, unknown> = {}) {
       entry_zone: "67100 - 67200",
       current_price: null
     },
+    ...overrides
+  };
+}
+
+function realExecutionResultDto(overrides: Record<string, unknown> = {}) {
+  return {
+    mode: "real",
+    status: "preview",
+    signal_valid: true,
+    execution_allowed: true,
+    exchange: "bybit",
+    symbol: "BTCUSDT",
+    message: "Real execution preview is ready.",
+    risk_decision: null,
+    execution_plan: {
+      symbol: "BTCUSDT",
+      side: "buy",
+      order_type: "market",
+      size: "0.1",
+      price: null,
+      stop_loss: "66500",
+      take_profit: "68100",
+      reduce_only: false,
+      leverage: 2,
+      margin_mode: "cross",
+      planned_orders: []
+    },
+    planned_orders: [],
+    idempotency_key: "real-preview:sig_1",
+    adapter: "bybit",
+    blockers: [],
+    connection_id: "conn_1",
+    environment: "testnet",
+    order_placement_mode: "dry_run",
+    reason_code: null,
+    reason_codes: [],
+    warnings: [],
+    validation_errors: [],
     ...overrides
   };
 }

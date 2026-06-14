@@ -21,6 +21,7 @@ import {
   useSendSignalActionMutation,
   useSignalActionStateQuery,
   useSignalExecutionPreviewQuery,
+  useSignalRealExecutionPreviewQuery,
   useUserProfileQuery
 } from "@/hooks/use-radar-queries";
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
@@ -133,6 +134,9 @@ export function RadarRoute() {
   const executionPreviewQuery = useSignalExecutionPreviewQuery(selectedSignal?.id ?? null, {
     enabled: shouldRequestExecutionPreview(selectedSignal, signalView, tradingActionsDisabled)
   });
+  const realExecutionPreviewQuery = useSignalRealExecutionPreviewQuery(selectedSignal?.id ?? null, selectedRealConnection?.id ?? null, {
+    enabled: shouldRequestExecutionPreview(selectedSignal, signalView, tradingActionsDisabled) && Boolean(selectedRealConnection?.id)
+  });
   const pendingEntryQuery = usePendingEntryQuery(selectedSignal?.id ?? null, userId, {
     enabled: selectedSignal != null && signalView === "open"
   });
@@ -198,9 +202,10 @@ export function RadarRoute() {
       riskStateQuery.refetch(),
       userProfileQuery.refetch(),
       virtualActionStateQuery.refetch(),
-      realActionStateQuery.refetch()
+      realActionStateQuery.refetch(),
+      realExecutionPreviewQuery.refetch()
     ]);
-  }, [healthQuery, historicalSignalsQuery, pendingEntriesQuery, pendingEntryHistoryQuery, pendingEntryQueueHistoryQuery, radarQuery, radarStatusQuery, realActionStateQuery, riskStateQuery, userProfileQuery, virtualActionStateQuery]);
+  }, [healthQuery, historicalSignalsQuery, pendingEntriesQuery, pendingEntryHistoryQuery, pendingEntryQueueHistoryQuery, radarQuery, radarStatusQuery, realActionStateQuery, realExecutionPreviewQuery, riskStateQuery, userProfileQuery, virtualActionStateQuery]);
 
   const handleSelectSignal = useCallback((signal: RadarSignal) => {
     setActionError(null);
@@ -379,6 +384,9 @@ export function RadarRoute() {
       executionPreview={executionPreviewQuery.data ?? null}
       executionPreviewError={executionPreviewQuery.error instanceof Error ? executionPreviewQuery.error.message : null}
       executionPreviewLoading={executionPreviewQuery.isFetching}
+      realExecutionPreview={realExecutionPreviewQuery.data ?? null}
+      realExecutionPreviewError={realExecutionPreviewQuery.error instanceof Error ? realExecutionPreviewQuery.error.message : null}
+      realExecutionPreviewLoading={realExecutionPreviewQuery.isFetching}
       actionState={virtualActionStateQuery.data ?? null}
       actionStateLoading={virtualActionStateQuery.isFetching}
       realActionState={realActionStateQuery.data ?? null}

@@ -5,6 +5,7 @@ import { FileCheck2, Filter, RadioTower, RefreshCw, XCircle } from "lucide-react
 import { Metric } from "@/components/Metric";
 import { SignalDetails, type RealTradeContext } from "@/components/SignalDetails";
 import { SignalFeed } from "@/components/SignalFeed";
+import type { RealExecutionResultDto } from "@/api/generated/schemas";
 import { RADAR_STATUS_FILTERS } from "@/domain/signal-status";
 import type { RadarDisplayMode } from "@/features/server-state/types";
 import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/domain/pending-entry-status";
@@ -51,6 +52,9 @@ interface RadarPageProps {
   executionPreview?: VirtualExecutionReport | null;
   executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
+  realExecutionPreview?: RealExecutionResultDto | null;
+  realExecutionPreviewError?: string | null;
+  realExecutionPreviewLoading?: boolean;
   actionState?: SignalActionState | null;
   actionStateLoading?: boolean;
   realActionState?: SignalActionState | null;
@@ -233,6 +237,9 @@ export function RadarPage(props: RadarPageProps) {
         executionPreview={props.executionPreview ?? null}
         executionPreviewError={props.executionPreviewError ?? null}
         executionPreviewLoading={props.executionPreviewLoading ?? false}
+        realExecutionPreview={props.realExecutionPreview ?? null}
+        realExecutionPreviewError={props.realExecutionPreviewError ?? null}
+        realExecutionPreviewLoading={props.realExecutionPreviewLoading ?? false}
         actionState={props.actionState}
         actionStateLoading={props.actionStateLoading ?? false}
         realActionState={props.realActionState}

@@ -103,6 +103,22 @@ export function useSignalExecutionPreviewQuery(signalId: string | null, options:
   });
 }
 
+export function useSignalRealExecutionPreviewQuery(
+  signalId: string | null,
+  connectionId: string | null,
+  options: PlannedQueryOptions = {}
+) {
+  return useQuery({
+    queryKey: serverStateKeys.signals.realExecutionPreview(signalId ?? "none", connectionId ?? "none"),
+    queryFn: () => api.realExecutionPreview({
+      signalId: signalId as string,
+      connectionId: connectionId as string
+    }),
+    enabled: options.enabled ?? Boolean(signalId && connectionId),
+    staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
 export function useSignalActionStateQuery(
   signalId: string | null,
   mode: SignalActionMode = "virtual",

@@ -10,7 +10,7 @@ import type {
   VirtualExecutionReport
 } from "@/types";
 import { openApiClient, request, requestJson } from "./client";
-import type { PendingEntryIntentReadDto } from "./generated/schemas";
+import type { PendingEntryIntentReadDto, RealExecutionResultDto } from "./generated/schemas";
 import {
   normalizePendingEntryIntent,
   normalizeRadarSummary,
@@ -38,6 +38,11 @@ type RealConfirmInput = {
   signalId: string;
   connectionId?: string | null;
   waitForConfirmation?: boolean;
+};
+
+type RealExecutionPreviewInput = {
+  signalId: string;
+  connectionId: string;
 };
 
 type SignalActionInput = {
@@ -185,6 +190,18 @@ export const signalsApi = {
     const preview = normalizeRiskPreviewResponse(response);
     if (!preview) throw new Error("API returned an empty execution preview");
     return riskPreviewToExecutionReport(preview);
+  },
+  async realExecutionPreview(input: RealExecutionPreviewInput): Promise<RealExecutionResultDto> {
+    return requestJson<RealExecutionResultDto>(
+      `/api/v1/signals/${encodeURIComponent(input.signalId)}/execution-preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "real",
+          connection_id: input.connectionId
+        })
+      }
+    );
   },
   async reject(signalId: string) {
     return request(() =>

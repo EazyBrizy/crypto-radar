@@ -18,10 +18,12 @@ import {
 import type { ExchangeConnection } from "@/features/server-state/types";
 
 const radarRouteMockState = vi.hoisted(() => ({
+  exchangeConnections: [] as ExchangeConnection[],
   pendingEntries: [] as PendingEntryIntent[],
   pendingEntryHistory: [] as PendingEntryIntent[],
   radarDataUpdatedAt: 0,
   radarResponse: { signals: [] as unknown[] },
+  realPreviewCalls: [] as Array<{ connectionId: string | null; enabled: boolean | undefined; signalId: string | null }>,
   refetch: vi.fn(),
   mutateAsync: vi.fn()
 }));
@@ -57,7 +59,7 @@ vi.mock("@/hooks/use-radar-queries", () => {
       dataByConnectionId: {},
       pendingByConnectionId: {}
     }),
-    useExchangeConnectionsQuery: () => query([]),
+    useExchangeConnectionsQuery: () => query(radarRouteMockState.exchangeConnections),
     useHealthQuery: () => query(null),
     useHistoricalSignalsQuery: () => query([]),
     usePendingEntriesQuery: (_userId: string, scope: "active" | "history") =>
@@ -102,6 +104,14 @@ vi.mock("@/hooks/use-radar-queries", () => {
       display_labels: { primary_action: "Wait for entry" }
     }),
     useSignalExecutionPreviewQuery: () => query(null),
+    useSignalRealExecutionPreviewQuery: (signalId: string | null, connectionId: string | null, options?: { enabled?: boolean }) => {
+      radarRouteMockState.realPreviewCalls.push({
+        connectionId,
+        enabled: options?.enabled,
+        signalId
+      });
+      return query(null);
+    },
     useUserProfileQuery: () => query(null)
   };
 });
@@ -203,10 +213,12 @@ const baseSignal: RadarSignal = {
 };
 
 beforeEach(() => {
+  radarRouteMockState.exchangeConnections = [];
   radarRouteMockState.pendingEntries = [];
   radarRouteMockState.pendingEntryHistory = [];
   radarRouteMockState.radarDataUpdatedAt = Date.parse("2026-06-05T09:59:00.000Z");
   radarRouteMockState.radarResponse = { signals: [] };
+  radarRouteMockState.realPreviewCalls = [];
   radarRouteMockState.refetch.mockResolvedValue(null);
   radarRouteMockState.mutateAsync.mockResolvedValue(null);
   useSignalStore.getState().clearSignals();
@@ -454,6 +466,29 @@ describe("RadarRoute selection", () => {
 
     await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_b"));
     expect(useUiStore.getState().selectedSignalId).toBe("sig_b");
+  });
+
+  it("requests real execution preview for the selected real exchange connection", async () => {
+    radarRouteMockState.exchangeConnections = [exchangeConnection({ id: "conn_real" })];
+    radarRouteMockState.radarResponse = {
+      signals: [
+        routeSignal({
+          id: "sig_real",
+          details_view: detailsView({
+            execution_summary: executionSummary({ preview_available: true })
+          })
+        })
+      ]
+    };
+
+    render(createElement(RadarRoute));
+
+    await waitFor(() => expect(screen.getByTestId("selected-signal")).toHaveTextContent("sig_real"));
+    await waitFor(() => expect(radarRouteMockState.realPreviewCalls).toContainEqual({
+      connectionId: "conn_real",
+      enabled: true,
+      signalId: "sig_real"
+    }));
   });
 });
 

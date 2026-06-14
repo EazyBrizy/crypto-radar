@@ -5,6 +5,7 @@ import { useState } from "react";
 import { BarChart3, FileCheck2, ShieldAlert, XCircle } from "lucide-react";
 
 import { Badge } from "./Badge";
+import type { RealExecutionResultDto } from "@/api/generated/schemas";
 import type { AccountRiskSnapshot, ExchangeConnection } from "@/features/server-state/types";
 import { useI18n, type I18nKey } from "@/i18n";
 import type {
@@ -41,6 +42,9 @@ interface SignalDetailsProps {
   executionPreview: VirtualExecutionReport | null;
   executionPreviewError?: string | null;
   executionPreviewLoading?: boolean;
+  realExecutionPreview?: RealExecutionResultDto | null;
+  realExecutionPreviewError?: string | null;
+  realExecutionPreviewLoading?: boolean;
   actionState?: SignalActionState | null;
   actionStateLoading?: boolean;
   realActionState?: SignalActionState | null;
@@ -83,6 +87,9 @@ export function SignalDetails({
   executionPreview,
   executionPreviewError = null,
   executionPreviewLoading = false,
+  realExecutionPreview = null,
+  realExecutionPreviewError = null,
+  realExecutionPreviewLoading = false,
   actionState,
   actionStateLoading = false,
   realActionState,
@@ -206,7 +213,9 @@ export function SignalDetails({
           actionState={realActionState ?? null}
           busy={realTradeBusy}
           context={realTradeContext}
-          execution={executionPreview}
+          execution={realExecutionPreview}
+          executionError={realExecutionPreviewError}
+          executionLoading={realExecutionPreviewLoading}
           onCancel={() => setRealConfirmationOpen(false)}
           onConfirm={() => {
             if (!onConfirmRealTrade) return;
@@ -725,6 +734,8 @@ function RealTradeConfirmationModal({
   signal,
   context,
   execution,
+  executionError,
+  executionLoading,
   actionState,
   busy,
   onCancel,
@@ -732,7 +743,9 @@ function RealTradeConfirmationModal({
 }: {
   signal: RadarSignal;
   context?: RealTradeContext;
-  execution: VirtualExecutionReport | null;
+  execution: RealExecutionResultDto | null;
+  executionError: string | null;
+  executionLoading: boolean;
   actionState: SignalActionState | null;
   busy: boolean;
   onCancel: () => void;
@@ -742,7 +755,7 @@ function RealTradeConfirmationModal({
   const confirmDisabled = busy || !(actionState?.can_enter_now || actionState?.can_arm_pending);
   const blockers = actionState?.blockers ?? [];
   const warnings = actionState?.warnings ?? [];
-  const riskCheck = execution?.risk_check ?? execution?.risk_decision?.risk_check ?? null;
+  const riskCheck = execution?.risk_decision?.risk_check ?? null;
   const tradePlan = signal.details_view?.trade_plan;
   return (
     <div className="real-trade-modal-backdrop">
@@ -770,13 +783,19 @@ function RealTradeConfirmationModal({
         <div className="real-trade-metric-grid">
           <RealTradeMetric label={tKey("common.exchange")} value={context?.connection ? `${context.connection.exchange_name || context.connection.exchange_code} / ${context.connection.label}` : signal.exchange} />
           <RealTradeMetric label={tKey("execution.accountEquity")} value={formatCurrencyAmount(context?.accountSnapshot?.account_equity)} />
-          <RealTradeMetric label={tKey("execution.availableBalance")} value={formatCurrencyAmount(riskCheck?.available_balance)} />
+          <RealTradeMetric label={tKey("execution.availableBalance")} value={formatCurrencyAmount(riskCheck?.available_balance ?? context?.accountSnapshot?.available_balance)} />
           <RealTradeMetric label={tKey("execution.symbolSide")} value={`${signal.symbol} / ${signal.direction.toUpperCase()}`} />
           <RealTradeMetric label={tKey("pendingEntry.entryZone")} value={tradePlan?.entry_zone ?? "-"} />
           <RealTradeMetric label={tKey("signalDetails.stopLoss")} value={formatPrice(tradePlan?.stop_loss)} />
           <RealTradeMetric label={tKey("signalDetails.selectedRr")} value={formatRMultiple(tradePlan?.selected_rr ?? null)} />
           <RealTradeMetric label={tKey("execution.riskGate")} value={t(riskCheck?.status ?? execution?.risk_decision?.status ?? "-")} />
         </div>
+
+        <RealExecutionPreviewBlock
+          execution={execution}
+          error={executionError}
+          loading={executionLoading}
+        />
 
         <div className="real-trade-blockers">
           <strong>{tKey("execution.backendBlockersWarnings")}</strong>
@@ -805,6 +824,64 @@ function RealTradeConfirmationModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function RealExecutionPreviewBlock({
+  execution,
+  error,
+  loading
+}: {
+  execution: RealExecutionResultDto | null;
+  error: string | null;
+  loading: boolean;
+}) {
+  const { t, tKey, tReason } = useI18n();
+  const statusLabel = execution
+    ? t(realExecutionPreviewStatusLabel(execution.status))
+    : error
+      ? tKey("signalDetails.previewError")
+      : loading
+        ? tKey("common.checking")
+        : tKey("signalDetails.notPreviewed");
+  const reasonCode = execution?.reason_code ?? execution?.reason_codes?.[0] ?? null;
+  return (
+    <div className="real-trade-blockers">
+      <div className="section-title">
+        <ShieldAlert size={18} />
+        <strong>{tKey("execution.realExecutionPreview")}</strong>
+        <Badge tone={execution ? realExecutionPreviewStatusTone(execution.status) : loading ? "yellow" : error ? "red" : "neutral"}>
+          {statusLabel}
+        </Badge>
+      </div>
+      {execution ? (
+        <>
+          <p>{t(execution.message)}</p>
+          <div className="risk-reward-detail-grid">
+            <MetricLine label={tKey("signalDetails.environment")} value={execution.environment ?? "-"} />
+            <MetricLine label={tKey("execution.orderPlacementMode")} value={execution.order_placement_mode ? t(execution.order_placement_mode.replaceAll("_", " ")) : "-"} />
+            <MetricLine label={tKey("signalDetails.reason")} value={reasonCode ? tReason(reasonCode) : "-"} />
+            <MetricLine label={tKey("signalDetails.canEnter")} value={formatBool(execution.execution_allowed, tKey)} />
+          </div>
+          {execution.blockers?.length ? (
+            <ul className="risk-blocker-list">
+              {execution.blockers.map((blocker) => (
+                <li key={blocker}>{tReason(blocker)}</li>
+              ))}
+            </ul>
+          ) : null}
+          {execution.warnings?.length ? (
+            <div className="real-trade-warning-list">
+              {execution.warnings.map((warning) => (
+                <span key={warning}>{tReason(warning)}</span>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p>{error ?? (loading ? tKey("signalDetails.previewLoading") : tKey("signalDetails.previewNotRequested"))}</p>
+      )}
     </div>
   );
 }
@@ -922,6 +999,24 @@ function riskGateTone(status: string | null | undefined): ViewTone {
   if (status === "failed") return "red";
   if (status === "warning") return "yellow";
   return "neutral";
+}
+
+export function realExecutionPreviewStatusLabel(status: RealExecutionResultDto["status"]): string {
+  if (status === "preview") return "Plan ready";
+  if (status === "risk_failed") return "Risk failed";
+  if (status === "readiness_failed") return "Readiness failed";
+  if (status === "not_implemented") return "Not implemented";
+  if (status === "dry_run") return "Dry-run";
+  if (status === "submitted") return "Submitted";
+  if (status === "partially_filled") return "Partially filled";
+  return "Failed";
+}
+
+function realExecutionPreviewStatusTone(status: RealExecutionResultDto["status"]): ViewTone {
+  if (status === "preview") return "blue";
+  if (status === "dry_run") return "yellow";
+  if (status === "submitted" || status === "partially_filled") return "green";
+  return "red";
 }
 
 function actionStateDisabledReason(state: SignalActionState | null, tReason: TReason): string | null {

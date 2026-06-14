@@ -173,7 +173,9 @@ export const serverStateKeys = {
     pendingEntryHistory: (signalId: string, userId = "me") => [...serverStateKeys.signals.all(), "pending-entry-history", signalId, userId] as const,
     actionState: (signalId: string, mode: SignalActionMode, connectionId = "none") =>
       [...serverStateKeys.signals.all(), "action-state", signalId, mode, connectionId] as const,
-    executionPreview: (signalId: string) => [...serverStateKeys.signals.all(), "execution-preview", signalId] as const
+    executionPreview: (signalId: string) => [...serverStateKeys.signals.all(), "execution-preview", signalId] as const,
+    realExecutionPreview: (signalId: string, connectionId: string) =>
+      [...serverStateKeys.signals.all(), "real-execution-preview", signalId, connectionId] as const
   },
   journal: {
     all: () => [...serverStateKeys.all, "journal"] as const,

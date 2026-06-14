@@ -29,15 +29,25 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertEqual(state.blockers[0].code, state.disabled_reason_code)
 
     def test_wait_for_pullback_can_arm_pending_only_in_virtual_mode(self) -> None:
-        connection = _exchange_connection()
+        connection = _exchange_connection(
+            order_placement_mode="testnet_real_orders",
+            can_place_orders=True,
+            safety_blockers=[],
+            account_snapshot_status="fresh",
+        )
+        signal = _signal(
+            status="wait_for_pullback",
+            decision=_decision(execution_allowed_real=True),
+            execution_gate=_gate(can_arm_pending=True),
+        )
 
         virtual_state = _service().state_for_signal(
             _signal(status="wait_for_pullback"),
             mode="virtual",
             user_id=USER_ID,
         )
-        real_state = _service(connection=connection).state_for_signal(
-            _signal(status="wait_for_pullback"),
+        real_state = _service(connection=connection, account_snapshot=_fresh_account_snapshot()).state_for_signal(
+            signal,
             mode="real",
             connection_id=str(connection.id),
             user_id=USER_ID,
@@ -51,6 +61,25 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertEqual(real_state.disabled_reason_code, "REAL_PENDING_NOT_IMPLEMENTED")
         self.assertEqual(real_state.blockers[0].code, "REAL_PENDING_NOT_IMPLEMENTED")
         self.assertIn("not implemented", real_state.blockers[0].message.lower())
+
+    def test_real_pending_not_implemented_does_not_mask_connection_required(self) -> None:
+        state = _service().state_for_signal(
+            _signal(
+                status="wait_for_pullback",
+                decision=_decision(execution_allowed_real=True),
+                execution_gate=_gate(can_arm_pending=True),
+            ),
+            mode="real",
+            connection_id=None,
+            user_id=USER_ID,
+        )
+
+        blocker_codes = [blocker.code for blocker in state.blockers]
+        self.assertFalse(state.can_arm_pending)
+        self.assertFalse(state.can_enter_now)
+        self.assertEqual(state.disabled_reason_code, "exchange_connection_required")
+        self.assertEqual(blocker_codes[0], "exchange_connection_required")
+        self.assertIn("REAL_PENDING_NOT_IMPLEMENTED", blocker_codes[1:])
 
     def test_actionable_signal_can_enter_now(self) -> None:
         state = _service().state_for_signal(_signal(status="actionable"), mode="virtual", user_id=USER_ID)
@@ -158,10 +187,19 @@ class SignalActionStateTest(unittest.TestCase):
         self.assertEqual(request.max_open_positions, 3)
 
     def test_real_waiting_signal_cannot_arm_pending_until_tick_driven_execution_exists(self) -> None:
-        connection = _exchange_connection()
+        connection = _exchange_connection(
+            order_placement_mode="testnet_real_orders",
+            can_place_orders=True,
+            safety_blockers=[],
+            account_snapshot_status="fresh",
+        )
 
-        state = _service(connection=connection).state_for_signal(
-            _signal(status="ready"),
+        state = _service(connection=connection, account_snapshot=_fresh_account_snapshot()).state_for_signal(
+            _signal(
+                status="ready",
+                decision=_decision(execution_allowed_real=True),
+                execution_gate=_gate(can_arm_pending=True),
+            ),
             mode="real",
             connection_id=str(connection.id),
             user_id=USER_ID,

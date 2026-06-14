@@ -184,7 +184,7 @@ class SignalActionService:
             )
             can_reconfirm = active_intent.status == "requires_reconfirmation"
         elif mode == "real" and context.blockers and _signal_can_arm_pending(signal):
-            blockers.insert(0, _real_pending_entry_not_implemented_blocker())
+            blockers.append(_real_pending_entry_not_implemented_blocker())
         elif context.blockers:
             can_enter_now = False
             can_arm_pending = False

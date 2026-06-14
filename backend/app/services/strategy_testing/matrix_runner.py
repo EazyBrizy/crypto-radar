@@ -35,6 +35,8 @@ class ScenarioRunner(Protocol):
         timeframe: str,
         is_cancelled: Callable[[], bool] | None = None,
         on_progress: StrategyTestScenarioProgressCallback | None = None,
+        candle_cache: dict[str, Any] | None = None,
+        feature_cache: dict[str, Any] | None = None,
     ) -> StrategyTestScenarioResult:
         ...
 
@@ -113,6 +115,7 @@ class StrategyTestMatrixResult:
             "execution_rejections": execution_rejections,
             "errors": list(self.errors),
             "scenarios": list(self.scenario_summaries),
+            "slowest_scenarios": _slowest_scenarios(self.scenario_summaries),
             **metric_sections,
         }
 
@@ -153,6 +156,8 @@ class StrategyTestMatrixRunner:
         trades: list[StrategyTestTrade] = []
         signal_events: list[StrategyTestSignalEvent] = []
         scenario_index = 0
+        candle_cache: dict[str, Any] = {}
+        feature_cache: dict[str, Any] = {}
 
         for strategy in request.strategies:
             for pair in request.pairs:
@@ -207,6 +212,8 @@ class StrategyTestMatrixRunner:
                             timeframe=timeframe,
                             is_cancelled=is_cancelled,
                             on_progress=handle_progress,
+                            candle_cache=candle_cache,
+                            feature_cache=feature_cache,
                         )
                     except StrategyTestRunCancelled:
                         return _matrix_result(
@@ -339,6 +346,38 @@ def _int_from_summary(summary: dict[str, Any], key: str) -> int:
         return int(summary.get(key) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _slowest_scenarios(scenario_summaries: Sequence[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for summary in scenario_summaries:
+        timings = summary.get("timings")
+        if not isinstance(timings, dict):
+            timings = {}
+        total_ms = _float_from_summary(timings, "total_ms")
+        bars_per_second = _float_from_summary(timings, "bars_per_second")
+        if total_ms <= 0 and bars_per_second <= 0:
+            continue
+        rows.append(
+            {
+                "strategy": summary.get("strategy"),
+                "exchange": summary.get("exchange"),
+                "symbol": summary.get("symbol"),
+                "timeframe": summary.get("timeframe"),
+                "total_ms": total_ms,
+                "bars_total": _int_from_summary(timings, "bars_total"),
+                "bars_per_second": bars_per_second,
+                "timings": dict(timings),
+            }
+        )
+    return sorted(rows, key=lambda item: item["total_ms"], reverse=True)[:limit]
+
+
+def _float_from_summary(summary: dict[str, Any], key: str) -> float:
+    try:
+        return float(summary.get(key) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _normalized_outcome(value: object) -> str:

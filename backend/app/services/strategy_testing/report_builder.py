@@ -300,7 +300,13 @@ def build_signal_funnel_response(
         for event in signal_events
         if event.no_entry or _normalized_outcome(event.outcome) in {"no_entry", "invalidated"}
     )
-    stage_counts = Counter((event.funnel_stage or "signal").strip() or "signal" for event in signal_events)
+    stage_counts: Counter[str] = Counter()
+    for event in signal_events:
+        stages = event.metadata.get("funnel_stages") if isinstance(event.metadata, dict) else None
+        if isinstance(stages, list) and stages:
+            stage_counts.update(str(stage).strip() or "signal" for stage in stages)
+        else:
+            stage_counts[(event.funnel_stage or "signal").strip() or "signal"] += 1
 
     return StrategyTestFunnelResponse(
         run_id=run_id,

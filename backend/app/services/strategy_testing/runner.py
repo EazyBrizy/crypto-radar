@@ -57,6 +57,8 @@ class StrategyTestScenarioRunner:
         timeframe: str,
         is_cancelled: Callable[[], bool] | None = None,
         on_progress: StrategyTestScenarioProgressCallback | None = None,
+        candle_cache: dict[str, Any] | None = None,
+        feature_cache: dict[str, Any] | None = None,
     ) -> StrategyTestScenarioResult:
         if _is_cancelled(is_cancelled):
             raise StrategyTestRunCancelled("strategy_test_run_cancelled")
@@ -80,6 +82,8 @@ class StrategyTestScenarioRunner:
                 options=assumptions.model_dump(mode="json"),
                 is_cancelled=is_cancelled,
                 on_progress=on_progress,
+                candle_cache=candle_cache,
+                feature_cache=feature_cache,
             )
         except BacktestRunCancelled as exc:
             raise StrategyTestRunCancelled(str(exc) or "strategy_test_run_cancelled") from exc
@@ -298,6 +302,9 @@ def _scenario_summary(
     result = detailed.run_result.result
     metrics = result.metrics if result is not None else {}
     signal_events = detailed.signal_events
+    timings = detailed.assumptions.get("timings")
+    if not isinstance(timings, dict):
+        timings = {}
     return {
         "strategy": strategy,
         "exchange": pair.exchange,
@@ -320,6 +327,9 @@ def _scenario_summary(
         "pnl_pct": result.pnl_pct if result is not None else 0.0,
         "metrics": metrics,
         "assumptions": detailed.assumptions,
+        "timings": dict(timings),
+        "bars_total": timings.get("bars_total"),
+        "bars_per_second": timings.get("bars_per_second"),
     }
 
 

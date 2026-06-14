@@ -7,6 +7,7 @@ import unittest
 from app.schemas.backtest import BacktestRunRequest
 from app.schemas.candle import OHLCVCandle
 from app.schemas.market import Features
+from app.schemas.signal import SignalExecutionGateSnapshot
 from app.services.backtest_runner import ProductionBacktestRunner
 from app.services.historical_candle_provider import InMemoryHistoricalCandleProvider
 from app.strategies.common import build_signal
@@ -194,6 +195,44 @@ class MissedRetestStrategyEngine:
         ]
 
 
+class ArmablePullbackStrategyEngine:
+    def __init__(self, trigger_timestamp: int, *, entry_min: float = 99.0, entry_max: float = 99.4) -> None:
+        self.trigger_timestamp = trigger_timestamp
+        self.entry_min = entry_min
+        self.entry_max = entry_max
+
+    async def generate_signals(self, features: Features, **_: object):
+        if features.timestamp != self.trigger_timestamp:
+            return []
+        signal = build_signal(
+            features=features,
+            strategy="volatility_squeeze_breakout",
+            direction="LONG",
+            reasons=["synthetic pullback setup"],
+            score=90,
+            entry=(self.entry_min + self.entry_max) / 2,
+            stop_loss=self.entry_min - 1.0,
+            take_profit_1=self.entry_max + 4.0,
+            take_profit_2=self.entry_max + 8.0,
+        )
+        return [
+            signal.model_copy(
+                update={
+                    "status": "wait_for_pullback",
+                    "entry_min": self.entry_min,
+                    "entry_max": self.entry_max,
+                    "execution_gate": SignalExecutionGateSnapshot(
+                        status="warning",
+                        feed_kind="watchlist",
+                        can_arm_pending=True,
+                        can_enter_now=False,
+                    ),
+                },
+                deep=True,
+            )
+        ]
+
+
 class AlphaRecordingStrategyEngine:
     def __init__(self) -> None:
         self.seen_alpha_contexts: list[object] = []
@@ -346,6 +385,72 @@ class BacktestRunnerTest(unittest.TestCase):
         event = next(event for event in result.signal_events if event.execution_candidate)
         self.assertTrue(event.no_entry)
         self.assertEqual(event.blocked_reason_code, "entry_zone_missed_wait_for_retest")
+
+    def test_historical_pending_entry_fills_when_zone_touched_after_three_bars(self) -> None:
+        candles = _pending_entry_candles(touch_index=6)
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=ArmablePullbackStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "historical_pending_max_wait_bars": 5,
+                }
+            }
+        )
+
+        result = runner.run_detailed(request, mode="production_like")
+
+        self.assertEqual(len(result.trades), 1)
+        self.assertEqual(result.trades[0].entry_time, _datetime_from_ms(candles[6].open_time))
+        self.assertEqual(result.trades[0].bars_to_entry, 3)
+        event = result.signal_events[0]
+        self.assertTrue(event.entry_touched)
+        self.assertTrue(event.filled)
+        self.assertIn(event.funnel_stage, {"filled", "closed"})
+        self.assertIn("entry_zone_touched", event.metadata["funnel_stages"])
+
+    def test_historical_pending_entry_expires_before_touch(self) -> None:
+        candles = _pending_entry_candles(touch_index=None)
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=ArmablePullbackStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "historical_pending_max_wait_bars": 2,
+                }
+            }
+        )
+
+        result = runner.run_detailed(request, mode="production_like")
+
+        self.assertEqual(len(result.trades), 0)
+        event = result.signal_events[0]
+        self.assertTrue(event.no_entry)
+        self.assertEqual(event.funnel_stage, "expired_before_touch")
+        self.assertEqual(event.blocked_reason_code, "pending_entry_expired_before_touch")
+
+    def test_backtest_timings_include_bar_rate(self) -> None:
+        candles = _candles()
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=AlphaRecordingStrategyEngine(),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(_request(candles))
+
+        timings = result.assumptions["timings"]
+        self.assertEqual(timings["bars_total"], len(candles) - 3)
+        self.assertIn("bars_per_second", timings)
+        self.assertGreaterEqual(timings["bars_per_second"], 0)
 
     def test_production_like_opens_closed_candle_signal_on_next_candle_open(self) -> None:
         candles = _candles()
@@ -729,6 +834,29 @@ def _candles() -> list[OHLCVCandle]:
                 trades=10,
                 is_closed=True,
             )
+        )
+    return candles
+
+
+def _pending_entry_candles(*, touch_index: int | None) -> list[OHLCVCandle]:
+    candles = _candles()
+    for index in range(4, len(candles)):
+        candles[index] = candles[index].model_copy(
+            update={
+                "open": 101.0,
+                "high": 101.4,
+                "low": 100.6,
+                "close": 101.0,
+            }
+        )
+    if touch_index is not None:
+        candles[touch_index] = candles[touch_index].model_copy(
+            update={
+                "open": 100.8,
+                "high": 103.0,
+                "low": 99.2,
+                "close": 102.0,
+            }
         )
     return candles
 

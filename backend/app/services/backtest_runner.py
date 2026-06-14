@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Awaitable, Callable, Mapping, Sequence, TypeVar
+from typing import Any, Awaitable, Callable, Mapping, MutableMapping, Sequence, TypeVar
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
 
-from app.domain.signal_status import is_execution_candidate_status
+from app.domain.signal_status import is_execution_candidate_status, is_waiting_entry_status
 from app.domain.virtual_trade_status import is_terminal_virtual_trade_status
 from app.schemas.backtest import BacktestResultResponse, BacktestRunRequest, BacktestRunResult
 from app.schemas.candle import OHLCVCandle
@@ -143,6 +144,7 @@ class _SimulatedPosition:
     signal: RadarSignal
     entry_index: int
     reference_entry_price: float
+    bars_to_entry: int = 0
     exit_index: int | None = None
     funding_buffer_per_unit: float = 0.0
     bars_in_trade: int = 0
@@ -177,12 +179,40 @@ class _BacktestState:
         self.open_positions = [] if position is None else [position]
 
 
+@dataclass
+class _BacktestTimingDiagnostics:
+    candle_load_ms: float = 0.0
+    feature_ms: float = 0.0
+    strategy_ms: float = 0.0
+    gate_ms: float = 0.0
+    execution_ms: float = 0.0
+    bars_total: int = 0
+    total_ms: float = 0.0
+
+    def summary(self) -> dict[str, Any]:
+        elapsed_seconds = self.total_ms / 1000 if self.total_ms > 0 else 0.0
+        bars_per_second = self.bars_total / elapsed_seconds if elapsed_seconds > 0 else 0.0
+        return {
+            "candle_load_ms": _round_ms(self.candle_load_ms),
+            "feature_ms": _round_ms(self.feature_ms),
+            "strategy_ms": _round_ms(self.strategy_ms),
+            "gate_ms": _round_ms(self.gate_ms),
+            "execution_ms": _round_ms(self.execution_ms),
+            "total_ms": _round_ms(self.total_ms),
+            "bars_total": self.bars_total,
+            "bars_per_second": round(bars_per_second, 8),
+        }
+
+
 @dataclass(frozen=True)
 class _PendingSignalEntry:
     signal: StrategySignal
     signal_event: BacktestSignalEvent
     features: Features
     signal_candle: OHLCVCandle
+    armed_index: int
+    max_wait_bars: int = 1
+    wait_for_entry_zone: bool = False
 
 
 @dataclass(frozen=True)
@@ -398,6 +428,8 @@ class ProductionBacktestRunner:
         is_cancelled: Callable[[], bool] | None = None,
         on_progress: Callable[[dict[str, Any]], None] | None = None,
         progress_interval_bars: int = 250,
+        candle_cache: MutableMapping[str, list[OHLCVCandle]] | None = None,
+        feature_cache: MutableMapping[str, list[Features | None]] | None = None,
     ) -> BacktestDetailedRunResult:
         return _run_awaitable_sync(
             self._run_detailed_async(
@@ -407,6 +439,8 @@ class ProductionBacktestRunner:
                 is_cancelled=is_cancelled,
                 on_progress=on_progress,
                 progress_interval_bars=progress_interval_bars,
+                candle_cache=candle_cache,
+                feature_cache=feature_cache,
             )
         )
 
@@ -428,7 +462,11 @@ class ProductionBacktestRunner:
         is_cancelled: Callable[[], bool] | None = None,
         on_progress: Callable[[dict[str, Any]], None] | None = None,
         progress_interval_bars: int = 250,
+        candle_cache: MutableMapping[str, list[OHLCVCandle]] | None = None,
+        feature_cache: MutableMapping[str, list[Features | None]] | None = None,
     ) -> BacktestDetailedRunResult:
+        total_started = time.perf_counter()
+        timings = _BacktestTimingDiagnostics()
         normalized_mode = _normalize_backtest_mode(mode)
         assumptions = _assumptions_for_backtest(request, normalized_mode, options)
         execution_policy = _execution_policy_for_backtest(normalized_mode, assumptions)
@@ -444,13 +482,22 @@ class ProductionBacktestRunner:
             risk_rejections=0,
             execution_rejections=0,
         )
-        loaded_candles = await self._historical_candle_provider.load_candles(
-            exchange=request.exchange,
-            symbol=request.symbol,
-            timeframe=request.timeframe,
-            start_at=request.start_at,
-            end_at=request.end_at,
-        )
+        candle_cache_key = _candle_cache_key(request)
+        candle_load_started = time.perf_counter()
+        cached_candles = candle_cache.get(candle_cache_key) if candle_cache is not None else None
+        if cached_candles is not None:
+            loaded_candles = list(cached_candles)
+        else:
+            loaded_candles = await self._historical_candle_provider.load_candles(
+                exchange=request.exchange,
+                symbol=request.symbol,
+                timeframe=request.timeframe,
+                start_at=request.start_at,
+                end_at=request.end_at,
+            )
+            if candle_cache is not None:
+                candle_cache[candle_cache_key] = list(loaded_candles)
+        _add_timing(timings, "candle_load_ms", candle_load_started)
         _raise_if_cancelled(is_cancelled)
         candles = sorted(
             [candle.model_copy(update={"is_closed": True}) for candle in loaded_candles if candle.is_closed],
@@ -479,6 +526,17 @@ class ProductionBacktestRunner:
 
         pending_entries: list[_PendingSignalEntry] = []
         bars_total = max(0, len(candles) - warmup)
+        timings.bars_total = bars_total
+        feature_cache_key = _feature_cache_key(
+            candle_cache_key,
+            rolling_window=rolling_window,
+            feature_engine=self._feature_engine,
+        )
+        features_by_index = feature_cache.get(feature_cache_key) if feature_cache is not None else None
+        if features_by_index is None:
+            features_by_index = [None] * len(candles) if feature_cache is not None else None
+            if feature_cache is not None and features_by_index is not None:
+                feature_cache[feature_cache_key] = features_by_index
         progress_interval = max(1, progress_interval_bars)
         for index in range(warmup, len(candles)):
             bars_processed = index - warmup + 1
@@ -496,14 +554,33 @@ class ProductionBacktestRunner:
                 )
             candle = candles[index]
             if pending_entries:
-                ready_entries = pending_entries
-                pending_entries = []
+                ready_entries: list[_PendingSignalEntry] = []
+                remaining_entries: list[_PendingSignalEntry] = []
+                for pending in pending_entries:
+                    if not pending.wait_for_entry_zone:
+                        ready_entries.append(pending)
+                        continue
+                    resolved = self._process_historical_pending_entry(
+                        request=request,
+                        risk_settings=risk_settings,
+                        pending=pending,
+                        candle=candle,
+                        index=index,
+                        state=state,
+                        constraints=constraints,
+                        execution_policy=execution_policy,
+                        timings=timings,
+                    )
+                    if not resolved:
+                        remaining_entries.append(pending)
+                pending_entries = remaining_entries
                 for pending in ready_entries:
                     if (
                         len(state.open_positions) >= constraints.max_concurrent_positions
                         or not _can_open_position_for_signal(
                             pending.signal,
                             policy=constraints.signal_selection_policy,
+                            allow_pending_candidates=pending.wait_for_entry_zone,
                             open_positions=state.open_positions,
                             recently_closed=state.closed_positions,
                             max_positions_per_symbol=constraints.max_positions_per_symbol,
@@ -532,6 +609,7 @@ class ProductionBacktestRunner:
                         state=state,
                         execution_policy=execution_policy,
                         signal_event=pending.signal_event,
+                        timings=timings,
                     )
 
             next_open_positions: list[_SimulatedPosition] = []
@@ -545,13 +623,21 @@ class ProductionBacktestRunner:
                     next_open_positions.append(updated_position)
             state.open_positions = next_open_positions
 
-            features = self._feature_engine.process_candles(
-                candles[max(0, index - rolling_window + 1) : index + 1]
-            )
+            features = features_by_index[index] if features_by_index is not None else None
+            if features is None:
+                feature_started = time.perf_counter()
+                features = self._feature_engine.process_candles(
+                    candles[max(0, index - rolling_window + 1) : index + 1]
+                )
+                _add_timing(timings, "feature_ms", feature_started)
+                if features_by_index is not None:
+                    features_by_index[index] = features
             if features is not None and features.candle_state != "closed":
                 raise AssertionError("backtest_open_candle_detected: feature window produced an open candle")
             if features is not None and len(state.open_positions) < constraints.max_concurrent_positions:
+                strategy_started = time.perf_counter()
                 signals = await self._generate_signals(request, features)
+                _add_timing(timings, "strategy_ms", strategy_started)
                 state.signals_seen += len(signals)
                 base_signal_events = {
                     _strategy_signal_key(request, signal): _backtest_signal_event_from_strategy_signal(
@@ -565,6 +651,7 @@ class ProductionBacktestRunner:
                 selected_signals = _select_signals(
                     signals,
                     policy=constraints.signal_selection_policy,
+                    allow_pending_candidates=_historical_pending_entries_enabled(execution_policy),
                     open_positions=state.open_positions,
                     recently_closed=state.closed_positions,
                     max_positions_per_symbol=constraints.max_positions_per_symbol,
@@ -583,9 +670,12 @@ class ProductionBacktestRunner:
                         execution_candidate=True,
                         funnel_stage="execution_candidate",
                     )
+                    if _should_arm_historical_pending(signal, execution_policy):
+                        signal_event = _mark_signal_event_armable(signal_event)
                     if not _can_open_position_for_signal(
                         signal,
                         policy=constraints.signal_selection_policy,
+                        allow_pending_candidates=_should_arm_historical_pending(signal, execution_policy),
                         open_positions=state.open_positions,
                         recently_closed=state.closed_positions,
                         max_positions_per_symbol=constraints.max_positions_per_symbol,
@@ -606,13 +696,30 @@ class ProductionBacktestRunner:
                     previous_execution_rejections = state.execution_rejections
                     previous_execution_policy_no_entries = len(state.execution_policy_no_entries)
                     previous_execution_policy_rejections = len(state.execution_policy_rejections)
-                    if execution_policy.entry_timing == "next_candle_open":
+                    if _should_arm_historical_pending(signal, execution_policy):
+                        pending_entries.append(
+                            _PendingSignalEntry(
+                                signal=signal,
+                                signal_event=_mark_signal_event_pending_armed(
+                                    signal_event,
+                                    armed_index=index,
+                                    max_wait_bars=_historical_pending_max_wait_bars(request),
+                                ),
+                                features=features,
+                                signal_candle=candle,
+                                armed_index=index,
+                                max_wait_bars=_historical_pending_max_wait_bars(request),
+                                wait_for_entry_zone=True,
+                            )
+                        )
+                    elif execution_policy.entry_timing == "next_candle_open":
                         pending_entries.append(
                             _PendingSignalEntry(
                                 signal=signal,
                                 signal_event=signal_event,
                                 features=features,
                                 signal_candle=candle,
+                                armed_index=index,
                             )
                         )
                     else:
@@ -631,6 +738,7 @@ class ProductionBacktestRunner:
                             previous_execution_rejections=previous_execution_rejections,
                             previous_execution_policy_no_entries=previous_execution_policy_no_entries,
                             previous_execution_policy_rejections=previous_execution_policy_rejections,
+                            timings=timings,
                         )
                 for signal in signals:
                     signal_key = _strategy_signal_key(request, signal)
@@ -643,7 +751,12 @@ class ProductionBacktestRunner:
             state.equity_curve.append(_equity_point(candle, _current_equity(state), float(request.initial_capital)))
 
         for pending in pending_entries:
-            state.signal_events.append(_mark_signal_event_no_entry(pending.signal_event, "no_next_candle_for_entry"))
+            reason_code = (
+                "pending_entry_expired_before_touch"
+                if pending.wait_for_entry_zone
+                else "no_next_candle_for_entry"
+            )
+            state.signal_events.append(_mark_signal_event_no_entry(pending.signal_event, reason_code))
         pending_entries = []
 
         if state.open_positions:
@@ -672,7 +785,8 @@ class ProductionBacktestRunner:
         )
         state.signal_events = _closed_signal_events(state.signal_events, state.closed_positions)
         metrics = _metrics_from_state(state)
-        assumptions = _assumptions_with_runtime_diagnostics(assumptions, state)
+        timings.total_ms = _elapsed_ms(total_started)
+        assumptions = _assumptions_with_runtime_diagnostics(assumptions, state, timings=timings)
         final_equity = state.cash_equity
         initial_capital = float(request.initial_capital)
         result = BacktestResultResponse(
@@ -707,6 +821,87 @@ class ProductionBacktestRunner:
             assumptions=assumptions,
             signal_events=state.signal_events,
         )
+
+    def _process_historical_pending_entry(
+        self,
+        *,
+        request: BacktestRunRequest,
+        risk_settings: RiskManagementSettings,
+        pending: _PendingSignalEntry,
+        candle: OHLCVCandle,
+        index: int,
+        state: _BacktestState,
+        constraints: _PositionConstraints,
+        execution_policy: BacktestExecutionPolicy,
+        timings: _BacktestTimingDiagnostics,
+    ) -> bool:
+        if _historical_pending_expired(pending, candle, index):
+            state.signal_events.append(
+                _mark_signal_event_no_entry(
+                    pending.signal_event,
+                    "pending_entry_expired_before_touch",
+                )
+            )
+            return True
+
+        touched = _entry_zone_touched(pending.signal, candle)
+        if not touched:
+            if _pending_invalidated_before_touch(pending.signal, candle):
+                state.signal_events.append(
+                    _mark_signal_event_no_entry(
+                        pending.signal_event,
+                        "pending_entry_invalidated_before_touch",
+                    )
+                )
+                return True
+            return False
+
+        touched_event = _mark_signal_event_entry_zone_touched(
+            pending.signal_event,
+            candle=candle,
+        )
+        if (
+            len(state.open_positions) >= constraints.max_concurrent_positions
+            or not _can_open_position_for_signal(
+                pending.signal,
+                policy=constraints.signal_selection_policy,
+                allow_pending_candidates=True,
+                open_positions=state.open_positions,
+                recently_closed=state.closed_positions,
+                max_positions_per_symbol=constraints.max_positions_per_symbol,
+                allow_opposite_signal_flip=constraints.allow_opposite_signal_flip,
+                cooldown_bars_after_close=constraints.cooldown_bars_after_close,
+                current_index=index,
+            )
+        ):
+            state.risk_rejections += 1
+            state.signal_events.append(
+                _mark_signal_event_rejected(
+                    touched_event,
+                    risk_rejected=True,
+                    reason_code="position_constraints_blocked",
+                )
+            )
+            return True
+
+        fill_price = _historical_pending_fill_price(pending.signal, candle)
+        fill_signal = _signal_with_historical_pending_touch_gate(pending.signal)
+        self._record_open_position_attempt(
+            request=request,
+            risk_settings=risk_settings,
+            features=pending.features,
+            signal=fill_signal,
+            signal_candle=pending.signal_candle,
+            entry_candle=candle,
+            index=index,
+            state=state,
+            execution_policy=execution_policy,
+            signal_event=touched_event,
+            timings=timings,
+            entry_price_override=fill_price,
+            bars_to_entry=max(0, index - pending.armed_index),
+        )
+        return True
 
     async def _generate_signals(
         self,
@@ -744,6 +939,9 @@ class ProductionBacktestRunner:
         previous_execution_rejections: int | None = None,
         previous_execution_policy_no_entries: int | None = None,
         previous_execution_policy_rejections: int | None = None,
+        timings: _BacktestTimingDiagnostics | None = None,
+        entry_price_override: float | None = None,
+        bars_to_entry: int = 0,
     ) -> _SimulatedPosition | None:
         if previous_risk_rejections is None:
             previous_risk_rejections = state.risk_rejections
@@ -764,6 +962,9 @@ class ProductionBacktestRunner:
             index=index,
             state=state,
             execution_policy=execution_policy,
+            timings=timings,
+            entry_price_override=entry_price_override,
+            bars_to_entry=bars_to_entry,
         )
         if position is not None:
             state.open_positions.append(position)
@@ -811,6 +1012,9 @@ class ProductionBacktestRunner:
         index: int,
         state: _BacktestState,
         execution_policy: BacktestExecutionPolicy,
+        timings: _BacktestTimingDiagnostics | None = None,
+        entry_price_override: float | None = None,
+        bars_to_entry: int = 0,
     ) -> _SimulatedPosition | None:
         if signal is None:
             return None
@@ -823,7 +1027,13 @@ class ProductionBacktestRunner:
         )
         radar_signal = _radar_signal_from_strategy_signal(signal, candle)
         opened_at = _datetime_from_ms(entry_candle.open_time if entry_candle is not None else candle.close_time)
-        entry_price = float(entry_candle.open) if entry_candle is not None else (_entry_price(signal) or features.close)
+        entry_price = (
+            entry_price_override
+            if entry_price_override is not None
+            else float(entry_candle.open)
+            if entry_candle is not None
+            else (_entry_price(signal) or features.close)
+        )
         request_fee_rate = float(request.fee_rate)
         request_slippage_bps = float(request.slippage_bps)
         confirm_request = ManualConfirmRequest(
@@ -858,6 +1068,7 @@ class ProductionBacktestRunner:
             updated_at=opened_at,
         )
         try:
+            gate_started = time.perf_counter()
             pre_execution_decision = self._risk_gate_service.evaluate(
                 context=self._risk_context_service.build_virtual_context(
                     signal=radar_signal,
@@ -879,15 +1090,18 @@ class ProductionBacktestRunner:
                 risk_settings=risk_settings,
             )
         except ValueError as exc:
+            _add_timing(timings, "gate_ms", gate_started)
             state.risk_rejections += 1
             state.risk_gate_blockers.append(str(exc))
             return None
+        _add_timing(timings, "gate_ms", gate_started)
         pre_execution_decision = _decision_for_mode(pre_execution_decision, execution_policy.mode)
         if not pre_execution_decision.can_enter:
             state.risk_rejections += 1
             state.risk_gate_blockers.extend(pre_execution_decision.blockers)
             return None
 
+        gate_started = time.perf_counter()
         execution_policy_decision = _backtest_execution_policy_decision(
             request=request,
             risk_settings=risk_settings,
@@ -897,6 +1111,7 @@ class ProductionBacktestRunner:
             confirm_request=confirm_request,
             risk_decision=pre_execution_decision,
         )
+        _add_timing(timings, "gate_ms", gate_started)
         if not execution_policy_decision.can_execute:
             if execution_policy_decision.should_wait:
                 state.execution_policy_no_entries.append(execution_policy_decision.reason_code)
@@ -905,12 +1120,14 @@ class ProductionBacktestRunner:
                 state.execution_policy_rejections.append(execution_policy_decision.reason_code)
             return None
 
+        execution_started = time.perf_counter()
         execution = self._execution_simulator.simulate_entry(
             signal=radar_signal,
             request=confirm_request,
             risk_decision=pre_execution_decision,
             reference_price=entry_price,
         )
+        _add_timing(timings, "execution_ms", execution_started)
         if execution.status == "rejected_virtual_execution" or execution.average_price is None:
             state.execution_rejections += 1
             return None
@@ -921,6 +1138,7 @@ class ProductionBacktestRunner:
             return None
         filled_entry = execution.average_price
         try:
+            gate_started = time.perf_counter()
             post_execution_decision = self._risk_gate_service.evaluate(
                 context=self._risk_context_service.build_virtual_context(
                     signal=radar_signal,
@@ -942,9 +1160,11 @@ class ProductionBacktestRunner:
                 risk_settings=risk_settings,
             )
         except ValueError as exc:
+            _add_timing(timings, "gate_ms", gate_started)
             state.risk_rejections += 1
             state.risk_gate_blockers.append(str(exc))
             return None
+        _add_timing(timings, "gate_ms", gate_started)
         post_execution_decision = _decision_for_mode(post_execution_decision, execution_policy.mode)
         if not post_execution_decision.can_enter:
             state.risk_rejections += 1
@@ -969,6 +1189,7 @@ class ProductionBacktestRunner:
             signal=radar_signal,
             entry_index=index,
             reference_entry_price=entry_price,
+            bars_to_entry=bars_to_entry,
             funding_buffer_per_unit=_float_param(request.params, "funding_buffer_per_unit", 0.0) or 0.0,
             strategy=radar_signal.strategy,
             regime=_regime_key(radar_signal),
@@ -1000,6 +1221,182 @@ def _entry_timing_for_backtest(mode: str, assumptions: Mapping[str, Any]) -> str
     if mode == "production_like" and not bool(assumptions.get("preserve_legacy_backtest")):
         return "next_candle_open"
     return "same_candle_close"
+
+
+def _historical_pending_entries_enabled(execution_policy: BacktestExecutionPolicy) -> bool:
+    return execution_policy.production_mode and not execution_policy.preserve_legacy_backtest
+
+
+def _should_arm_historical_pending(
+    signal: StrategySignal,
+    execution_policy: BacktestExecutionPolicy,
+) -> bool:
+    if not _historical_pending_entries_enabled(execution_policy):
+        return False
+    if not is_waiting_entry_status(str(signal.status)):
+        return False
+    gate = signal.execution_gate
+    if gate is None or not gate.can_arm_pending:
+        return False
+    return _entry_zone(signal) is not None
+
+
+def _historical_pending_max_wait_bars(request: BacktestRunRequest) -> int:
+    for key in ("historical_pending_max_wait_bars", "pending_entry_max_wait_bars", "max_wait_bars"):
+        value = _int_param(request.params, key, 0)
+        if value > 0:
+            return value
+    return 12
+
+
+def _historical_pending_expired(
+    pending: _PendingSignalEntry,
+    candle: OHLCVCandle,
+    index: int,
+) -> bool:
+    if pending.max_wait_bars > 0 and index - pending.armed_index > pending.max_wait_bars:
+        return True
+    expires_at = _signal_expires_at(pending.signal)
+    if expires_at is None:
+        return False
+    return _datetime_from_ms(candle.open_time) >= expires_at
+
+
+def _entry_zone_touched(signal: StrategySignal, candle: OHLCVCandle) -> bool:
+    zone = _entry_zone(signal)
+    if zone is None:
+        return False
+    entry_min, entry_max = zone
+    return candle.low <= entry_max and candle.high >= entry_min
+
+
+def _pending_invalidated_before_touch(signal: StrategySignal, candle: OHLCVCandle) -> bool:
+    if signal.stop_loss is None:
+        return False
+    direction = _normalized_direction(signal.direction)
+    if direction == "short":
+        return candle.high >= signal.stop_loss
+    return candle.low <= signal.stop_loss
+
+
+def _historical_pending_fill_price(signal: StrategySignal, candle: OHLCVCandle) -> float:
+    zone = _entry_zone(signal)
+    if zone is None:
+        return candle.open
+    entry_min, entry_max = zone
+    if entry_min <= candle.open <= entry_max:
+        return candle.open
+    direction = _normalized_direction(signal.direction)
+    if direction == "short":
+        return entry_min if candle.open < entry_min else entry_max
+    return entry_max if candle.open > entry_max else entry_min
+
+
+def _entry_zone(signal: StrategySignal) -> tuple[float, float] | None:
+    if signal.entry_min is None or signal.entry_max is None:
+        return None
+    entry_min = float(signal.entry_min)
+    entry_max = float(signal.entry_max)
+    if entry_min <= 0 or entry_max <= 0:
+        return None
+    if entry_max < entry_min:
+        return entry_max, entry_min
+    return entry_min, entry_max
+
+
+def _signal_with_historical_pending_touch_gate(signal: StrategySignal) -> StrategySignal:
+    gate = signal.execution_gate
+    if gate is not None:
+        gate_metadata = dict(gate.metadata)
+        gate_metadata.update(
+            {
+                "runtime": "historical_backtest",
+                "event": "pending_entry_filled",
+            }
+        )
+        gate = gate.model_copy(
+            update={
+                "status": "passed",
+                "feed_kind": "execution_signal",
+                "can_notify": True,
+                "can_enter_now": True,
+                "can_arm_pending": False,
+                "can_show_in_execution_feed": True,
+                "metadata": gate_metadata,
+            }
+        )
+    return signal.model_copy(
+        update={
+            "status": "actionable",
+            "execution_gate": gate,
+        },
+        deep=True,
+    )
+
+
+def _signal_expires_at(signal: StrategySignal) -> datetime | None:
+    trade_plan = signal.trade_plan
+    if trade_plan is None:
+        return None
+    raw_value = trade_plan.metadata.get("expires_at") or trade_plan.entry.metadata.get("expires_at")
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, datetime):
+        return raw_value.astimezone(timezone.utc)
+    if isinstance(raw_value, str):
+        try:
+            return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _candle_cache_key(request: BacktestRunRequest) -> str:
+    return ":".join(
+        [
+            request.exchange.strip().lower(),
+            request.symbol.strip().upper(),
+            request.timeframe.strip(),
+            _cache_datetime(request.start_at),
+            _cache_datetime(request.end_at),
+        ]
+    )
+
+
+def _feature_cache_key(
+    candle_cache_key: str,
+    *,
+    rolling_window: int,
+    feature_engine: FeatureEngine,
+) -> str:
+    engine_key = f"{type(feature_engine).__module__}.{type(feature_engine).__qualname__}"
+    return f"{candle_cache_key}:rolling_window={rolling_window}:feature_engine={engine_key}"
+
+
+def _cache_datetime(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def _elapsed_ms(started: float) -> float:
+    return (time.perf_counter() - started) * 1000
+
+
+def _add_timing(
+    timings: _BacktestTimingDiagnostics | None,
+    field_name: str,
+    started: float,
+) -> None:
+    if timings is None:
+        return
+    setattr(timings, field_name, float(getattr(timings, field_name)) + _elapsed_ms(started))
+
+
+def _round_ms(value: float) -> float:
+    if not math.isfinite(value):
+        return 0.0
+    return round(value, 3)
 
 
 def _normalize_signal_for_backtest(
@@ -1217,11 +1614,14 @@ def _trade_plan_with_backtest_market_context(
 def _assumptions_with_runtime_diagnostics(
     assumptions: Mapping[str, Any],
     state: _BacktestState,
+    *,
+    timings: _BacktestTimingDiagnostics,
 ) -> dict[str, Any]:
     values = dict(assumptions)
     values["trade_plan_completion_warnings"] = _dedupe_strings(state.trade_plan_completion_warnings)
     values["risk_gate_blockers"] = _dedupe_strings(state.risk_gate_blockers)
     values["backtest_trade_plan_assumptions"] = _dedupe_strings(state.backtest_trade_plan_assumptions)
+    values["timings"] = timings.summary()
     return values
 
 
@@ -1512,9 +1912,65 @@ def _backtest_signal_event_from_strategy_signal(
             ),
             "candle_close_time": candle.close_time,
             "execution_gate": signal.execution_gate.model_dump(mode="json") if signal.execution_gate else None,
+            "funnel_stages": ["signal_seen"],
         },
         tags=["backtest", "signal_event", "candle_state=closed"],
         created_at=candle_time,
+    )
+
+
+def _mark_signal_event_armable(event: BacktestSignalEvent) -> BacktestSignalEvent:
+    return replace(
+        event,
+        execution_candidate=True,
+        funnel_stage="armable",
+        metadata=_event_metadata_with_funnel_stage(event, "armable"),
+    )
+
+
+def _mark_signal_event_pending_armed(
+    event: BacktestSignalEvent,
+    *,
+    armed_index: int,
+    max_wait_bars: int,
+) -> BacktestSignalEvent:
+    return replace(
+        event,
+        funnel_stage="pending_armed",
+        metadata=_event_metadata_with_funnel_stage(
+            event,
+            "pending_armed",
+            {
+                "pending_entry": {
+                    "armed_index": armed_index,
+                    "max_wait_bars": max_wait_bars,
+                }
+            },
+        ),
+    )
+
+
+def _mark_signal_event_entry_zone_touched(
+    event: BacktestSignalEvent,
+    *,
+    candle: OHLCVCandle,
+) -> BacktestSignalEvent:
+    return replace(
+        event,
+        entry_touched=True,
+        funnel_stage="entry_zone_touched",
+        metadata=_event_metadata_with_funnel_stage(
+            event,
+            "entry_zone_touched",
+            {
+                "pending_entry_touch": {
+                    "candle_open_time": candle.open_time,
+                    "candle_close_time": candle.close_time,
+                    "high": candle.high,
+                    "low": candle.low,
+                }
+            },
+        ),
     )
 
 
@@ -1533,6 +1989,7 @@ def _mark_signal_event_filled(
         "entry_timing": entry_timing,
         "execution_status": execution.status if execution is not None else position.trade.execution_status,
     }
+    metadata = _event_metadata_with_funnel_stage(event, "filled", metadata)
     return replace(
         event,
         signal_id=position.signal.id,
@@ -1562,16 +2019,22 @@ def _mark_signal_event_rejected(
         blocked_reason_code=reason_code,
         outcome="rejected",
         funnel_stage=stage,
+        metadata=_event_metadata_with_funnel_stage(event, stage),
     )
 
 
 def _mark_signal_event_no_entry(event: BacktestSignalEvent, reason_code: str) -> BacktestSignalEvent:
+    stage = {
+        "pending_entry_expired_before_touch": "expired_before_touch",
+        "pending_entry_invalidated_before_touch": "invalidated_before_touch",
+    }.get(reason_code, "no_entry")
     return replace(
         event,
         no_entry=True,
         outcome="no_entry",
-        funnel_stage="no_entry",
+        funnel_stage=stage,
         blocked_reason_code=reason_code,
+        metadata=_event_metadata_with_funnel_stage(event, stage),
     )
 
 
@@ -1615,6 +2078,7 @@ def _closed_signal_events(
             "close_reason": position.trade.close_reason,
             "exit_time": position.trade.closed_at.isoformat() if position.trade.closed_at else None,
         }
+        metadata = _event_metadata_with_funnel_stage(event, "closed", metadata)
         closed_events.append(
             replace(
                 event,
@@ -1625,6 +2089,28 @@ def _closed_signal_events(
             )
         )
     return closed_events
+
+
+def _event_metadata_with_funnel_stage(
+    event: BacktestSignalEvent,
+    stage: str,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = dict(event.metadata)
+    stages = metadata.get("funnel_stages")
+    if not isinstance(stages, list):
+        stages = ["signal_seen"]
+    else:
+        stages = [str(item) for item in stages]
+        if not stages:
+            stages = ["signal_seen"]
+    if not stages or stages[-1] != stage:
+        stages.append(stage)
+    metadata["funnel_stages"] = stages
+    if extra:
+        metadata.update(dict(extra))
+        metadata["funnel_stages"] = stages
+    return metadata
 
 
 def _simulated_trades_from_state(
@@ -1668,7 +2154,7 @@ def _simulated_trade_from_position(
         slippage=_decimal(_slippage_cost(position)),
         mfe_r=_mfe_r(position),
         mae_r=_mae_r(position),
-        bars_to_entry=0,
+        bars_to_entry=position.bars_to_entry,
         bars_in_trade=position.bars_in_trade,
         close_reason=trade.close_reason or "open",
         outcome=_trade_outcome(trade, pnl),
@@ -1852,6 +2338,7 @@ def _select_signals(
     signals: Sequence[StrategySignal],
     *,
     policy: str,
+    allow_pending_candidates: bool = False,
     open_positions: Sequence[_SimulatedPosition],
     recently_closed: Sequence[_SimulatedPosition],
     max_positions_per_symbol: int,
@@ -1866,6 +2353,7 @@ def _select_signals(
         if _is_signal_eligible_for_selection(
             signal,
             policy=normalized_policy,
+            allow_pending_candidates=allow_pending_candidates,
             open_positions=open_positions,
             recently_closed=recently_closed,
             max_positions_per_symbol=max_positions_per_symbol,
@@ -1885,6 +2373,7 @@ def _is_signal_eligible_for_selection(
     signal: StrategySignal,
     *,
     policy: str,
+    allow_pending_candidates: bool,
     open_positions: Sequence[_SimulatedPosition],
     recently_closed: Sequence[_SimulatedPosition],
     max_positions_per_symbol: int,
@@ -1893,7 +2382,8 @@ def _is_signal_eligible_for_selection(
     current_index: int | None,
 ) -> bool:
     status = str(signal.status).strip().lower()
-    if not is_execution_candidate_status(status):
+    pending_candidate = allow_pending_candidates and _signal_can_arm_pending(signal)
+    if not is_execution_candidate_status(status) and not pending_candidate:
         return False
     if status == "confirmed":
         return False
@@ -1915,6 +2405,7 @@ def _can_open_position_for_signal(
     signal: StrategySignal,
     *,
     policy: str,
+    allow_pending_candidates: bool = False,
     open_positions: Sequence[_SimulatedPosition],
     recently_closed: Sequence[_SimulatedPosition],
     max_positions_per_symbol: int,
@@ -1925,6 +2416,7 @@ def _can_open_position_for_signal(
     return _is_signal_eligible_for_selection(
         signal,
         policy=policy,
+        allow_pending_candidates=allow_pending_candidates,
         open_positions=open_positions,
         recently_closed=recently_closed,
         max_positions_per_symbol=max_positions_per_symbol,
@@ -1938,6 +2430,11 @@ def _signal_selection_score(signal: StrategySignal) -> tuple[float, float]:
     score = float(signal.score) if signal.score is not None else float(signal.confidence or 0.0) * 100.0
     confidence = float(signal.confidence or 0.0)
     return (score, confidence)
+
+
+def _signal_can_arm_pending(signal: StrategySignal) -> bool:
+    gate = signal.execution_gate
+    return bool(gate is not None and gate.can_arm_pending and is_waiting_entry_status(str(signal.status)))
 
 
 def _open_positions_for_symbol(
@@ -2058,6 +2555,10 @@ def _signal_feed_kind(signal: StrategySignal) -> str:
 
 
 def _signal_trigger_passed(signal: StrategySignal) -> bool:
+    if signal.execution_gate is not None and (
+        signal.execution_gate.can_enter_now or signal.execution_gate.can_arm_pending
+    ):
+        return True
     if signal.trigger is not None:
         return bool(signal.trigger.passed)
     return str(signal.status).strip().lower() == "actionable"
@@ -2585,6 +3086,7 @@ def _replace_position(
         signal=position.signal,
         entry_index=position.entry_index,
         reference_entry_price=position.reference_entry_price,
+        bars_to_entry=position.bars_to_entry,
         exit_index=position.exit_index if exit_index is None else exit_index,
         funding_buffer_per_unit=position.funding_buffer_per_unit,
         bars_in_trade=position.bars_in_trade if bars_in_trade is None else bars_in_trade,

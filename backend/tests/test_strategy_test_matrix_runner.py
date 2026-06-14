@@ -8,7 +8,9 @@ from uuid import UUID, uuid4
 import unittest
 
 from app.schemas.backtest import BacktestRunResult
-from app.services.backtest_runner import BacktestDetailedRunResult
+from app.schemas.candle import OHLCVCandle
+from app.schemas.market import Features
+from app.services.backtest_runner import BacktestDetailedRunResult, ProductionBacktestRunner
 from app.services.strategy_testing.assumptions import build_strategy_test_assumptions
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult, StrategyTestMatrixRunner
 from app.services.strategy_testing.runner import StrategyTestScenarioResult, StrategyTestScenarioRunner
@@ -92,6 +94,43 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         summary_metrics = {metric["code"]: metric for metric in result.summary()["summary_metrics"]}
         self.assertEqual(summary_metrics["signals_count"]["value"], 2)
         self.assertAlmostEqual(summary_metrics["entry_touch_rate"]["value"], 0.5)
+
+    def test_matrix_summary_includes_slowest_scenarios(self) -> None:
+        request = _matrix_request(strategies=["slow", "fast"])
+        scenario_runner = _RecordingScenarioRunner(
+            summary_overrides=[
+                {"timings": {"bars_total": 100, "bars_per_second": 10.0, "total_ms": 10_000.0}},
+                {"timings": {"bars_total": 100, "bars_per_second": 100.0, "total_ms": 1_000.0}},
+            ]
+        )
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+
+        result = matrix_runner.run_matrix(request=request, run_id=RUN_ID, user_uuid=USER_ID)
+
+        slowest = result.summary()["slowest_scenarios"]
+        self.assertEqual(slowest[0]["strategy"], "slow")
+        self.assertEqual(slowest[0]["total_ms"], 10_000.0)
+        self.assertEqual(slowest[0]["bars_per_second"], 10.0)
+
+    def test_matrix_reuses_candle_loads_for_same_pair_timeframe(self) -> None:
+        candles = _historical_candles()
+        provider = _CountingHistoricalCandleProvider(candles)
+        backtest_runner = ProductionBacktestRunner(
+            feature_engine=_SilentFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=_NoSignalStrategyEngine(),  # type: ignore[arg-type]
+            historical_candle_provider=provider,
+        )
+        scenario_runner = StrategyTestScenarioRunner(backtest_runner)
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+        request = _matrix_request(
+            strategies=["trend_pullback_continuation", "volatility_squeeze_breakout"],
+            params={"warmup_candles": 3, "rolling_window_candles": 3},
+        )
+
+        result = matrix_runner.run_matrix(request=request, run_id=RUN_ID, user_uuid=USER_ID)
+
+        self.assertEqual(result.completed_scenarios, 2)
+        self.assertEqual(provider.load_calls, 1)
 
     def test_matrix_reports_progress_after_each_scenario(self) -> None:
         request = _matrix_request(strategies=["s1", "s2", "s3"])
@@ -389,10 +428,12 @@ class _RecordingScenarioRunner:
         self,
         fail_on: set[int] | None = None,
         signal_events: list[StrategyTestSignalEvent] | None = None,
+        summary_overrides: list[dict[str, Any]] | None = None,
     ) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
         self._fail_on = fail_on or set()
         self._signal_events = signal_events or []
+        self._summary_overrides = summary_overrides or []
 
     def run_scenario(
         self,
@@ -405,26 +446,31 @@ class _RecordingScenarioRunner:
         timeframe: str,
         is_cancelled: Any = None,
         on_progress: Any = None,
+        candle_cache: Any = None,
+        feature_cache: Any = None,
     ) -> StrategyTestScenarioResult:
-        _ = run_id, user_id, request, is_cancelled, on_progress
+        _ = run_id, user_id, request, is_cancelled, on_progress, candle_cache, feature_cache
         index = len(self.calls)
         self.calls.append((strategy, pair.exchange, pair.symbol, timeframe))
         if index in self._fail_on:
             raise ValueError(f"scenario {index} failed")
+        summary = {
+            "strategy": strategy,
+            "exchange": pair.exchange,
+            "symbol": pair.symbol,
+            "timeframe": timeframe,
+            "signals_seen": 1,
+            "risk_rejections": 0,
+            "execution_rejections": 0,
+        }
+        if index < len(self._summary_overrides):
+            summary.update(self._summary_overrides[index])
         return StrategyTestScenarioResult(
             run_id=RUN_ID,
             strategy=strategy,
             pair=pair,
             timeframe=timeframe,
-            summary={
-                "strategy": strategy,
-                "exchange": pair.exchange,
-                "symbol": pair.symbol,
-                "timeframe": timeframe,
-                "signals_seen": 1,
-                "risk_rejections": 0,
-                "execution_rejections": 0,
-            },
+            summary=summary,
             trades=[],
             signal_events=list(self._signal_events),
         )
@@ -662,6 +708,84 @@ def _matrix_request(
         slippage_bps=Decimal("0"),
         params=params or {},
     )
+
+
+class _CountingHistoricalCandleProvider:
+    def __init__(self, candles: list[OHLCVCandle]) -> None:
+        self._candles = candles
+        self.load_calls = 0
+
+    async def load_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> list[OHLCVCandle]:
+        _ = exchange, symbol, timeframe, start_at, end_at
+        self.load_calls += 1
+        return list(self._candles)
+
+
+class _SilentFeatureEngine:
+    def process_candles(self, candles: list[OHLCVCandle]) -> Features:
+        latest = candles[-1]
+        previous = candles[-2] if len(candles) > 1 else None
+        return Features(
+            exchange=latest.exchange,
+            symbol=latest.symbol,
+            timeframe=latest.timeframe,
+            timestamp=latest.close_time,
+            price=latest.close,
+            open=latest.open,
+            high=latest.high,
+            low=latest.low,
+            close=latest.close,
+            price_change_1m=0.0,
+            previous_open=previous.open if previous is not None else None,
+            previous_high=previous.high if previous is not None else None,
+            previous_low=previous.low if previous is not None else None,
+            previous_close=previous.close if previous is not None else None,
+            previous_volume=previous.volume if previous is not None else None,
+            volume=latest.volume,
+            volume_spike=1.0,
+            volume_ma_20=latest.volume,
+            volatility=1.0,
+            history_length=len(candles),
+            atr_14=1.0,
+        )
+
+
+class _NoSignalStrategyEngine:
+    async def generate_signals(self, features: Features, **kwargs: Any) -> list[Any]:
+        _ = features, kwargs
+        return []
+
+
+def _historical_candles() -> list[OHLCVCandle]:
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    candles: list[OHLCVCandle] = []
+    for index in range(6):
+        open_time = int((start + timedelta(hours=index)).timestamp() * 1000)
+        candles.append(
+            OHLCVCandle(
+                exchange="bybit",
+                symbol="BTCUSDT",
+                timeframe="1h",
+                open_time=open_time,
+                close_time=open_time + 3_599_999,
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.0,
+                volume=100.0,
+                trades=10,
+                is_closed=True,
+            )
+        )
+    return candles
 
 
 def _assumption_kwargs(mode: str) -> dict[str, Any]:

@@ -236,6 +236,39 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime_state["pending_entries"][0]["trade_id"], "trade_1")
         self.assertEqual(runtime_state["opened_trades"], 1)
 
+    async def test_forward_pending_entry_retention_keeps_active_and_caps_terminal_history(self) -> None:
+        terminal_entries = [_terminal_pending_entry(index) for index in range(205)]
+        run_store = _ForwardRunStore([_run(runtime_state={"pending_entries": terminal_entries})])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_arm_pending=True))),
+            virtual_trading=_VirtualTrading(),
+        )
+
+        await runtime.process_strategy_signal(_strategy_signal())
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        entries_after_arm = runtime_state["pending_entries"]
+
+        self.assertEqual(len(entries_after_arm), 201)
+        self.assertEqual(_pending_entry_status_counts(entries_after_arm), {"filled": 200, "pending": 1})
+        self.assertFalse(any(entry["signal_id"] == "terminal_0" for entry in entries_after_arm))
+        self.assertTrue(any(entry["signal_id"] == "terminal_204" for entry in entries_after_arm))
+        self.assertTrue(any(entry["signal_id"] == "sig_1" and entry["status"] == "pending" for entry in entries_after_arm))
+
+        fill_result = await runtime.process_market_tick(
+            MarketData(exchange="bybit", symbol="BTCUSDT", price=100.5, volume=1.0, timestamp=1_780_000_060)
+        )
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        entries_after_fill = runtime_state["pending_entries"]
+
+        self.assertEqual(fill_result.opened_trades, 1)
+        self.assertEqual(len(entries_after_fill), 200)
+        self.assertEqual(_pending_entry_status_counts(entries_after_fill), {"filled": 200})
+        self.assertFalse(any(entry["signal_id"] == "terminal_5" for entry in entries_after_fill))
+        self.assertTrue(any(entry["signal_id"] == "sig_1" and entry["status"] == "filled" for entry in entries_after_fill))
+
     async def test_default_forward_pending_touch_uses_bounded_touch_price(self) -> None:
         run_store = _ForwardRunStore([_run()])
         trade_store = _RecordingTradeStore()
@@ -901,6 +934,33 @@ def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:
         "tags": request.tags,
         "scenario_count": len(request.strategies) * len(request.pairs) * len(request.timeframes),
     }
+
+
+def _terminal_pending_entry(index: int) -> dict[str, Any]:
+    resolved_at = (NOW + timedelta(seconds=index)).isoformat()
+    return {
+        "status": "filled",
+        "signal_id": f"terminal_{index}",
+        "exchange": "bybit",
+        "symbol": "BTCUSDT",
+        "side": "long",
+        "entry_min": 100.0,
+        "entry_max": 101.0,
+        "stop_loss": 95.0,
+        "targets": [110.0],
+        "created_at": NOW.isoformat(),
+        "resolved_at": resolved_at,
+        "filled_at": resolved_at,
+        "trade_id": f"trade_terminal_{index}",
+    }
+
+
+def _pending_entry_status_counts(entries: Sequence[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in entries:
+        status = str(entry.get("status") or "pending")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
 
 
 class _ForwardRunStore:

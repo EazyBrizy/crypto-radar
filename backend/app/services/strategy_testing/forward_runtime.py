@@ -39,6 +39,17 @@ from app.services.strategy_testing.stores import ClickHouseStrategyTestStore, Po
 from app.services.trade_plan_fingerprint import fingerprint_signal_trade_plan
 
 
+FORWARD_PENDING_TERMINAL_RETENTION_LIMIT = 200
+_FORWARD_PENDING_TERMINAL_STATUSES = {
+    "blocked",
+    "cancelled",
+    "canceled",
+    "expired",
+    "failed",
+    "filled",
+}
+
+
 class ForwardRunStore(Protocol):
     def list_runs(
         self,
@@ -180,7 +191,7 @@ class ForwardStrategyTestRuntime:
                 "metrics_written": _counter(detail.run.runtime_state, "metrics_written"),
                 "forward_account": _initial_forward_account(request),
                 "forward_positions": list(detail.run.runtime_state.get("forward_positions") or []),
-                "pending_entries": _forward_pending_entries(detail.run),
+                "pending_entries": _cap_forward_pending_entries(_forward_pending_entries(detail.run)),
                 "last_error": None,
             },
         )
@@ -625,7 +636,7 @@ class ForwardStrategyTestRuntime:
                     **counter_patch,
                     **state_patch,
                     **last_patch,
-                    "pending_entries": updated_entries,
+                    "pending_entries": _cap_forward_pending_entries(updated_entries),
                 },
             )
             result.runtime_state_updates += 1
@@ -994,7 +1005,21 @@ def _upsert_forward_pending_entry(
         updated.append(dict(entry))
     if not replaced:
         updated.append(dict(pending_entry))
-    return updated
+    return _cap_forward_pending_entries(updated)
+
+
+def _cap_forward_pending_entries(entries: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    terminal_seen = 0
+    kept_reversed: list[dict[str, Any]] = []
+    for entry in reversed(entries):
+        snapshot = dict(entry)
+        if _forward_pending_entry_is_terminal(snapshot):
+            if terminal_seen < FORWARD_PENDING_TERMINAL_RETENTION_LIMIT:
+                kept_reversed.append(snapshot)
+            terminal_seen += 1
+            continue
+        kept_reversed.append(snapshot)
+    return list(reversed(kept_reversed))
 
 
 def _forward_pending_entry_snapshot(
@@ -1057,6 +1082,10 @@ def _pending_entry_targets_from_signal(signal: RadarSignal) -> list[float]:
 
 def _forward_pending_entry_status(entry: dict[str, Any]) -> str:
     return str(entry.get("status") or "pending").strip().lower()
+
+
+def _forward_pending_entry_is_terminal(entry: dict[str, Any]) -> bool:
+    return _forward_pending_entry_status(entry) in _FORWARD_PENDING_TERMINAL_STATUSES
 
 
 def _forward_pending_entry_matches_market(entry: dict[str, Any], exchange: str, symbol: str) -> bool:

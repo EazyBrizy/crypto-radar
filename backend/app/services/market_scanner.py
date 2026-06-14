@@ -1,11 +1,12 @@
 import asyncio
 import contextlib
+import inspect
 import logging
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
-from typing import List, Optional, Protocol
+from typing import Awaitable, List, Optional, Protocol
 
 from app.core.config import settings
 from app.domain.virtual_trade_status import is_terminal_virtual_trade_status
@@ -88,6 +89,11 @@ class PendingEntryTriggerProcessor(Protocol):
         ...
 
 
+class ForwardStrategyTestProcessor(Protocol):
+    def process_market_tick(self, tick: MarketData) -> Awaitable[object] | object:
+        ...
+
+
 @dataclass
 class ScannerRuntimeStats:
     ticks_processed: int = 0
@@ -134,6 +140,7 @@ class MarketScanner:
         derivative_market: DerivativeMarketSnapshotService | None = derivative_market_snapshot_service,
         alpha_market_context: AlphaMarketContextService | None = alpha_market_context_service,
         market_regime_context_store: MarketRegimeContextStore | None = market_regime_context_store,
+        forward_strategy_tests: ForwardStrategyTestProcessor | None = None,
         scan_pairs: Iterable[tuple[str, str]] | None = None,
         universe_source: str = "default",
         universe_warning: str | None = None,
@@ -176,6 +183,7 @@ class MarketScanner:
         self._derivative_market = derivative_market
         self._alpha_market_context = alpha_market_context
         self._market_regime_context_store = market_regime_context_store
+        self._forward_strategy_tests = forward_strategy_tests
         self._feature_engine = FeatureEngine()
         self._strategy_engine = StrategyEngine()
         self._stats = ScannerRuntimeStats()
@@ -255,6 +263,7 @@ class MarketScanner:
         if updated_trades:
             await self._publish_trade_updates(updated_trades)
         await self._process_pending_entry_triggers(data)
+        await self._process_forward_strategy_test_tick(data)
         updated_candles = self._candle_store.update_from_tick(data)
         await self._persist_market_candles(updated_candles)
         self._stats.candles_updated += len(updated_candles)
@@ -490,6 +499,14 @@ class MarketScanner:
                 data.symbol,
                 len(results),
             )
+
+    async def _process_forward_strategy_test_tick(self, data: MarketData) -> None:
+        if self._forward_strategy_tests is None:
+            return
+        try:
+            await maybe_await(self._forward_strategy_tests.process_market_tick(data))
+        except Exception as exc:
+            logger.warning("Forward strategy test market tick skipped: %s", exc)
 
     async def _context_features_for(self, candle: OHLCVCandle) -> dict[str, Features]:
         result: dict[str, Features] = {}
@@ -1084,6 +1101,12 @@ def _features_with_derivative_context(
 
 def _symbol_key(exchange: str, symbol: str) -> tuple[str, str]:
     return (exchange.strip().lower(), symbol.strip().upper())
+
+
+async def maybe_await(value: Awaitable[object] | object) -> object:
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 def _is_open_candle(candle: OHLCVCandle) -> bool:

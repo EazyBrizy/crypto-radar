@@ -84,6 +84,25 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime_state["forward_account"]["open_positions"], 1)
         self.assertEqual(runtime_state["forward_account"]["closed_positions"], 0)
 
+    async def test_trade_store_schema_is_ensured_once_before_first_forward_write(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _SchemaRecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(_radar_signal(execution_gate=_gate(can_enter_now=True))),
+            virtual_trading=_VirtualTrading(),
+        )
+
+        await runtime.process_strategy_signal(_strategy_signal())
+        await runtime.process_strategy_signal(_strategy_signal())
+
+        self.assertEqual(trade_store.calls[0], "ensure_schema")
+        self.assertEqual(trade_store.calls.count("ensure_schema"), 1)
+        self.assertIn("write_trades", trade_store.calls)
+        self.assertIn("write_signal_events", trade_store.calls)
+        self.assertIn("write_metrics", trade_store.calls)
+
     async def test_default_forward_entry_price_uses_long_entry_zone_midpoint(self) -> None:
         run_store = _ForwardRunStore([_run()])
         trade_store = _RecordingTradeStore()
@@ -235,6 +254,78 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime_state["pending_entries"][0]["status"], "filled")
         self.assertEqual(runtime_state["pending_entries"][0]["trade_id"], "trade_1")
         self.assertEqual(runtime_state["opened_trades"], 1)
+
+    async def test_forward_market_ticks_update_runtime_state_fill_close_and_skip_no_match(self) -> None:
+        run_store = _ForwardRunStore([_run(
+            pairs=[StrategyTestPair(exchange="bybit", symbol="SOLUSDT")]
+        )])
+        trade_store = _RecordingTradeStore()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=_SignalWriter(
+                _radar_signal(
+                    symbol="SOLUSDT",
+                    take_profit_2=None,
+                    execution_gate=_gate(can_arm_pending=True),
+                )
+            ),
+            virtual_trading=_VirtualTrading(),
+        )
+
+        pending_result = await runtime.process_strategy_signal(
+            _strategy_signal(symbol="SOLUSDT", take_profit_2=None)
+        )
+        no_match_result = await runtime.process_market_tick(
+            MarketData(exchange="bybit", symbol="BTCUSDT", price=100.5, volume=1.0, timestamp=1_780_000_030)
+        )
+        fill_result = await runtime.process_market_tick(
+            MarketData(
+                exchange="bybit",
+                symbol="SOLUSDT",
+                price=100.0,
+                best_ask=100.5,
+                volume=1.0,
+                timestamp=1_780_000_060,
+            )
+        )
+        close_result = await runtime.process_market_tick(
+            MarketData(exchange="bybit", symbol="SOLUSDT", price=111.0, volume=1.0, timestamp=1_780_000_120)
+        )
+
+        self.assertEqual(pending_result.pending_entries_armed, 1)
+        self.assertEqual(no_match_result.signals_skipped, 1)
+        self.assertEqual(fill_result.opened_trades, 1)
+        self.assertEqual(close_result.closed_trades, 1)
+        state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        self.assertEqual(state["status"], "processing")
+        self.assertEqual(state["processed_ticks"], 2)
+        self.assertEqual(state["last_tick_at"], 1_780_000_120)
+        self.assertEqual(state["last_exchange"], "bybit")
+        self.assertEqual(state["last_symbol"], "SOLUSDT")
+        self.assertEqual(state["last_price"], 111.0)
+        self.assertEqual(state["last_heartbeat_reason"], "market_data_received")
+        self.assertEqual(state["pending_entries_count"], 0)
+        self.assertEqual(state["opened_trades"], 1)
+        self.assertEqual(state["closed_trades"], 1)
+        self.assertEqual(state["last_forward_event"], "trade_closed")
+        self.assertEqual(len([trade for trade in trade_store.trades if trade.exit_time is not None]), 1)
+
+    async def test_heartbeat_marks_active_run_waiting_for_market_data_before_first_tick(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            virtual_trading=_VirtualTrading(),
+        )
+
+        result = runtime.heartbeat_active_runs()
+
+        self.assertEqual(result.runtime_state_updates, 1)
+        state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        self.assertEqual(state["status"], "waiting_for_market_data")
+        self.assertEqual(state["last_heartbeat_reason"], "waiting_for_market_data")
+        self.assertEqual(state["processed_ticks"], 0)
 
     async def test_forward_pending_entry_retention_keeps_active_and_caps_terminal_history(self) -> None:
         terminal_entries = [_terminal_pending_entry(index) for index in range(205)]
@@ -851,6 +942,7 @@ def _strategy_signal(
 
 def _radar_signal(
     *,
+    symbol: str = "BTCUSDT",
     direction: Literal["long", "short"] = "long",
     entry_min: float | None = 100.0,
     entry_max: float | None = 101.0,
@@ -861,7 +953,7 @@ def _radar_signal(
 ) -> RadarSignal:
     return RadarSignal(
         id="sig_1",
-        symbol="BTCUSDT",
+        symbol=symbol,
         exchange="bybit",
         strategy="trend_pullback_continuation",
         direction=direction,
@@ -892,13 +984,21 @@ def _gate(*, can_enter_now: bool = False, can_arm_pending: bool = False) -> Sign
     )
 
 
-def _trade(signal_id: str = "sig_1") -> VirtualTrade:
+def _trade(
+    signal_id: str = "sig_1",
+    *,
+    exchange: str = "bybit",
+    symbol: str = "BTCUSDT",
+    stop_loss: float = 95.0,
+    take_profit: list[float] | None = None,
+) -> VirtualTrade:
+    targets = take_profit or [110.0, 115.0]
     return VirtualTrade(
         id="trade_1",
         user_id=USER_ID,
         signal_id=signal_id,
-        exchange="bybit",
-        symbol="BTCUSDT",
+        exchange=exchange,
+        symbol=symbol,
         strategy="trend_pullback_continuation",
         timeframe="15m",
         side="long",
@@ -908,8 +1008,8 @@ def _trade(signal_id: str = "sig_1") -> VirtualTrade:
         quantity=1.0,
         leverage=1,
         risk_percent=1.0,
-        stop_loss=95.0,
-        take_profit=[110.0, 115.0],
+        stop_loss=stop_loss,
+        take_profit=targets,
         opened_at=NOW,
         updated_at=NOW,
     )
@@ -1027,6 +1127,27 @@ class _RecordingTradeStore:
         self.signal_events.extend(signal_events)
 
 
+class _SchemaRecordingTradeStore(_RecordingTradeStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def ensure_schema(self) -> None:
+        self.calls.append("ensure_schema")
+
+    def write_trades(self, trades: Sequence[StrategyTestTrade]) -> None:
+        self.calls.append("write_trades")
+        super().write_trades(trades)
+
+    def write_metrics(self, rows: Sequence[StrategyTestMetricRow]) -> None:
+        self.calls.append("write_metrics")
+        super().write_metrics(rows)
+
+    def write_signal_events(self, signal_events: Sequence[StrategyTestSignalEvent]) -> None:
+        self.calls.append("write_signal_events")
+        super().write_signal_events(signal_events)
+
+
 class _SignalWriter:
     def __init__(self, signal: RadarSignal) -> None:
         self.signal = signal
@@ -1049,7 +1170,14 @@ class _VirtualTrading:
 
     def open_virtual_trade(self, signal: RadarSignal, request: ManualConfirmRequest) -> VirtualTrade:
         self.open_calls.append((signal, request))
-        return _trade(signal.id)
+        targets = [target for target in [signal.take_profit_1, signal.take_profit_2] if target is not None]
+        return _trade(
+            signal.id,
+            exchange=signal.exchange,
+            symbol=signal.symbol,
+            stop_loss=float(signal.stop_loss or 95.0),
+            take_profit=targets,
+        )
 
 
 class _ForbiddenVirtualTrading:

@@ -8,6 +8,7 @@ from typing import Awaitable, Optional, Protocol
 
 from app.core.config import settings
 from app.domain.signal_status import is_execution_candidate_status, is_market_opportunity_status
+from app.schemas.market import MarketData
 from app.schemas.signal import StrategySignal
 from app.services.market_scanner import MarketScanner
 from app.services.candle_service import candle_service
@@ -28,6 +29,9 @@ class ForwardStrategySignalProcessor(Protocol):
     def process_strategy_signal(self, signal: StrategySignal) -> Awaitable[object] | object:
         ...
 
+    def process_market_tick(self, tick: MarketData) -> Awaitable[object] | object:
+        ...
+
 
 class ScannerRunner:
     """Запускает MarketScanner в фоне и сохраняет реальные сигналы в SignalService."""
@@ -38,9 +42,11 @@ class ScannerRunner:
         store: SignalService = signal_service,
         forward_strategy_tests: ForwardStrategySignalProcessor | None = None,
     ) -> None:
-        self._scanner = scanner or self._build_configured_scanner()
         self._store = store
         self._forward_strategy_tests = forward_strategy_tests
+        self._scanner = scanner or self._build_configured_scanner(
+            forward_strategy_tests=forward_strategy_tests
+        )
         self._task: Optional[asyncio.Task[None]] = None
         self._processed_signals = 0
         self._external_scanner = scanner is not None
@@ -92,7 +98,9 @@ class ScannerRunner:
         if was_running and should_rebuild:
             await self.stop()
         if not self._external_scanner and should_rebuild:
-            self._scanner = self._build_configured_scanner()
+            self._scanner = self._build_configured_scanner(
+                forward_strategy_tests=self._forward_strategy_tests
+            )
             self._scanner_subscription_hash = next_subscription_hash
             self._processed_signals = 0
             self._last_update_event_monotonic.clear()
@@ -210,7 +218,10 @@ class ScannerRunner:
         return True
 
     @staticmethod
-    def _build_configured_scanner() -> MarketScanner:
+    def _build_configured_scanner(
+        *,
+        forward_strategy_tests: ForwardStrategySignalProcessor | None = None,
+    ) -> MarketScanner:
         timeframes = radar_config_service.selected_timeframes()
         candle_service.configure_timeframes(timeframes)
         try:
@@ -221,6 +232,7 @@ class ScannerRunner:
                 symbols=[],
                 exchanges=[],
                 scan_pairs=[],
+                forward_strategy_tests=forward_strategy_tests,
                 universe_source="blocked",
                 universe_warning=str(exc),
                 max_scanner_pairs=settings.max_scanner_pairs,
@@ -230,6 +242,7 @@ class ScannerRunner:
             symbols=[symbol for _, symbol in scanner_universe.pairs],
             exchanges=[exchange for exchange, _ in scanner_universe.pairs],
             scan_pairs=scanner_universe.pairs,
+            forward_strategy_tests=forward_strategy_tests,
             universe_source=scanner_universe.source,
             universe_warning=scanner_universe.warning,
             max_scanner_pairs=scanner_universe.max_pairs,

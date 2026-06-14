@@ -169,6 +169,7 @@ class ForwardStrategyTestRuntime:
         self._virtual_trading = virtual_trading or ForwardIsolatedVirtualTrading()
         self._execution_gate = execution_gate or signal_execution_gate_service
         self._scanner = scanner
+        self._trade_store_schema_ensured = False
 
     def start_run(
         self,
@@ -191,7 +192,7 @@ class ForwardStrategyTestRuntime:
                 "metrics_written": _counter(detail.run.runtime_state, "metrics_written"),
                 "forward_account": _initial_forward_account(request),
                 "forward_positions": list(detail.run.runtime_state.get("forward_positions") or []),
-                "pending_entries": _cap_forward_pending_entries(_forward_pending_entries(detail.run)),
+                **_forward_pending_entries_runtime_patch(_forward_pending_entries(detail.run)),
                 "last_error": None,
             },
         )
@@ -200,11 +201,16 @@ class ForwardStrategyTestRuntime:
         result = ForwardRuntimeResult()
         result.cancelled_runs += self._cancel_stopping_runs()
         for run in self._running_forward_runs():
+            processed_ticks = _counter(run.runtime_state, "processed_ticks")
+            waiting_for_first_tick = processed_ticks == 0
             self._run_store.update_runtime_state(
                 run.run_id,
                 {
-                    "status": "listening",
-                    "last_heartbeat_reason": "forward_runtime_worker",
+                    "status": "waiting_for_market_data" if waiting_for_first_tick else "listening",
+                    "last_heartbeat_reason": (
+                        "waiting_for_market_data" if waiting_for_first_tick else "forward_runtime_worker"
+                    ),
+                    "processed_ticks": processed_ticks,
                     "last_processed_at": _now_iso(),
                 },
             )
@@ -214,9 +220,12 @@ class ForwardStrategyTestRuntime:
     async def process_market_tick(self, tick: MarketData) -> ForwardRuntimeResult:
         result = ForwardRuntimeResult(ticks_processed=1)
         result.cancelled_runs += self._cancel_stopping_runs()
-        for run in self._running_forward_runs():
+        runs = self._running_forward_runs()
+        matched_runs = 0
+        for run in runs:
             if not _run_matches_market(run, tick.exchange, tick.symbol):
                 continue
+            matched_runs += 1
             marked = _mark_to_market_forward_account(run, tick)
             trades_written, signal_events_written, metrics_written = self._write_forward_close_records(
                 run,
@@ -243,13 +252,35 @@ class ForwardStrategyTestRuntime:
                     "last_exchange": tick.exchange.lower(),
                     "last_symbol": tick.symbol.upper(),
                     "last_price": tick.price,
+                    "last_tick_at": tick.timestamp,
                     "last_tick_timestamp": tick.timestamp,
+                    "last_heartbeat_reason": "market_data_received",
+                    "pending_entries_count": _forward_pending_entries_count(
+                        _forward_pending_entries(run)
+                    ),
+                    "last_forward_event": "trade_closed" if marked.closed_trades else "market_tick",
                     **marked.runtime_state,
                     **persistence_counters,
                 },
             )
             result.runtime_state_updates += 1
             result.merge(self._process_pending_entries_for_tick(updated_detail.run, tick))
+        if matched_runs == 0 and runs:
+            result.signals_skipped += 1
+            for run in runs:
+                if _counter(run.runtime_state, "processed_ticks") != 0:
+                    continue
+                self._run_store.update_runtime_state(
+                    run.run_id,
+                    {
+                        "status": "waiting_for_market_data",
+                        "last_heartbeat_reason": "no_matching_market_data",
+                        "processed_ticks": 0,
+                        "last_forward_event": "market_tick_no_match",
+                        "last_processed_at": _now_iso(),
+                    },
+                )
+                result.runtime_state_updates += 1
 
         if self._scanner is None:
             return result
@@ -300,14 +331,17 @@ class ForwardStrategyTestRuntime:
                                 {
                                     "processed_signals": 1,
                                     "pending_entries_armed": 1,
-                                    "pending_entries": _upsert_forward_pending_entry(
-                                        _forward_pending_entries(run),
-                                        _forward_pending_entry_snapshot(radar_signal, gate),
+                                    **_forward_pending_entries_runtime_patch(
+                                        _upsert_forward_pending_entry(
+                                            _forward_pending_entries(run),
+                                            _forward_pending_entry_snapshot(radar_signal, gate),
+                                        )
                                     ),
                                     "signal_events_written": 1,
                                     "last_signal_id": radar_signal.id,
                                     "last_gate_status": gate.status,
                                     "last_feed_kind": gate.feed_kind,
+                                    "last_forward_event": "signal_pending",
                                     "last_execution_policy_mode": execution_policy_decision.mode,
                                     "last_execution_policy_reason_code": execution_policy_decision.reason_code,
                                 },
@@ -332,6 +366,7 @@ class ForwardStrategyTestRuntime:
                                 "last_signal_id": radar_signal.id,
                                 "last_gate_status": gate.status,
                                 "last_feed_kind": gate.feed_kind,
+                                "last_forward_event": "signal_blocked",
                                 "last_execution_policy_mode": execution_policy_decision.mode,
                                 "last_execution_policy_reason_code": execution_policy_decision.reason_code,
                             },
@@ -363,6 +398,7 @@ class ForwardStrategyTestRuntime:
                                 "last_signal_id": radar_signal.id,
                                 "last_gate_status": gate.status,
                                 "last_feed_kind": gate.feed_kind,
+                                "last_forward_event": "signal_blocked",
                                 "last_portfolio_risk_action": portfolio_decision.action,
                                 "last_portfolio_risk_reason_code": portfolio_decision.reason_code,
                             },
@@ -396,6 +432,7 @@ class ForwardStrategyTestRuntime:
                             "last_gate_status": gate.status,
                             "last_feed_kind": gate.feed_kind,
                             "last_trade_id": opened.id,
+                            "last_forward_event": "trade_opened",
                             **_apply_forward_trade_open(run, opened),
                         },
                     )
@@ -414,14 +451,17 @@ class ForwardStrategyTestRuntime:
                         {
                             "processed_signals": 1,
                             "pending_entries_armed": 1,
-                            "pending_entries": _upsert_forward_pending_entry(
-                                _forward_pending_entries(run),
-                                _forward_pending_entry_snapshot(radar_signal, gate),
+                            **_forward_pending_entries_runtime_patch(
+                                _upsert_forward_pending_entry(
+                                    _forward_pending_entries(run),
+                                    _forward_pending_entry_snapshot(radar_signal, gate),
+                                )
                             ),
                             "signal_events_written": 1,
                             "last_signal_id": radar_signal.id,
                             "last_gate_status": gate.status,
                             "last_feed_kind": gate.feed_kind,
+                            "last_forward_event": "signal_pending",
                         },
                     )
                 else:
@@ -441,6 +481,9 @@ class ForwardStrategyTestRuntime:
                             "last_signal_id": radar_signal.id,
                             "last_gate_status": gate.status,
                             "last_feed_kind": gate.feed_kind,
+                            "last_forward_event": (
+                                "signal_blocked" if gate.status == "blocked" else "signal_no_entry"
+                            ),
                         },
                     )
                 result.runtime_state_updates += 1
@@ -508,6 +551,7 @@ class ForwardStrategyTestRuntime:
                         reason="Pending forward entry expired before entry touch.",
                     )
                 )
+                last_patch["last_forward_event"] = "pending_entry_expired"
                 changed = True
                 continue
 
@@ -523,6 +567,7 @@ class ForwardStrategyTestRuntime:
                         reason=str(exc),
                     )
                 )
+                last_patch["last_forward_event"] = "pending_entry_blocked"
                 changed = True
                 continue
             if touch is None:
@@ -561,6 +606,7 @@ class ForwardStrategyTestRuntime:
                             "last_signal_id": signal.id,
                             "last_gate_status": blocked_gate.status,
                             "last_feed_kind": blocked_gate.feed_kind,
+                            "last_forward_event": "pending_entry_blocked",
                             "last_portfolio_risk_action": portfolio_decision.action,
                             "last_portfolio_risk_reason_code": portfolio_decision.reason_code,
                         }
@@ -583,6 +629,7 @@ class ForwardStrategyTestRuntime:
                         touch=touch,
                     )
                 )
+                last_patch["last_forward_event"] = "pending_entry_blocked"
                 changed = True
                 continue
 
@@ -625,18 +672,20 @@ class ForwardStrategyTestRuntime:
                     "last_gate_status": gate.status,
                     "last_feed_kind": gate.feed_kind,
                     "last_trade_id": opened.id,
+                    "last_forward_event": "trade_opened",
                 }
             )
             changed = True
 
         if changed:
+            pending_entries_patch = _forward_pending_entries_runtime_patch(updated_entries)
             self._increment_runtime_state(
                 run,
                 {
                     **counter_patch,
                     **state_patch,
                     **last_patch,
-                    "pending_entries": _cap_forward_pending_entries(updated_entries),
+                    **pending_entries_patch,
                 },
             )
             result.runtime_state_updates += 1
@@ -678,11 +727,13 @@ class ForwardStrategyTestRuntime:
         signal: RadarSignal,
         trade: VirtualTrade,
     ) -> int:
+        self._ensure_trade_store_schema()
         row = _strategy_test_trade_from_virtual_trade(run=run, signal=signal, trade=trade)
         self._trade_store.write_trades([row])
         return 1
 
     def _write_signal_event(self, event: StrategyTestSignalEvent) -> int:
+        self._ensure_trade_store_schema()
         self._trade_store.write_signal_events([event])
         return 1
 
@@ -692,6 +743,7 @@ class ForwardStrategyTestRuntime:
         signal: RadarSignal,
         trade: VirtualTrade,
     ) -> int:
+        self._ensure_trade_store_schema()
         self._trade_store.write_metrics(
             [_strategy_test_metric_from_virtual_trade(run=run, signal=signal, trade=trade)]
         )
@@ -705,6 +757,7 @@ class ForwardStrategyTestRuntime:
         if not trades:
             return 0, 0, 0
 
+        self._ensure_trade_store_schema()
         trade_rows: list[StrategyTestTrade] = []
         signal_events: list[StrategyTestSignalEvent] = []
         metric_rows: list[StrategyTestMetricRow] = []
@@ -732,6 +785,14 @@ class ForwardStrategyTestRuntime:
         self._trade_store.write_signal_events(signal_events)
         self._trade_store.write_metrics(metric_rows)
         return len(trade_rows), len(signal_events), len(metric_rows)
+
+    def _ensure_trade_store_schema(self) -> None:
+        if self._trade_store_schema_ensured:
+            return
+        ensure_schema = getattr(self._trade_store, "ensure_schema", None)
+        if ensure_schema is not None:
+            ensure_schema()
+        self._trade_store_schema_ensured = True
 
     def _increment_runtime_state(
         self,
@@ -983,6 +1044,18 @@ def _forward_pending_entries(run: StrategyTestRunResponse) -> list[dict[str, Any
     if not isinstance(raw_entries, list):
         return []
     return [dict(entry) for entry in raw_entries if isinstance(entry, dict)]
+
+
+def _forward_pending_entries_runtime_patch(entries: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    capped_entries = _cap_forward_pending_entries(entries)
+    return {
+        "pending_entries": capped_entries,
+        "pending_entries_count": _forward_pending_entries_count(capped_entries),
+    }
+
+
+def _forward_pending_entries_count(entries: Sequence[dict[str, Any]]) -> int:
+    return sum(1 for entry in entries if _forward_pending_entry_status(entry) == "pending")
 
 
 def _upsert_forward_pending_entry(

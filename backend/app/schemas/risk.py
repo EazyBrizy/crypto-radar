@@ -225,7 +225,7 @@ class ResolvedExecutionProfile(BaseModel):
     rr_guard_mode: RRGuardMode = "soft"
     min_rr_ratio: Decimal = Field(default=Decimal("2.0"), ge=0, le=100)
     rr_target: RRTarget = "final"
-    radar_display_mode: RadarDisplayMode = "all_market_opportunities"
+    radar_display_mode: RadarDisplayMode = "execution_ready"
     sources: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 

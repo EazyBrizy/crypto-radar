@@ -3843,6 +3843,16 @@ export interface components {
              */
             total_signals: number;
             /**
+             * Hot Signals
+             * @default 0
+             */
+            hot_signals: number;
+            /**
+             * Armable Signals
+             * @default 0
+             */
+            armable_signals: number;
+            /**
              * Execution Ready Signals
              * @default 0
              */
@@ -3867,6 +3877,11 @@ export interface components {
              * @default 0
              */
             positive_edge_signals: number;
+            /**
+             * Blocked Diagnostics
+             * @default 0
+             */
+            blocked_diagnostics: number;
             /**
              * Blocked Ideas
              * @default 0

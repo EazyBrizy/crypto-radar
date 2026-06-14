@@ -213,11 +213,14 @@ const pendingEntryIntentSchema = z.object({
 
 const radarSummarySchema = z.object({
   total_signals: z.number(),
+  hot_signals: z.number().default(0),
+  armable_signals: z.number().default(0),
   execution_ready_signals: z.number(),
   watchlist_signals: z.number().optional(),
   market_ideas: z.number().optional(),
   high_confidence_signals: z.number(),
   positive_edge_signals: z.number(),
+  blocked_diagnostics: z.number().default(0),
   blocked_ideas: z.number()
 }).passthrough();
 
@@ -1829,6 +1832,7 @@ function normalizeRiskAmountMode(value: unknown): RiskAmountMode {
 
 function normalizeRadarDisplayMode(value: unknown): RadarDisplayMode {
   if (
+    value === "all_market_opportunities" ||
     value === "market_ideas" ||
     value === "watchlist" ||
     value === "execution_ready" ||
@@ -1837,7 +1841,7 @@ function normalizeRadarDisplayMode(value: unknown): RadarDisplayMode {
   ) {
     return value;
   }
-  return "all_market_opportunities";
+  return "execution_ready";
 }
 
 function normalizeRRGuardMode(value: unknown, fallback: RRGuardMode): RRGuardMode {

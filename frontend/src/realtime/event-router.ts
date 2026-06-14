@@ -5,7 +5,8 @@ import { isActivePendingEntryStatus, isTerminalPendingEntryStatus } from "@/doma
 import {
   isRadarDashboardQueryKey,
   isSignalHistoryQueryKey,
-  radarResponseWithSignals
+  radarResponseWithSignals,
+  signalMatchesRadarDisplayMode
 } from "@/features/server-state/radar-cache";
 import { queryKeys, serverStateKeys } from "@/features/server-state/query-keys";
 import { translateKey, translateReasonCode, type I18nKey } from "@/i18n";
@@ -299,6 +300,7 @@ function applySignalTerminalStatus(queryClient: QueryClient, signalId: string, s
 function applySignalEntryTouched(queryClient: QueryClient, signalId: string, price: number) {
   applySignalStatus(queryClient, signalId, "entry_touched");
   const signal = useSignalStore.getState().signalsById[signalId];
+  if (signal && !signalMatchesRadarDisplayMode(signal, "execution_ready")) return;
   if (signal) usePriceStore.getState().queuePrice(signal.symbol, price);
   useNotificationStore.getState().push({
     kind: "signal",

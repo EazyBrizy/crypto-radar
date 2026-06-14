@@ -31,7 +31,7 @@ import { useTradingActionsDisabled } from "@/stores/ui-selectors";
 import { useUiStore } from "@/stores/ui-store";
 import type { PendingEntryIntent, RadarSignal, SignalActionState, SignalStatus } from "@/types";
 import type { ExchangeConnection, RadarDisplayMode } from "@/features/server-state/types";
-import { mergeRadarSnapshotWithRealtime } from "@/features/server-state/radar-cache";
+import { filterSignalsForRadarDisplayMode, mergeRadarSnapshotWithRealtime } from "@/features/server-state/radar-cache";
 import { isOpenFeedSignal } from "@/utils";
 
 export function RadarRoute() {
@@ -43,7 +43,7 @@ export function RadarRoute() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | SignalStatus>("all");
   const [signalView, setSignalView] = useState<"open" | "history">("open");
-  const [radarDisplayMode, setRadarDisplayMode] = useState<RadarDisplayMode>("all_market_opportunities");
+  const [radarDisplayMode, setRadarDisplayMode] = useState<RadarDisplayMode>("execution_ready");
   const [hasUserSelectedSignal, setHasUserSelectedSignal] = useState(false);
   const [selectedPendingEntryId, setSelectedPendingEntryId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -80,11 +80,12 @@ export function RadarRoute() {
         currentSignals,
         radarQuery.data.signals,
         snapshotReceivedAt,
-        signalState.signalReceivedAtById
+        signalState.signalReceivedAtById,
+        radarDisplayMode
       ),
       snapshotReceivedAt
     );
-  }, [radarQuery.data, radarQuery.dataUpdatedAt, replaceSignals]);
+  }, [radarDisplayMode, radarQuery.data, radarQuery.dataUpdatedAt, replaceSignals]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -92,8 +93,13 @@ export function RadarRoute() {
   }, []);
 
   const signals = useMemo(
-    () => signalIds.map((signalId) => signalsById[signalId]).filter((signal): signal is RadarSignal => Boolean(signal) && isOpenFeedSignal(signal, nowMs)),
-    [nowMs, signalIds, signalsById]
+    () => filterSignalsForRadarDisplayMode(
+      signalIds
+        .map((signalId) => signalsById[signalId])
+        .filter((signal): signal is RadarSignal => Boolean(signal) && isOpenFeedSignal(signal, nowMs)),
+      radarDisplayMode
+    ),
+    [nowMs, radarDisplayMode, signalIds, signalsById]
   );
   const historicalSignals = useMemo(
     () => (historicalSignalsQuery.data ?? []).filter((signal) => signal.status === "invalidated" || signal.status === "expired"),

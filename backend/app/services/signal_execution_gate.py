@@ -196,6 +196,7 @@ class SignalExecutionGateService:
         pending_candidate = is_waiting_entry_status(status) or execution_ready
         can_arm_pending = (
             pending_candidate
+            and score >= score_threshold
             and candle_allows_execution
             and not hard_blockers
             and _edge_allows_execution(signal.edge)

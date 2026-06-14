@@ -186,6 +186,17 @@ class SignalExecutionGateServiceTest(unittest.TestCase):
         self.assertTrue(gate.can_arm_pending)
         self.assertFalse(gate.can_show_in_execution_feed)
 
+    def test_low_score_wait_for_pullback_cannot_arm_pending(self) -> None:
+        signal = _signal(status="wait_for_pullback", score=60)
+
+        gate = SignalExecutionGateService().evaluate(signal)
+
+        self.assertEqual(gate.feed_kind, "watchlist")
+        self.assertFalse(gate.can_enter_now)
+        self.assertFalse(gate.can_arm_pending)
+        self.assertFalse(gate.can_show_in_execution_feed)
+        self.assertIn("score_below_execution_threshold", _reason_codes(gate))
+
     def test_rr_hard_block_blocks_enter_now_and_pending(self) -> None:
         signal = _signal(status="wait_for_pullback")
         assert signal.trade_plan is not None

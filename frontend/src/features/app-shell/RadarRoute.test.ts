@@ -21,6 +21,7 @@ const radarRouteMockState = vi.hoisted(() => ({
   exchangeConnections: [] as ExchangeConnection[],
   pendingEntries: [] as PendingEntryIntent[],
   pendingEntryHistory: [] as PendingEntryIntent[],
+  radarDisplayModeCalls: [] as Array<string | null | undefined>,
   radarDataUpdatedAt: 0,
   radarResponse: { signals: [] as unknown[] },
   realPreviewCalls: [] as Array<{ connectionId: string | null; enabled: boolean | undefined; signalId: string | null }>,
@@ -83,7 +84,10 @@ vi.mock("@/hooks/use-radar-queries", () => {
     }),
     usePendingEntryHistoryQuery: () => query([]),
     usePendingEntryQuery: () => query(null),
-    useRadarQuery: () => query(radarRouteMockState.radarResponse),
+    useRadarQuery: (radarDisplayMode?: string | null) => {
+      radarRouteMockState.radarDisplayModeCalls.push(radarDisplayMode);
+      return query(radarRouteMockState.radarResponse);
+    },
     useRadarStatusQuery: () => query(null),
     useReconfirmPendingEntryMutation: mutation,
     useRejectSignalMutation: mutation,
@@ -128,6 +132,8 @@ vi.mock("./RadarPage", async () => {
       onSelectPendingEntrySignal: (intent: PendingEntryIntent) => void;
       onSelectSignal: (signal: RadarSignal) => void;
       missingSelectedSignalId: string | null;
+      radarDisplayMode: string;
+      onRadarDisplayModeChange: (mode: "all_market_opportunities" | "market_ideas" | "watchlist" | "execution_ready" | "execution_signals" | "blocked") => void;
       pendingEntries: PendingEntryIntent[];
       selectedPendingEntry?: PendingEntryIntent | null;
       selectedSignal: RadarSignal | null;
@@ -141,6 +147,7 @@ vi.mock("./RadarPage", async () => {
       React.createElement("div", { "data-testid": "selected-card" }, props.selectedSignalId ?? "none"),
       React.createElement("div", { "data-testid": "selected-pending-entry" }, props.selectedPendingEntry?.id ?? "none"),
       React.createElement("div", { "data-testid": "missing-signal" }, props.missingSelectedSignalId ?? "none"),
+      React.createElement("div", { "data-testid": "active-mode" }, props.radarDisplayMode),
       React.createElement("div", { "data-testid": "signal-ids" }, props.signalIds.join(",")),
       React.createElement("div", { "data-testid": "pending-statuses" }, props.pendingEntries.map((intent) => `${intent.id}:${intent.status}`).join(",")),
       React.createElement("div", { "data-testid": "active-filter" }, props.filter),
@@ -152,6 +159,7 @@ vi.mock("./RadarPage", async () => {
         : null,
       React.createElement("button", { onClick: () => props.onFilterChange("short"), type: "button" }, "filter short"),
       React.createElement("button", { onClick: () => props.onFilterChange("all"), type: "button" }, "filter all"),
+      React.createElement("button", { onClick: () => props.onRadarDisplayModeChange("blocked"), type: "button" }, "mode blocked"),
       ...props.pendingEntries.map((intent) => React.createElement(
         "button",
         { key: intent.id, onClick: () => props.onSelectPendingEntrySignal(intent), type: "button" },
@@ -211,13 +219,25 @@ const baseSignal: RadarSignal = {
   auto_entry: null,
   created_at: "2026-05-31T07:00:00.000Z",
   updated_at: "2026-05-31T07:00:00.000Z",
-  expires_at: "2026-05-31T08:00:00.000Z"
+  expires_at: "2026-05-31T08:00:00.000Z",
+  execution_gate: {
+    status: "warning",
+    feed_kind: "watchlist",
+    can_notify: false,
+    can_enter_now: false,
+    can_arm_pending: true,
+    can_show_in_execution_feed: false,
+    reasons: [],
+    warnings: [],
+    metadata: {}
+  }
 };
 
 beforeEach(() => {
   radarRouteMockState.exchangeConnections = [];
   radarRouteMockState.pendingEntries = [];
   radarRouteMockState.pendingEntryHistory = [];
+  radarRouteMockState.radarDisplayModeCalls = [];
   radarRouteMockState.radarDataUpdatedAt = Date.parse("2026-06-05T09:59:00.000Z");
   radarRouteMockState.radarResponse = { signals: [] };
   radarRouteMockState.realPreviewCalls = [];
@@ -311,7 +331,95 @@ function routeSignal(overrides: Partial<RadarSignal> = {}): RadarSignal {
   };
 }
 
+function blockedGate(): NonNullable<RadarSignal["execution_gate"]> {
+  return {
+    status: "blocked",
+    feed_kind: "blocked",
+    can_notify: false,
+    can_enter_now: false,
+    can_arm_pending: false,
+    can_show_in_execution_feed: false,
+    reasons: [
+      {
+        code: "score_below_execution_threshold",
+        severity: "info",
+        source: "score",
+        message: "Score 60 is below execution threshold 70.",
+        metadata: { score: 60, execution_score_threshold: 70 }
+      }
+    ],
+    warnings: [],
+    metadata: {}
+  };
+}
+
 describe("RadarRoute selection", () => {
+  it("requests the execution-ready radar feed by default", () => {
+    render(createElement(RadarRoute));
+
+    expect(radarRouteMockState.radarDisplayModeCalls[0]).toBe("execution_ready");
+    expect(screen.getByTestId("active-mode")).toHaveTextContent("execution_ready");
+  });
+
+  it("keeps blocked diagnostics out of the default visible list", async () => {
+    const hotSignal = routeSignal({ id: "sig_hot" });
+    const blockedSignal = routeSignal({
+      id: "sig_blocked",
+      execution_gate: blockedGate(),
+      details_view: detailsView({
+        primary_status: "blocked",
+        can_enter_now: false,
+        execution_summary: executionSummary({ preview_available: false })
+      })
+    });
+    radarRouteMockState.radarResponse = { signals: [blockedSignal, hotSignal] };
+
+    render(createElement(RadarRoute));
+
+    await waitFor(() => expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_hot"));
+    expect(screen.getByTestId("signal-ids")).not.toHaveTextContent("sig_blocked");
+  });
+
+  it("shows blocked diagnostics only after selecting the blocked mode", async () => {
+    const blockedSignal = routeSignal({
+      id: "sig_blocked",
+      execution_gate: blockedGate(),
+      details_view: detailsView({
+        primary_status: "blocked",
+        can_enter_now: false,
+        execution_summary: executionSummary({ preview_available: false })
+      })
+    });
+    radarRouteMockState.radarResponse = { signals: [blockedSignal] };
+
+    render(createElement(RadarRoute));
+
+    expect(screen.getByTestId("signal-ids")).toBeEmptyDOMElement();
+
+    fireEvent.click(screen.getByRole("button", { name: "mode blocked" }));
+
+    await waitFor(() => expect(screen.getByTestId("active-mode")).toHaveTextContent("blocked"));
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_blocked");
+  });
+
+  it("does not keep stale blocked realtime signals visible in the default mode", () => {
+    useSignalStore.getState().addSignal(routeSignal({
+      id: "sig_realtime_blocked",
+      execution_gate: blockedGate(),
+      details_view: detailsView({
+        primary_status: "blocked",
+        can_enter_now: false,
+        execution_summary: executionSummary({ preview_available: false })
+      }),
+      updated_at: "2026-06-05T10:00:05.000Z"
+    }));
+    radarRouteMockState.radarResponse = { signals: [] };
+
+    render(createElement(RadarRoute));
+
+    expect(screen.getByTestId("signal-ids")).toBeEmptyDOMElement();
+  });
+
   it("renders realtime signal.created after an empty REST radar snapshot and shows pending after arming", async () => {
     radarRouteMockState.radarResponse = { signals: [] };
     const queryClient = new QueryClient();

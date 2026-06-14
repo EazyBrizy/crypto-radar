@@ -1698,7 +1698,7 @@ export function SettingsPage({
                   <label>
                     <span title={t(EXECUTION_PROFILE_HELP.radarMode)}>{tKey("settings.radarMode")}</span>
                     <select
-                      defaultValue={String(strategyConfig.risk_settings.radar_display_mode ?? "all_market_opportunities")}
+                      defaultValue={String(strategyConfig.risk_settings.radar_display_mode ?? "execution_ready")}
                       disabled={busy}
                       name="risk:radar_display_mode"
                     >

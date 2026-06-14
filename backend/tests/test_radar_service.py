@@ -49,6 +49,53 @@ class FakeRiskPreviewEvaluator:
 
 
 class RadarServiceTest(unittest.TestCase):
+    def test_default_mode_uses_execution_ready_feed_not_market_diagnostics(self) -> None:
+        hot = _signal(
+            status="actionable",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_enter_now=True, can_arm_pending=False),
+        )
+        blocked_forming_low_score = _signal(
+            status="actionable",
+            rr_status="passed",
+            score=60,
+            execution_gate=_execution_gate(
+                can_enter_now=False,
+                can_arm_pending=False,
+                feed_kind="blocked",
+                status="blocked",
+                reasons=[
+                    {
+                        "code": "forming_candle",
+                        "severity": "blocker",
+                        "source": "candle",
+                        "message": "Forming candle is not allowed in the execution feed.",
+                    },
+                    {
+                        "code": "score_below_execution_threshold",
+                        "severity": "info",
+                        "source": "score",
+                        "message": "Score 60 is below execution threshold 70.",
+                    },
+                ],
+            ),
+        )
+        risk_preview = FakeRiskPreviewEvaluator(
+            {hot.id: FakeRiskDecision(status="passed", can_enter=True)}
+        )
+        service = RadarService(
+            signal_provider=FakeSignalProvider([blocked_forming_low_score, hot]),
+            risk_preview_evaluator=risk_preview,
+            user_risk_settings_provider=lambda user_id: RiskManagementSettings(),
+            strategy_risk_settings_provider=lambda signal, *, user_id: ({}, "not_configured"),
+        )
+
+        response = service.list_signals(user_id="demo_user")
+
+        self.assertEqual([signal.id for signal in response.signals], [hot.id])
+        self.assertEqual(response.summary.hot_signals, 1)
+        self.assertEqual(response.summary.blocked_diagnostics, 1)
+
     def test_all_mode_returns_actionable_blocked_by_rr_and_waiting_setups(self) -> None:
         active = _signal(status="active", rr_status="passed")
         blocked_by_rr = _signal(status="ready", rr_status="failed")
@@ -125,10 +172,23 @@ class RadarServiceTest(unittest.TestCase):
         self.assertEqual(response.summary.execution_ready_signals, 1)
 
     def test_execution_ready_returns_only_actionable_or_entry_touched_with_risk_gate_can_enter(self) -> None:
-        actionable = _signal(status="actionable", rr_status="passed")
-        entry_touched = _signal(status="entry_touched", rr_status="passed", direction="short")
+        actionable = _signal(
+            status="actionable",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_enter_now=True, can_arm_pending=False),
+        )
+        entry_touched = _signal(
+            status="entry_touched",
+            rr_status="passed",
+            direction="short",
+            execution_gate=_execution_gate(can_enter_now=True, can_arm_pending=False),
+        )
         waiting_entry = _signal(status="ready", rr_status="passed")
-        denied = _signal(status="actionable", rr_status="passed")
+        denied = _signal(
+            status="actionable",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_enter_now=True, can_arm_pending=False),
+        )
         risk_preview = FakeRiskPreviewEvaluator(
             {
                 actionable.id: FakeRiskDecision(status="passed", can_enter=True),
@@ -159,6 +219,61 @@ class RadarServiceTest(unittest.TestCase):
                 {"signal_id": denied.id, "user_id": "demo_user", "record_audit": False},
             ],
         )
+
+    def test_execution_ready_includes_armable_waiting_pullback(self) -> None:
+        waiting_pullback = _signal(
+            status="wait_for_pullback",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_enter_now=False, can_arm_pending=True, feed_kind="watchlist", status="warning"),
+        )
+        service = _service(
+            [waiting_pullback],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="execution_ready")
+
+        self.assertEqual([signal.id for signal in response.signals], [waiting_pullback.id])
+        self.assertEqual(response.signals[0].can_enter, False)
+        self.assertIn("arm pending", response.signals[0].display_reason or "")
+
+    def test_execution_ready_excludes_blocked_forming_low_score_diagnostic(self) -> None:
+        blocked_forming_low_score = _signal(
+            status="actionable",
+            rr_status="passed",
+            score=60,
+            execution_gate=_execution_gate(
+                can_enter_now=False,
+                can_arm_pending=False,
+                feed_kind="blocked",
+                status="blocked",
+                reasons=[
+                    {
+                        "code": "forming_candle",
+                        "severity": "blocker",
+                        "source": "candle",
+                        "message": "Forming candle is not allowed in the execution feed.",
+                    },
+                    {
+                        "code": "score_below_execution_threshold",
+                        "severity": "info",
+                        "source": "score",
+                        "message": "Score 60 is below execution threshold 70.",
+                    },
+                ],
+            ),
+        )
+        service = _service(
+            [blocked_forming_low_score],
+            risk_preview=FakeRiskPreviewEvaluator({}),
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="execution_ready")
+
+        self.assertEqual(response.signals, [])
+        self.assertEqual(response.summary.blocked_diagnostics, 1)
 
     def test_execution_ready_uses_execution_gate_as_source_of_truth(self) -> None:
         gate_passed = _signal(
@@ -260,7 +375,7 @@ class RadarServiceTest(unittest.TestCase):
         self.assertIn("Daily risk limit reached", response.signals[0].display_reason or "")
         self.assertEqual(risk_preview.calls, [{"signal_id": gate_passed.id, "user_id": "demo_user", "record_audit": False}])
 
-    def test_all_market_opportunities_hides_blocked_feed_but_counts_summary(self) -> None:
+    def test_all_market_opportunities_includes_blocked_diagnostics(self) -> None:
         active = _signal(status="active", rr_status="passed", execution_gate=_execution_gate(can_show=False, feed_kind="market_idea", status="warning"))
         blocked = _signal(
             status="actionable",
@@ -289,8 +404,9 @@ class RadarServiceTest(unittest.TestCase):
 
         response = service.list_signals(user_id="demo_user", mode="all_market_opportunities")
 
-        self.assertEqual([signal.id for signal in response.signals], [active.id])
-        self.assertEqual(response.summary.total_signals, 1)
+        self.assertEqual([signal.id for signal in response.signals], [active.id, blocked.id])
+        self.assertEqual(response.summary.total_signals, 2)
+        self.assertEqual(response.summary.blocked_diagnostics, 1)
         self.assertEqual(response.summary.blocked_ideas, 1)
 
     def test_blocked_mode_returns_low_score_diagnostics_with_backend_reason(self) -> None:
@@ -326,7 +442,11 @@ class RadarServiceTest(unittest.TestCase):
         self.assertIn("Score 25 is below execution threshold 70.", response.signals[0].card_view.reason)
 
     def test_user_execution_ready_mode_is_resolved_when_request_mode_is_absent(self) -> None:
-        actionable = _signal(status="actionable", rr_status="passed")
+        actionable = _signal(
+            status="actionable",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_enter_now=True, can_arm_pending=False),
+        )
         waiting_entry = _signal(status="ready", rr_status="passed")
         risk_preview = FakeRiskPreviewEvaluator(
             {actionable.id: FakeRiskDecision(status="passed", can_enter=True)}
@@ -485,18 +605,23 @@ def _signal(
 
 def _execution_gate(
     *,
-    can_show: bool,
+    can_show: bool | None = None,
+    can_enter_now: bool | None = None,
+    can_arm_pending: bool | None = None,
     feed_kind: str = "execution_signal",
     status: str = "passed",
     reasons: list[dict[str, object]] | None = None,
 ) -> SignalExecutionGateSnapshot:
+    can_enter = can_show if can_enter_now is None else can_enter_now
+    can_arm = can_show if can_arm_pending is None else can_arm_pending
+    can_show_in_feed = bool(can_show if can_show is not None else can_enter)
     return SignalExecutionGateSnapshot(
         status=status,
         feed_kind=feed_kind,
-        can_notify=can_show,
-        can_enter_now=can_show,
-        can_arm_pending=can_show,
-        can_show_in_execution_feed=can_show,
+        can_notify=can_show_in_feed,
+        can_enter_now=bool(can_enter),
+        can_arm_pending=bool(can_arm),
+        can_show_in_execution_feed=can_show_in_feed,
         reasons=reasons or [],
     )
 

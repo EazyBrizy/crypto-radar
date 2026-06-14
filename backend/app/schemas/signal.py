@@ -328,11 +328,14 @@ class SignalDetailsView(BaseModel):
 
 class RadarSummary(BaseModel):
     total_signals: int = 0
+    hot_signals: int = 0
+    armable_signals: int = 0
     execution_ready_signals: int = 0
     watchlist_signals: int = 0
     market_ideas: int = 0
     high_confidence_signals: int = 0
     positive_edge_signals: int = 0
+    blocked_diagnostics: int = 0
     blocked_ideas: int = 0
 
 

@@ -575,11 +575,14 @@ export interface SignalDetailsView {
 
 export interface RadarSummary {
   total_signals: number;
+  hot_signals: number;
+  armable_signals: number;
   execution_ready_signals: number;
   watchlist_signals?: number;
   market_ideas?: number;
   high_confidence_signals: number;
   positive_edge_signals: number;
+  blocked_diagnostics: number;
   blocked_ideas: number;
 }
 

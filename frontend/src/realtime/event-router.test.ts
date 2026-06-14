@@ -52,7 +52,18 @@ const baseSignal: RadarSignal = {
   auto_entry: null,
   created_at: "2026-05-25T10:12:41.231Z",
   updated_at: "2026-05-25T10:12:41.231Z",
-  expires_at: "2099-05-25T11:12:41.231Z"
+  expires_at: "2099-05-25T11:12:41.231Z",
+  execution_gate: {
+    status: "passed",
+    feed_kind: "execution_signal",
+    can_notify: true,
+    can_enter_now: true,
+    can_arm_pending: false,
+    can_show_in_execution_feed: true,
+    reasons: [],
+    warnings: [],
+    metadata: { execution_score_threshold: 70 }
+  }
 };
 
 const baseTrade: TradeJournalEntry = {
@@ -240,6 +251,51 @@ describe("createRealtimeEventRouter signal feed updates", () => {
 
     expect(useSignalStore.getState().signalsById.sig_1.status).toBe("entry_touched");
     expect(useNotificationStore.getState().notifications[0]?.title).toBe("Entry zone touched");
+  });
+
+  it("does not push entry touched notifications for blocked diagnostics", () => {
+    const blockedSignal: RadarSignal = {
+      ...baseSignal,
+      id: "sig_blocked",
+      score: 60,
+      execution_gate: {
+        status: "blocked",
+        feed_kind: "blocked",
+        can_notify: false,
+        can_enter_now: false,
+        can_arm_pending: false,
+        can_show_in_execution_feed: false,
+        reasons: [
+          {
+            code: "score_below_execution_threshold",
+            severity: "info",
+            source: "score",
+            message: "Score 60 is below execution threshold 70.",
+            metadata: { score: 60, execution_score_threshold: 70 }
+          }
+        ],
+        warnings: [],
+        metadata: { execution_score_threshold: 70 }
+      }
+    };
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.signals, [blockedSignal]);
+    useSignalStore.getState().addSignal(blockedSignal);
+    const router = createRealtimeEventRouter({ queryClient, onRealtimeEvent: () => undefined });
+
+    router.route({
+      id: "evt_entry_blocked",
+      type: "signal.entry_touched",
+      version: 1,
+      timestamp: "2026-05-25T10:12:44.231Z",
+      payload: {
+        price: 67900,
+        signalId: "sig_blocked"
+      }
+    });
+
+    expect(useSignalStore.getState().signalsById.sig_blocked.status).toBe("entry_touched");
+    expect(useNotificationStore.getState().notifications).toEqual([]);
   });
 
   it("removes expired signals from the active feed", () => {
@@ -478,9 +534,12 @@ describe("createRealtimeEventRouter signal feed updates", () => {
 function radarSummary(signals: RadarSignal[] = []) {
   return {
     total_signals: signals.length,
+    hot_signals: signals.filter((signal) => signal.execution_gate?.can_enter_now || signal.execution_gate?.can_arm_pending).length,
+    armable_signals: signals.filter((signal) => signal.execution_gate?.can_arm_pending).length,
     execution_ready_signals: 0,
     high_confidence_signals: signals.filter((signal) => signal.score >= 80).length,
     positive_edge_signals: 0,
+    blocked_diagnostics: 0,
     blocked_ideas: 0
   };
 }

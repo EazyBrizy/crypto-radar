@@ -216,11 +216,14 @@ def build_radar_summary(signals: list[RadarSignal]) -> RadarSummary:
     signals = [normalize_signal_snapshots(signal) for signal in signals]
     return RadarSummary(
         total_signals=len(signals),
+        hot_signals=sum(1 for signal in signals if _signal_hot(signal)),
+        armable_signals=sum(1 for signal in signals if _signal_armable(signal)),
         execution_ready_signals=sum(1 for signal in signals if _signal_can_enter(signal)),
         watchlist_signals=sum(1 for signal in signals if _gate_feed_kind(signal) == "watchlist"),
         market_ideas=sum(1 for signal in signals if _gate_feed_kind(signal) == "market_idea"),
         high_confidence_signals=sum(1 for signal in signals if signal.score >= 80),
         positive_edge_signals=sum(1 for signal in signals if signal.edge is not None and signal.edge.status == "positive"),
+        blocked_diagnostics=sum(1 for signal in signals if _signal_blocked(signal)),
         blocked_ideas=sum(1 for signal in signals if _signal_blocked(signal)),
     )
 
@@ -495,6 +498,20 @@ def _signal_can_enter(signal: RadarSignal) -> bool:
     if signal.execution_gate is not None:
         return signal.execution_gate.can_enter_now
     return bool(signal.details_view and signal.details_view.can_enter_now)
+
+
+def _signal_armable(signal: RadarSignal) -> bool:
+    if signal.execution_gate is not None:
+        return signal.execution_gate.can_arm_pending
+    return bool(signal.details_view and signal.details_view.primary_status == "waiting_entry")
+
+
+def _signal_hot(signal: RadarSignal) -> bool:
+    if signal.execution_gate is not None:
+        return signal.execution_gate.feed_kind != "blocked" and (
+            signal.execution_gate.can_enter_now or signal.execution_gate.can_arm_pending
+        )
+    return _signal_can_enter(signal) or _signal_armable(signal)
 
 
 def _gate_can_enter(signal: RadarSignal) -> bool | None:

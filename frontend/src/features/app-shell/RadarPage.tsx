@@ -180,9 +180,9 @@ export function RadarPage(props: RadarPageProps) {
         </div>
         <div className="filter-row">
           {([
-            { labelKey: "radar.allIdeasFilter", value: "all_market_opportunities" },
+            { labelKey: "radar.hotFilter", value: "execution_ready" },
             { labelKey: "radar.watchlistFilter", value: "watchlist" },
-            { labelKey: "radar.readyToExecuteFilter", value: "execution_ready" },
+            { labelKey: "radar.diagnosticsFilter", value: "all_market_opportunities" },
             { labelKey: "radar.blockedFilter", value: "blocked" }
           ] as const).map((item) => (
             <button

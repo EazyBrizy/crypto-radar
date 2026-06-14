@@ -42,7 +42,7 @@ export const DEFAULT_RISK_MANAGEMENT_SETTINGS: RiskManagementSettings = {
   risk_per_trade_percent: 1,
   fixed_risk_amount: null,
   fixed_risk_currency: "USDT",
-  radar_display_mode: "all_market_opportunities",
+  radar_display_mode: "execution_ready",
   min_rr_ratio: 2,
   rr_guard_mode: "soft",
   discovery_rr_guard_mode: "soft",

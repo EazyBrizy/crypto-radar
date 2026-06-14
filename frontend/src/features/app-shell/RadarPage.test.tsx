@@ -49,7 +49,7 @@ describe("RadarPage", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Ready to execute" }));
+    fireEvent.click(screen.getByRole("button", { name: "Hot" }));
 
     expect(onRadarDisplayModeChange).toHaveBeenCalledWith("execution_ready");
   });
@@ -88,9 +88,9 @@ describe("RadarPage", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "All ideas" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hot" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Watchlist" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ready to execute" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Blocked" })).toBeInTheDocument();
   });
 

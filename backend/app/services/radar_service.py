@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from app.core.config import settings
 from app.domain.signal_status import is_execution_candidate_status
 from app.schemas.risk import RadarDisplayMode, RiskDecision, RiskPreviewRequest
 from app.schemas.signal_action import SignalActionBlocker, SignalActionMode, SignalActionState
@@ -104,8 +105,6 @@ class RadarService:
                 strategy_risk_settings=strategy_settings_by_signal.get(signal.id),
             )
             if resolution.mode == "all_market_opportunities":
-                if _gate_feed_kind(signal) == "blocked":
-                    continue
                 annotated = _annotated_signal(
                     signal,
                     rr_status=_rr_status(signal),
@@ -187,20 +186,24 @@ class RadarService:
                 continue
 
             gate = signal.execution_gate
-            if gate is not None and not gate.can_show_in_execution_feed:
-                continue
-            if gate is None and not is_execution_candidate_status(signal.status):
+            if not _signal_is_hot(signal):
                 continue
 
-            decision = self._evaluate_risk_gate(signal, user_id=user_id)
-            if decision is None or not decision.can_enter:
-                continue
+            decision: RiskDecision | None = None
+            can_enter = False
+            display_reason = _execution_ready_display_reason(resolution, action="arm_pending")
+            if gate is not None and gate.can_enter_now:
+                decision = self._evaluate_risk_gate(signal, user_id=user_id)
+                if decision is None or not decision.can_enter:
+                    continue
+                can_enter = True
+                display_reason = _execution_ready_display_reason(resolution, action="enter_now")
             annotated = _annotated_signal(
                 signal,
                 rr_status=_rr_status(signal),
-                risk_gate_status=decision.status,
-                can_enter=decision.can_enter,
-                display_reason=_execution_ready_display_reason(resolution),
+                risk_gate_status=decision.status if decision is not None else None,
+                can_enter=can_enter,
+                display_reason=display_reason,
             )
             with_action_state = _consume_action_state_budget(
                 include_action_state=include_action_state,
@@ -224,9 +227,17 @@ class RadarService:
                 len(visible_signals),
             )
         summary = build_radar_summary(visible_signals)
+        source_summary = build_radar_summary(signals)
         source_blocked_ideas = sum(1 for signal in signals if _gate_feed_kind(signal) == "blocked")
-        if source_blocked_ideas > summary.blocked_ideas:
-            summary = summary.model_copy(update={"blocked_ideas": source_blocked_ideas})
+        summary = summary.model_copy(
+            update={
+                "hot_signals": max(summary.hot_signals, source_summary.hot_signals),
+                "armable_signals": max(summary.armable_signals, source_summary.armable_signals),
+                "watchlist_signals": max(summary.watchlist_signals, source_summary.watchlist_signals),
+                "blocked_diagnostics": max(summary.blocked_diagnostics, source_summary.blocked_diagnostics, source_blocked_ideas),
+                "blocked_ideas": max(summary.blocked_ideas, source_summary.blocked_ideas, source_blocked_ideas),
+            }
+        )
         return RadarResponse(signals=visible_signals, summary=summary)
 
     def _with_views(
@@ -319,7 +330,7 @@ class RadarService:
                 signal.id,
                 exc,
             )
-            fallback_mode = risk_settings.radar_display_mode or "all_market_opportunities"
+            fallback_mode = risk_settings.radar_display_mode or "execution_ready"
             return _RadarDisplayResolution(
                 mode=fallback_mode,
                 source=f"fallback:{strategy_source}",
@@ -489,6 +500,58 @@ def _matches_feed_kind_mode(signal: RadarSignal, mode: str) -> bool:
     return feed_kind == mode
 
 
+def _signal_is_hot(signal: RadarSignal) -> bool:
+    gate = signal.execution_gate
+    if gate is None:
+        return False
+    if gate.feed_kind == "blocked":
+        return False
+    if not (gate.can_enter_now or gate.can_arm_pending):
+        return False
+    if any(reason.severity == "blocker" for reason in gate.reasons):
+        return False
+    if not _signal_score_meets_hot_threshold(signal):
+        return False
+    return _signal_has_hot_trade_plan(signal)
+
+
+def _signal_score_meets_hot_threshold(signal: RadarSignal) -> bool:
+    gate = signal.execution_gate
+    threshold = settings.execution_min_score
+    if gate is not None:
+        raw_threshold = gate.metadata.get("execution_score_threshold")
+        try:
+            threshold = int(raw_threshold if raw_threshold is not None else threshold)
+        except (TypeError, ValueError):
+            threshold = settings.execution_min_score
+        if any(reason.code == "score_below_execution_threshold" for reason in gate.reasons):
+            return False
+    return int(signal.score or 0) >= threshold
+
+
+def _signal_has_hot_trade_plan(signal: RadarSignal) -> bool:
+    if signal.trade_plan is not None:
+        metadata_sources = (signal.trade_plan.metadata, signal.trade_plan.risk_rules.metadata)
+        for metadata in metadata_sources:
+            completeness = metadata.get("trade_plan_completeness")
+            if isinstance(completeness, Mapping):
+                if completeness.get("complete") is False or completeness.get("execution_allowed_virtual") is False:
+                    return False
+            if metadata.get("trade_plan_complete") is False or metadata.get("execution_allowed_virtual") is False:
+                return False
+    has_entry_zone = signal.entry_min is not None and signal.entry_max is not None
+    if not has_entry_zone and signal.trade_plan is not None:
+        has_entry_zone = (
+            signal.trade_plan.entry.min_price is not None
+            and signal.trade_plan.entry.max_price is not None
+        ) or signal.trade_plan.entry.price is not None
+    has_stop = signal.stop_loss is not None or (signal.trade_plan is not None and signal.trade_plan.stop_loss is not None)
+    has_target = any(value is not None for value in (signal.take_profit_1, signal.take_profit_2))
+    if not has_target and signal.trade_plan is not None:
+        has_target = any(target.price is not None for target in signal.trade_plan.targets)
+    return has_entry_zone and has_stop and has_target
+
+
 def _all_market_display_reason(
     signal: RadarSignal,
     resolution: _RadarDisplayResolution,
@@ -502,8 +565,16 @@ def _all_market_display_reason(
     return reason
 
 
-def _execution_ready_display_reason(resolution: _RadarDisplayResolution) -> str:
-    reason = "shown: execution_ready RiskGate preview allowed entry"
+def _execution_ready_display_reason(
+    resolution: _RadarDisplayResolution,
+    *,
+    action: str,
+) -> str:
+    reason = (
+        "shown: execution_ready RiskGate preview allowed entry"
+        if action == "enter_now"
+        else "shown: execution_ready execution_gate allows arm pending"
+    )
     if resolution.source:
         reason = f"{reason} ({resolution.source})"
     if resolution.warnings:

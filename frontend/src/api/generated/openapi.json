@@ -12111,6 +12111,16 @@
             "title": "Total Signals",
             "default": 0
           },
+          "hot_signals": {
+            "type": "integer",
+            "title": "Hot Signals",
+            "default": 0
+          },
+          "armable_signals": {
+            "type": "integer",
+            "title": "Armable Signals",
+            "default": 0
+          },
           "execution_ready_signals": {
             "type": "integer",
             "title": "Execution Ready Signals",
@@ -12134,6 +12144,11 @@
           "positive_edge_signals": {
             "type": "integer",
             "title": "Positive Edge Signals",
+            "default": 0
+          },
+          "blocked_diagnostics": {
+            "type": "integer",
+            "title": "Blocked Diagnostics",
             "default": 0
           },
           "blocked_ideas": {

@@ -155,8 +155,10 @@ class StrategyTestReportBuilder:
     def _build_report(self, run_detail: StrategyTestRunDetailResponse) -> StrategyTestReport:
         run = run_detail.run
         analytics_warnings: list[str] = []
-        trades = _list_trades_or_empty(self._analytics_store, run.run_id, analytics_warnings)
-        signal_events = _list_signal_events_or_empty(self._analytics_store, run.run_id, analytics_warnings)
+        trades = _dedupe_trades(_list_trades_or_empty(self._analytics_store, run.run_id, analytics_warnings))
+        signal_events = _dedupe_signal_events(
+            _list_signal_events_or_empty(self._analytics_store, run.run_id, analytics_warnings)
+        )
         source_summary = _run_summary_source(run_detail)
         metric_results = build_report_metric_results(
             trades,
@@ -432,6 +434,67 @@ def _list_signal_events_or_empty(
         return []
 
 
+def _dedupe_trades(trades: Sequence[StrategyTestTrade]) -> list[StrategyTestTrade]:
+    result: list[StrategyTestTrade] = []
+    seen: set[tuple[str, str, str]] = set()
+    for trade in trades:
+        key = (
+            str(trade.run_id),
+            _analytics_scenario_key(trade.strategy_code, trade.exchange, trade.symbol, trade.timeframe),
+            str(trade.trade_id),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(trade)
+    return result
+
+
+def _dedupe_signal_events(signal_events: Sequence[StrategyTestSignalEvent]) -> list[StrategyTestSignalEvent]:
+    result: list[StrategyTestSignalEvent] = []
+    seen: set[tuple[str, str, str]] = set()
+    for event in signal_events:
+        event_id = event.signal_id or event.synthetic_signal_id or event.signal_key
+        key = (
+            str(event.run_id),
+            _analytics_scenario_key(event.strategy_code, event.exchange, event.symbol, event.timeframe),
+            str(event_id),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(event)
+    return result
+
+
+def _completed_scenario_count_from_rows(
+    trades: Sequence[StrategyTestTrade],
+    signal_events: Sequence[StrategyTestSignalEvent],
+) -> int:
+    scenario_keys = {
+        _analytics_scenario_key(trade.strategy_code, trade.exchange, trade.symbol, trade.timeframe)
+        for trade in trades
+    }
+    scenario_keys.update(
+        _analytics_scenario_key(event.strategy_code, event.exchange, event.symbol, event.timeframe)
+        for event in signal_events
+    )
+    return len(scenario_keys)
+
+
+def _analytics_scenario_key(
+    strategy: object,
+    exchange: object,
+    symbol: object,
+    timeframe: object,
+) -> str:
+    return "::".join(_key_text(value) for value in (strategy, exchange, symbol, timeframe))
+
+
+def _key_text(value: object) -> str:
+    return str(value or "unknown").strip() or "unknown"
+
+
 def build_candidate_adjustments(
     *,
     trades: Sequence[StrategyTestTrade],
@@ -574,6 +637,9 @@ def _build_summary(
     requested = run.requested_matrix
     all_metrics = _metric_map_for_group(metrics, {"all": "all"})
     source = source_summary or {}
+    completed_scenarios = _summary_int(source, "completed_scenarios", 0)
+    if completed_scenarios <= 0:
+        completed_scenarios = _completed_scenario_count_from_rows(trades, signal_events)
     funnel = (
         build_signal_funnel_response(run.run_id, signal_events)
         if signal_events
@@ -595,7 +661,7 @@ def _build_summary(
         "status": run.status,
         "mode": _run_mode(requested),
         "scenario_count": _summary_value(source, "scenario_count", requested.get("scenario_count")),
-        "completed_scenarios": _summary_int(source, "completed_scenarios", 0),
+        "completed_scenarios": completed_scenarios,
         "failed_scenarios": _summary_int(source, "failed_scenarios", 0),
         "strategies": list(_list_value(requested.get("strategies"))),
         "pairs": list(_list_value(requested.get("pairs"))),
@@ -646,7 +712,15 @@ def _build_summary(
     elif isinstance(run.runtime_state.get("last_error"), str) and run.runtime_state["last_error"]:
         summary["error"] = run.runtime_state["last_error"]
     if source and run.status in {"failed", "cancelled", "running", "stopping"}:
-        summary["partial_summary"] = dict(source)
+        partial_source = dict(source)
+        if completed_scenarios > _summary_int(partial_source, "completed_scenarios", 0):
+            partial_source["completed_scenarios"] = completed_scenarios
+        if signal_events and _summary_int(partial_source, "signals_count", 0) <= 0:
+            partial_source["signals_count"] = len(signal_events)
+            partial_source["signals_seen"] = len(signal_events)
+        if trades and _summary_int(partial_source, "trades_count", 0) <= 0:
+            partial_source["trades_count"] = len(trades)
+        summary["partial_summary"] = partial_source
     if analytics_warnings:
         summary["analytics_warnings"] = list(analytics_warnings)
     return summary

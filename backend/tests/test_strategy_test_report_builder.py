@@ -164,6 +164,20 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertEqual(report.summary["failed_scenarios"], 1)
         self.assertEqual(report.summary["signals_count"], 5)
 
+    def test_running_report_infers_completed_scenarios_from_written_rows(self) -> None:
+        report = _builder(
+            [_trade("trade-1", strategy="trend_pullback_continuation")],
+            status="running",
+            signal_events=[
+                _signal_event("signal-1", entry_touched=True, filled=True, closed=True, outcome="win"),
+            ],
+        ).build_report(RUN_ID)
+
+        self.assertEqual(report.status, "running")
+        self.assertEqual(report.summary["completed_scenarios"], 1)
+        self.assertEqual(report.summary["trades_count"], 1)
+        self.assertEqual(report.summary["signals_count"], 1)
+
     def test_signal_funnel_section_lists_no_entry_signals(self) -> None:
         report = _builder(
             [],

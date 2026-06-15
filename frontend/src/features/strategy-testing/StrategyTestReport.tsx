@@ -173,10 +173,13 @@ function RunSummaryFallback({
 
 function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
   const phase = runtimeText(run, "phase") ?? run.status;
-  const scenarioCompleted = runtimeNumber(run, "scenario_completed") ?? summaryNumber(run, "completed_scenarios") ?? 0;
-  const scenarioTotal = runtimeNumber(run, "scenario_total") ?? requestedScenarioCount(run) ?? summaryNumber(run, "scenario_count") ?? 0;
-  const barsProcessed = runtimeNumber(run, "bars_processed");
-  const barsTotal = runtimeNumber(run, "bars_total");
+  const scenarioCompleted = runtimeNumber(run, "scenarios_completed") ?? runtimeNumber(run, "scenario_completed") ?? summaryNumber(run, "completed_scenarios") ?? 0;
+  const scenarioTotal = runtimeNumber(run, "scenarios_total") ?? runtimeNumber(run, "scenario_total") ?? requestedScenarioCount(run) ?? summaryNumber(run, "scenario_count") ?? 0;
+  const currentScenarioIndex = runtimeNumber(run, "current_scenario_index");
+  const matrixBarsProcessed = runtimeNumber(run, "matrix_bars_processed") ?? runtimeNumber(run, "bars_processed");
+  const matrixBarsTotal = runtimeNumber(run, "matrix_bars_total") ?? runtimeNumber(run, "bars_total");
+  const scenarioBarsProcessed = runtimeNumber(run, "current_scenario_bars_processed") ?? runtimeNumber(run, "scenario_bars_processed");
+  const scenarioBarsTotal = runtimeNumber(run, "current_scenario_bars_total") ?? runtimeNumber(run, "scenario_bars_total");
   const barsPct = runtimeNumber(run, "bars_pct");
   const currentPair = currentPairLabel(run);
   const lastError = runtimeText(run, "last_error") ?? run.error;
@@ -188,24 +191,26 @@ function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
           {summaryItem("Phase", phase)}
           {summaryItem("Heartbeat age", heartbeatAgeLabel(run.last_heartbeat_at))}
           {summaryItem("Scenarios", scenarioTotal ? `${scenarioCompleted} / ${scenarioTotal}` : scenarioCompleted)}
+          {summaryItem("Current scenario", currentScenarioIndex && scenarioTotal ? `${currentScenarioIndex} / ${scenarioTotal}` : currentScenarioIndex ?? "-")}
           {summaryItem("Strategy", runtimeText(run, "current_strategy") ?? "-")}
           {summaryItem("Pair", currentPair)}
           {summaryItem("Timeframe", runtimeText(run, "current_timeframe") ?? "-")}
-          {summaryItem("Bars", formatBarsProgress(barsProcessed, barsTotal, barsPct))}
+          {summaryItem("Matrix bars", formatBarsProgress(matrixBarsProcessed, matrixBarsTotal, barsPct))}
+          {summaryItem("Scenario bars", formatBarsCount(scenarioBarsProcessed, scenarioBarsTotal))}
           {summaryItem("Throughput", formatBarsPerSecond(runtimeNumber(run, "bars_per_second")))}
           {summaryItem("ETA", formatSeconds(runtimeNumber(run, "eta_seconds")))}
-          {summaryItem("Signals", runtimeNumber(run, "signals_seen") ?? summaryNumber(run, "signals_seen") ?? 0)}
-          {summaryItem("Execution candidates", runtimeNumber(run, "execution_candidates") ?? summaryNumber(run, "execution_candidates") ?? 0)}
-          {summaryItem("Pending armed", runtimeNumber(run, "pending_armed") ?? summaryNumber(run, "pending_armed") ?? 0)}
+          {summaryItem("Signals", runtimeCounterNumber(run, "signals") ?? runtimeNumber(run, "signals_seen") ?? summaryNumber(run, "signals_seen") ?? 0)}
+          {summaryItem("Execution candidates", runtimeCounterNumber(run, "execution_candidates") ?? runtimeNumber(run, "execution_candidates") ?? summaryNumber(run, "execution_candidates") ?? 0)}
+          {summaryItem("Pending armed", runtimeCounterNumber(run, "pending_armed") ?? runtimeNumber(run, "pending_armed") ?? summaryNumber(run, "pending_armed") ?? 0)}
           {summaryItem("Entry touched", runtimeNumber(run, "entry_touched") ?? runtimeNumber(run, "touched") ?? summaryNumber(run, "entry_touched") ?? 0)}
-          {summaryItem("Filled", runtimeNumber(run, "filled") ?? summaryNumber(run, "filled") ?? 0)}
-          {summaryItem("Closed", runtimeNumber(run, "closed") ?? summaryNumber(run, "closed") ?? 0)}
-          {summaryItem("No entry", runtimeNumber(run, "no_entry") ?? summaryNumber(run, "no_entry") ?? 0)}
+          {summaryItem("Filled", runtimeCounterNumber(run, "filled") ?? runtimeNumber(run, "filled") ?? summaryNumber(run, "filled") ?? 0)}
+          {summaryItem("Closed", runtimeCounterNumber(run, "closed") ?? runtimeNumber(run, "closed") ?? summaryNumber(run, "closed") ?? 0)}
+          {summaryItem("No entry", runtimeCounterNumber(run, "no_entry") ?? runtimeNumber(run, "no_entry") ?? summaryNumber(run, "no_entry") ?? 0)}
           {summaryItem("Not selected", runtimeNumber(run, "not_selected") ?? summaryNumber(run, "not_selected") ?? 0)}
-          {summaryItem("Pending entries", runtimeNumber(run, "pending_entries_count") ?? 0)}
+          {summaryItem("Pending entries", runtimeCounterNumber(run, "pending_entries") ?? runtimeNumber(run, "pending_entries_count") ?? 0)}
           {summaryItem("Trades", runtimeNumber(run, "trades_count") ?? summaryNumber(run, "trades_count") ?? 0)}
-          {summaryItem("Risk rejections", runtimeNumber(run, "risk_rejections") ?? summaryNumber(run, "risk_rejections") ?? 0)}
-          {summaryItem("Execution rejections", runtimeNumber(run, "execution_rejections") ?? summaryNumber(run, "execution_rejections") ?? 0)}
+          {summaryItem("Risk rejections", runtimeCounterNumber(run, "risk_rejections") ?? runtimeNumber(run, "risk_rejections") ?? summaryNumber(run, "risk_rejections") ?? 0)}
+          {summaryItem("Execution rejections", runtimeCounterNumber(run, "execution_rejections") ?? runtimeNumber(run, "execution_rejections") ?? summaryNumber(run, "execution_rejections") ?? 0)}
           {summaryItem("Last progress", runtimeText(run, "last_progress_at") ?? "-")}
         </div>
         {lastError ? <p className="form-error">{lastError}</p> : null}
@@ -528,6 +533,13 @@ function runtimeNumber(run: StrategyTestRunResponse, key: string): number | null
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function runtimeCounterNumber(run: StrategyTestRunResponse, key: string): number | null {
+  const counters = run.runtime_state.counters;
+  if (!counters || typeof counters !== "object" || Array.isArray(counters)) return null;
+  const value = (counters as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function summaryNumber(run: StrategyTestRunResponse, key: keyof StrategyTestRunResponse["summary"]): number | null {
   const value = run.summary[key] ?? partialSummaryValue(run, String(key));
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -571,6 +583,11 @@ function formatBarsProgress(processed: number | null, total: number | null, pct:
   const computedPct = pct ?? (totalValue > 0 ? (processedValue / totalValue) * 100 : null);
   const percent = computedPct == null ? null : formatNumber(computedPct);
   return percent == null ? `${processedValue} / ${totalValue}` : `${processedValue} / ${totalValue} (${percent}%)`;
+}
+
+function formatBarsCount(processed: number | null, total: number | null): string {
+  if (processed == null && total == null) return "-";
+  return `${processed ?? 0} / ${total ?? 0}`;
 }
 
 function formatBarsPerSecond(value: number | null): string {

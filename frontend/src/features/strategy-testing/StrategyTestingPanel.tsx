@@ -895,27 +895,37 @@ function ActiveRunNotice({
 }
 
 function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
-  const scenarioCompleted = runtimeNumber(run, "scenario_completed") ?? runSummaryNumber(run, "completed_scenarios") ?? 0;
-  const scenarioTotal = runtimeNumber(run, "scenario_total") ?? requestedScenarioCount(run) ?? runSummaryNumber(run, "scenario_count") ?? 0;
-  const barsProcessed = runtimeNumber(run, "bars_processed");
-  const barsTotal = runtimeNumber(run, "bars_total");
+  const phase = runtimeText(run, "phase");
+  const scenarioCompleted = runtimeNumber(run, "scenarios_completed") ?? runtimeNumber(run, "scenario_completed") ?? runSummaryNumber(run, "completed_scenarios") ?? 0;
+  const scenarioTotal = runtimeNumber(run, "scenarios_total") ?? runtimeNumber(run, "scenario_total") ?? requestedScenarioCount(run) ?? runSummaryNumber(run, "scenario_count") ?? 0;
+  const currentScenarioIndex = runtimeNumber(run, "current_scenario_index");
+  const matrixBarsProcessed = runtimeNumber(run, "matrix_bars_processed") ?? runtimeNumber(run, "bars_processed");
+  const matrixBarsTotal = runtimeNumber(run, "matrix_bars_total") ?? runtimeNumber(run, "bars_total");
+  const scenarioBarsProcessed = runtimeNumber(run, "current_scenario_bars_processed") ?? runtimeNumber(run, "scenario_bars_processed");
+  const scenarioBarsTotal = runtimeNumber(run, "current_scenario_bars_total") ?? runtimeNumber(run, "scenario_bars_total");
   const barsPct = runtimeNumber(run, "bars_pct");
-  const pendingArmed = runtimeNumber(run, "pending_armed") ?? runtimeNumber(run, "pending_entries_armed") ?? runSummaryNumber(run, "pending_armed") ?? 0;
-  const filled = runtimeNumber(run, "filled") ?? runtimeNumber(run, "opened_trades") ?? runSummaryNumber(run, "filled") ?? 0;
-  const noEntry = runtimeNumber(run, "no_entry") ?? runSummaryNumber(run, "no_entry") ?? 0;
+  const pendingArmed = runtimeCounterNumber(run, "pending_armed") ?? runtimeNumber(run, "pending_armed") ?? runtimeNumber(run, "pending_entries_armed") ?? runSummaryNumber(run, "pending_armed") ?? 0;
+  const filled = runtimeCounterNumber(run, "filled") ?? runtimeNumber(run, "filled") ?? runtimeNumber(run, "opened_trades") ?? runSummaryNumber(run, "filled") ?? 0;
+  const noEntry = runtimeCounterNumber(run, "no_entry") ?? runtimeNumber(run, "no_entry") ?? runSummaryNumber(run, "no_entry") ?? 0;
+  const signals = runtimeCounterNumber(run, "signals") ?? runtimeNumber(run, "signals_seen") ?? runtimeNumber(run, "processed_signals") ?? runSummaryNumber(run, "signals_seen") ?? 0;
+  const pendingEntries = runtimeCounterNumber(run, "pending_entries") ?? runtimeNumber(run, "pending_entries_count") ?? 0;
+  const closed = runtimeCounterNumber(run, "closed") ?? runtimeNumber(run, "closed") ?? runtimeNumber(run, "closed_trades") ?? runSummaryNumber(run, "closed") ?? 0;
 
   return (
     <section aria-label="Active run progress summary" className="strategy-test-active-progress">
+      {phase ? activeProgressItem("Phase", phase) : null}
       {activeProgressItem("Scenarios", scenarioTotal ? `${scenarioCompleted} / ${scenarioTotal}` : scenarioCompleted)}
-      {activeProgressItem("Bars", formatBarsProgress(barsProcessed, barsTotal, barsPct))}
+      {activeProgressItem("Current scenario", currentScenarioIndex && scenarioTotal ? `${currentScenarioIndex} / ${scenarioTotal}` : currentScenarioIndex ?? "-")}
+      {activeProgressItem("Matrix bars", formatBarsProgress(matrixBarsProcessed, matrixBarsTotal, barsPct))}
+      {activeProgressItem("Scenario bars", formatBarsCount(scenarioBarsProcessed, scenarioBarsTotal))}
       {activeProgressItem("Throughput", formatBarsPerSecond(runtimeNumber(run, "bars_per_second")))}
       {activeProgressItem("ETA", formatSeconds(runtimeNumber(run, "eta_seconds")))}
-      {activeProgressItem("Signals", runtimeNumber(run, "signals_seen") ?? runtimeNumber(run, "processed_signals") ?? runSummaryNumber(run, "signals_seen") ?? 0)}
+      {activeProgressItem("Signals", signals)}
       {activeProgressItem("Pending armed", pendingArmed)}
-      {activeProgressItem("Pending entries", runtimeNumber(run, "pending_entries_count") ?? 0)}
+      {activeProgressItem("Pending entries", pendingEntries)}
       {activeProgressItem("No entry", noEntry)}
       {activeProgressItem("Filled", filled)}
-      {activeProgressItem("Closed", runtimeNumber(run, "closed") ?? runtimeNumber(run, "closed_trades") ?? runSummaryNumber(run, "closed") ?? 0)}
+      {activeProgressItem("Closed", closed)}
     </section>
   );
 }
@@ -948,6 +958,20 @@ function runtimeNumber(run: StrategyTestRunResponse, key: string): number | null
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function runtimeText(run: StrategyTestRunResponse, key: string): string | null {
+  const value = run.runtime_state[key];
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text || null;
+}
+
+function runtimeCounterNumber(run: StrategyTestRunResponse, key: string): number | null {
+  const counters = run.runtime_state.counters;
+  if (!counters || typeof counters !== "object" || Array.isArray(counters)) return null;
+  const value = (counters as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function runSummaryNumber(run: StrategyTestRunResponse, key: keyof StrategyTestRunResponse["summary"]): number | null {
   const value = run.summary[key] ?? runtimePartialSummaryValue(run, String(key));
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -971,6 +995,11 @@ function formatBarsProgress(processed: number | null, total: number | null, pct:
   const computedPct = pct ?? (totalValue > 0 ? (processedValue / totalValue) * 100 : null);
   const percent = computedPct == null ? null : formatNumber(computedPct);
   return percent == null ? `${formatActiveNumber(processedValue)} / ${formatActiveNumber(totalValue)}` : `${formatActiveNumber(processedValue)} / ${formatActiveNumber(totalValue)} (${percent}%)`;
+}
+
+function formatBarsCount(processed: number | null, total: number | null): string {
+  if (processed == null && total == null) return "-";
+  return `${formatActiveNumber(processed ?? 0)} / ${formatActiveNumber(total ?? 0)}`;
 }
 
 function formatBarsPerSecond(value: number | null): string {

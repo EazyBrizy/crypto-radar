@@ -19322,6 +19322,7 @@
           "code": {
             "type": "string",
             "enum": [
+              "estimating_failed",
               "market_data_missing",
               "market_data_duplicates",
               "market_data_below_warmup"
@@ -19931,8 +19932,15 @@
             "title": "Summary"
           },
           "runtime_state": {
-            "additionalProperties": true,
-            "type": "object",
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/StrategyTestRuntimeState"
+              }
+            ],
             "title": "Runtime State"
           },
           "created_at": {
@@ -20003,6 +20011,218 @@
         ],
         "title": "StrategyTestRunResponse"
       },
+      "StrategyTestRuntimeCounters": {
+        "properties": {
+          "signals": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Signals",
+            "default": 0
+          },
+          "execution_candidates": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Execution Candidates",
+            "default": 0
+          },
+          "pending_armed": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Pending Armed",
+            "default": 0
+          },
+          "pending_entries": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Pending Entries",
+            "default": 0
+          },
+          "no_entry": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "No Entry",
+            "default": 0
+          },
+          "filled": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Filled",
+            "default": 0
+          },
+          "closed": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Closed",
+            "default": 0
+          },
+          "risk_rejections": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Risk Rejections",
+            "default": 0
+          },
+          "execution_rejections": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Execution Rejections",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "StrategyTestRuntimeCounters"
+      },
+      "StrategyTestRuntimeState": {
+        "properties": {
+          "scenarios_total": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Scenarios Total",
+            "default": 0
+          },
+          "scenarios_completed": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Scenarios Completed",
+            "default": 0
+          },
+          "scenarios_failed": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Scenarios Failed",
+            "default": 0
+          },
+          "current_scenario_index": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Scenario Index"
+          },
+          "current_scenario_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Scenario Key"
+          },
+          "current_scenario_bars_processed": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Current Scenario Bars Processed",
+            "default": 0
+          },
+          "current_scenario_bars_total": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Scenario Bars Total"
+          },
+          "matrix_bars_processed": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Matrix Bars Processed",
+            "default": 0
+          },
+          "matrix_bars_total": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matrix Bars Total"
+          },
+          "bars_pct": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Bars Pct",
+            "default": 0
+          },
+          "elapsed_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Elapsed Seconds",
+            "default": 0
+          },
+          "bars_per_second": {
+            "type": "number",
+            "minimum": 0,
+            "title": "Bars Per Second",
+            "default": 0
+          },
+          "eta_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta Seconds"
+          },
+          "phase": {
+            "type": "string",
+            "title": "Phase",
+            "default": "queued"
+          },
+          "last_progress_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Progress At"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
+          "stale_threshold_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Stale Threshold Seconds",
+            "default": 0
+          },
+          "counters": {
+            "$ref": "#/components/schemas/StrategyTestRuntimeCounters"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "StrategyTestRuntimeState"
+      },
       "StrategyTestScenarioEstimate": {
         "properties": {
           "strategy": {
@@ -20050,6 +20270,7 @@
             "items": {
               "type": "string",
               "enum": [
+                "estimating_failed",
                 "market_data_missing",
                 "market_data_duplicates",
                 "market_data_below_warmup"

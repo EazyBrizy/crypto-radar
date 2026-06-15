@@ -89,27 +89,34 @@ describe("StrategyTestReport", () => {
           last_heartbeat_at: "2026-06-02T00:01:00.000Z",
           runtime_state: {
             bars_per_second: 50,
-            bars_pct: 25,
-            bars_processed: 250,
-            bars_total: 1000,
-            closed: 1,
+            bars_pct: 38.74,
+            counters: {
+              closed: 1,
+              execution_candidates: 12,
+              filled: 2,
+              no_entry: 5,
+              pending_armed: 4,
+              pending_entries: 1,
+              risk_rejections: 0,
+              signals: 20
+            },
             current_exchange: "bybit",
+            current_scenario_bars_processed: 49750,
+            current_scenario_bars_total: 86597,
+            current_scenario_index: 3,
+            current_scenario_key: "trend_pullback_continuation::bybit::BTCUSDT::15m",
             current_strategy: "trend_pullback_continuation",
             current_symbol: "BTCUSDT",
             current_timeframe: "15m",
             elapsed_ms: 5000,
             entry_touched: 3,
             eta_seconds: 15,
-            execution_candidates: 12,
-            filled: 2,
-            no_entry: 5,
+            matrix_bars_processed: 149750,
+            matrix_bars_total: 386597,
             not_selected: 4,
-            pending_armed: 4,
-            pending_entries_count: 1,
             phase: "running_scenario",
-            scenario_completed: 0,
-            scenario_total: 16,
-            signals_seen: 20,
+            scenarios_completed: 2,
+            scenarios_total: 16,
             touched: 3,
             trades_count: 0
           },
@@ -121,7 +128,10 @@ describe("StrategyTestReport", () => {
     );
 
     const progress = screen.getByLabelText("Active run progress");
-    expect(within(progress).getByText("250 / 1000 (25%)")).toBeInTheDocument();
+    expect(within(progress).getByText("2 / 16")).toBeInTheDocument();
+    expect(within(progress).getByText("3 / 16")).toBeInTheDocument();
+    expect(within(progress).getByText("149750 / 386597 (38.74%)")).toBeInTheDocument();
+    expect(within(progress).getByText("49750 / 86597")).toBeInTheDocument();
     expect(within(progress).getByText("50 bars/s")).toBeInTheDocument();
     expect(within(progress).getByText("15s")).toBeInTheDocument();
     expect(within(progress).getByText("Execution candidates")).toBeInTheDocument();

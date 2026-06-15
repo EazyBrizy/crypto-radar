@@ -6357,7 +6357,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "market_data_missing" | "market_data_duplicates" | "market_data_below_warmup";
+            code: "estimating_failed" | "market_data_missing" | "market_data_duplicates" | "market_data_below_warmup";
             /** Message */
             message: string;
             /** Exchange */
@@ -6644,7 +6644,7 @@ export interface components {
             /** Runtime State */
             runtime_state?: {
                 [key: string]: unknown;
-            };
+            } | components["schemas"]["StrategyTestRuntimeState"];
             /** Created At */
             created_at?: string | null;
             /** Started At */
@@ -6655,6 +6655,124 @@ export interface components {
             last_heartbeat_at?: string | null;
             /** Error */
             error?: string | null;
+        };
+        /** StrategyTestRuntimeCounters */
+        StrategyTestRuntimeCounters: {
+            /**
+             * Signals
+             * @default 0
+             */
+            signals: number;
+            /**
+             * Execution Candidates
+             * @default 0
+             */
+            execution_candidates: number;
+            /**
+             * Pending Armed
+             * @default 0
+             */
+            pending_armed: number;
+            /**
+             * Pending Entries
+             * @default 0
+             */
+            pending_entries: number;
+            /**
+             * No Entry
+             * @default 0
+             */
+            no_entry: number;
+            /**
+             * Filled
+             * @default 0
+             */
+            filled: number;
+            /**
+             * Closed
+             * @default 0
+             */
+            closed: number;
+            /**
+             * Risk Rejections
+             * @default 0
+             */
+            risk_rejections: number;
+            /**
+             * Execution Rejections
+             * @default 0
+             */
+            execution_rejections: number;
+        };
+        /** StrategyTestRuntimeState */
+        StrategyTestRuntimeState: {
+            /**
+             * Scenarios Total
+             * @default 0
+             */
+            scenarios_total: number;
+            /**
+             * Scenarios Completed
+             * @default 0
+             */
+            scenarios_completed: number;
+            /**
+             * Scenarios Failed
+             * @default 0
+             */
+            scenarios_failed: number;
+            /** Current Scenario Index */
+            current_scenario_index?: number | null;
+            /** Current Scenario Key */
+            current_scenario_key?: string | null;
+            /**
+             * Current Scenario Bars Processed
+             * @default 0
+             */
+            current_scenario_bars_processed: number;
+            /** Current Scenario Bars Total */
+            current_scenario_bars_total?: number | null;
+            /**
+             * Matrix Bars Processed
+             * @default 0
+             */
+            matrix_bars_processed: number;
+            /** Matrix Bars Total */
+            matrix_bars_total?: number | null;
+            /**
+             * Bars Pct
+             * @default 0
+             */
+            bars_pct: number;
+            /**
+             * Elapsed Seconds
+             * @default 0
+             */
+            elapsed_seconds: number;
+            /**
+             * Bars Per Second
+             * @default 0
+             */
+            bars_per_second: number;
+            /** Eta Seconds */
+            eta_seconds?: number | null;
+            /**
+             * Phase
+             * @default queued
+             */
+            phase: string;
+            /** Last Progress At */
+            last_progress_at?: string | null;
+            /** Last Heartbeat At */
+            last_heartbeat_at?: string | null;
+            /**
+             * Stale Threshold Seconds
+             * @default 0
+             */
+            stale_threshold_seconds: number;
+            counters?: components["schemas"]["StrategyTestRuntimeCounters"];
+        } & {
+            [key: string]: unknown;
         };
         /** StrategyTestScenarioEstimate */
         StrategyTestScenarioEstimate: {
@@ -6677,7 +6795,7 @@ export interface components {
             /** Bars Total */
             bars_total: number;
             /** Warning Codes */
-            warning_codes?: ("market_data_missing" | "market_data_duplicates" | "market_data_below_warmup")[];
+            warning_codes?: ("estimating_failed" | "market_data_missing" | "market_data_duplicates" | "market_data_below_warmup")[];
         };
         /** StrategyTestSignalEvent */
         StrategyTestSignalEvent: {

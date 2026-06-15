@@ -330,6 +330,7 @@ describe("StrategyTestingPanel", () => {
 
     const notice = screen.getByLabelText("Active strategy test run");
     expect(within(notice).getByText("Stale active run")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: /Cancel run/u }));
 
     expect(mocks.cancelStrategyTest).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333");
@@ -574,17 +575,27 @@ describe("StrategyTestingPanel", () => {
       run_id: "68686868-6868-4868-8868-686868686868",
       runtime_state: {
         bars_per_second: 40,
-        bars_pct: 50,
-        bars_processed: 500,
-        bars_total: 1000,
+        bars_pct: 38.74,
+        counters: {
+          closed: 1,
+          execution_candidates: 8,
+          execution_rejections: 1,
+          filled: 2,
+          no_entry: 4,
+          pending_armed: 1,
+          pending_entries: 2,
+          risk_rejections: 2,
+          signals: 6542
+        },
+        current_scenario_bars_processed: 49750,
+        current_scenario_bars_total: 86597,
+        current_scenario_index: 3,
         eta_seconds: 12,
-        filled: 2,
-        no_entry: 4,
-        pending_armed: 1,
-        pending_entries_count: 2,
-        scenario_completed: 0,
-        scenario_total: 16,
-        signals_seen: 6542
+        matrix_bars_processed: 149750,
+        matrix_bars_total: 386597,
+        phase: "running_scenario",
+        scenarios_completed: 2,
+        scenarios_total: 16
       },
       status: "running",
       test_type: "historical_backtest"
@@ -600,11 +611,14 @@ describe("StrategyTestingPanel", () => {
 
     const notice = screen.getByLabelText("Active strategy test run");
     const progress = within(notice).getByLabelText("Active run progress summary");
-    expect(within(progress).getByText("0 / 16")).toBeInTheDocument();
-    expect(within(progress).getByText("500 / 1000 (50%)")).toBeInTheDocument();
+    expect(within(progress).getByText("2 / 16")).toBeInTheDocument();
+    expect(within(progress).getByText("3 / 16")).toBeInTheDocument();
+    expect(within(progress).getByText("149750 / 386597 (38.74%)")).toBeInTheDocument();
+    expect(within(progress).getByText("49750 / 86597")).toBeInTheDocument();
     expect(within(progress).getByText("40 bars/s")).toBeInTheDocument();
     expect(within(progress).getByText("12s")).toBeInTheDocument();
     expect(within(progress).getByText("6542")).toBeInTheDocument();
+    expect(within(progress).getByText("Phase")).toBeInTheDocument();
     expect(within(progress).getByText("Pending armed")).toBeInTheDocument();
     expect(within(progress).getByText("No entry")).toBeInTheDocument();
     expect(within(progress).getByText("Filled")).toBeInTheDocument();

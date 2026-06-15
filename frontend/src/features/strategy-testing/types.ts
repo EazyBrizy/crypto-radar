@@ -7,6 +7,8 @@ type StrategyTestEstimateResponseDto = components["schemas"]["StrategyTestEstima
 type StrategyTestSignalEventDto = components["schemas"]["StrategyTestSignalEvent"];
 type StrategyTestFunnelResponseDto = components["schemas"]["StrategyTestFunnelResponse"];
 type StrategyTestCalibrationResponseDto = components["schemas"]["StrategyTestCalibrationResponse"];
+type StrategyTestRuntimeCountersDto = components["schemas"]["StrategyTestRuntimeCounters"];
+type StrategyTestRuntimeStateDto = components["schemas"]["StrategyTestRuntimeState"];
 
 export type StrategyTestMode = StrategyTestRunRequestDto["mode"];
 export type StrategyTestType = StrategyTestRunResponseDto["test_type"];
@@ -76,13 +78,18 @@ export interface StrategyTestRunSummary {
   [key: string]: unknown;
 }
 
+export type StrategyTestRuntimeCounters = Partial<StrategyTestRuntimeCountersDto> & Record<string, unknown>;
+export type StrategyTestRuntimeState = Partial<Omit<StrategyTestRuntimeStateDto, "counters">> & {
+  counters?: StrategyTestRuntimeCounters;
+} & Record<string, unknown>;
+
 export interface StrategyTestRunResponse {
   run_id: string;
   status: StrategyTestRunStatus;
   test_type: StrategyTestType;
   requested_matrix: StrategyTestRequestedMatrix;
   summary: StrategyTestRunSummary;
-  runtime_state: Record<string, unknown>;
+  runtime_state: StrategyTestRuntimeState;
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;

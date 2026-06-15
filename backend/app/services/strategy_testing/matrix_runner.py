@@ -24,6 +24,15 @@ from app.services.strategy_testing.schemas import (
 
 
 class ScenarioRunner(Protocol):
+    def count_scenario_bars(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        pair: StrategyTestPair,
+        timeframe: str,
+    ) -> int:
+        ...
+
     def run_scenario(
         self,
         *,
@@ -191,11 +200,14 @@ class StrategyTestMatrixRunner:
         scenario_index = 0
         candle_cache: dict[str, Any] = {}
         feature_cache: dict[str, Any] = {}
+        bars_by_pair_timeframe, matrix_bars_total = self._estimate_matrix_bars(request)
+        bars_completed_before = 0
 
         for strategy in request.strategies:
             for pair in request.pairs:
                 for timeframe in request.timeframes:
                     scenario_index += 1
+                    scenario_bars_total = bars_by_pair_timeframe.get(_bar_count_key(pair, timeframe))
                     context = StrategyTestScenarioContext(
                         index=scenario_index,
                         total=scenario_count,
@@ -222,6 +234,12 @@ class StrategyTestMatrixRunner:
                     def handle_progress(progress: dict[str, Any]) -> None:
                         if on_scenario_progress is None:
                             return
+                        progress = _matrix_progress(
+                            progress,
+                            bars_completed_before=bars_completed_before,
+                            scenario_bars_total=scenario_bars_total,
+                            matrix_bars_total=matrix_bars_total,
+                        )
                         partial_summary = _partial_summary(
                             run_id=run_id,
                             scenario_count=scenario_count,
@@ -291,6 +309,10 @@ class StrategyTestMatrixRunner:
                     scenario_summaries.append(result.summary)
                     trades.extend(result.trades)
                     signal_events.extend(result.signal_events)
+                    bars_completed_before += _scenario_bars_completed(
+                        result.summary,
+                        scenario_bars_total=scenario_bars_total,
+                    )
                     partial_summary = _partial_summary(
                         run_id=run_id,
                         scenario_count=scenario_count,
@@ -317,6 +339,38 @@ class StrategyTestMatrixRunner:
             metric_set=request.metric_set,
         )
 
+    def _estimate_matrix_bars(
+        self,
+        request: StrategyTestRunRequest,
+    ) -> tuple[dict[tuple[str, str, str], int], int | None]:
+        count_bars = getattr(self._scenario_runner, "count_scenario_bars", None)
+        if not callable(count_bars):
+            return {}, None
+
+        bars_by_pair_timeframe: dict[tuple[str, str, str], int] = {}
+        for pair in request.pairs:
+            for timeframe in request.timeframes:
+                key = _bar_count_key(pair, timeframe)
+                if key in bars_by_pair_timeframe:
+                    continue
+                bars_by_pair_timeframe[key] = max(
+                    0,
+                    int(
+                        count_bars(
+                            request=request,
+                            pair=pair,
+                            timeframe=timeframe,
+                        )
+                    ),
+                )
+
+        total_bars = 0
+        for _strategy in request.strategies:
+            for pair in request.pairs:
+                for timeframe in request.timeframes:
+                    total_bars += bars_by_pair_timeframe.get(_bar_count_key(pair, timeframe), 0)
+        return bars_by_pair_timeframe, total_bars
+
 
 def _partial_summary(
     *,
@@ -341,6 +395,47 @@ def _partial_summary(
         signal_events=signal_events,
         metric_set=metric_set,
     ).summary()
+
+
+def _bar_count_key(pair: StrategyTestPair, timeframe: str) -> tuple[str, str, str]:
+    return (pair.exchange, pair.symbol, timeframe)
+
+
+def _matrix_progress(
+    progress: dict[str, Any],
+    *,
+    bars_completed_before: int,
+    scenario_bars_total: int | None,
+    matrix_bars_total: int | None,
+) -> dict[str, Any]:
+    updated = dict(progress)
+    scenario_bars_processed = _int_from_summary(updated, "bars_processed")
+    existing_scenario_total = _int_from_summary(updated, "bars_total")
+    scenario_total = scenario_bars_total if scenario_bars_total is not None else existing_scenario_total
+    updated["scenario_bars_processed"] = scenario_bars_processed
+    updated["scenario_bars_total"] = scenario_total
+    if matrix_bars_total is not None:
+        updated["bars_processed"] = min(matrix_bars_total, bars_completed_before + scenario_bars_processed)
+        updated["bars_total"] = matrix_bars_total
+        updated["bars_pct"] = (
+            round((updated["bars_processed"] / matrix_bars_total) * 100, 2)
+            if matrix_bars_total > 0
+            else 0.0
+        )
+    return updated
+
+
+def _scenario_bars_completed(
+    summary: dict[str, Any],
+    *,
+    scenario_bars_total: int | None,
+) -> int:
+    if scenario_bars_total is not None:
+        return scenario_bars_total
+    timings = summary.get("timings")
+    if isinstance(timings, dict):
+        return _int_from_summary(timings, "bars_total")
+    return _int_from_summary(summary, "bars_total")
 
 
 def _matrix_result(

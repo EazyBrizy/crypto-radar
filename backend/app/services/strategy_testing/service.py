@@ -577,6 +577,8 @@ def _scenario_runtime_state(
     if progress:
         state["bars_processed"] = _int_value(progress.get("bars_processed"))
         state["bars_total"] = _int_value(progress.get("bars_total"))
+        state["scenario_bars_processed"] = _int_value(progress.get("scenario_bars_processed"))
+        state["scenario_bars_total"] = _int_value(progress.get("scenario_bars_total"))
         state["pending_entries_count"] = _int_value(progress.get("pending_entries_count"))
         for key in ("bars_pct", "elapsed_ms", "bars_per_second", "eta_seconds"):
             state[key] = _float_value(progress.get(key), default=None)

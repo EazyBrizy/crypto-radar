@@ -46,6 +46,32 @@ class StrategyTestScenarioRunner:
     def __init__(self, backtest_runner: ProductionBacktestRunner | None = None) -> None:
         self._backtest_runner = backtest_runner or ProductionBacktestRunner()
 
+    def count_scenario_bars(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        pair: StrategyTestPair,
+        timeframe: str,
+    ) -> int:
+        assumptions = build_strategy_test_assumptions(
+            mode=request.mode,
+            fee_rate=request.fee_rate,
+            slippage_bps=request.slippage_bps,
+            same_candle_policy=request.same_candle_policy,
+            initial_capital=request.initial_capital,
+            params=request.params,
+        )
+        return self._backtest_runner.count_scenario_bars(
+            _backtest_request_from_scenario(
+                request=request,
+                strategy=request.strategies[0],
+                pair=pair,
+                timeframe=timeframe,
+            ),
+            mode=request.mode,
+            options=assumptions.model_dump(mode="json"),
+        )
+
     def run_scenario(
         self,
         *,

@@ -166,6 +166,36 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
             ],
         )
 
+    def test_matrix_progress_uses_matrix_wide_deduped_bar_total(self) -> None:
+        request = _matrix_request(strategies=["s1", "s2"], timeframes=["15m"])
+        scenario_runner = _ProgressCountingScenarioRunner(bars_per_pair_timeframe={("bybit", "BTCUSDT", "15m"): 3})
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+        progress_updates: list[tuple[int, int, int, int, int]] = []
+
+        matrix_runner.run_matrix(
+            request=request,
+            run_id=RUN_ID,
+            user_uuid=USER_ID,
+            on_scenario_progress=lambda context, progress, _partial_summary: progress_updates.append(
+                (
+                    context.index,
+                    progress["bars_processed"],
+                    progress["bars_total"],
+                    progress["scenario_bars_processed"],
+                    progress["scenario_bars_total"],
+                )
+            ),
+        )
+
+        self.assertEqual(
+            progress_updates,
+            [
+                (1, 1, 6, 1, 3),
+                (2, 4, 6, 1, 3),
+            ],
+        )
+        self.assertEqual(scenario_runner.count_calls, [("bybit", "BTCUSDT", "15m")])
+
     def test_matrix_stops_before_next_scenario_when_cancelled(self) -> None:
         request = _matrix_request(strategies=["s1", "s2", "s3"])
         scenario_runner = _RecordingScenarioRunner()
@@ -676,6 +706,71 @@ class _RecordingScenarioRunner:
             summary=summary,
             trades=[],
             signal_events=list(self._signal_events),
+        )
+
+
+class _ProgressCountingScenarioRunner:
+    def __init__(self, *, bars_per_pair_timeframe: dict[tuple[str, str, str], int]) -> None:
+        self._bars_per_pair_timeframe = bars_per_pair_timeframe
+        self.count_calls: list[tuple[str, str, str]] = []
+
+    def count_scenario_bars(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        pair: StrategyTestPair,
+        timeframe: str,
+    ) -> int:
+        _ = request
+        key = (pair.exchange, pair.symbol, timeframe)
+        self.count_calls.append(key)
+        return self._bars_per_pair_timeframe[key]
+
+    def run_scenario(
+        self,
+        *,
+        run_id: UUID,
+        user_id: UUID,
+        request: StrategyTestRunRequest,
+        strategy: str,
+        pair: StrategyTestPair,
+        timeframe: str,
+        is_cancelled: Any = None,
+        on_progress: Any = None,
+        candle_cache: Any = None,
+        feature_cache: Any = None,
+    ) -> StrategyTestScenarioResult:
+        _ = user_id, request, is_cancelled, candle_cache, feature_cache
+        bars_total = self._bars_per_pair_timeframe[(pair.exchange, pair.symbol, timeframe)]
+        if on_progress is not None:
+            on_progress(
+                {
+                    "phase": "running_scenario",
+                    "bars_processed": 1,
+                    "bars_total": bars_total,
+                    "signals_seen": 0,
+                    "trades_count": 0,
+                    "risk_rejections": 0,
+                    "execution_rejections": 0,
+                }
+            )
+        return StrategyTestScenarioResult(
+            run_id=run_id,
+            strategy=strategy,
+            pair=pair,
+            timeframe=timeframe,
+            summary={
+                "strategy": strategy,
+                "exchange": pair.exchange,
+                "symbol": pair.symbol,
+                "timeframe": timeframe,
+                "signals_seen": 0,
+                "risk_rejections": 0,
+                "execution_rejections": 0,
+                "timings": {"bars_total": bars_total},
+            },
+            trades=[],
+            signal_events=[],
         )
 
 
@@ -1235,6 +1330,7 @@ class _CountingHistoricalCandleProvider:
     def __init__(self, candles: list[OHLCVCandle]) -> None:
         self._candles = candles
         self.load_calls = 0
+        self.count_calls = 0
 
     async def load_candles(
         self,
@@ -1248,6 +1344,19 @@ class _CountingHistoricalCandleProvider:
         _ = exchange, symbol, timeframe, start_at, end_at
         self.load_calls += 1
         return list(self._candles)
+
+    async def count_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        _ = exchange, symbol, timeframe, start_at, end_at
+        self.count_calls += 1
+        return len({candle.open_time for candle in self._candles if candle.is_closed})
 
 
 class _SilentFeatureEngine:

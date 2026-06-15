@@ -23,6 +23,17 @@ class HistoricalCandleProvider(Protocol):
     ) -> list[OHLCVCandle]:
         ...
 
+    async def count_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        ...
+
 
 class ClickHouseQueryClient(Protocol):
     def query(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
@@ -44,6 +55,24 @@ class ClickHouseHistoricalCandleProvider:
     ) -> list[OHLCVCandle]:
         return await asyncio.to_thread(
             self._load_candles_sync,
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+        )
+
+    async def count_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._count_candles_sync,
             exchange=exchange,
             symbol=symbol,
             timeframe=timeframe,
@@ -113,6 +142,48 @@ class ClickHouseHistoricalCandleProvider:
         finally:
             self._close_client(client)
 
+    def _count_candles_sync(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        table = OHLCV_TABLES_BY_TIMEFRAME.get(timeframe)
+        if table is None:
+            raise ValueError(f"unsupported_timeframe: {timeframe}")
+
+        query = f"""
+            SELECT count() AS candles_count
+            FROM (
+                SELECT ts
+                FROM {table}
+                WHERE exchange = {{exchange:String}}
+                  AND symbol = {{symbol:String}}
+                  AND ts >= {{start_at:DateTime64(3, 'UTC')}}
+                  AND ts <= {{closed_open_end_at:DateTime64(3, 'UTC')}}
+                  AND toUnixTimestamp(ts) % {{timeframe_seconds:UInt32}} = 0
+                GROUP BY ts
+            )
+        """
+        client = self._client()
+        try:
+            result = client.query(
+                query,
+                parameters={
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "start_at": _as_utc(start_at),
+                    "closed_open_end_at": _closed_open_end_at(end_at, timeframe),
+                    "timeframe_seconds": TIMEFRAME_MS[timeframe] // 1000,
+                },
+            )
+            return _count_from_result(result)
+        finally:
+            self._close_client(client)
+
     def _client(self) -> ClickHouseQueryClient:
         return self._clickhouse_client_factory()
 
@@ -150,7 +221,26 @@ class InMemoryHistoricalCandleProvider:
             and candle.is_closed
             and start_ms <= candle.open_time <= end_ms
         ]
-        return sorted(candles, key=lambda candle: candle.open_time)
+        return _dedupe_candles(candles, end_ms=end_ms)
+
+    async def count_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        return len(
+            await self.load_candles(
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                start_at=start_at,
+                end_at=end_at,
+            )
+        )
 
 
 def _row_to_candle(row: dict[str, Any], timeframe: str) -> OHLCVCandle:
@@ -179,6 +269,30 @@ def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if current is None or _row_tie_breaker(row) > _row_tie_breaker(current):
             deduped[key] = row
     return sorted(deduped.values(), key=lambda row: _datetime_to_ms(row["ts"]))
+
+
+def _dedupe_candles(candles: list[OHLCVCandle], *, end_ms: int) -> list[OHLCVCandle]:
+    deduped: dict[int, OHLCVCandle] = {}
+    for candle in candles:
+        if not candle.is_closed:
+            continue
+        if candle.close_time > end_ms:
+            continue
+        current = deduped.get(candle.open_time)
+        if current is None or _candle_tie_breaker(candle) > _candle_tie_breaker(current):
+            deduped[candle.open_time] = candle
+    return sorted(deduped.values(), key=lambda candle: candle.open_time)
+
+
+def _candle_tie_breaker(candle: OHLCVCandle) -> tuple[float, float, float, float, float, int]:
+    return (
+        float(candle.open),
+        float(candle.high),
+        float(candle.low),
+        float(candle.close),
+        float(candle.volume),
+        int(candle.trades),
+    )
 
 
 def _row_tie_breaker(row: dict[str, Any]) -> tuple[int, Decimal, Decimal, Decimal, Decimal, Decimal, int]:
@@ -213,6 +327,18 @@ def _is_expected_closed_row(row: dict[str, Any], *, timeframe: str, end_ms: int)
 def _closed_open_end_at(end_at: datetime, timeframe: str) -> datetime:
     timeframe_ms = TIMEFRAME_MS[timeframe]
     return _as_utc(end_at) - timedelta(milliseconds=timeframe_ms - 1)
+
+
+def _count_from_result(result: Any) -> int:
+    rows = result.named_results() if hasattr(result, "named_results") else []
+    if not rows:
+        return 0
+    first = rows[0]
+    if isinstance(first, dict):
+        for key in ("candles_count", "count()", "count"):
+            if key in first:
+                return int(first[key] or 0)
+    return 0
 
 
 def _datetime_to_ms(value: datetime) -> int:

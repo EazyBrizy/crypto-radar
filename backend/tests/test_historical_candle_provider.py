@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from app.services.historical_candle_provider import ClickHouseHistoricalCandleProvider
+from app.schemas.candle import OHLCVCandle
+from app.services.historical_candle_provider import (
+    ClickHouseHistoricalCandleProvider,
+    InMemoryHistoricalCandleProvider,
+)
 
 
 class _QueryResult:
@@ -89,6 +93,42 @@ class ClickHouseHistoricalCandleProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("exchange, symbol, ts", query)
         self.assertIn("ORDER BY ts ASC", query)
 
+    async def test_count_candles_uses_deduped_timestamp_count_query(self) -> None:
+        client = _FakeClickHouseClient([{"candles_count": 2}])
+        provider = ClickHouseHistoricalCandleProvider(lambda: client)
+
+        count = await provider.count_candles(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            timeframe="15m",
+            start_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            end_at=datetime(2026, 6, 1, 13, 0, tzinfo=timezone.utc),
+        )
+
+        query = client.queries[0]
+        self.assertEqual(count, 2)
+        self.assertIn("SELECT count()", query)
+        self.assertIn("FROM (", query)
+        self.assertIn("SELECT ts", query)
+        self.assertIn("GROUP BY ts", query)
+
+    async def test_in_memory_count_candles_counts_unique_closed_timestamps(self) -> None:
+        first = _candle(open_time=1780315200000, close=101.0)
+        duplicate = _candle(open_time=1780315200000, close=102.0)
+        second = _candle(open_time=1780316100000, close=103.0)
+        open_preview = _candle(open_time=1780317000000, close=104.0, is_closed=False)
+        provider = InMemoryHistoricalCandleProvider([first, duplicate, second, open_preview])
+
+        count = await provider.count_candles(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            timeframe="15m",
+            start_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            end_at=datetime(2026, 6, 1, 12, 45, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(count, 2)
+
 
 def _row(
     *,
@@ -109,6 +149,28 @@ def _row(
         "trades_count": trades_count,
         "created_at": created_at,
     }
+
+
+def _candle(
+    *,
+    open_time: int,
+    close: float,
+    is_closed: bool = True,
+) -> OHLCVCandle:
+    return OHLCVCandle(
+        exchange="bybit",
+        symbol="BTCUSDT",
+        timeframe="15m",
+        open_time=open_time,
+        close_time=open_time + 899_999,
+        open=100.0,
+        high=105.0,
+        low=95.0,
+        close=close,
+        volume=123.45,
+        trades=10,
+        is_closed=is_closed,
+    )
 
 
 if __name__ == "__main__":

@@ -463,6 +463,21 @@ class ProductionBacktestRunner:
             )
         )
 
+    def count_scenario_bars(
+        self,
+        request: BacktestRunRequest,
+        *,
+        mode: str = "production_like",
+        options: dict[str, Any] | None = None,
+    ) -> int:
+        return _run_awaitable_sync(
+            self._count_scenario_bars_async(
+                request,
+                mode=mode,
+                options=options,
+            )
+        )
+
     async def _run_async(self, request: BacktestRunRequest) -> BacktestRunResult:
         return (
             await self._run_detailed_async(
@@ -471,6 +486,26 @@ class ProductionBacktestRunner:
                 options={"preserve_legacy_backtest": True},
             )
         ).run_result
+
+    async def _count_scenario_bars_async(
+        self,
+        request: BacktestRunRequest,
+        *,
+        mode: str,
+        options: dict[str, Any] | None,
+    ) -> int:
+        normalized_mode = _normalize_backtest_mode(mode)
+        assumptions = _assumptions_for_backtest(request, normalized_mode, options)
+        request = _request_with_mode_options(request, normalized_mode, assumptions)
+        warmup = max(1, _int_param(request.params, "warmup_candles", self._warmup_candles))
+        candles_count = await self._historical_candle_provider.count_candles(
+            exchange=request.exchange,
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            start_at=request.start_at,
+            end_at=request.end_at,
+        )
+        return max(0, candles_count - warmup)
 
     async def _run_detailed_async(
         self,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 from uuid import UUID
 
 from app.services.strategy_testing.metrics import MetricResult
@@ -50,6 +50,16 @@ class ScenarioRunner(Protocol):
         ...
 
 
+class ScenarioResultSink(Protocol):
+    def write_result(
+        self,
+        context: "StrategyTestScenarioContext",
+        result: StrategyTestScenarioResult,
+        partial_summary: dict[str, Any],
+    ) -> None:
+        ...
+
+
 @dataclass(frozen=True)
 class StrategyTestScenarioContext:
     index: int
@@ -86,8 +96,11 @@ class StrategyTestMatrixResult:
 
     def summary(self, metrics: Sequence[MetricResult] | None = None) -> dict[str, Any]:
         summary_signals_seen = sum(_int_from_summary(item, "signals_seen") for item in self.scenario_summaries)
-        signals_count = len(self.signal_events) or summary_signals_seen
-        signals_seen = signals_count
+        summary_signals_count = sum(_int_from_summary(item, "signals_count") for item in self.scenario_summaries)
+        signals_count = len(self.signal_events) or summary_signals_count or summary_signals_seen
+        signals_seen = summary_signals_seen or signals_count
+        summary_trades_count = sum(_int_from_summary(item, "trades_count") for item in self.scenario_summaries)
+        trades_count = len(self.trades) or summary_trades_count
         execution_candidates = (
             sum(1 for event in self.signal_events if event.execution_candidate)
             if self.signal_events
@@ -113,8 +126,16 @@ class StrategyTestMatrixResult:
             if self.signal_events
             else sum(_int_from_summary(item, "closed") for item in self.scenario_summaries)
         )
-        wins = sum(1 for event in self.signal_events if _normalized_outcome(event.outcome) == "win")
-        losses = sum(1 for event in self.signal_events if _normalized_outcome(event.outcome) == "loss")
+        wins = (
+            sum(1 for event in self.signal_events if _normalized_outcome(event.outcome) == "win")
+            if self.signal_events
+            else sum(_int_from_summary(item, "wins") for item in self.scenario_summaries)
+        )
+        losses = (
+            sum(1 for event in self.signal_events if _normalized_outcome(event.outcome) == "loss")
+            if self.signal_events
+            else sum(_int_from_summary(item, "losses") for item in self.scenario_summaries)
+        )
         no_entry = (
             sum(1 for event in self.signal_events if event.no_entry)
             if self.signal_events
@@ -140,7 +161,7 @@ class StrategyTestMatrixResult:
             "scenario_count": self.scenario_count,
             "completed_scenarios": self.completed_scenarios,
             "failed_scenarios": self.failed_scenarios,
-            "trades_count": len(self.trades),
+            "trades_count": trades_count,
             "signals_seen": signals_seen,
             "signals_count": signals_count,
             "execution_candidates": execution_candidates,
@@ -188,6 +209,8 @@ class StrategyTestMatrixRunner:
             None,
         ]
         | None = None,
+        scenario_result_sink: ScenarioResultSink | None = None,
+        completed_scenario_summaries: Mapping[str, dict[str, Any]] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
     ) -> StrategyTestMatrixResult:
         scenario_count = len(request.strategies) * len(request.pairs) * len(request.timeframes)
@@ -197,6 +220,8 @@ class StrategyTestMatrixRunner:
         errors: list[dict[str, Any]] = []
         trades: list[StrategyTestTrade] = []
         signal_events: list[StrategyTestSignalEvent] = []
+        metrics: list[MetricResult] = []
+        completed_summary_by_key = dict(completed_scenario_summaries or {})
         scenario_index = 0
         candle_cache: dict[str, Any] = {}
         feature_cache: dict[str, Any] = {}
@@ -225,9 +250,23 @@ class StrategyTestMatrixRunner:
                             errors=errors,
                             trades=trades,
                             signal_events=signal_events,
+                            metrics=metrics,
                             cancelled=True,
                             metric_set=request.metric_set,
                         )
+                    scenario_key = _scenario_key(context)
+                    if scenario_key in completed_summary_by_key:
+                        summary = _checkpoint_summary_for_context(
+                            completed_summary_by_key[scenario_key],
+                            context=context,
+                        )
+                        completed += 1
+                        scenario_summaries.append(summary)
+                        bars_completed_before += _scenario_bars_completed(
+                            summary,
+                            scenario_bars_total=scenario_bars_total,
+                        )
+                        continue
                     if on_scenario_started is not None:
                         on_scenario_started(context)
 
@@ -249,6 +288,7 @@ class StrategyTestMatrixRunner:
                             errors=errors,
                             trades=trades,
                             signal_events=signal_events,
+                            metrics=metrics,
                             metric_set=request.metric_set,
                         )
                         on_scenario_progress(context, progress, partial_summary)
@@ -276,6 +316,7 @@ class StrategyTestMatrixRunner:
                             errors=errors,
                             trades=trades,
                             signal_events=signal_events,
+                            metrics=metrics,
                             cancelled=True,
                             metric_set=request.metric_set,
                         )
@@ -299,6 +340,7 @@ class StrategyTestMatrixRunner:
                             errors=errors,
                             trades=trades,
                             signal_events=signal_events,
+                            metrics=metrics,
                             metric_set=request.metric_set,
                         )
                         if on_scenario_failed is not None:
@@ -306,11 +348,17 @@ class StrategyTestMatrixRunner:
                         continue
 
                     completed += 1
-                    scenario_summaries.append(result.summary)
-                    trades.extend(result.trades)
-                    signal_events.extend(result.signal_events)
+                    scenario_summary = _scenario_result_summary(result, context=context)
+                    scenario_summaries.append(scenario_summary)
+                    metrics.extend(
+                        build_matrix_metric_results(
+                            result.trades,
+                            signal_events=result.signal_events,
+                            metric_set=request.metric_set,
+                        )
+                    )
                     bars_completed_before += _scenario_bars_completed(
-                        result.summary,
+                        scenario_summary,
                         scenario_bars_total=scenario_bars_total,
                     )
                     partial_summary = _partial_summary(
@@ -322,8 +370,11 @@ class StrategyTestMatrixRunner:
                         errors=errors,
                         trades=trades,
                         signal_events=signal_events,
+                        metrics=metrics,
                         metric_set=request.metric_set,
                     )
+                    if scenario_result_sink is not None:
+                        scenario_result_sink.write_result(context, result, partial_summary)
                     if on_scenario_completed is not None:
                         on_scenario_completed(context, result, partial_summary)
 
@@ -336,6 +387,7 @@ class StrategyTestMatrixRunner:
             errors=errors,
             trades=trades,
             signal_events=signal_events,
+            metrics=metrics,
             metric_set=request.metric_set,
         )
 
@@ -382,6 +434,7 @@ def _partial_summary(
     errors: list[dict[str, Any]],
     trades: list[StrategyTestTrade],
     signal_events: list[StrategyTestSignalEvent],
+    metrics: list[MetricResult],
     metric_set: Sequence[str],
 ) -> dict[str, Any]:
     return _matrix_result(
@@ -393,12 +446,66 @@ def _partial_summary(
         errors=errors,
         trades=trades,
         signal_events=signal_events,
+        metrics=metrics,
         metric_set=metric_set,
     ).summary()
 
 
 def _bar_count_key(pair: StrategyTestPair, timeframe: str) -> tuple[str, str, str]:
     return (pair.exchange, pair.symbol, timeframe)
+
+
+def _scenario_key(context: StrategyTestScenarioContext) -> str:
+    return "::".join(_key_text(value) for value in (context.strategy, context.exchange, context.symbol, context.timeframe))
+
+
+def _checkpoint_summary_for_context(
+    summary: Mapping[str, Any],
+    *,
+    context: StrategyTestScenarioContext,
+) -> dict[str, Any]:
+    updated = _scenario_identity_summary(context)
+    updated.update(dict(summary))
+    updated.setdefault("scenario_key", _scenario_key(context))
+    return updated
+
+
+def _scenario_result_summary(
+    result: StrategyTestScenarioResult,
+    *,
+    context: StrategyTestScenarioContext,
+) -> dict[str, Any]:
+    summary = _checkpoint_summary_for_context(result.summary, context=context)
+    signal_events = result.signal_events
+    if signal_events:
+        summary["signals_seen"] = len(signal_events)
+        summary["signals_count"] = len(signal_events)
+        summary["execution_candidates"] = sum(1 for event in signal_events if event.execution_candidate)
+        summary["pending_armed"] = sum(1 for event in signal_events if _event_has_stage(event, "pending_armed"))
+        summary["entry_touched"] = sum(1 for event in signal_events if event.entry_touched)
+        summary["touched"] = summary["entry_touched"]
+        summary["filled"] = sum(1 for event in signal_events if event.filled)
+        summary["closed"] = sum(1 for event in signal_events if event.closed)
+        summary["wins"] = sum(1 for event in signal_events if _normalized_outcome(event.outcome) == "win")
+        summary["losses"] = sum(1 for event in signal_events if _normalized_outcome(event.outcome) == "loss")
+        summary["no_entry"] = sum(1 for event in signal_events if event.no_entry)
+        summary["not_selected"] = sum(1 for event in signal_events if event.blocked_reason_code == "not_selected")
+        summary["risk_rejections"] = sum(1 for event in signal_events if event.risk_rejected)
+        summary["execution_rejections"] = sum(1 for event in signal_events if event.execution_rejected)
+    if result.trades:
+        summary["trades_count"] = len(result.trades)
+    else:
+        summary.setdefault("trades_count", 0)
+    return summary
+
+
+def _scenario_identity_summary(context: StrategyTestScenarioContext) -> dict[str, Any]:
+    return {
+        "strategy": context.strategy,
+        "exchange": context.exchange,
+        "symbol": context.symbol,
+        "timeframe": context.timeframe,
+    }
 
 
 def _matrix_progress(
@@ -449,6 +556,7 @@ def _matrix_result(
     trades: list[StrategyTestTrade],
     signal_events: list[StrategyTestSignalEvent],
     metric_set: Sequence[str],
+    metrics: list[MetricResult] | None = None,
     cancelled: bool = False,
 ) -> StrategyTestMatrixResult:
     return StrategyTestMatrixResult(
@@ -460,7 +568,9 @@ def _matrix_result(
         errors=list(errors),
         trades=list(trades),
         signal_events=list(signal_events),
-        metrics=build_matrix_metric_results(
+        metrics=list(metrics)
+        if metrics is not None
+        else build_matrix_metric_results(
             trades,
             signal_events=signal_events,
             metric_set=metric_set,
@@ -520,6 +630,10 @@ def _float_from_summary(summary: dict[str, Any], key: str) -> float:
         return float(summary.get(key) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _key_text(value: object) -> str:
+    return str(value or "unknown").strip() or "unknown"
 
 
 def _normalized_outcome(value: object) -> str:

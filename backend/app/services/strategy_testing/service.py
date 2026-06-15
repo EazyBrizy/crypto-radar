@@ -145,15 +145,31 @@ class StrategyTestingService:
         )
         try:
             user_uuid = strategy_test_user_uuid(request.user_id)
-            written_trade_keys: set[tuple[str, str, str]] = set()
-            written_signal_event_keys: set[tuple[str, str, str]] = set()
-            written_metric_keys: set[tuple[str, ...]] = set()
+            completed_scenario_summaries = _completed_scenario_summaries_by_key(self._run_store, run_id)
+            if completed_scenario_summaries:
+                last_summary = _normalize_summary(
+                    StrategyTestMatrixResult(
+                        run_id=run_id,
+                        scenario_count=_scenario_total(request),
+                        completed_scenarios=len(completed_scenario_summaries),
+                        failed_scenarios=0,
+                        scenario_summaries=list(completed_scenario_summaries.values()),
+                    ).summary()
+                )
+            scenario_result_sink = _ScenarioResultPersistenceSink(
+                trade_store=self._trade_store,
+                run_store=self._run_store,
+                run_id=run_id,
+                user_id=user_uuid,
+                request=request,
+            )
 
             def is_cancelled() -> bool:
                 detail = self._run_store.get_run(run_id)
                 return bool(detail is not None and detail.run.status in {"cancelled", "stopping"})
 
             def on_started(context: StrategyTestScenarioContext) -> None:
+                _mark_scenario_running(self._run_store, run_id, context)
                 self._run_store.update_runtime_state(
                     run_id,
                     _scenario_runtime_state(
@@ -190,17 +206,6 @@ class StrategyTestingService:
             ) -> None:
                 nonlocal last_summary
                 last_summary = _normalize_summary(partial_summary)
-                _write_scenario_result_once(
-                    self._trade_store,
-                    run_id=run_id,
-                    user_id=user_uuid,
-                    request=request,
-                    context=context,
-                    result=result,
-                    written_trade_keys=written_trade_keys,
-                    written_signal_event_keys=written_signal_event_keys,
-                    written_metric_keys=written_metric_keys,
-                )
                 self._run_store.update_runtime_state(
                     run_id,
                     _scenario_runtime_state(
@@ -220,6 +225,7 @@ class StrategyTestingService:
             ) -> None:
                 nonlocal last_summary
                 last_summary = _normalize_summary(partial_summary)
+                _mark_scenario_failed(self._run_store, run_id, context, exc, last_summary)
                 self._run_store.update_runtime_state(
                     run_id,
                     _scenario_runtime_state(
@@ -241,6 +247,8 @@ class StrategyTestingService:
                 on_scenario_completed=on_completed,
                 on_scenario_failed=on_failed,
                 on_scenario_progress=on_progress,
+                scenario_result_sink=scenario_result_sink,
+                completed_scenario_summaries=completed_scenario_summaries,
                 is_cancelled=is_cancelled,
             )
             if matrix_result.cancelled or is_cancelled():
@@ -282,16 +290,17 @@ class StrategyTestingService:
                     partial_summary=summary,
                 ),
             )
-            _write_trades_once(
-                self._trade_store,
-                matrix_result.trades,
-                written_trade_keys=written_trade_keys,
-            )
-            _write_signal_events_once(
-                self._trade_store,
-                matrix_result.signal_events,
-                written_signal_event_keys=written_signal_event_keys,
-            )
+            if scenario_result_sink.results_written == 0:
+                _write_trades_once(
+                    self._trade_store,
+                    matrix_result.trades,
+                    written_trade_keys=set(),
+                )
+                _write_signal_events_once(
+                    self._trade_store,
+                    matrix_result.signal_events,
+                    written_signal_event_keys=set(),
+                )
             _write_metrics_once(
                 self._trade_store,
                 metric_results_to_rows(
@@ -300,7 +309,7 @@ class StrategyTestingService:
                     mode=request.mode,
                     results=metric_results,
                 ),
-                written_metric_keys=written_metric_keys,
+                written_metric_keys=set(),
             )
             if _auto_publish_calibration(request):
                 try:
@@ -995,6 +1004,150 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+class _ScenarioResultPersistenceSink:
+    def __init__(
+        self,
+        *,
+        trade_store: StrategyTestTradeStore,
+        run_store: StrategyTestRunStore,
+        run_id: UUID,
+        user_id: UUID,
+        request: StrategyTestRunRequest,
+    ) -> None:
+        self._trade_store = trade_store
+        self._run_store = run_store
+        self._run_id = run_id
+        self._user_id = user_id
+        self._request = request
+        self.results_written = 0
+
+    def write_result(
+        self,
+        context: StrategyTestScenarioContext,
+        result: Any,
+        partial_summary: dict[str, Any],
+    ) -> None:
+        _ = partial_summary
+        _write_scenario_result_once(
+            self._trade_store,
+            run_id=self._run_id,
+            user_id=self._user_id,
+            request=self._request,
+            context=context,
+            result=result,
+            written_trade_keys=set(),
+            written_signal_event_keys=set(),
+            written_metric_keys=set(),
+        )
+        _mark_scenario_completed(
+            self._run_store,
+            self._run_id,
+            context,
+            result,
+        )
+        self.results_written += 1
+
+
+def _completed_scenario_summaries_by_key(
+    run_store: StrategyTestRunStore,
+    run_id: UUID,
+) -> dict[str, dict[str, Any]]:
+    list_scenarios = getattr(run_store, "list_scenarios", None)
+    if not callable(list_scenarios):
+        return {}
+    scenarios = list_scenarios(run_id)
+    summaries: dict[str, dict[str, Any]] = {}
+    for scenario in scenarios:
+        if _checkpoint_attr(scenario, "status") != "completed":
+            continue
+        scenario_key = _text(_checkpoint_attr(scenario, "scenario_key"))
+        if not scenario_key:
+            continue
+        summary = dict(_checkpoint_attr(scenario, "summary", {}) or {})
+        summary.setdefault("scenario_key", scenario_key)
+        summary.setdefault("strategy", _checkpoint_attr(scenario, "strategy_code"))
+        summary.setdefault("exchange", _checkpoint_attr(scenario, "exchange"))
+        summary.setdefault("symbol", _checkpoint_attr(scenario, "symbol"))
+        summary.setdefault("timeframe", _checkpoint_attr(scenario, "timeframe"))
+        summaries[scenario_key] = summary
+    return summaries
+
+
+def _mark_scenario_running(
+    run_store: StrategyTestRunStore,
+    run_id: UUID,
+    context: StrategyTestScenarioContext,
+) -> None:
+    mark_running = getattr(run_store, "mark_scenario_running", None)
+    if not callable(mark_running):
+        return
+    mark_running(
+        run_id,
+        scenario_key=_scenario_key(context),
+        scenario_index=_int_value(getattr(context, "index", 0), default=0),
+        strategy_code=context.strategy,
+        exchange=context.exchange,
+        symbol=context.symbol,
+        timeframe=context.timeframe,
+    )
+
+
+def _mark_scenario_completed(
+    run_store: StrategyTestRunStore,
+    run_id: UUID,
+    context: StrategyTestScenarioContext,
+    result: Any,
+) -> None:
+    mark_completed = getattr(run_store, "mark_scenario_completed", None)
+    if not callable(mark_completed):
+        return
+    mark_completed(
+        run_id,
+        scenario_key=_scenario_key(context),
+        summary=_completed_scenario_summary(context, result),
+        bars_processed=_result_bars_processed(result),
+        result_written_at=datetime.now(timezone.utc),
+    )
+
+
+def _mark_scenario_failed(
+    run_store: StrategyTestRunStore,
+    run_id: UUID,
+    context: StrategyTestScenarioContext,
+    exc: Exception,
+    partial_summary: dict[str, Any],
+) -> None:
+    mark_failed = getattr(run_store, "mark_scenario_failed", None)
+    if not callable(mark_failed):
+        return
+    mark_failed(
+        run_id,
+        scenario_key=_scenario_key(context),
+        error=str(exc),
+        summary=_failed_scenario_summary(context, exc, partial_summary),
+    )
+
+
+def _checkpoint_attr(checkpoint: Any, name: str, default: Any = None) -> Any:
+    if isinstance(checkpoint, dict):
+        return checkpoint.get(name, default)
+    return getattr(checkpoint, name, default)
+
+
+def _result_bars_processed(result: Any) -> int | None:
+    summary = dict(getattr(result, "summary", {}) or {})
+    timings = summary.get("timings")
+    if isinstance(timings, dict):
+        bars_total = _summary_int(timings, "bars_total", 0)
+        if bars_total > 0:
+            return bars_total
+    bars_processed = _summary_int(summary, "bars_processed", 0)
+    if bars_processed > 0:
+        return bars_processed
+    bars_total = _summary_int(summary, "bars_total", 0)
+    return bars_total if bars_total > 0 else None
+
+
 def _write_scenario_result_once(
     trade_store: StrategyTestTradeStore,
     *,
@@ -1051,23 +1204,17 @@ def _write_trades_once(
     if not trades:
         return
     _ensure_trade_store_schema(trade_store)
-    existing_keys = _existing_trade_keys(trade_store, trades[0].run_id)
     new_trades: list[StrategyTestTrade] = []
     new_keys: set[tuple[str, str, str]] = set()
     for trade in trades:
         key = _trade_idempotency_key(trade, scenario_key=scenario_key)
-        if key in written_trade_keys or key in existing_keys or key in new_keys:
+        if key in written_trade_keys or key in new_keys:
             continue
         new_trades.append(trade)
         new_keys.add(key)
     if new_trades:
         trade_store.write_trades(new_trades)
     written_trade_keys.update(new_keys)
-    written_trade_keys.update(
-        _trade_idempotency_key(trade, scenario_key=scenario_key)
-        for trade in trades
-        if _trade_idempotency_key(trade, scenario_key=scenario_key) in existing_keys
-    )
 
 
 def _write_signal_events_once(
@@ -1080,12 +1227,11 @@ def _write_signal_events_once(
     if not signal_events:
         return
     _ensure_trade_store_schema(trade_store)
-    existing_keys = _existing_signal_event_keys(trade_store, signal_events[0].run_id)
     new_events: list[StrategyTestSignalEvent] = []
     new_keys: set[tuple[str, str, str]] = set()
     for event in signal_events:
         key = _signal_event_idempotency_key(event, scenario_key=scenario_key)
-        if key in written_signal_event_keys or key in existing_keys or key in new_keys:
+        if key in written_signal_event_keys or key in new_keys:
             continue
         new_events.append(event)
         new_keys.add(key)
@@ -1095,11 +1241,6 @@ def _write_signal_events_once(
             raise RuntimeError("strategy_test_signal_event_store_not_available")
         write_events(new_events)
     written_signal_event_keys.update(new_keys)
-    written_signal_event_keys.update(
-        _signal_event_idempotency_key(event, scenario_key=scenario_key)
-        for event in signal_events
-        if _signal_event_idempotency_key(event, scenario_key=scenario_key) in existing_keys
-    )
 
 
 def _write_metrics_once(
@@ -1111,23 +1252,17 @@ def _write_metrics_once(
     if not rows:
         return
     _ensure_trade_store_schema(trade_store)
-    existing_keys = _existing_metric_keys(trade_store, rows[0].run_id)
     new_rows: list[StrategyTestMetricRow] = []
     new_keys: set[tuple[str, ...]] = set()
     for row in rows:
         key = _metric_idempotency_key(row)
-        if key in written_metric_keys or key in existing_keys or key in new_keys:
+        if key in written_metric_keys or key in new_keys:
             continue
         new_rows.append(row)
         new_keys.add(key)
     if new_rows:
         trade_store.write_metrics(new_rows)
     written_metric_keys.update(new_keys)
-    written_metric_keys.update(
-        _metric_idempotency_key(row)
-        for row in rows
-        if _metric_idempotency_key(row) in existing_keys
-    )
 
 
 def _scenario_metric_rows(
@@ -1217,42 +1352,6 @@ def _with_scenario_metric_metadata(
             "metadata": metadata,
         }
     )
-
-
-def _existing_trade_keys(
-    trade_store: StrategyTestTradeStore,
-    run_id: UUID,
-) -> set[tuple[str, str, str]]:
-    list_trades = getattr(trade_store, "list_trades", None)
-    if not callable(list_trades):
-        return set()
-    return {
-        _trade_idempotency_key(trade)
-        for trade in list_trades(run_id, limit=ANALYTICS_IDEMPOTENCY_LOOKBACK_LIMIT, offset=0)
-    }
-
-
-def _existing_signal_event_keys(
-    trade_store: StrategyTestTradeStore,
-    run_id: UUID,
-) -> set[tuple[str, str, str]]:
-    list_events = getattr(trade_store, "list_signal_events", None)
-    if not callable(list_events):
-        return set()
-    return {
-        _signal_event_idempotency_key(event)
-        for event in list_events(run_id, limit=ANALYTICS_IDEMPOTENCY_LOOKBACK_LIMIT, offset=0)
-    }
-
-
-def _existing_metric_keys(
-    trade_store: StrategyTestTradeStore,
-    run_id: UUID,
-) -> set[tuple[str, ...]]:
-    list_metrics = getattr(trade_store, "list_metrics", None)
-    if not callable(list_metrics):
-        return set()
-    return {_metric_idempotency_key(row) for row in list_metrics(run_id)}
 
 
 def _trade_idempotency_key(
@@ -1540,7 +1639,6 @@ def _text(value: object) -> str:
 
 STRATEGY_TEST_ACTIVE_STATUSES: tuple[StrategyTestRunStatus, ...] = ("queued", "running", "stopping")
 STRATEGY_TEST_STALE_THRESHOLD_SECONDS = 900
-ANALYTICS_IDEMPOTENCY_LOOKBACK_LIMIT = 1_000_000
 STRATEGY_TEST_DUPLICATE_WARNING_RATIO = 1.2
 STRATEGY_TEST_MEDIUM_ESTIMATE_BARS = 50_000
 STRATEGY_TEST_LARGE_ESTIMATE_BARS = 250_000

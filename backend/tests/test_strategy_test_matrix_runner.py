@@ -82,7 +82,7 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         self.assertEqual(result.completed_scenarios, 0)
         self.assertEqual(result.failed_scenarios, 2)
 
-    def test_matrix_collects_signal_events_and_builds_funnel_metrics(self) -> None:
+    def test_matrix_builds_funnel_metrics_without_returning_signal_events(self) -> None:
         request = _matrix_request(strategies=["s1"], pairs=[StrategyTestPair(exchange="bybit", symbol="BTCUSDT")])
         scenario_runner = _RecordingScenarioRunner(
             signal_events=[
@@ -94,7 +94,7 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
 
         result = matrix_runner.run_matrix(request=request, run_id=RUN_ID, user_uuid=USER_ID)
 
-        self.assertEqual(len(result.signal_events), 2)
+        self.assertEqual(result.signal_events, [])
         self.assertEqual(result.summary()["signals_count"], 2)
         summary_metrics = {metric["code"]: metric for metric in result.summary()["summary_metrics"]}
         self.assertEqual(summary_metrics["signals_count"]["value"], 2)
@@ -211,6 +211,25 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         self.assertTrue(result.cancelled)
         self.assertEqual(result.completed_scenarios, 1)
         self.assertEqual(len(scenario_runner.calls), 1)
+
+    def test_matrix_streams_large_scenario_result_without_returning_full_events(self) -> None:
+        request = _matrix_request(strategies=["s1"])
+        scenario_runner = _HighVolumeScenarioRunner(signal_events_count=150_000)
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+        result_sink = _CapturingScenarioResultSink()
+
+        result = matrix_runner.run_matrix(
+            request=request,
+            run_id=RUN_ID,
+            user_uuid=USER_ID,
+            scenario_result_sink=result_sink,
+        )
+
+        self.assertEqual(result.completed_scenarios, 1)
+        self.assertEqual(result.signal_events, [])
+        self.assertEqual(result.trades, [])
+        self.assertEqual(result.summary()["signals_count"], 150_000)
+        self.assertEqual(result_sink.signal_event_counts, [150_000])
 
 
 class StrategyTestAssumptionsTest(unittest.TestCase):
@@ -558,6 +577,60 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         ]
         self.assertEqual(len(scenario_metric_keys), len(set(scenario_metric_keys)))
 
+    def test_high_volume_scenario_write_path_does_not_list_previous_analytics(self) -> None:
+        trade_store = _ListFailingTradeStore()
+        service = StrategyTestingService(
+            run_store=_EphemeralRunStore(),
+            trade_store=trade_store,
+            matrix_runner=_SingleCallbackMatrixRunner(signal_events_count=150_000),
+        )
+
+        response = service.create_run(_matrix_request())
+
+        self.assertEqual(response.status, "completed")
+        self.assertEqual(len(trade_store.signal_events), 150_000)
+        self.assertEqual(trade_store.list_trades_calls, 0)
+        self.assertEqual(trade_store.list_signal_events_calls, 0)
+        self.assertEqual(trade_store.list_metrics_calls, 0)
+
+    def test_completed_scenario_checkpoint_is_not_executed_on_resume(self) -> None:
+        run_store = _ScenarioCheckpointRunStore(
+            completed_scenarios=[
+                {
+                    "scenario_key": "trend_pullback_continuation::bybit::BTCUSDT::1h",
+                    "scenario_index": 1,
+                    "status": "completed",
+                    "strategy": "trend_pullback_continuation",
+                    "exchange": "bybit",
+                    "symbol": "BTCUSDT",
+                    "timeframe": "1h",
+                    "summary": {
+                        "strategy": "trend_pullback_continuation",
+                        "exchange": "bybit",
+                        "symbol": "BTCUSDT",
+                        "timeframe": "1h",
+                        "signals_seen": 12,
+                        "trades_count": 2,
+                        "risk_rejections": 0,
+                        "execution_rejections": 0,
+                    },
+                }
+            ]
+        )
+        scenario_runner = _RecordingScenarioRunner()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            matrix_runner=StrategyTestMatrixRunner(scenario_runner),
+        )
+
+        response = service.create_run(_matrix_request())
+
+        self.assertEqual(response.status, "completed")
+        self.assertEqual(scenario_runner.calls, [])
+        self.assertEqual(response.summary["completed_scenarios"], 1)
+        self.assertEqual(response.summary["signals_seen"], 12)
+
     def test_service_merges_absolute_active_progress_without_double_counting(self) -> None:
         run_store = _EphemeralRunStore()
         service = StrategyTestingService(
@@ -709,6 +782,57 @@ class _RecordingScenarioRunner:
         )
 
 
+class _HighVolumeScenarioRunner:
+    def __init__(self, *, signal_events_count: int) -> None:
+        self.signal_events_count = signal_events_count
+
+    def run_scenario(
+        self,
+        *,
+        run_id: UUID,
+        user_id: UUID,
+        request: StrategyTestRunRequest,
+        strategy: str,
+        pair: StrategyTestPair,
+        timeframe: str,
+        **kwargs: Any,
+    ) -> StrategyTestScenarioResult:
+        _ = user_id, request, kwargs
+        return StrategyTestScenarioResult(
+            run_id=run_id,
+            strategy=strategy,
+            pair=pair,
+            timeframe=timeframe,
+            summary={
+                "strategy": strategy,
+                "exchange": pair.exchange,
+                "symbol": pair.symbol,
+                "timeframe": timeframe,
+                "signals_seen": self.signal_events_count,
+                "signals_count": self.signal_events_count,
+                "execution_candidates": self.signal_events_count,
+                "risk_rejections": 0,
+                "execution_rejections": 0,
+            },
+            trades=[],
+            signal_events=_signal_events(self.signal_events_count, strategy=strategy),
+        )
+
+
+class _CapturingScenarioResultSink:
+    def __init__(self) -> None:
+        self.signal_event_counts: list[int] = []
+
+    def write_result(
+        self,
+        context: StrategyTestScenarioContext,
+        result: StrategyTestScenarioResult,
+        partial_summary: dict[str, Any],
+    ) -> None:
+        _ = context, partial_summary
+        self.signal_event_counts.append(len(result.signal_events))
+
+
 class _ProgressCountingScenarioRunner:
     def __init__(self, *, bars_per_pair_timeframe: dict[tuple[str, str, str], int]) -> None:
         self._bars_per_pair_timeframe = bars_per_pair_timeframe
@@ -802,8 +926,9 @@ class _CallbackMatrixRunner:
         on_scenario_failed: Any = None,
         on_scenario_progress: Any = None,
         is_cancelled: Any = None,
+        **kwargs: Any,
     ) -> StrategyTestMatrixResult:
-        _ = user_uuid, on_scenario_started, on_scenario_failed, on_scenario_progress, is_cancelled
+        _ = user_uuid, on_scenario_started, on_scenario_failed, on_scenario_progress, is_cancelled, kwargs
         completed = 0
         summaries: list[dict[str, Any]] = []
         for strategy in request.strategies:
@@ -858,8 +983,9 @@ class _RepeatedProgressMatrixRunner:
         on_scenario_failed: Any = None,
         on_scenario_progress: Any = None,
         is_cancelled: Any = None,
+        **kwargs: Any,
     ) -> StrategyTestMatrixResult:
-        _ = user_uuid, on_scenario_started, on_scenario_completed, on_scenario_failed, is_cancelled
+        _ = user_uuid, on_scenario_started, on_scenario_completed, on_scenario_failed, is_cancelled, kwargs
         completed_summary = {
             "scenario_count": len(request.strategies),
             "completed_scenarios": 1,
@@ -938,6 +1064,7 @@ class _FirstScenarioPersistsThenFailsMatrixRunner:
         on_scenario_started: Any = None,
         on_scenario_completed: Any = None,
         on_scenario_failed: Any = None,
+        scenario_result_sink: Any = None,
         **kwargs: Any,
     ) -> StrategyTestMatrixResult:
         _ = user_uuid, kwargs
@@ -961,6 +1088,8 @@ class _FirstScenarioPersistsThenFailsMatrixRunner:
             trades=list(first_result.trades),
             signal_events=list(first_result.signal_events),
         ).summary()
+        if scenario_result_sink is not None:
+            scenario_result_sink.write_result(first_context, first_result, partial)
         if on_scenario_completed is not None:
             on_scenario_completed(first_context, first_result, partial)
         self._after_first_completed()
@@ -1013,6 +1142,7 @@ class _CancelAfterFirstScenarioMatrixRunner:
         on_scenario_started: Any = None,
         on_scenario_completed: Any = None,
         is_cancelled: Any = None,
+        scenario_result_sink: Any = None,
         **kwargs: Any,
     ) -> StrategyTestMatrixResult:
         _ = user_uuid, kwargs
@@ -1035,6 +1165,8 @@ class _CancelAfterFirstScenarioMatrixRunner:
             trades=list(result.trades),
             signal_events=list(result.signal_events),
         ).summary()
+        if scenario_result_sink is not None:
+            scenario_result_sink.write_result(context, result, partial)
         if on_scenario_completed is not None:
             on_scenario_completed(context, result, partial)
         self._run_store.mark_stopping(run_id)
@@ -1101,6 +1233,70 @@ class _RepeatedCompletionMatrixRunner:
         )
 
 
+class _SingleCallbackMatrixRunner:
+    def __init__(self, *, signal_events_count: int) -> None:
+        self.signal_events_count = signal_events_count
+
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+        on_scenario_started: Any = None,
+        on_scenario_completed: Any = None,
+        scenario_result_sink: Any = None,
+        **kwargs: Any,
+    ) -> StrategyTestMatrixResult:
+        _ = user_uuid, kwargs
+        context = StrategyTestScenarioContext(
+            index=1,
+            total=1,
+            strategy=request.strategies[0],
+            pair=request.pairs[0],
+            timeframe=request.timeframes[0],
+        )
+        if on_scenario_started is not None:
+            on_scenario_started(context)
+        result = StrategyTestScenarioResult(
+            run_id=run_id,
+            strategy=context.strategy,
+            pair=context.pair,
+            timeframe=context.timeframe,
+            summary={
+                "strategy": context.strategy,
+                "exchange": context.exchange,
+                "symbol": context.symbol,
+                "timeframe": context.timeframe,
+                "signals_seen": self.signal_events_count,
+                "signals_count": self.signal_events_count,
+                "execution_candidates": self.signal_events_count,
+                "risk_rejections": 0,
+                "execution_rejections": 0,
+            },
+            trades=[],
+            signal_events=_signal_events(self.signal_events_count, strategy=context.strategy),
+        )
+        partial = StrategyTestMatrixResult(
+            run_id=run_id,
+            scenario_count=1,
+            completed_scenarios=1,
+            failed_scenarios=0,
+            scenario_summaries=[result.summary],
+        ).summary()
+        if scenario_result_sink is not None:
+            scenario_result_sink.write_result(context, result, partial)
+        if on_scenario_completed is not None:
+            on_scenario_completed(context, result, partial)
+        return StrategyTestMatrixResult(
+            run_id=run_id,
+            scenario_count=1,
+            completed_scenarios=1,
+            failed_scenarios=0,
+            scenario_summaries=[result.summary],
+        )
+
+
 class _CancellingMatrixRunner:
     def __init__(self, run_store: "_EphemeralRunStore") -> None:
         self._run_store = run_store
@@ -1157,6 +1353,34 @@ class _RecordingTradeStore:
 
     def list_metrics(self, run_id: UUID) -> list[StrategyTestMetricRow]:
         return [row for row in self.metrics if row.run_id == run_id]
+
+
+class _ListFailingTradeStore(_RecordingTradeStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.list_trades_calls = 0
+        self.list_signal_events_calls = 0
+        self.list_metrics_calls = 0
+
+    def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
+        _ = run_id, limit, offset
+        self.list_trades_calls += 1
+        raise AssertionError("write path must not list existing trades")
+
+    def list_signal_events(
+        self,
+        run_id: UUID,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[StrategyTestSignalEvent]:
+        _ = run_id, limit, offset
+        self.list_signal_events_calls += 1
+        raise AssertionError("write path must not list existing signal events")
+
+    def list_metrics(self, run_id: UUID) -> list[StrategyTestMetricRow]:
+        _ = run_id
+        self.list_metrics_calls += 1
+        raise AssertionError("write path must not list existing metrics")
 
 
 class _SchemaRecordingTradeStore(_RecordingTradeStore):
@@ -1300,6 +1524,109 @@ class _EphemeralRunStore:
         run = self.detail.run.model_copy(update={"status": status, "summary": summary or {}, "error": error})
         self.detail = StrategyTestRunDetailResponse(run=run)
         return self.detail
+
+
+@dataclass
+class _ScenarioCheckpoint:
+    scenario_key: str
+    scenario_index: int
+    status: str
+    strategy_code: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    summary: dict[str, Any]
+    bars_total: int = 0
+    bars_processed: int = 0
+    error: str | None = None
+
+
+class _ScenarioCheckpointRunStore(_EphemeralRunStore):
+    def __init__(self, completed_scenarios: Sequence[dict[str, Any]]) -> None:
+        super().__init__()
+        self._scenarios = {
+            str(item["scenario_key"]): _ScenarioCheckpoint(
+                scenario_key=str(item["scenario_key"]),
+                scenario_index=int(item["scenario_index"]),
+                status=str(item["status"]),
+                strategy_code=str(item["strategy"]),
+                exchange=str(item["exchange"]),
+                symbol=str(item["symbol"]),
+                timeframe=str(item["timeframe"]),
+                summary=dict(item["summary"]),
+            )
+            for item in completed_scenarios
+        }
+
+    def list_scenarios(self, run_id: UUID) -> list[_ScenarioCheckpoint]:
+        _ = run_id
+        return sorted(self._scenarios.values(), key=lambda scenario: scenario.scenario_index)
+
+    def completed_scenario_keys(self, run_id: UUID) -> set[str]:
+        _ = run_id
+        return {
+            scenario.scenario_key
+            for scenario in self._scenarios.values()
+            if scenario.status == "completed"
+        }
+
+    def mark_scenario_running(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        scenario_index: int,
+        strategy_code: str,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        bars_total: int | None = None,
+    ) -> _ScenarioCheckpoint:
+        _ = run_id
+        scenario = _ScenarioCheckpoint(
+            scenario_key=scenario_key,
+            scenario_index=scenario_index,
+            status="running",
+            strategy_code=strategy_code,
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            summary={},
+            bars_total=bars_total or 0,
+        )
+        self._scenarios[scenario_key] = scenario
+        return scenario
+
+    def mark_scenario_completed(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        summary: dict[str, Any],
+        bars_processed: int | None = None,
+        result_written_at: datetime | None = None,
+    ) -> _ScenarioCheckpoint:
+        _ = run_id, result_written_at
+        scenario = self._scenarios[scenario_key]
+        scenario.status = "completed"
+        scenario.summary = dict(summary)
+        scenario.bars_processed = bars_processed or scenario.bars_processed
+        return scenario
+
+    def mark_scenario_failed(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        error: str,
+        summary: dict[str, Any] | None = None,
+    ) -> _ScenarioCheckpoint:
+        _ = run_id
+        scenario = self._scenarios[scenario_key]
+        scenario.status = "failed"
+        scenario.error = error
+        scenario.summary = dict(summary or {})
+        return scenario
 
 
 def _matrix_request(
@@ -1495,6 +1822,19 @@ def _scenario_result(strategy: str) -> StrategyTestScenarioResult:
         trades=[trade],
         signal_events=[event],
     )
+
+
+def _signal_events(count: int, *, strategy: str) -> list[StrategyTestSignalEvent]:
+    base = _signal_event("signal-0").model_copy(update={"strategy_code": strategy})
+    return [
+        base.model_copy(
+            update={
+                "synthetic_signal_id": f"signal-{index}",
+                "signal_key": f"{strategy}:BTCUSDT:signal-{index}",
+            }
+        )
+        for index in range(count)
+    ]
 
 
 def _signal_event(

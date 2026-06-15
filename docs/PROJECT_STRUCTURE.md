@@ -35,7 +35,7 @@ Key docs:
 - Strategy engine and strategy modules: `backend/app/strategies/`
 - Execution gate and dedup: `backend/app/services/signal_execution_gate.py`, `backend/app/services/signal_deduplication.py`
 - Edge and strategy eligibility: `backend/app/services/edge_calibration.py`, `backend/app/services/execution_strategy_registry.py`
-- Strategy testing runtime: `backend/app/services/strategy_testing/`, `backend/app/workers/forward_strategy_test_worker.py`
+- Strategy testing runtime: `backend/app/services/strategy_testing/`, durable worker entrypoint `backend/app/workers/strategy_test_worker.py`, forward runtime adapter `backend/app/workers/forward_strategy_test_worker.py`
 - Pending-entry reason codes: `backend/app/domain/pending_entry_reason.py`
 - Virtual trading canonical modules: `backend/app/services/virtual_trading/service.py`, `backend/app/services/virtual_trading/execution_engine.py`, `backend/app/services/virtual_trading/simulation_model.py`
 - Exchange adapters: `backend/app/exchanges/`

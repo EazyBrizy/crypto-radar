@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Protocol, Sequence, cast
 from uuid import UUID, uuid4
@@ -178,6 +178,26 @@ class StrategyTestRunStore(Protocol):
         ...
 
     def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
+        ...
+
+    def claim_next_run(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> StrategyTestRunDetailResponse | None:
+        ...
+
+    def renew_lease(
+        self,
+        run_id: UUID,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> StrategyTestRunDetailResponse:
+        ...
+
+    def recover_expired_leases(self, *, worker_id: str) -> dict[str, int]:
         ...
 
     def mark_running(self, run_id: UUID) -> StrategyTestRunDetailResponse:
@@ -644,12 +664,100 @@ class PostgresStrategyTestRunStore:
                 return None
             return _run_to_detail(run)
 
+    def claim_next_run(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> StrategyTestRunDetailResponse | None:
+        now = _utc_now()
+        with self._session_factory() as session:
+            run = session.scalars(_claim_next_run_statement().limit(1)).first()
+            if run is None:
+                return None
+            run.worker_id = worker_id
+            run.worker_attempt = int(run.worker_attempt or 0) + 1
+            run.claimed_at = now
+            run.lease_expires_at = _lease_expires_at(now, lease_seconds)
+            session.flush()
+            detail = _run_to_detail(run)
+            session.commit()
+            return detail
+
+    def renew_lease(
+        self,
+        run_id: UUID,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> StrategyTestRunDetailResponse:
+        now = _utc_now()
+        with self._session_factory() as session:
+            run = _get_run_or_raise(session, run_id)
+            run.worker_id = run.worker_id or worker_id
+            run.claimed_at = run.claimed_at or now
+            run.last_heartbeat_at = now
+            run.lease_expires_at = _lease_expires_at(now, lease_seconds)
+            session.flush()
+            detail = _run_to_detail(run)
+            session.commit()
+            return detail
+
+    def recover_expired_leases(self, *, worker_id: str) -> dict[str, int]:
+        now = _utc_now()
+        recovered = {"failed": 0, "cancelled": 0, "requeued": 0}
+        with self._session_factory() as session:
+            statement = (
+                select(StrategyTestRun)
+                .where(StrategyTestRun.status.in_(("queued", "running", "stopping")))
+                .where(StrategyTestRun.lease_expires_at.is_not(None))
+                .where(StrategyTestRun.lease_expires_at <= now)
+                .order_by(StrategyTestRun.lease_expires_at.asc(), StrategyTestRun.created_at.asc())
+                .with_for_update(skip_locked=True)
+            )
+            runs = list(session.scalars(statement).all())
+            for run in runs:
+                if run.status == "queued":
+                    run.worker_id = None
+                    run.lease_expires_at = None
+                    run.claimed_at = None
+                    recovered["requeued"] += 1
+                    continue
+                if run.status == "stopping":
+                    run.status = "cancelled"
+                    run.finished_at = now
+                    run.last_heartbeat_at = now
+                    run.lease_expires_at = None
+                    run.runtime_state = {
+                        **_json_object(run.runtime_state),
+                        "phase": "cancelled",
+                        "cancelled_reason": "strategy_test_worker_lease_expired",
+                        "recovered_by_worker_id": worker_id,
+                    }
+                    recovered["cancelled"] += 1
+                    continue
+                run.status = "failed"
+                run.finished_at = now
+                run.last_heartbeat_at = now
+                run.lease_expires_at = None
+                run.error = "Strategy test worker lease expired before completion"
+                run.runtime_state = {
+                    **_json_object(run.runtime_state),
+                    "phase": "failed",
+                    "last_error": run.error,
+                    "recovered_by_worker_id": worker_id,
+                }
+                recovered["failed"] += 1
+            session.flush()
+            session.commit()
+        return recovered
+
     def mark_running(self, run_id: UUID) -> StrategyTestRunDetailResponse:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
             run.status = "running"
-            now = datetime.now(timezone.utc)
-            run.started_at = now
+            now = _utc_now()
+            run.started_at = run.started_at or now
             run.last_heartbeat_at = now
             run.error = None
             session.flush()
@@ -664,10 +772,11 @@ class PostgresStrategyTestRunStore:
     ) -> StrategyTestRunDetailResponse:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
-            now = datetime.now(timezone.utc)
+            now = _utc_now()
             run.status = "completed"
             run.finished_at = now
             run.last_heartbeat_at = now
+            run.lease_expires_at = None
             run.summary = dict(summary or {})
             run.error = None
             session.flush()
@@ -683,10 +792,11 @@ class PostgresStrategyTestRunStore:
     ) -> StrategyTestRunDetailResponse:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
-            now = datetime.now(timezone.utc)
+            now = _utc_now()
             run.status = "failed"
             run.finished_at = now
             run.last_heartbeat_at = now
+            run.lease_expires_at = None
             run.error = error
             if summary is not None:
                 run.summary = dict(summary)
@@ -699,7 +809,7 @@ class PostgresStrategyTestRunStore:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
             run.status = "stopping"
-            run.last_heartbeat_at = datetime.now(timezone.utc)
+            run.last_heartbeat_at = _utc_now()
             session.flush()
             detail = _run_to_detail(run)
             session.commit()
@@ -708,10 +818,11 @@ class PostgresStrategyTestRunStore:
     def mark_cancelled(self, run_id: UUID) -> StrategyTestRunDetailResponse:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
-            now = datetime.now(timezone.utc)
+            now = _utc_now()
             run.status = "cancelled"
             run.finished_at = now
             run.last_heartbeat_at = now
+            run.lease_expires_at = None
             session.flush()
             detail = _run_to_detail(run)
             session.commit()
@@ -731,11 +842,20 @@ class PostgresStrategyTestRunStore:
                 **dict(runtime_state),
             }
             if heartbeat:
-                run.last_heartbeat_at = datetime.now(timezone.utc)
+                run.last_heartbeat_at = _utc_now()
             session.flush()
             detail = _run_to_detail(run)
             session.commit()
             return detail
+
+
+def _claim_next_run_statement() -> Any:
+    return (
+        select(StrategyTestRun)
+        .where(StrategyTestRun.status == "queued")
+        .order_by(StrategyTestRun.created_at.asc())
+        .with_for_update(skip_locked=True)
+    )
 
 
 def _get_run_or_raise(session: Session, run_id: UUID) -> StrategyTestRun:
@@ -743,6 +863,14 @@ def _get_run_or_raise(session: Session, run_id: UUID) -> StrategyTestRun:
     if run is None:
         raise ValueError(f"Strategy test run is not found: {run_id}")
     return run
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _lease_expires_at(now: datetime, lease_seconds: int) -> datetime:
+    return now + timedelta(seconds=max(1, int(lease_seconds)))
 
 
 def _stored_params(request: StrategyTestRunRequest) -> dict[str, Any]:

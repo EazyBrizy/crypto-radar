@@ -27,24 +27,23 @@ from app.services.strategy_testing.schemas import (
     StrategyTestTrade,
 )
 from app.services.strategy_testing.service import StrategyTestingService
-from app.workers.forward_strategy_test_worker import ForwardStrategyTestWorker
+from app.workers.strategy_test_worker import StrategyTestWorker
 
 
 NOW = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
 
 
 class ForwardStrategyTestAppIntegrationTest(unittest.TestCase):
-    def test_lifespan_forward_virtual_pending_chain_uses_shared_stores(self) -> None:
+    def test_strategy_worker_forward_virtual_pending_chain_uses_shared_stores(self) -> None:
         run_store = _SharedRunStore()
         trade_store = _RecordingTradeStore()
-
-        app.dependency_overrides[get_strategy_testing_service] = (
-            lambda: StrategyTestingService(
-                run_store=run_store,
-                trade_store=trade_store,
-                matrix_runner=_FailingStrategyTestMatrixRunner(),  # type: ignore[arg-type]
-            )
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=trade_store,
+            matrix_runner=_FailingStrategyTestMatrixRunner(),  # type: ignore[arg-type]
         )
+
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
 
         try:
             with _patched_lifespan(run_store, trade_store), TestClient(app) as client:
@@ -54,15 +53,23 @@ class ForwardStrategyTestAppIntegrationTest(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 202)
                 run_id = UUID(response.json()["run_id"])
+                self.assertEqual(response.json()["status"], "queued")
 
-                worker = app.state.forward_strategy_test_worker
                 runner = app.state.scanner_runner
-                scanner = runner._scanner  # type: ignore[attr-defined]
-                self.assertIs(runner._forward_strategy_tests, worker)  # type: ignore[attr-defined]
-                self.assertIs(scanner._forward_strategy_tests, worker)  # type: ignore[attr-defined]
+                self.assertIsNone(app.state.forward_strategy_test_worker)
+                self.assertIsNone(runner._forward_strategy_tests)  # type: ignore[attr-defined]
+
+                strategy_worker = StrategyTestWorker(
+                    service=service,
+                    run_store=run_store,
+                    worker_id="test-worker",
+                    heartbeat_interval_seconds=0.01,
+                )
+                worker_result = asyncio.run(strategy_worker.run_once())
+                runtime = ForwardStrategyTestRuntime(run_store=run_store, trade_store=trade_store)
 
                 asyncio.run(
-                    scanner._process_forward_strategy_test_tick(  # type: ignore[attr-defined]
+                    runtime.process_market_tick(
                         MarketData(
                             exchange="bybit",
                             symbol="BTCUSDT",
@@ -73,12 +80,12 @@ class ForwardStrategyTestAppIntegrationTest(unittest.TestCase):
                     )
                 )
                 asyncio.run(
-                    runner._process_forward_strategy_test_signal(  # type: ignore[attr-defined]
+                    runtime.process_strategy_signal(
                         _strategy_signal(execution_gate=_gate(can_arm_pending=True))
                     )
                 )
                 asyncio.run(
-                    scanner._process_forward_strategy_test_tick(  # type: ignore[attr-defined]
+                    runtime.process_market_tick(
                         MarketData(
                             exchange="bybit",
                             symbol="BTCUSDT",
@@ -110,21 +117,20 @@ class ForwardStrategyTestAppIntegrationTest(unittest.TestCase):
                 self.assertIn("write_signal_events", trade_store.calls)
                 self.assertIn("write_trades", trade_store.calls)
                 self.assertIn("write_metrics", trade_store.calls)
-                self.assertEqual(worker.last_result.opened_trades, 1)
+                self.assertEqual(worker_result.started_forward_runs, 1)
         finally:
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 
     def test_scanner_disabled_forward_run_waits_for_market_data_and_exposes_health_reason(self) -> None:
         run_store = _SharedRunStore()
         trade_store = _RecordingTradeStore()
-
-        app.dependency_overrides[get_strategy_testing_service] = (
-            lambda: StrategyTestingService(
-                run_store=run_store,
-                trade_store=trade_store,
-                matrix_runner=_FailingStrategyTestMatrixRunner(),  # type: ignore[arg-type]
-            )
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=trade_store,
+            matrix_runner=_FailingStrategyTestMatrixRunner(),  # type: ignore[arg-type]
         )
+
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
 
         try:
             with _patched_lifespan(run_store, trade_store), TestClient(app) as client:
@@ -134,9 +140,15 @@ class ForwardStrategyTestAppIntegrationTest(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 202)
                 run_id = UUID(response.json()["run_id"])
-                worker = app.state.forward_strategy_test_worker
+                strategy_worker = StrategyTestWorker(
+                    service=service,
+                    run_store=run_store,
+                    worker_id="test-worker",
+                    heartbeat_interval_seconds=0.01,
+                )
 
-                worker._last_result = worker._runtime.heartbeat_active_runs()  # type: ignore[attr-defined]
+                asyncio.run(strategy_worker.run_once())
+                worker_heartbeat = asyncio.run(strategy_worker.run_once())
 
                 detail_response = client.get(f"/api/v1/strategy-tests/runs/{run_id}")
                 health_response = client.get("/health")
@@ -153,10 +165,9 @@ class ForwardStrategyTestAppIntegrationTest(unittest.TestCase):
                 self.assertEqual(runtime_state["processed_ticks"], 0)
                 self.assertFalse(health["scanner_running"])
                 self.assertEqual(health["market_data_status"], "offline")
-                self.assertEqual(
-                    health["forward_strategy_test_last_result"]["runtime_state_updates"],
-                    1,
-                )
+                self.assertFalse(health["forward_strategy_test_running"])
+                self.assertEqual(health["forward_strategy_test_last_result"], {})
+                self.assertEqual(worker_heartbeat.forward_heartbeat_updates, 1)
                 self.assertEqual(
                     detail_response.json()["run"]["runtime_state"]["last_heartbeat_reason"],
                     "waiting_for_market_data",
@@ -172,18 +183,7 @@ def _patched_lifespan(
 ) -> Iterator[None]:
     events: list[str] = []
 
-    class SharedForwardStrategyTestWorker(ForwardStrategyTestWorker):
-        def __init__(self) -> None:
-            super().__init__(
-                runtime=ForwardStrategyTestRuntime(
-                    run_store=run_store,
-                    trade_store=trade_store,
-                ),
-                interval_seconds=60.0,
-            )
-
     with ExitStack() as stack:
-        stack.enter_context(patch("app.main.ForwardStrategyTestWorker", SharedForwardStrategyTestWorker))
         stack.enter_context(patch("app.main.ExchangeInstrumentRuleSyncRunner", _worker_factory("instrument", events)))
         stack.enter_context(patch("app.main.DerivativeSnapshotSyncRunner", _worker_factory("derivative", events)))
         stack.enter_context(patch("app.main.OrderbookSnapshotWorker", _worker_factory("orderbook", events)))
@@ -273,6 +273,31 @@ class _SharedRunStore:
         detail = StrategyTestRunDetailResponse(run=run)
         self._runs[run.run_id] = detail
         return detail
+
+    def claim_next_run(self, *, worker_id: str, lease_seconds: int) -> StrategyTestRunDetailResponse | None:
+        _ = worker_id, lease_seconds
+        for detail in self._runs.values():
+            if detail.run.status == "queued":
+                return detail
+        return None
+
+    def renew_lease(
+        self,
+        run_id: UUID,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> StrategyTestRunDetailResponse:
+        _ = worker_id, lease_seconds
+        detail = self._runs[run_id]
+        self._runs[run_id] = StrategyTestRunDetailResponse(
+            run=detail.run.model_copy(update={"last_heartbeat_at": NOW})
+        )
+        return self._runs[run_id]
+
+    def recover_expired_leases(self, *, worker_id: str) -> dict[str, int]:
+        _ = worker_id
+        return {"failed": 0, "cancelled": 0, "requeued": 0}
 
     def list_runs(
         self,

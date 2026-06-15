@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import JSON, create_engine, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -15,7 +16,7 @@ from app.core.database import Base
 from app.models.strategy_testing import StrategyTestRun
 from app.models.user import AppUser
 from app.services.strategy_testing.schemas import StrategyTestPair, StrategyTestRunRequest
-from app.services.strategy_testing.stores import PostgresStrategyTestRunStore
+from app.services.strategy_testing.stores import PostgresStrategyTestRunStore, _claim_next_run_statement
 
 
 MIGRATION_PATH = (
@@ -29,6 +30,12 @@ FORWARD_RUNTIME_MIGRATION_PATH = (
     / "alembic"
     / "versions"
     / "202606060004_add_forward_strategy_test_runtime.py"
+)
+STRATEGY_TEST_WORKER_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "alembic"
+    / "versions"
+    / "202606150001_add_strategy_test_worker_lease.py"
 )
 
 
@@ -52,6 +59,10 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("summary", column_names)
         self.assertIn("runtime_state", column_names)
         self.assertIn("last_heartbeat_at", column_names)
+        self.assertIn("worker_id", column_names)
+        self.assertIn("worker_attempt", column_names)
+        self.assertIn("lease_expires_at", column_names)
+        self.assertIn("claimed_at", column_names)
         self.assertIn("ck_strategy_test_runs_status", constraint_names)
         self.assertIn("ck_strategy_test_runs_test_type", constraint_names)
         self.assertIn("ck_strategy_test_runs_mode", constraint_names)
@@ -60,6 +71,7 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("ck_strategy_test_runs_requested_timeframes_non_empty", constraint_names)
         self.assertIn("ix_strategy_test_runs_user_created", index_names)
         self.assertIn("ix_strategy_test_runs_status_created", index_names)
+        self.assertIn("ix_strategy_test_runs_status_lease", index_names)
         self.assertIn("ix_strategy_test_runs_mode", index_names)
         self.assertIn("ix_strategy_test_runs_test_type", index_names)
         status_sql = str(status_constraint.sqltext)
@@ -95,6 +107,29 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("forward_virtual", migration)
         self.assertIn("stopping", migration)
 
+    def test_strategy_test_worker_lease_migration_contract_is_reflected_by_model(self) -> None:
+        migration = STRATEGY_TEST_WORKER_MIGRATION_PATH.read_text(encoding="utf-8")
+        table = StrategyTestRun.__table__
+
+        self.assertIn("worker_id", table.c)
+        self.assertIn("worker_attempt", table.c)
+        self.assertIn("lease_expires_at", table.c)
+        self.assertIn("claimed_at", table.c)
+        self.assertIn("ix_strategy_test_runs_status_lease", {index.name for index in table.indexes})
+        self.assertIn("worker_id", migration)
+        self.assertIn("worker_attempt", migration)
+        self.assertIn("lease_expires_at", migration)
+        self.assertIn("claimed_at", migration)
+        self.assertIn("ix_strategy_test_runs_status_lease", migration)
+
+    def test_claim_next_run_statement_uses_postgres_skip_locked(self) -> None:
+        statement = _claim_next_run_statement().limit(1)
+
+        compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+        self.assertIn("FOR UPDATE SKIP LOCKED", compiled)
+        self.assertIn("strategy_test_runs.status = ", compiled)
+
 
 class PostgresStrategyTestRunStoreTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -127,6 +162,7 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
         self.assertEqual(detail.run.summary, {})
         self.assertEqual(detail.run.runtime_state, {})
         self.assertIsNone(detail.run.last_heartbeat_at)
+        self.assertEqual(detail.run.requested_matrix["scenario_count"], 4)
         matrix = detail.run.requested_matrix
         self.assertEqual(matrix["user_id"], "demo_user")
         self.assertEqual(matrix["mode"], "research_virtual")
@@ -152,6 +188,28 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
             self.assertEqual(run.requested_user_id, "demo_user")
             self.assertEqual(run.status, "queued")
             self.assertEqual(run.test_type, "historical_backtest")
+            self.assertIsNone(run.worker_id)
+            self.assertEqual(run.worker_attempt, 0)
+            self.assertIsNone(run.lease_expires_at)
+            self.assertIsNone(run.claimed_at)
+
+    def test_claim_next_run_sets_worker_lease_and_attempt(self) -> None:
+        created = self.store.create_run(_request())
+
+        claimed = self.store.claim_next_run(worker_id="worker-a", lease_seconds=30)
+
+        self.assertIsNotNone(claimed)
+        assert claimed is not None
+        self.assertEqual(claimed.run.run_id, created.run.run_id)
+        with self.SessionFactory() as session:
+            run = session.get(StrategyTestRun, created.run.run_id)
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.status, "queued")
+            self.assertEqual(run.worker_id, "worker-a")
+            self.assertEqual(run.worker_attempt, 1)
+            self.assertIsNotNone(run.claimed_at)
+            self.assertIsNotNone(run.lease_expires_at)
 
     def test_create_run_persists_forward_virtual_test_type(self) -> None:
         detail = self.store.create_run(_request(test_type="forward_virtual"))
@@ -391,6 +449,10 @@ def _create_sqlite_tables(engine: Any) -> None:
                     started_at DATETIME,
                     finished_at DATETIME,
                     last_heartbeat_at DATETIME,
+                    worker_id TEXT,
+                    worker_attempt INTEGER NOT NULL DEFAULT 0,
+                    lease_expires_at DATETIME,
+                    claimed_at DATETIME,
                     FOREIGN KEY(user_id) REFERENCES app_users(id)
                 )
                 """

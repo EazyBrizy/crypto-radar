@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status as http_status
+from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
 
 from app.services.strategy_testing.schemas import (
     StrategyTestCalibrationResponse,
@@ -33,14 +33,12 @@ def get_strategy_testing_service() -> StrategyTestingService:
 )
 async def create_strategy_test_run(
     request: StrategyTestRunRequest,
-    background_tasks: BackgroundTasks,
     service: StrategyTestingService = Depends(get_strategy_testing_service),
 ) -> StrategyTestRunResponse:
     try:
         run = service.enqueue_run(request)
     except (LookupError, ValueError) as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    background_tasks.add_task(service.execute_run, run.run_id, request)
     return run
 
 

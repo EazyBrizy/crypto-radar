@@ -83,6 +83,3 @@ class ForwardStrategyTestWorker:
                 logger.warning("Forward strategy test heartbeat failed: %s", exc)
                 self._last_result = ForwardRuntimeResult(errors=[str(exc)])
             await asyncio.sleep(self._interval_seconds)
-
-
-forward_strategy_test_worker = ForwardStrategyTestWorker()

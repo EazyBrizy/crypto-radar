@@ -23,7 +23,6 @@ from app.services.realtime_gateway import realtime_gateway
 from app.services.trading_kill_switch import scanner_kill_switch_payload
 from app.workers.derivative_snapshot_worker import DerivativeSnapshotSyncRunner
 from app.workers.exchange_instrument_worker import ExchangeInstrumentRuleSyncRunner
-from app.workers.forward_strategy_test_worker import ForwardStrategyTestWorker
 from app.workers.orderbook_snapshot_worker import OrderbookSnapshotWorker
 from app.workers.real_position_sync_worker import BybitRealPositionSyncClient, RealPositionSyncWorker
 from app.workers.signal_worker import ScannerRunner, SignalExpiryWorker
@@ -60,8 +59,7 @@ def _real_position_sync_enabled() -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    forward_strategy_test_worker = ForwardStrategyTestWorker()
-    runner = ScannerRunner(forward_strategy_tests=forward_strategy_test_worker)
+    runner = ScannerRunner()
     instrument_rule_runner = ExchangeInstrumentRuleSyncRunner()
     derivative_snapshot_runner = DerivativeSnapshotSyncRunner()
     orderbook_snapshot_worker = OrderbookSnapshotWorker()
@@ -81,7 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.orderbook_snapshot_worker = orderbook_snapshot_worker
     app.state.signal_expiry_worker = signal_expiry_worker
     app.state.real_position_sync_worker = real_position_sync_worker
-    app.state.forward_strategy_test_worker = forward_strategy_test_worker
+    app.state.forward_strategy_test_worker = None
     app.state.scanner_autostart_enabled = scanner_autostart_enabled
     app.state.exchange_instrument_rule_sync_enabled = instrument_rule_sync_enabled
     app.state.derivative_snapshot_sync_enabled = derivative_snapshot_sync_enabled
@@ -114,8 +112,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         logging.info("Real position sync disabled by settings")
 
-    forward_strategy_test_worker.start()
-
     if scanner_autostart_enabled:
         runner.start()
     else:
@@ -125,7 +121,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await runner.stop()
-        await forward_strategy_test_worker.stop()
         await signal_expiry_worker.stop()
         await orderbook_snapshot_worker.stop()
         await real_position_sync_worker.stop()

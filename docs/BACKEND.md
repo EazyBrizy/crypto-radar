@@ -51,7 +51,7 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 - Historical analytics writes must be idempotent by `run_id`, scenario key (`strategy/exchange/symbol/timeframe`), and trade/event/metric key. Retries, cancellation, and repeated completion callbacks should preserve already written rows without duplicating report data.
 - Running, stopping, cancelled, and failed historical reports may be partial. Report generation reads completed scenario rows already in analytics storage and combines them with `runtime_state.partial_summary`; cancellation keeps completed scenario rows visible.
 - `forward_virtual` runs start as backend-owned runtime runs: `StrategyTestingService.execute_run` marks them `running`, initializes `runtime_state.status="listening"`, and leaves processing to `ForwardStrategyTestRuntime`.
-- `StrategyTestingService` is constructed per API request, but run state is not request-local. The API service and lifespan-managed `ForwardStrategyTestWorker` must share the configured strategy-test run store and analytics store, so a run created by one service instance remains visible to the worker and later read requests.
+- `StrategyTestingService` is constructed per API request and by the durable `strategy-test-worker` process, but run state is not request-local. API routes only enqueue strategy-test runs; `backend/app/workers/strategy_test_worker.py` claims queued runs with a database lease and executes them through the same service/store boundaries.
 - `ForwardStrategyTestRuntime` consumes scanner ticks or `StrategySignal` objects, filters them by the requested strategy/pair/timeframe matrix, persists signals through `SignalService`, uses `SignalExecutionGateSnapshot` as the execution source of truth, and delegates virtual entries to `VirtualTradingService` or pending entries to `PendingEntryService`.
 - `forward_virtual` must never place real orders. It records virtual trades and lightweight forward metrics into the existing strategy-test stores and updates `runtime_state` counters such as `processed_ticks`, `processed_signals`, `opened_trades`, `pending_entries_armed`, `trades_written`, and `metrics_written`.
 - `runtime_state.status="listening"` means the run is active and the runtime has either just started or is alive after receiving market data. `runtime_state.status="waiting_for_market_data"` means the worker heartbeat sees an active forward run with zero matching ticks; `runtime_state.last_heartbeat_reason` carries the display reason such as `waiting_for_market_data` or `no_matching_market_data`.
@@ -148,7 +148,8 @@ Important rules:
 ## Background Workers
 
 - Scanner runner: `backend/app/workers/signal_worker.py`
-- Forward strategy-test worker: `backend/app/workers/forward_strategy_test_worker.py`
+- Durable strategy-test worker: `backend/app/workers/strategy_test_worker.py`
+- Forward strategy-test runtime adapter: `backend/app/workers/forward_strategy_test_worker.py`
 - Derivative snapshots: `backend/app/workers/derivative_snapshot_worker.py`
 - Exchange instrument rules: `backend/app/workers/exchange_instrument_worker.py`
 - Orderbook snapshots: `backend/app/workers/orderbook_snapshot_worker.py`

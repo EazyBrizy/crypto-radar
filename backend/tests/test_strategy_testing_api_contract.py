@@ -145,9 +145,9 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(data["requested_matrix"]["test_type"], "historical_backtest")
         self.assertEqual(data["requested_matrix"]["scenario_count"], 12)
         self.assertEqual(list_response.json()[0]["run_id"], data["run_id"])
-        self.assertEqual(list_response.json()[0]["status"], "completed")
+        self.assertEqual(list_response.json()[0]["status"], "queued")
         self.assertEqual(list_response.json()[0]["test_type"], "historical_backtest")
-        self.assertEqual(list_response.json()[0]["summary"]["scenario_count"], 12)
+        self.assertEqual(list_response.json()[0]["runtime_state"]["phase"], "queued")
 
     def test_post_forward_virtual_run_starts_runtime_without_historical_matrix(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -170,10 +170,24 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["status"], "queued")
         self.assertEqual(response.json()["test_type"], "forward_virtual")
-        self.assertEqual(list_response.json()[0]["status"], "running")
+        self.assertEqual(list_response.json()[0]["status"], "queued")
         self.assertEqual(list_response.json()[0]["test_type"], "forward_virtual")
-        self.assertEqual(list_response.json()[0]["runtime_state"]["status"], "listening")
-        self.assertEqual(list_response.json()[0]["runtime_state"]["processed_signals"], 0)
+        self.assertEqual(list_response.json()[0]["runtime_state"], {})
+
+    def test_post_runs_only_enqueues_and_does_not_execute_in_background(self) -> None:
+        service = _RecordingEnqueueOnlyService()
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+
+        try:
+            response = client.post("/api/v1/strategy-tests/runs", json=_payload())
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
+        self.assertEqual(service.enqueue_calls, 1)
+        self.assertEqual(service.execute_calls, 0)
 
     def test_completed_historical_run_does_not_publish_execution_calibration_by_default(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -211,6 +225,39 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(call["run_id"], created.run.run_id)
         self.assertEqual(call["request"].test_type, "historical_backtest")
         self.assertIn("expectancy_after_costs_r", {metric.code for metric in call["metrics"]})
+
+    def test_execute_run_restores_request_from_persisted_matrix_when_request_omitted(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        runner = _RecordingMatrixRunner()
+        service = StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=runner,  # type: ignore[arg-type]
+            eligibility_profile_updater=_RecordingEligibilityProfileUpdater(),
+        )
+        request = _request(params={"auto_publish_calibration": False})
+        created = store.create_run(request)
+
+        completed = service.execute_run(created.run.run_id)
+
+        self.assertEqual(completed.status, "completed")
+        self.assertIsNotNone(runner.request)
+        assert runner.request is not None
+        self.assertEqual(runner.request.user_id, request.user_id)
+        self.assertEqual(runner.request.test_type, "historical_backtest")
+        self.assertEqual(runner.request.strategies, request.strategies)
+        self.assertEqual(runner.request.pairs, request.pairs)
+        self.assertEqual(runner.request.timeframes, request.timeframes)
+        self.assertEqual(runner.request.start_at, request.start_at)
+        self.assertEqual(runner.request.end_at, request.end_at)
+        self.assertEqual(runner.request.mode, request.mode)
+        self.assertEqual(runner.request.initial_capital, request.initial_capital)
+        self.assertEqual(runner.request.fee_rate, request.fee_rate)
+        self.assertEqual(runner.request.slippage_bps, request.slippage_bps)
+        self.assertEqual(runner.request.same_candle_policy, request.same_candle_policy)
+        self.assertEqual(runner.request.params, request.params)
+        self.assertEqual(runner.request.metric_set, request.metric_set)
+        self.assertEqual(runner.request.tags, request.tags)
 
     def test_calibration_endpoint_publishes_completed_run_profiles(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -884,6 +931,22 @@ class _MetricStrategyTestMatrixRunner:
         )
 
 
+class _RecordingMatrixRunner(_NoopStrategyTestMatrixRunner):
+    def __init__(self) -> None:
+        self.request: StrategyTestRunRequest | None = None
+
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+        **kwargs: Any,
+    ) -> StrategyTestMatrixResult:
+        self.request = request
+        return super().run_matrix(request=request, run_id=run_id, user_uuid=user_uuid, **kwargs)
+
+
 class _InsufficientSampleStrategyTestMatrixRunner:
     def run_matrix(
         self,
@@ -931,6 +994,27 @@ class _FailingStrategyTestMatrixRunner:
     ) -> StrategyTestMatrixResult:
         _ = request, run_id, user_uuid, kwargs
         raise AssertionError("forward_virtual must not use historical matrix runner")
+
+
+class _RecordingEnqueueOnlyService:
+    def __init__(self) -> None:
+        self.enqueue_calls = 0
+        self.execute_calls = 0
+
+    def enqueue_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        self.enqueue_calls += 1
+        return StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="queued",
+            test_type=request.test_type,
+            requested_matrix=_requested_matrix(request),
+            created_at=_now(),
+        )
+
+    def execute_run(self, run_id: UUID, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        _ = run_id, request
+        self.execute_calls += 1
+        raise AssertionError("POST /strategy-tests/runs must not execute strategy tests in FastAPI BackgroundTasks")
 
 
 class _RecordingEligibilityProfileUpdater:

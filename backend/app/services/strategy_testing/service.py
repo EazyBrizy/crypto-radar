@@ -105,11 +105,19 @@ class StrategyTestingService:
             ).run
         return created.run
 
-    def execute_run(self, run_id: UUID, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+    def execute_run(
+        self,
+        run_id: UUID,
+        request: StrategyTestRunRequest | None = None,
+    ) -> StrategyTestRunResponse:
+        existing = self._run_store.get_run(run_id)
+        if request is None:
+            if existing is None:
+                raise LookupError(f"Strategy test run is not found: {run_id}")
+            request = _request_from_run(existing.run)
         if request.test_type == "forward_virtual":
             return self._forward_runtime.start_run(run_id, request).run
         last_summary = _empty_partial_summary(_scenario_total(request))
-        existing = self._run_store.get_run(run_id)
         if existing is not None:
             last_summary = _summary_from_run(existing.run) or last_summary
         if existing is not None and existing.run.status in {"cancelled", "stopping"}:
@@ -438,6 +446,9 @@ class StrategyTestingService:
         )
         return self._run_store.mark_cancelled(run_id).run
 
+    def heartbeat_forward_runs(self) -> Any:
+        return self._forward_runtime.heartbeat_active_runs()
+
     def publish_calibration(self, run_id: UUID) -> StrategyTestCalibrationResponse:
         detail = self._run_store.get_run(run_id)
         if detail is None:
@@ -446,7 +457,7 @@ class StrategyTestingService:
         if run.status != "completed":
             raise ValueError("Strategy test run must be completed before calibration can be published.")
 
-        request = _request_from_completed_run(run)
+        request = _request_from_run(run)
         metrics = _metric_results_from_run_summary(run.summary)
         if not metrics:
             raise ValueError("Strategy test run has no grouped metrics suitable for calibration.")
@@ -1166,7 +1177,7 @@ def _auto_publish_calibration(request: StrategyTestRunRequest) -> bool:
     return request.params.get("auto_publish_calibration") is True
 
 
-def _request_from_completed_run(run: StrategyTestRunResponse) -> StrategyTestRunRequest:
+def _request_from_run(run: StrategyTestRunResponse) -> StrategyTestRunRequest:
     return StrategyTestRunRequest(**dict(run.requested_matrix))
 
 

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ARRAY, CheckConstraint, DateTime, ForeignKey, Index, Text
+from sqlalchemy import ARRAY, CheckConstraint, DateTime, ForeignKey, Index, Integer, Text
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -37,6 +37,7 @@ class StrategyTestRun(Base):
         ),
         Index("ix_strategy_test_runs_user_created", "user_id", text("created_at DESC")),
         Index("ix_strategy_test_runs_status_created", "status", text("created_at DESC")),
+        Index("ix_strategy_test_runs_status_lease", "status", "lease_expires_at"),
         Index("ix_strategy_test_runs_mode", "mode"),
         Index("ix_strategy_test_runs_test_type", "test_type"),
     )
@@ -101,5 +102,9 @@ class StrategyTestRun(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    worker_attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["AppUser"] = relationship()

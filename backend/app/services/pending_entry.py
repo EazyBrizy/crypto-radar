@@ -113,7 +113,7 @@ class PendingEntryService:
         if list_active is None:
             return []
         active = list_active(user_id=user_uuid, mode=mode, limit=limit)
-        now = datetime.now(timezone.utc)
+        now = _utc_now()
         expired = [intent for intent in active if _pending_entry_expired_before_touch(intent, now)]
         for intent in expired:
             self.transition_status(
@@ -313,7 +313,7 @@ class PendingEntryService:
             signal=signal,
             trade_plan_hash=trade_plan_hash,
             execution_profile_snapshot=execution_profile.model_dump(mode="json"),
-            accepted_at=datetime.now(timezone.utc),
+            accepted_at=_utc_now(),
         )
         request_snapshot = _request_snapshot(next_request, mode=intent.mode)
         request_snapshot = _with_reconfirmation_lifecycle_event(
@@ -454,7 +454,7 @@ class PendingEntryService:
             signal=signal,
             trade_plan_hash=trade_plan_hash,
             execution_profile_snapshot=execution_profile.model_dump(mode="json"),
-            accepted_at=datetime.now(timezone.utc),
+            accepted_at=_utc_now(),
         )
         existing = self._get_active_intent(
             user_id=user_uuid,
@@ -783,7 +783,7 @@ def _request_snapshot_with_market_review(
     material_change_pending_review: bool,
 ) -> dict[str, Any]:
     snapshot = dict(request_snapshot or {})
-    now = datetime.now(timezone.utc)
+    now = _utc_now()
     current_market_snapshot = {
         "observed_at": now.isoformat(),
         "signal_id": str(signal.id),
@@ -871,7 +871,7 @@ def _with_reconfirmation_lifecycle_event(
     lifecycle_events.append(
         {
             "event": "pending_entry.reconfirmed",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": _utc_now().isoformat(),
             "intent_id": str(previous_intent.id),
             "signal_id": str(previous_intent.signal_id),
             "previous_status": previous_intent.status,
@@ -899,6 +899,10 @@ def _manual_confirm_request(request: ManualConfirmRequest | dict[str, Any] | Non
 
 def _pending_entry_mode(value: str) -> PendingEntryIntentMode:
     return "real" if str(value).strip().lower() == "real" else "virtual"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _pending_entry_expired_before_touch(

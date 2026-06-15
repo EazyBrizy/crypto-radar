@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+from unittest.mock import patch
 from uuid import UUID
 
 from sqlalchemy import create_engine, text
@@ -357,6 +358,52 @@ class PendingEntryServiceTest(unittest.TestCase):
         active_queue = service.list_active_for_user(user_id="usr_demo")
         history = service.list_history_for_user(user_id="usr_demo")
 
+        self.assertEqual(active_queue, [])
+        self.assertEqual([intent.id for intent in history], [created.id])
+        self.assertEqual(history[0].status, "expired")
+        self.assertEqual(history[0].reason_code, "pending_entry_expired_before_touch")
+        self.assertEqual(repository.transitions[0][1], "expired")
+
+    def test_list_active_for_user_uses_patchable_clock_for_future_expiration(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = self._service(repository)
+        created = service.arm_from_signal(
+            user_id="demo_user",
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id="demo_user", auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        fixed_now = datetime(2026, 6, 14, 10, 0, tzinfo=timezone.utc)
+        future_active = created.model_copy(update={"expires_at": fixed_now + timedelta(minutes=15)})
+        repository.records = [future_active]
+        repository.active = future_active
+
+        with patch("app.services.pending_entry._utc_now", return_value=fixed_now):
+            active_queue = service.list_active_for_user(user_id="usr_demo")
+
+        self.assertEqual([intent.id for intent in active_queue], [created.id])
+        self.assertEqual(repository.transitions, [])
+
+    def test_list_active_for_user_expires_intent_under_patchable_clock(self) -> None:
+        repository = _FakePendingEntryRepository()
+        service = self._service(repository)
+        created = service.arm_from_signal(
+            user_id="demo_user",
+            signal_id=SIGNAL_ID,
+            mode="virtual",
+            request=ManualConfirmRequest(user_id="demo_user", auto_enter_on_confirmation=True),
+            execution_profile=_execution_profile(),
+        )
+        fixed_now = datetime(2026, 6, 14, 10, 0, tzinfo=timezone.utc)
+        expired_active = created.model_copy(update={"expires_at": fixed_now - timedelta(seconds=1)})
+        repository.records = [expired_active]
+        repository.active = expired_active
+
+        with patch("app.services.pending_entry._utc_now", return_value=fixed_now):
+            active_queue = service.list_active_for_user(user_id="usr_demo")
+
+        history = service.list_history_for_user(user_id="usr_demo")
         self.assertEqual(active_queue, [])
         self.assertEqual([intent.id for intent in history], [created.id])
         self.assertEqual(history[0].status, "expired")

@@ -452,7 +452,7 @@ class ExecutionProfileResolver:
         )
         radar_display_mode, radar_source = _resolve_profile_field(
             "radar_display_mode",
-            default="execution_ready",
+            default="all_market_opportunities",
             request_settings=request_settings,
             request_fields=request_fields,
             strategy_settings=strategy_settings,

@@ -286,7 +286,7 @@ class ExecutionProfileResolverTest(unittest.TestCase):
             instrument_type="spot",
         )
 
-        self.assertEqual(profile.radar_display_mode, "execution_ready")
+        self.assertEqual(profile.radar_display_mode, "all_market_opportunities")
         self.assertEqual(profile.sources["radar_display_mode"], "default")
 
 

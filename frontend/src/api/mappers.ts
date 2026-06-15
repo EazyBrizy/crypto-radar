@@ -1843,7 +1843,7 @@ function normalizeRadarDisplayMode(value: unknown): RadarDisplayMode {
   ) {
     return value;
   }
-  return "execution_ready";
+  return "all_market_opportunities";
 }
 
 function normalizeRRGuardMode(value: unknown, fallback: RRGuardMode): RRGuardMode {

@@ -330,7 +330,7 @@ class RadarService:
                 signal.id,
                 exc,
             )
-            fallback_mode = risk_settings.radar_display_mode or "execution_ready"
+            fallback_mode = risk_settings.radar_display_mode or "all_market_opportunities"
             return _RadarDisplayResolution(
                 mode=fallback_mode,
                 source=f"fallback:{strategy_source}",

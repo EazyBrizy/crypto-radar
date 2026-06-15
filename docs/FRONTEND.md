@@ -89,6 +89,7 @@ The Radar UI displays backend execution state. It must not recompute whether a s
 - Use `signal.edge.metadata.strategy_eligibility` only as display context for strategy eligibility.
 - Use `signal.execution_gate.metadata.dedup` only as display context for keep/suppress/replace decisions.
 - Use pending-entry `view.reason_code` and backend terminal metadata for no-entry, rejected, expired, or temporary-failure outcomes.
+- The Radar route starts in `all_market_opportunities`; `execution_ready` is an explicit user-selected filter for the execution feed.
 - `signal.execution_ready` means the backend approved an execution-ready notification. Legacy `signal.created` is displayed as a non-execution idea unless its payload explicitly says otherwise.
 - Signal cards and details should render backend blockers such as `forming_candle`, `trigger_not_confirmed`, `dedup_suppressed_by_better_signal`, strategy eligibility failures, and pending-entry terminal reasons without doing trading math.
 - Do not infer `can_enter`, `can_run`, disabled reasons, stale decisions, PnL, or risk state from raw signal snapshots. Display the backend fields that already carry those decisions.

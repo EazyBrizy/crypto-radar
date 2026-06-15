@@ -124,12 +124,15 @@ The scanner execution path is:
 
 Important rules:
 
+- The default `radar_display_mode` is `all_market_opportunities`; clients must request
+  `execution_ready` explicitly when they want the execution-only feed.
 - Closed-candle confirmation is required when `settings.execution_closed_candle_only` is enabled. Open/forming candles may appear only as preview/watchlist/blocked state with a `forming_candle` reason.
 - Execution candidates must have a passed trigger snapshot. Missing or failed triggers produce `trigger_not_confirmed`.
 - The execution gate owns all action booleans: `can_notify`, `can_enter_now`, `can_arm_pending`, and `can_show_in_execution_feed`.
 - Edge gates use backend thresholds for expectancy after costs, profit factor, entry-touch rate, and no-entry rate.
 - Strategy eligibility metadata comes from persisted strategy-test eligibility profiles when available. It is advisory unless `settings.execution_require_walk_forward_edge` is enabled, then it becomes a hard blocker.
 - Pending-entry trigger automation is virtual-only. Real pending execution must remain disabled unless a separately tested real execution path is added.
+- Pending-entry expiration checks use the service-level UTC clock (`_utc_now()`), so tests can patch current time without disabling expiration product logic.
 
 ## Background Workers
 

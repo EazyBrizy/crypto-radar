@@ -115,6 +115,8 @@ class TradingWorkflowE2ESmokeTest(unittest.IsolatedAsyncioTestCase):
         self.realtime_broker = _CapturingRealtimeBroker()
         self._broker_patch = patch("app.services.market_scanner.realtime_event_broker", self.realtime_broker)
         self._broker_patch.start()
+        self._pending_now_patch = patch("app.services.pending_entry._utc_now", return_value=TEST_NOW)
+        self._pending_now_patch.start()
         self._trigger_now_patch = patch("app.services.pending_entry_trigger._utc_now", return_value=TEST_NOW)
         self._trigger_now_patch.start()
         self.scanner = MarketScanner(
@@ -137,6 +139,7 @@ class TradingWorkflowE2ESmokeTest(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self) -> None:
         self._trigger_now_patch.stop()
+        self._pending_now_patch.stop()
         self._broker_patch.stop()
         self.engine.dispose()
         _restore_column_types(self._type_patches)

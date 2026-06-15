@@ -43,7 +43,7 @@ export function RadarRoute() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | SignalStatus>("all");
   const [signalView, setSignalView] = useState<"open" | "history">("open");
-  const [radarDisplayMode, setRadarDisplayMode] = useState<RadarDisplayMode>("execution_ready");
+  const [radarDisplayMode, setRadarDisplayMode] = useState<RadarDisplayMode>("all_market_opportunities");
   const [hasUserSelectedSignal, setHasUserSelectedSignal] = useState(false);
   const [selectedPendingEntryId, setSelectedPendingEntryId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());

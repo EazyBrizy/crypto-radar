@@ -49,7 +49,8 @@ class FakeRiskPreviewEvaluator:
 
 
 class RadarServiceTest(unittest.TestCase):
-    def test_default_mode_uses_execution_ready_feed_not_market_diagnostics(self) -> None:
+    def test_default_mode_keeps_legacy_open_market_opportunities_visible(self) -> None:
+        legacy_open = _signal(status="wait_for_pullback", rr_status="passed")
         hot = _signal(
             status="actionable",
             rr_status="passed",
@@ -84,7 +85,7 @@ class RadarServiceTest(unittest.TestCase):
             {hot.id: FakeRiskDecision(status="passed", can_enter=True)}
         )
         service = RadarService(
-            signal_provider=FakeSignalProvider([blocked_forming_low_score, hot]),
+            signal_provider=FakeSignalProvider([legacy_open, blocked_forming_low_score, hot]),
             risk_preview_evaluator=risk_preview,
             user_risk_settings_provider=lambda user_id: RiskManagementSettings(),
             strategy_risk_settings_provider=lambda signal, *, user_id: ({}, "not_configured"),
@@ -92,8 +93,12 @@ class RadarServiceTest(unittest.TestCase):
 
         response = service.list_signals(user_id="demo_user")
 
-        self.assertEqual([signal.id for signal in response.signals], [hot.id])
-        self.assertEqual(response.summary.hot_signals, 1)
+        self.assertEqual(
+            [signal.id for signal in response.signals],
+            [legacy_open.id, blocked_forming_low_score.id, hot.id],
+        )
+        self.assertTrue(all("all_market_opportunities" in (signal.display_reason or "") for signal in response.signals))
+        self.assertEqual(risk_preview.calls, [])
         self.assertEqual(response.summary.blocked_diagnostics, 1)
 
     def test_all_mode_returns_actionable_blocked_by_rr_and_waiting_setups(self) -> None:
@@ -274,6 +279,49 @@ class RadarServiceTest(unittest.TestCase):
 
         self.assertEqual(response.signals, [])
         self.assertEqual(response.summary.blocked_diagnostics, 1)
+
+    def test_execution_ready_explicit_mode_filters_legacy_open_and_blocked_signals(self) -> None:
+        legacy_open = _signal(status="wait_for_pullback", rr_status="passed")
+        blocked_forming_low_score = _signal(
+            status="actionable",
+            rr_status="passed",
+            score=60,
+            execution_gate=_execution_gate(
+                can_enter_now=False,
+                can_arm_pending=False,
+                feed_kind="blocked",
+                status="blocked",
+                reasons=[
+                    {
+                        "code": "forming_candle",
+                        "severity": "blocker",
+                        "source": "candle",
+                        "message": "Forming candle is not allowed in the execution feed.",
+                    }
+                ],
+            ),
+        )
+        hot = _signal(
+            status="actionable",
+            rr_status="passed",
+            execution_gate=_execution_gate(can_enter_now=True, can_arm_pending=False),
+        )
+        risk_preview = FakeRiskPreviewEvaluator(
+            {hot.id: FakeRiskDecision(status="passed", can_enter=True)}
+        )
+        service = _service(
+            [legacy_open, blocked_forming_low_score, hot],
+            risk_preview=risk_preview,
+            user_mode="all_market_opportunities",
+        )
+
+        response = service.list_signals(user_id="demo_user", mode="execution_ready")
+
+        self.assertEqual([signal.id for signal in response.signals], [hot.id])
+        self.assertEqual(
+            risk_preview.calls,
+            [{"signal_id": hot.id, "user_id": "demo_user", "record_audit": False}],
+        )
 
     def test_execution_ready_uses_execution_gate_as_source_of_truth(self) -> None:
         gate_passed = _signal(

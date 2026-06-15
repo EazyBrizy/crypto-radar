@@ -41,7 +41,7 @@ class RiskManagementSettings(BaseModel):
     risk_per_trade_percent: float = Field(default=1.0, gt=0, le=10)
     fixed_risk_amount: float | None = Field(default=None, gt=0)
     fixed_risk_currency: str = Field(default="USDT", min_length=1, max_length=16)
-    radar_display_mode: RadarDisplayMode = "execution_ready"
+    radar_display_mode: RadarDisplayMode = "all_market_opportunities"
     min_rr_ratio: float = Field(default=2.0, ge=0, le=10)
     rr_guard_mode: RRGuardMode = "soft"
     discovery_rr_guard_mode: RRGuardMode = "soft"

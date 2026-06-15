@@ -159,6 +159,7 @@ vi.mock("./RadarPage", async () => {
         : null,
       React.createElement("button", { onClick: () => props.onFilterChange("short"), type: "button" }, "filter short"),
       React.createElement("button", { onClick: () => props.onFilterChange("all"), type: "button" }, "filter all"),
+      React.createElement("button", { onClick: () => props.onRadarDisplayModeChange("execution_ready"), type: "button" }, "mode execution_ready"),
       React.createElement("button", { onClick: () => props.onRadarDisplayModeChange("blocked"), type: "button" }, "mode blocked"),
       ...props.pendingEntries.map((intent) => React.createElement(
         "button",
@@ -354,14 +355,14 @@ function blockedGate(): NonNullable<RadarSignal["execution_gate"]> {
 }
 
 describe("RadarRoute selection", () => {
-  it("requests the execution-ready radar feed by default", () => {
+  it("requests the all-market-opportunities radar feed by default", () => {
     render(createElement(RadarRoute));
 
-    expect(radarRouteMockState.radarDisplayModeCalls[0]).toBe("execution_ready");
-    expect(screen.getByTestId("active-mode")).toHaveTextContent("execution_ready");
+    expect(radarRouteMockState.radarDisplayModeCalls[0]).toBe("all_market_opportunities");
+    expect(screen.getByTestId("active-mode")).toHaveTextContent("all_market_opportunities");
   });
 
-  it("keeps blocked diagnostics out of the default visible list", async () => {
+  it("keeps blocked diagnostics visible in the default all-market list", async () => {
     const hotSignal = routeSignal({ id: "sig_hot" });
     const blockedSignal = routeSignal({
       id: "sig_blocked",
@@ -377,10 +378,11 @@ describe("RadarRoute selection", () => {
     render(createElement(RadarRoute));
 
     await waitFor(() => expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_hot"));
-    expect(screen.getByTestId("signal-ids")).not.toHaveTextContent("sig_blocked");
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_blocked");
   });
 
-  it("shows blocked diagnostics only after selecting the blocked mode", async () => {
+  it("narrows blocked diagnostics after selecting the blocked mode", async () => {
+    const hotSignal = routeSignal({ id: "sig_hot" });
     const blockedSignal = routeSignal({
       id: "sig_blocked",
       execution_gate: blockedGate(),
@@ -390,19 +392,21 @@ describe("RadarRoute selection", () => {
         execution_summary: executionSummary({ preview_available: false })
       })
     });
-    radarRouteMockState.radarResponse = { signals: [blockedSignal] };
+    radarRouteMockState.radarResponse = { signals: [hotSignal, blockedSignal] };
 
     render(createElement(RadarRoute));
 
-    expect(screen.getByTestId("signal-ids")).toBeEmptyDOMElement();
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_hot");
+    expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_blocked");
 
     fireEvent.click(screen.getByRole("button", { name: "mode blocked" }));
 
     await waitFor(() => expect(screen.getByTestId("active-mode")).toHaveTextContent("blocked"));
     expect(screen.getByTestId("signal-ids")).toHaveTextContent("sig_blocked");
+    expect(screen.getByTestId("signal-ids")).not.toHaveTextContent("sig_hot");
   });
 
-  it("does not keep stale blocked realtime signals visible in the default mode", () => {
+  it("does not keep stale blocked realtime signals visible in explicit execution-ready mode", async () => {
     useSignalStore.getState().addSignal(routeSignal({
       id: "sig_realtime_blocked",
       execution_gate: blockedGate(),
@@ -417,6 +421,9 @@ describe("RadarRoute selection", () => {
 
     render(createElement(RadarRoute));
 
+    fireEvent.click(screen.getByRole("button", { name: "mode execution_ready" }));
+
+    await waitFor(() => expect(screen.getByTestId("active-mode")).toHaveTextContent("execution_ready"));
     expect(screen.getByTestId("signal-ids")).toBeEmptyDOMElement();
   });
 

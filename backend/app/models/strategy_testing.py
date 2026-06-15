@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ARRAY, CheckConstraint, DateTime, ForeignKey, Index, Integer, Text
+from sqlalchemy import ARRAY, CheckConstraint, DateTime, ForeignKey, Index, Integer, Text, UniqueConstraint
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -108,3 +108,62 @@ class StrategyTestRun(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["AppUser"] = relationship()
+    scenarios: Mapped[list["StrategyTestScenario"]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+
+class StrategyTestScenario(Base):
+    __tablename__ = "strategy_test_scenarios"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_strategy_test_scenarios_status",
+        ),
+        CheckConstraint("bars_total >= 0", name="ck_strategy_test_scenarios_bars_total_non_negative"),
+        CheckConstraint("bars_processed >= 0", name="ck_strategy_test_scenarios_bars_processed_non_negative"),
+        UniqueConstraint("run_id", "scenario_key", name="uq_strategy_test_scenarios_run_key"),
+        Index("ix_strategy_test_scenarios_run_status", "run_id", "status"),
+        Index("ix_strategy_test_scenarios_run_index", "run_id", "scenario_index"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("strategy_test_runs.id", name="fk_strategy_test_scenarios_run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scenario_key: Mapped[str] = mapped_column(Text, nullable=False)
+    scenario_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    strategy_code: Mapped[str] = mapped_column(Text, nullable=False)
+    exchange: Mapped[str] = mapped_column(Text, nullable=False)
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    timeframe: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'queued'"))
+    bars_total: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    bars_processed: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_written_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+    run: Mapped[StrategyTestRun] = relationship(back_populates="scenarios")

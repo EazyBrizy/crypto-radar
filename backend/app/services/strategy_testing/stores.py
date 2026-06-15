@@ -11,13 +11,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.clickhouse_client import create_clickhouse_client
 from app.core.database import SessionLocal
-from app.models.strategy_testing import StrategyTestRun
+from app.models.strategy_testing import StrategyTestRun, StrategyTestScenario
 from app.services.strategy_testing.schemas import (
     StrategyTestMetricRow,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestScenarioCheckpoint,
     StrategyTestSignalEvent,
     StrategyTestType,
     StrategyTestTrade,
@@ -231,6 +232,56 @@ class StrategyTestRunStore(Protocol):
         *,
         heartbeat: bool = True,
     ) -> StrategyTestRunDetailResponse:
+        ...
+
+    def list_scenarios(self, run_id: UUID) -> list[StrategyTestScenarioCheckpoint]:
+        ...
+
+    def completed_scenario_keys(self, run_id: UUID) -> set[str]:
+        ...
+
+    def mark_scenario_running(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        scenario_index: int,
+        strategy_code: str,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        bars_total: int | None = None,
+    ) -> StrategyTestScenarioCheckpoint:
+        ...
+
+    def mark_scenario_completed(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        summary: dict[str, Any],
+        bars_processed: int | None = None,
+        result_written_at: datetime | None = None,
+    ) -> StrategyTestScenarioCheckpoint:
+        ...
+
+    def mark_scenario_failed(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        error: str,
+        summary: dict[str, Any] | None = None,
+    ) -> StrategyTestScenarioCheckpoint:
+        ...
+
+    def mark_scenario_cancelled(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        summary: dict[str, Any] | None = None,
+    ) -> StrategyTestScenarioCheckpoint:
         ...
 
 
@@ -848,6 +899,144 @@ class PostgresStrategyTestRunStore:
             session.commit()
             return detail
 
+    def list_scenarios(self, run_id: UUID) -> list[StrategyTestScenarioCheckpoint]:
+        with self._session_factory() as session:
+            statement = (
+                select(StrategyTestScenario)
+                .where(StrategyTestScenario.run_id == run_id)
+                .order_by(StrategyTestScenario.scenario_index.asc())
+            )
+            return [_scenario_to_checkpoint(scenario) for scenario in session.scalars(statement).all()]
+
+    def completed_scenario_keys(self, run_id: UUID) -> set[str]:
+        with self._session_factory() as session:
+            statement = (
+                select(StrategyTestScenario.scenario_key)
+                .where(StrategyTestScenario.run_id == run_id)
+                .where(StrategyTestScenario.status == "completed")
+            )
+            return {str(key) for key in session.scalars(statement).all()}
+
+    def mark_scenario_running(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        scenario_index: int,
+        strategy_code: str,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        bars_total: int | None = None,
+    ) -> StrategyTestScenarioCheckpoint:
+        now = _utc_now()
+        with self._session_factory() as session:
+            _get_run_or_raise(session, run_id)
+            scenario = _get_scenario(session, run_id, scenario_key)
+            if scenario is None:
+                scenario = StrategyTestScenario(
+                    id=uuid4(),
+                    run_id=run_id,
+                    scenario_key=scenario_key,
+                    scenario_index=scenario_index,
+                    strategy_code=strategy_code,
+                    exchange=exchange,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    status="running",
+                    bars_total=max(0, int(bars_total or 0)),
+                    bars_processed=0,
+                    summary={},
+                    started_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(scenario)
+            elif scenario.status != "completed":
+                scenario.scenario_index = scenario_index
+                scenario.strategy_code = strategy_code
+                scenario.exchange = exchange
+                scenario.symbol = symbol
+                scenario.timeframe = timeframe
+                scenario.status = "running"
+                scenario.bars_total = max(0, int(bars_total if bars_total is not None else scenario.bars_total or 0))
+                scenario.bars_processed = 0
+                scenario.error = None
+                scenario.started_at = scenario.started_at or now
+                scenario.completed_at = None
+                scenario.updated_at = now
+            session.flush()
+            checkpoint = _scenario_to_checkpoint(scenario)
+            session.commit()
+            return checkpoint
+
+    def mark_scenario_completed(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        summary: dict[str, Any],
+        bars_processed: int | None = None,
+        result_written_at: datetime | None = None,
+    ) -> StrategyTestScenarioCheckpoint:
+        now = _utc_now()
+        with self._session_factory() as session:
+            scenario = _get_scenario_or_raise(session, run_id, scenario_key)
+            scenario.status = "completed"
+            scenario.summary = dict(summary)
+            if bars_processed is not None:
+                scenario.bars_processed = max(0, int(bars_processed))
+            elif scenario.bars_total:
+                scenario.bars_processed = max(scenario.bars_processed or 0, scenario.bars_total)
+            scenario.result_written_at = result_written_at or now
+            scenario.completed_at = now
+            scenario.error = None
+            scenario.updated_at = now
+            session.flush()
+            checkpoint = _scenario_to_checkpoint(scenario)
+            session.commit()
+            return checkpoint
+
+    def mark_scenario_failed(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        error: str,
+        summary: dict[str, Any] | None = None,
+    ) -> StrategyTestScenarioCheckpoint:
+        now = _utc_now()
+        with self._session_factory() as session:
+            scenario = _get_scenario_or_raise(session, run_id, scenario_key)
+            scenario.status = "failed"
+            scenario.error = error
+            scenario.summary = dict(summary or {})
+            scenario.completed_at = now
+            scenario.updated_at = now
+            session.flush()
+            checkpoint = _scenario_to_checkpoint(scenario)
+            session.commit()
+            return checkpoint
+
+    def mark_scenario_cancelled(
+        self,
+        run_id: UUID,
+        *,
+        scenario_key: str,
+        summary: dict[str, Any] | None = None,
+    ) -> StrategyTestScenarioCheckpoint:
+        now = _utc_now()
+        with self._session_factory() as session:
+            scenario = _get_scenario_or_raise(session, run_id, scenario_key)
+            scenario.status = "cancelled"
+            scenario.summary = dict(summary or scenario.summary or {})
+            scenario.completed_at = now
+            scenario.updated_at = now
+            session.flush()
+            checkpoint = _scenario_to_checkpoint(scenario)
+            session.commit()
+            return checkpoint
+
 
 def _claim_next_run_statement() -> Any:
     return (
@@ -858,11 +1047,58 @@ def _claim_next_run_statement() -> Any:
     )
 
 
+def _get_scenario(
+    session: Session,
+    run_id: UUID,
+    scenario_key: str,
+) -> StrategyTestScenario | None:
+    statement = (
+        select(StrategyTestScenario)
+        .where(StrategyTestScenario.run_id == run_id)
+        .where(StrategyTestScenario.scenario_key == scenario_key)
+    )
+    return session.scalars(statement).first()
+
+
+def _get_scenario_or_raise(
+    session: Session,
+    run_id: UUID,
+    scenario_key: str,
+) -> StrategyTestScenario:
+    scenario = _get_scenario(session, run_id, scenario_key)
+    if scenario is None:
+        raise ValueError(f"Strategy test scenario is not found: {run_id} {scenario_key}")
+    return scenario
+
+
 def _get_run_or_raise(session: Session, run_id: UUID) -> StrategyTestRun:
     run = session.get(StrategyTestRun, run_id)
     if run is None:
         raise ValueError(f"Strategy test run is not found: {run_id}")
     return run
+
+
+def _scenario_to_checkpoint(scenario: StrategyTestScenario) -> StrategyTestScenarioCheckpoint:
+    return StrategyTestScenarioCheckpoint(
+        id=scenario.id,
+        run_id=scenario.run_id,
+        scenario_key=scenario.scenario_key,
+        scenario_index=scenario.scenario_index,
+        strategy_code=scenario.strategy_code,
+        exchange=scenario.exchange,
+        symbol=scenario.symbol,
+        timeframe=scenario.timeframe,
+        status=cast(Any, scenario.status),
+        bars_total=int(scenario.bars_total or 0),
+        bars_processed=int(scenario.bars_processed or 0),
+        summary=_json_object(scenario.summary),
+        error=scenario.error,
+        result_written_at=scenario.result_written_at,
+        started_at=scenario.started_at,
+        completed_at=scenario.completed_at,
+        created_at=scenario.created_at,
+        updated_at=scenario.updated_at,
+    )
 
 
 def _utc_now() -> datetime:

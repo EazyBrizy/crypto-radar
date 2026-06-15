@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
 StrategyTestType = Literal["historical_backtest", "forward_virtual"]
 StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "stopping"]
+StrategyTestScenarioStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 StrategyTestCalibrationDecision = Literal["positive", "negative", "insufficient_sample"]
 StrategyTestEstimateLevel = Literal["small", "medium", "large"]
 StrategyTestEstimateWarningCode = Literal[
@@ -123,6 +124,27 @@ class StrategyTestRunDetailResponse(BaseModel):
     trades_count: int = 0
     warnings: list[str] = Field(default_factory=list)
     rejections: list[str] = Field(default_factory=list)
+
+
+class StrategyTestScenarioCheckpoint(BaseModel):
+    id: UUID | None = None
+    run_id: UUID
+    scenario_key: str
+    scenario_index: int = Field(ge=0)
+    strategy_code: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    status: StrategyTestScenarioStatus
+    bars_total: int = Field(default=0, ge=0)
+    bars_processed: int = Field(default=0, ge=0)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    result_written_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class StrategyTestFunnelResponse(BaseModel):

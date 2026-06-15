@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401
+from app.models import strategy_testing as strategy_testing_models
 from app.core.database import Base
 from app.models.strategy_testing import StrategyTestRun
 from app.models.user import AppUser
@@ -37,12 +38,52 @@ STRATEGY_TEST_WORKER_MIGRATION_PATH = (
     / "versions"
     / "202606150001_add_strategy_test_worker_lease.py"
 )
+SCENARIO_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "alembic"
+    / "versions"
+    / "202606150002_add_strategy_test_scenarios.py"
+)
 
 
 class StrategyTestingRunModelTest(unittest.TestCase):
     def test_model_table_exists_in_base_metadata(self) -> None:
         self.assertIn("strategy_test_runs", Base.metadata.tables)
         self.assertIs(Base.metadata.tables["strategy_test_runs"], StrategyTestRun.__table__)
+
+    def test_scenario_model_table_exists_in_base_metadata(self) -> None:
+        scenario_model = getattr(strategy_testing_models, "StrategyTestScenario", None)
+
+        self.assertIsNotNone(scenario_model)
+        self.assertIn("strategy_test_scenarios", Base.metadata.tables)
+        self.assertIs(Base.metadata.tables["strategy_test_scenarios"], scenario_model.__table__)
+
+    def test_scenario_model_constraints_and_indexes_match_contract(self) -> None:
+        scenario_model = getattr(strategy_testing_models, "StrategyTestScenario", None)
+        self.assertIsNotNone(scenario_model)
+        table = scenario_model.__table__
+        column_names = set(table.c.keys())
+        constraint_names = {constraint.name for constraint in table.constraints}
+        index_names = {index.name for index in table.indexes}
+
+        self.assertIn("run_id", column_names)
+        self.assertIn("scenario_key", column_names)
+        self.assertIn("scenario_index", column_names)
+        self.assertIn("strategy_code", column_names)
+        self.assertIn("exchange", column_names)
+        self.assertIn("symbol", column_names)
+        self.assertIn("timeframe", column_names)
+        self.assertIn("status", column_names)
+        self.assertIn("bars_total", column_names)
+        self.assertIn("bars_processed", column_names)
+        self.assertIn("summary", column_names)
+        self.assertIn("error", column_names)
+        self.assertIn("result_written_at", column_names)
+        self.assertIn("started_at", column_names)
+        self.assertIn("completed_at", column_names)
+        self.assertIn("uq_strategy_test_scenarios_run_key", constraint_names)
+        self.assertIn("ck_strategy_test_scenarios_status", constraint_names)
+        self.assertIn("ix_strategy_test_scenarios_run_status", index_names)
 
     def test_model_constraints_and_indexes_match_contract(self) -> None:
         table = StrategyTestRun.__table__
@@ -122,6 +163,22 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("claimed_at", migration)
         self.assertIn("ix_strategy_test_runs_status_lease", migration)
 
+    def test_scenario_checkpoint_migration_contract_is_reflected_by_model(self) -> None:
+        scenario_model = getattr(strategy_testing_models, "StrategyTestScenario", None)
+        self.assertIsNotNone(scenario_model)
+        migration = SCENARIO_MIGRATION_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("strategy_test_scenarios", migration)
+        self.assertIn("fk_strategy_test_scenarios_run_id", migration)
+        self.assertIn("uq_strategy_test_scenarios_run_key", migration)
+        self.assertIn("ix_strategy_test_scenarios_run_status", migration)
+        self.assertIn("queued", migration)
+        self.assertIn("running", migration)
+        self.assertIn("completed", migration)
+        self.assertIn("failed", migration)
+        self.assertIn("cancelled", migration)
+        self.assertIn("op.drop_table(\"strategy_test_scenarios\")", migration)
+
     def test_claim_next_run_statement_uses_postgres_skip_locked(self) -> None:
         statement = _claim_next_run_statement().limit(1)
 
@@ -192,6 +249,39 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
             self.assertEqual(run.worker_attempt, 0)
             self.assertIsNone(run.lease_expires_at)
             self.assertIsNone(run.claimed_at)
+
+    def test_scenario_checkpoint_lifecycle_and_completed_key_lookup(self) -> None:
+        created = self.store.create_run(_request())
+
+        running = self.store.mark_scenario_running(
+            created.run.run_id,
+            scenario_key="trend_pullback_continuation::bybit::BTCUSDT::1h",
+            scenario_index=1,
+            strategy_code="trend_pullback_continuation",
+            exchange="bybit",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            bars_total=250,
+        )
+        completed = self.store.mark_scenario_completed(
+            created.run.run_id,
+            scenario_key="trend_pullback_continuation::bybit::BTCUSDT::1h",
+            summary={"signals_seen": 150_000, "trades_count": 7},
+            bars_processed=250,
+            result_written_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        scenarios = self.store.list_scenarios(created.run.run_id)
+
+        self.assertEqual(running.status, "running")
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(completed.summary["signals_seen"], 150_000)
+        self.assertEqual(completed.bars_total, 250)
+        self.assertEqual(completed.bars_processed, 250)
+        self.assertEqual(
+            self.store.completed_scenario_keys(created.run.run_id),
+            {"trend_pullback_continuation::bybit::BTCUSDT::1h"},
+        )
+        self.assertEqual([scenario.scenario_key for scenario in scenarios], [completed.scenario_key])
 
     def test_claim_next_run_sets_worker_lease_and_attempt(self) -> None:
         created = self.store.create_run(_request())
@@ -380,6 +470,11 @@ def _patch_sqlite_column_types() -> list[tuple[Any, Any]]:
         column = StrategyTestRun.__table__.c[column_name]
         patches.append((column, column.type))
         column.type = JSON()
+    scenario_model = getattr(strategy_testing_models, "StrategyTestScenario", None)
+    if scenario_model is not None:
+        column = scenario_model.__table__.c["summary"]
+        patches.append((column, column.type))
+        column.type = JSON()
     return patches
 
 
@@ -454,6 +549,34 @@ def _create_sqlite_tables(engine: Any) -> None:
                     lease_expires_at DATETIME,
                     claimed_at DATETIME,
                     FOREIGN KEY(user_id) REFERENCES app_users(id)
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE strategy_test_scenarios (
+                    id UUID PRIMARY KEY,
+                    run_id UUID NOT NULL,
+                    scenario_key TEXT NOT NULL,
+                    scenario_index INTEGER NOT NULL,
+                    strategy_code TEXT NOT NULL,
+                    exchange TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    bars_total INTEGER NOT NULL DEFAULT 0,
+                    bars_processed INTEGER NOT NULL DEFAULT 0,
+                    summary JSON NOT NULL,
+                    error TEXT,
+                    result_written_at DATETIME,
+                    started_at DATETIME,
+                    completed_at DATETIME,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES strategy_test_runs(id),
+                    UNIQUE(run_id, scenario_key)
                 )
                 """
             )

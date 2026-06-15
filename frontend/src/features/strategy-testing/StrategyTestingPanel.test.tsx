@@ -120,6 +120,69 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("button", { name: "Forward virtual" })).toBeInTheDocument();
   });
 
+  it("shows a large run warning before starting a heavy matrix", async () => {
+    const user = userEvent.setup();
+    const availablePairs = [
+      marketPair("BTCUSDT", "BTC"),
+      marketPair("ETHUSDT", "ETH"),
+      marketPair("SOLUSDT", "SOL"),
+      marketPair("XRPUSDT", "XRP"),
+      marketPair("DOGEUSDT", "DOGE"),
+      marketPair("ADAUSDT", "ADA"),
+      marketPair("BNBUSDT", "BNB"),
+      marketPair("LINKUSDT", "LINK")
+    ];
+
+    renderPanel({
+      availablePairs,
+      strategyConfigs: [strategyConfig({ timeframes: ["1m", "5m"] })]
+    });
+
+    for (const pair of availablePairs.slice(3)) {
+      await user.click(screen.getByRole("checkbox", { name: new RegExp(pair.symbol, "u") }));
+    }
+
+    const estimate = screen.getByLabelText("Strategy test run estimate");
+    expect(within(estimate).getByText("16")).toBeInTheDocument();
+    expect(within(estimate).getByText(/414,720 bars total/u)).toBeInTheDocument();
+    expect(within(estimate).getByText(/Large run/u)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Run strategy test/u }));
+
+    expect(mocks.runStrategyTest).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Large run confirmation")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Confirm large run/u })).toBeInTheDocument();
+  });
+
+  it("builds the smoke preset request with one pair, one timeframe, three days, and production-like mode", async () => {
+    const user = userEvent.setup();
+    mocks.runStrategyTest.mockResolvedValue(strategyTestRun({
+      status: "queued",
+      test_type: "historical_backtest"
+    }));
+
+    renderPanel({
+      availablePairs: [marketPair("BTCUSDT", "BTC"), marketPair("ETHUSDT", "ETH")],
+      strategyConfigs: [strategyConfig({ timeframes: ["1m", "5m"] })]
+    });
+
+    await user.click(screen.getByRole("button", { name: /Smoke/u }));
+    const runButton = screen.getByRole("button", { name: /Run strategy test/u });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    await user.click(runButton);
+
+    await waitFor(() => expect(mocks.runStrategyTest).toHaveBeenCalledTimes(1));
+    const request = mocks.runStrategyTest.mock.calls[0][0];
+    expect(request).toEqual(expect.objectContaining({
+      mode: "production_like",
+      pairs: [{ exchange: "bybit", symbol: "BTCUSDT" }],
+      tags: ["backtest"],
+      test_type: "historical_backtest",
+      timeframes: ["1m"]
+    }));
+    expect(new Date(request.end_at).getTime() - new Date(request.start_at).getTime()).toBe(3 * 24 * 60 * 60 * 1000);
+  });
+
   it("localizes strategy testing count badges through the DOM localizer", async () => {
     window.localStorage.setItem("crypto-radar:locale", "ru");
     mocks.runs = [
@@ -429,6 +492,47 @@ describe("StrategyTestingPanel", () => {
     expect(within(notice).getByText("Run is receiving heartbeats. Large historical scenarios can stay on the same scenario for a while.")).toBeInTheDocument();
   });
 
+  it("renders active progress bars, ETA, and funnel counters in the active run notice", () => {
+    const activeRun = strategyTestRun({
+      run_id: "68686868-6868-4868-8868-686868686868",
+      runtime_state: {
+        bars_per_second: 40,
+        bars_pct: 50,
+        bars_processed: 500,
+        bars_total: 1000,
+        eta_seconds: 12,
+        filled: 2,
+        no_entry: 4,
+        pending_armed: 1,
+        pending_entries_count: 2,
+        scenario_completed: 0,
+        scenario_total: 16,
+        signals_seen: 6542
+      },
+      status: "running",
+      test_type: "historical_backtest"
+    });
+    mocks.activeRun = activeRunState({
+      active_run: activeRun,
+      can_run: false,
+      is_stale: false
+    });
+    mocks.runDetail = activeRun;
+
+    renderPanel();
+
+    const notice = screen.getByLabelText("Active strategy test run");
+    const progress = within(notice).getByLabelText("Active run progress summary");
+    expect(within(progress).getByText("0 / 16")).toBeInTheDocument();
+    expect(within(progress).getByText("500 / 1000 (50%)")).toBeInTheDocument();
+    expect(within(progress).getByText("40 bars/s")).toBeInTheDocument();
+    expect(within(progress).getByText("12s")).toBeInTheDocument();
+    expect(within(progress).getByText("6542")).toBeInTheDocument();
+    expect(within(progress).getByText("Pending armed")).toBeInTheDocument();
+    expect(within(progress).getByText("No entry")).toBeInTheDocument();
+    expect(within(progress).getByText("Filled")).toBeInTheDocument();
+  });
+
   it("renders selected active run progress instead of an empty report state", async () => {
     const user = userEvent.setup();
     const activeRun = strategyTestRun({
@@ -656,18 +760,18 @@ function strategyTestRun(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function marketPair(): MarketPairOption {
+function marketPair(symbol = "BTCUSDT", baseAsset = "BTC"): MarketPairOption {
   return {
-    base_asset: "BTC",
+    base_asset: baseAsset,
     exchange: "bybit",
-    id: "pair_btc",
+    id: `pair_${symbol.toLowerCase()}`,
     quote_asset: "USDT",
     status: "active",
-    symbol: "BTCUSDT"
+    symbol
   };
 }
 
-function strategyConfig(): StrategyConfig {
+function strategyConfig(overrides: Partial<StrategyConfig> = {}): StrategyConfig {
   return {
     created_at: "2026-06-02T00:00:00.000Z",
     exchanges: ["bybit"],
@@ -683,6 +787,7 @@ function strategyConfig(): StrategyConfig {
     strategy_version_id: "strategy_version_1",
     timeframes: ["1m", "5m", "15m"],
     updated_at: "2026-06-02T00:00:00.000Z",
-    user_id: "demo_user"
+    user_id: "demo_user",
+    ...overrides
   };
 }

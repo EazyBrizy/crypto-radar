@@ -9,6 +9,7 @@ import unittest
 
 from app.services.strategy_testing.schemas import StrategyTestMetricRow, StrategyTestSignalEvent, StrategyTestTrade
 from app.services.strategy_testing.stores import (
+    STRATEGY_TEST_ANALYTICS_ALTER_DDLS,
     STRATEGY_TEST_METRICS_DDL,
     STRATEGY_TEST_SIGNALS_DDL,
     STRATEGY_TEST_TRADES_DDL,
@@ -64,7 +65,12 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
 
         self.assertEqual(
             client.commands,
-            [STRATEGY_TEST_TRADES_DDL, STRATEGY_TEST_METRICS_DDL, STRATEGY_TEST_SIGNALS_DDL],
+            [
+                STRATEGY_TEST_TRADES_DDL,
+                STRATEGY_TEST_METRICS_DDL,
+                STRATEGY_TEST_SIGNALS_DDL,
+                *STRATEGY_TEST_ANALYTICS_ALTER_DDLS,
+            ],
         )
         self.assertTrue(client.closed)
 
@@ -86,6 +92,24 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(row[columns.index("execution_rejected")], 1)
         self.assertTrue(client.closed)
 
+    def test_write_trades_inserts_deterministic_analytics_keys(self) -> None:
+        client = FakeClickHouseClient()
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        store.write_trades([_trade()])
+
+        _table, data, columns = client.inserts[0]
+        row = data[0]
+        self.assertIn("scenario_key", columns)
+        self.assertIn("event_key", columns)
+        self.assertIn("run_attempt", columns)
+        self.assertEqual(
+            row[columns.index("scenario_key")],
+            "trend_pullback_continuation::bybit::BTCUSDT::1h",
+        )
+        self.assertEqual(row[columns.index("event_key")], "trade-1")
+        self.assertEqual(row[columns.index("run_attempt")], 0)
+
     def test_write_metrics_inserts_expected_columns(self) -> None:
         client = FakeClickHouseClient()
         store = ClickHouseStrategyTestStore(lambda: client)
@@ -99,6 +123,22 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(row[columns.index("metric_code")], "expectancy_r")
         self.assertEqual(row[columns.index("metadata_json")], '{"source":"lab","note":"проверка"}')
         self.assertTrue(client.closed)
+
+    def test_write_metrics_inserts_scenario_key_and_attempt(self) -> None:
+        client = FakeClickHouseClient()
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        store.write_metrics([_metric()])
+
+        _table, data, columns = client.inserts[0]
+        row = data[0]
+        self.assertIn("scenario_key", columns)
+        self.assertIn("run_attempt", columns)
+        self.assertEqual(
+            row[columns.index("scenario_key")],
+            "trend_pullback_continuation::bybit::BTCUSDT::1h",
+        )
+        self.assertEqual(row[columns.index("run_attempt")], 0)
 
     def test_write_signal_events_inserts_expected_columns(self) -> None:
         client = FakeClickHouseClient()
@@ -116,6 +156,24 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(row[columns.index("no_entry")], 1)
         self.assertEqual(row[columns.index("features_snapshot_json")], '{"atr":"1.2"}')
         self.assertTrue(client.closed)
+
+    def test_write_signal_events_inserts_deterministic_analytics_keys(self) -> None:
+        client = FakeClickHouseClient()
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        store.write_signal_events([_signal_event()])
+
+        _table, data, columns = client.inserts[0]
+        row = data[0]
+        self.assertIn("scenario_key", columns)
+        self.assertIn("event_key", columns)
+        self.assertIn("run_attempt", columns)
+        self.assertEqual(
+            row[columns.index("scenario_key")],
+            "trend_pullback_continuation::bybit::BTCUSDT::1h",
+        )
+        self.assertEqual(row[columns.index("event_key")], "signal-1")
+        self.assertEqual(row[columns.index("run_attempt")], 0)
 
     def test_list_trades_parses_json_decimal_and_datetime_fields(self) -> None:
         client = FakeClickHouseClient(rows=[_trade_row()])
@@ -137,6 +195,10 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(trade.tags, ["backtest", "lab"])
         self.assertFalse(trade.risk_rejected)
         self.assertTrue(trade.execution_rejected)
+        query = client.queries[0][0]
+        self.assertIn("argMax", query)
+        self.assertIn("GROUP BY", query)
+        self.assertIn("event_key", query)
 
     def test_list_metrics_parses_metadata_json(self) -> None:
         client = FakeClickHouseClient(rows=[_metric_row()])
@@ -150,6 +212,10 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(metric.metric_value, 0.6)
         self.assertEqual(metric.sample_size, 10)
         self.assertEqual(metric.metadata, {"source": "grouped"})
+        query = client.queries[0][0]
+        self.assertIn("argMax", query)
+        self.assertIn("GROUP BY", query)
+        self.assertIn("scenario_key", query)
 
     def test_list_signal_events_parses_json_decimal_and_flags(self) -> None:
         client = FakeClickHouseClient(rows=[_signal_event_row()])
@@ -167,6 +233,40 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertTrue(event.no_entry)
         self.assertEqual(event.features_snapshot, {"atr": "1.2"})
         self.assertEqual(event.metadata, {"source": "backtest"})
+        query = client.queries[0][0]
+        self.assertIn("argMax", query)
+        self.assertIn("GROUP BY", query)
+        self.assertIn("event_key", query)
+
+    def test_aggregate_signal_funnel_deduplicates_in_clickhouse(self) -> None:
+        client = FakeClickHouseClient(
+            rows=[
+                {
+                    "signals_count": 4,
+                    "execution_candidates": 3,
+                    "entry_touched": 2,
+                    "filled": 1,
+                    "closed": 1,
+                    "wins": 1,
+                    "losses": 0,
+                    "no_entry": 2,
+                    "risk_rejected": 1,
+                    "execution_rejected": 1,
+                }
+            ]
+        )
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        funnel = store.aggregate_signal_funnel(RUN_ID)
+
+        self.assertEqual(client.queries[0][1], {"run_id": RUN_ID})
+        self.assertEqual(funnel.signals_count, 4)
+        self.assertEqual(funnel.execution_candidates, 3)
+        self.assertEqual(funnel.entry_touch_rate, 0.5)
+        self.assertEqual(funnel.execution_rejection_rate, 1 / 3)
+        query = client.queries[0][0]
+        self.assertIn("argMax", query)
+        self.assertIn("GROUP BY run_id, scenario_key, event_key", query)
 
     def test_clickhouse_init_file_contains_strategy_test_tables(self) -> None:
         schema = DDL_FILE.read_text(encoding="utf-8")
@@ -175,6 +275,12 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS analytics.strategy_test_trades", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS analytics.strategy_test_metrics", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals", schema)
+        self.assertIn("scenario_key String", schema)
+        self.assertIn("event_key String", schema)
+        self.assertIn("run_attempt UInt32", schema)
+        self.assertIn("ALTER TABLE analytics.strategy_test_trades ADD COLUMN IF NOT EXISTS scenario_key String", schema)
+        self.assertIn("ALTER TABLE analytics.strategy_test_signals ADD COLUMN IF NOT EXISTS event_key String", schema)
+        self.assertIn("ALTER TABLE analytics.strategy_test_metrics ADD COLUMN IF NOT EXISTS run_attempt UInt32", schema)
         self.assertIn("ENGINE = MergeTree", schema)
         self.assertIn("ENGINE = ReplacingMergeTree(created_at)", schema)
         self.assertNotIn("DROP TABLE", schema)

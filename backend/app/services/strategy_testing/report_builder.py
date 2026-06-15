@@ -159,6 +159,11 @@ class StrategyTestReportBuilder:
         signal_events = _dedupe_signal_events(
             _list_signal_events_or_empty(self._analytics_store, run.run_id, analytics_warnings)
         )
+        aggregate_funnel = _aggregate_signal_funnel_or_none(
+            self._analytics_store,
+            run.run_id,
+            analytics_warnings,
+        )
         source_summary = _run_summary_source(run_detail)
         metric_results = build_report_metric_results(
             trades,
@@ -188,6 +193,7 @@ class StrategyTestReportBuilder:
             signal_events,
             source_summary=source_summary,
             analytics_warnings=analytics_warnings,
+            funnel_override=aggregate_funnel,
         )
         sections = _build_sections(
             trades=trades,
@@ -434,6 +440,21 @@ def _list_signal_events_or_empty(
         return []
 
 
+def _aggregate_signal_funnel_or_none(
+    analytics_store: ReportAnalyticsStore,
+    run_id: UUID,
+    warnings: list[str],
+) -> StrategyTestFunnelResponse | None:
+    aggregate_funnel = getattr(analytics_store, "aggregate_signal_funnel", None)
+    if not callable(aggregate_funnel):
+        return None
+    try:
+        return aggregate_funnel(run_id)
+    except Exception as exc:
+        warnings.append(f"analytics_signal_funnel_unavailable:{exc}")
+        return None
+
+
 def _dedupe_trades(trades: Sequence[StrategyTestTrade]) -> list[StrategyTestTrade]:
     result: list[StrategyTestTrade] = []
     seen: set[tuple[str, str, str]] = set()
@@ -632,6 +653,7 @@ def _build_summary(
     *,
     source_summary: dict[str, Any] | None = None,
     analytics_warnings: Sequence[str] = (),
+    funnel_override: StrategyTestFunnelResponse | None = None,
 ) -> dict[str, Any]:
     run = run_detail.run
     requested = run.requested_matrix
@@ -640,7 +662,7 @@ def _build_summary(
     completed_scenarios = _summary_int(source, "completed_scenarios", 0)
     if completed_scenarios <= 0:
         completed_scenarios = _completed_scenario_count_from_rows(trades, signal_events)
-    funnel = (
+    funnel = funnel_override or (
         build_signal_funnel_response(run.run_id, signal_events)
         if signal_events
         else _signal_funnel_from_summary(run.run_id, source)

@@ -13,6 +13,7 @@ from app.core.clickhouse_client import create_clickhouse_client
 from app.core.database import SessionLocal
 from app.models.strategy_testing import StrategyTestRun, StrategyTestScenario
 from app.services.strategy_testing.schemas import (
+    StrategyTestFunnelResponse,
     StrategyTestMetricRow,
     StrategyTestRunDetailResponse,
     StrategyTestRunRequest,
@@ -37,6 +38,9 @@ CREATE TABLE IF NOT EXISTS analytics.strategy_test_trades
 (
     run_id UUID,
     trade_id String,
+    scenario_key String,
+    event_key String,
+    run_attempt UInt32,
     user_id UUID,
     mode LowCardinality(String),
     strategy_code LowCardinality(String),
@@ -76,13 +80,15 @@ CREATE TABLE IF NOT EXISTS analytics.strategy_test_trades
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(entry_time)
-ORDER BY (run_id, strategy_code, exchange, symbol, timeframe, entry_time, trade_id)
+ORDER BY (run_id, scenario_key, event_key, entry_time, trade_id)
 """
 
 STRATEGY_TEST_METRICS_DDL = """
 CREATE TABLE IF NOT EXISTS analytics.strategy_test_metrics
 (
     run_id UUID,
+    scenario_key String,
+    run_attempt UInt32,
     user_id UUID,
     mode LowCardinality(String),
     strategy_code LowCardinality(String),
@@ -102,6 +108,7 @@ ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(created_at)
 ORDER BY (
     run_id,
+    scenario_key,
     strategy_code,
     exchange,
     symbol,
@@ -117,6 +124,9 @@ STRATEGY_TEST_SIGNALS_DDL = """
 CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals
 (
     run_id UUID,
+    scenario_key String,
+    event_key String,
+    run_attempt UInt32,
     user_id UUID,
     mode LowCardinality(String),
     test_type LowCardinality(String),
@@ -162,8 +172,19 @@ CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(candle_time)
-ORDER BY (run_id, strategy_code, exchange, symbol, timeframe, candle_time, signal_key)
+ORDER BY (run_id, scenario_key, event_key, candle_time, signal_key)
 """
+
+STRATEGY_TEST_ANALYTICS_ALTER_DDLS = [
+    "ALTER TABLE analytics.strategy_test_trades ADD COLUMN IF NOT EXISTS scenario_key String DEFAULT concat(strategy_code, '::', exchange, '::', symbol, '::', timeframe)",
+    "ALTER TABLE analytics.strategy_test_trades ADD COLUMN IF NOT EXISTS event_key String DEFAULT trade_id",
+    "ALTER TABLE analytics.strategy_test_trades ADD COLUMN IF NOT EXISTS run_attempt UInt32 DEFAULT 0",
+    "ALTER TABLE analytics.strategy_test_signals ADD COLUMN IF NOT EXISTS scenario_key String DEFAULT concat(strategy_code, '::', exchange, '::', symbol, '::', timeframe)",
+    "ALTER TABLE analytics.strategy_test_signals ADD COLUMN IF NOT EXISTS event_key String DEFAULT coalesce(nullIf(signal_id, ''), nullIf(synthetic_signal_id, ''), signal_key)",
+    "ALTER TABLE analytics.strategy_test_signals ADD COLUMN IF NOT EXISTS run_attempt UInt32 DEFAULT 0",
+    "ALTER TABLE analytics.strategy_test_metrics ADD COLUMN IF NOT EXISTS scenario_key String DEFAULT concat(strategy_code, '::', exchange, '::', symbol, '::', timeframe)",
+    "ALTER TABLE analytics.strategy_test_metrics ADD COLUMN IF NOT EXISTS run_attempt UInt32 DEFAULT 0",
+]
 
 
 class StrategyTestRunStore(Protocol):
@@ -300,6 +321,9 @@ class ClickHouseStrategyTestStore:
     _trade_columns = [
         "run_id",
         "trade_id",
+        "scenario_key",
+        "event_key",
+        "run_attempt",
         "user_id",
         "mode",
         "strategy_code",
@@ -339,6 +363,8 @@ class ClickHouseStrategyTestStore:
     ]
     _metric_columns = [
         "run_id",
+        "scenario_key",
+        "run_attempt",
         "user_id",
         "mode",
         "strategy_code",
@@ -356,6 +382,9 @@ class ClickHouseStrategyTestStore:
     ]
     _signal_event_columns = [
         "run_id",
+        "scenario_key",
+        "event_key",
+        "run_attempt",
         "user_id",
         "mode",
         "test_type",
@@ -409,6 +438,8 @@ class ClickHouseStrategyTestStore:
             client.command(STRATEGY_TEST_TRADES_DDL)
             client.command(STRATEGY_TEST_METRICS_DDL)
             client.command(STRATEGY_TEST_SIGNALS_DDL)
+            for alter_ddl in STRATEGY_TEST_ANALYTICS_ALTER_DDLS:
+                client.command(alter_ddl)
         finally:
             self._close_client(client)
 
@@ -436,50 +467,14 @@ class ClickHouseStrategyTestStore:
         if offset < 0:
             raise ValueError("offset must be non-negative")
 
-        query = """
+        query = f"""
             SELECT
-                run_id,
-                trade_id,
-                user_id,
-                mode,
-                strategy_code,
-                strategy_version,
-                exchange,
-                symbol,
-                timeframe,
-                direction,
-                signal_score,
-                market_regime,
-                score_bucket,
-                entry_time,
-                exit_time,
-                entry_price,
-                exit_price,
-                stop_loss,
-                targets_json,
-                selected_rr,
-                realized_r,
-                pnl,
-                pnl_pct,
-                fees,
-                slippage,
-                mfe_r,
-                mae_r,
-                bars_to_entry,
-                bars_in_trade,
-                close_reason,
-                outcome,
-                risk_rejected,
-                execution_rejected,
-                warnings_json,
-                features_snapshot_json,
-                trade_plan_json,
-                tags,
-                created_at
+                {_dedup_select_columns_sql(self._trade_columns, _trade_dedup_group_columns())}
             FROM analytics.strategy_test_trades
-            WHERE run_id = {run_id:UUID}
+            WHERE run_id = {{run_id:UUID}}
+            GROUP BY run_id, scenario_key, event_key
             ORDER BY entry_time ASC, trade_id ASC
-            LIMIT {limit:UInt32} OFFSET {offset:UInt32}
+            LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
         """
         client = self._client()
         try:
@@ -518,9 +513,10 @@ class ClickHouseStrategyTestStore:
 
         query = f"""
             SELECT
-                {_signal_event_select_columns_sql()}
+                {_dedup_select_columns_sql(self._signal_event_columns, _signal_event_dedup_group_columns())}
             FROM analytics.strategy_test_signals
             WHERE run_id = {{run_id:UUID}}
+            GROUP BY run_id, scenario_key, event_key
             ORDER BY candle_time ASC, signal_key ASC
             LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
         """
@@ -532,6 +528,60 @@ class ClickHouseStrategyTestStore:
             )
             rows = result.named_results() if hasattr(result, "named_results") else []
             return [_row_to_signal_event(row) for row in rows]
+        finally:
+            self._close_client(client)
+
+    def aggregate_signal_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
+        query = f"""
+            SELECT
+                count() AS signals_count,
+                sum(toUInt64(execution_candidate)) AS execution_candidates,
+                sum(toUInt64(entry_touched)) AS entry_touched,
+                sum(toUInt64(filled)) AS filled,
+                sum(toUInt64(closed)) AS closed,
+                sum(if(lowerUTF8(ifNull(outcome, '')) = 'win', 1, 0)) AS wins,
+                sum(if(lowerUTF8(ifNull(outcome, '')) = 'loss', 1, 0)) AS losses,
+                sum(toUInt64(no_entry)) AS no_entry,
+                sum(toUInt64(risk_rejected)) AS risk_rejected,
+                sum(toUInt64(execution_rejected)) AS execution_rejected
+            FROM (
+                SELECT
+                    {_dedup_select_columns_sql(self._signal_event_columns, _signal_event_dedup_group_columns())}
+                FROM analytics.strategy_test_signals
+                WHERE run_id = {{run_id:UUID}}
+                GROUP BY run_id, scenario_key, event_key
+            )
+        """
+        client = self._client()
+        try:
+            result = client.query(query, parameters={"run_id": run_id})
+            rows = result.named_results() if hasattr(result, "named_results") else []
+            row = rows[0] if rows else {}
+            signals_count = _int_from_row(row, "signals_count")
+            execution_candidates = _int_from_row(row, "execution_candidates")
+            entry_touched = _int_from_row(row, "entry_touched")
+            no_entry = _int_from_row(row, "no_entry")
+            risk_rejected = _int_from_row(row, "risk_rejected")
+            execution_rejected = _int_from_row(row, "execution_rejected")
+            return StrategyTestFunnelResponse(
+                run_id=run_id,
+                signals_count=signals_count,
+                execution_candidates=execution_candidates,
+                entry_touched=entry_touched,
+                filled=_int_from_row(row, "filled"),
+                closed=_int_from_row(row, "closed"),
+                wins=_int_from_row(row, "wins"),
+                losses=_int_from_row(row, "losses"),
+                no_entry=no_entry,
+                risk_rejected=risk_rejected,
+                execution_rejected=execution_rejected,
+                entry_touch_rate=_safe_rate(entry_touched, signals_count),
+                no_entry_rate=_safe_rate(no_entry, signals_count),
+                risk_rejection_rate=_safe_rate(risk_rejected, signals_count),
+                execution_rejection_rate=_safe_rate(execution_rejected, execution_candidates),
+                false_signal_rate=_safe_rate(no_entry, signals_count),
+                stages=[],
+            )
         finally:
             self._close_client(client)
 
@@ -609,11 +659,14 @@ class ClickHouseStrategyTestStore:
             self._close_client(client)
 
     def list_metrics(self, run_id: UUID) -> list[StrategyTestMetricRow]:
-        query = """
+        query = f"""
             SELECT
+                {_dedup_select_columns_sql(self._metric_columns, _metric_dedup_group_columns())}
+            FROM analytics.strategy_test_metrics
+            WHERE run_id = {{run_id:UUID}}
+            GROUP BY
                 run_id,
-                user_id,
-                mode,
+                scenario_key,
                 strategy_code,
                 exchange,
                 symbol,
@@ -621,13 +674,7 @@ class ClickHouseStrategyTestStore:
                 market_regime,
                 score_bucket,
                 direction,
-                metric_code,
-                metric_value,
-                sample_size,
-                metadata_json,
-                created_at
-            FROM analytics.strategy_test_metrics
-            WHERE run_id = {run_id:UUID}
+                metric_code
             ORDER BY
                 strategy_code ASC,
                 exchange ASC,
@@ -1174,10 +1221,48 @@ def _signal_event_select_columns_sql() -> str:
     return ",\n                ".join(ClickHouseStrategyTestStore._signal_event_columns)
 
 
+def _dedup_select_columns_sql(columns: Sequence[str], group_columns: set[str]) -> str:
+    expressions: list[str] = []
+    for column in columns:
+        if column in group_columns:
+            expressions.append(column)
+        elif column == "created_at":
+            expressions.append("max(created_at) AS created_at")
+        else:
+            expressions.append(f"argMax({column}, created_at) AS {column}")
+    return ",\n                ".join(expressions)
+
+
+def _trade_dedup_group_columns() -> set[str]:
+    return {"run_id", "scenario_key", "event_key"}
+
+
+def _signal_event_dedup_group_columns() -> set[str]:
+    return {"run_id", "scenario_key", "event_key"}
+
+
+def _metric_dedup_group_columns() -> set[str]:
+    return {
+        "run_id",
+        "scenario_key",
+        "strategy_code",
+        "exchange",
+        "symbol",
+        "timeframe",
+        "market_regime",
+        "score_bucket",
+        "direction",
+        "metric_code",
+    }
+
+
 def _trade_to_clickhouse(trade: StrategyTestTrade) -> list[Any]:
     return [
         trade.run_id,
         trade.trade_id,
+        _analytics_scenario_key(trade.strategy_code, trade.exchange, trade.symbol, trade.timeframe),
+        _trade_event_key(trade),
+        _run_attempt(trade),
         trade.user_id,
         trade.mode,
         trade.strategy_code,
@@ -1220,6 +1305,9 @@ def _trade_to_clickhouse(trade: StrategyTestTrade) -> list[Any]:
 def _signal_event_to_clickhouse(event: StrategyTestSignalEvent) -> list[Any]:
     return [
         event.run_id,
+        _analytics_scenario_key(event.strategy_code, event.exchange, event.symbol, event.timeframe),
+        _signal_event_key(event),
+        _run_attempt(event),
         event.user_id,
         event.mode,
         event.test_type,
@@ -1268,6 +1356,8 @@ def _signal_event_to_clickhouse(event: StrategyTestSignalEvent) -> list[Any]:
 def _metric_to_clickhouse(row: StrategyTestMetricRow) -> list[Any]:
     return [
         row.run_id,
+        _metric_scenario_key(row),
+        _run_attempt(row),
         row.user_id,
         row.mode,
         row.strategy_code,
@@ -1400,6 +1490,55 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
 
 
+def _analytics_scenario_key(
+    strategy: object,
+    exchange: object,
+    symbol: object,
+    timeframe: object,
+) -> str:
+    return "::".join(_key_text(value) for value in (strategy, exchange, symbol, timeframe))
+
+
+def _trade_event_key(trade: StrategyTestTrade) -> str:
+    return str(trade.trade_id)
+
+
+def _signal_event_key(event: StrategyTestSignalEvent) -> str:
+    return str(event.signal_id or event.synthetic_signal_id or event.signal_key)
+
+
+def _metric_scenario_key(row: StrategyTestMetricRow) -> str:
+    scenario_key = row.metadata.get("scenario_key") if isinstance(row.metadata, dict) else None
+    if scenario_key:
+        return str(scenario_key)
+    return _analytics_scenario_key(row.strategy_code, row.exchange, row.symbol, row.timeframe)
+
+
+def _run_attempt(row: object) -> int:
+    metadata = getattr(row, "metadata", None)
+    if isinstance(metadata, dict):
+        for key in ("run_attempt", "worker_attempt"):
+            value = metadata.get(key)
+            if value is not None:
+                return _non_negative_int(value)
+    for key in ("run_attempt", "worker_attempt"):
+        value = getattr(row, key, None)
+        if value is not None:
+            return _non_negative_int(value)
+    return 0
+
+
+def _non_negative_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _key_text(value: object) -> str:
+    return str(value or "unknown").strip() or "unknown"
+
+
 def _loads_json(value: Any, fallback: list[Any] | dict[str, Any]) -> Any:
     if isinstance(value, (list, dict)):
         return value
@@ -1450,6 +1589,16 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _int_from_row(row: dict[str, Any], key: str) -> int:
+    return _non_negative_int(row.get(key))
+
+
+def _safe_rate(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return numerator / denominator
 
 
 def _bool(value: Any) -> bool:

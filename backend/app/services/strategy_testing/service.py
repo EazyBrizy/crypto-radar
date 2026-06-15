@@ -513,6 +513,9 @@ class StrategyTestingService:
     def get_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
         if self._run_store.get_run(run_id) is None:
             raise ValueError(f"Strategy test run is not found: {run_id}")
+        aggregate_funnel = getattr(self._trade_store, "aggregate_signal_funnel", None)
+        if callable(aggregate_funnel):
+            return aggregate_funnel(run_id)
         return build_signal_funnel_response(
             run_id,
             self.list_signal_events(run_id, limit=10000, offset=0),

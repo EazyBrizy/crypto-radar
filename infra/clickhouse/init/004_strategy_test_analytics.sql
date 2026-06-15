@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS analytics.strategy_test_trades
 (
     run_id UUID,
     trade_id String,
+    scenario_key String,
+    event_key String,
+    run_attempt UInt32,
     user_id UUID,
     mode LowCardinality(String),
     strategy_code LowCardinality(String),
@@ -43,11 +46,13 @@ CREATE TABLE IF NOT EXISTS analytics.strategy_test_trades
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(entry_time)
-ORDER BY (run_id, strategy_code, exchange, symbol, timeframe, entry_time, trade_id);
+ORDER BY (run_id, scenario_key, event_key, entry_time, trade_id);
 
 CREATE TABLE IF NOT EXISTS analytics.strategy_test_metrics
 (
     run_id UUID,
+    scenario_key String,
+    run_attempt UInt32,
     user_id UUID,
     mode LowCardinality(String),
     strategy_code LowCardinality(String),
@@ -67,6 +72,7 @@ ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(created_at)
 ORDER BY (
     run_id,
+    scenario_key,
     strategy_code,
     exchange,
     symbol,
@@ -80,6 +86,9 @@ ORDER BY (
 CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals
 (
     run_id UUID,
+    scenario_key String,
+    event_key String,
+    run_attempt UInt32,
     user_id UUID,
     mode LowCardinality(String),
     test_type LowCardinality(String),
@@ -125,4 +134,15 @@ CREATE TABLE IF NOT EXISTS analytics.strategy_test_signals
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(candle_time)
-ORDER BY (run_id, strategy_code, exchange, symbol, timeframe, candle_time, signal_key);
+ORDER BY (run_id, scenario_key, event_key, candle_time, signal_key);
+
+ALTER TABLE analytics.strategy_test_trades ADD COLUMN IF NOT EXISTS scenario_key String DEFAULT concat(strategy_code, '::', exchange, '::', symbol, '::', timeframe);
+ALTER TABLE analytics.strategy_test_trades ADD COLUMN IF NOT EXISTS event_key String DEFAULT trade_id;
+ALTER TABLE analytics.strategy_test_trades ADD COLUMN IF NOT EXISTS run_attempt UInt32 DEFAULT 0;
+
+ALTER TABLE analytics.strategy_test_signals ADD COLUMN IF NOT EXISTS scenario_key String DEFAULT concat(strategy_code, '::', exchange, '::', symbol, '::', timeframe);
+ALTER TABLE analytics.strategy_test_signals ADD COLUMN IF NOT EXISTS event_key String DEFAULT coalesce(nullIf(signal_id, ''), nullIf(synthetic_signal_id, ''), signal_key);
+ALTER TABLE analytics.strategy_test_signals ADD COLUMN IF NOT EXISTS run_attempt UInt32 DEFAULT 0;
+
+ALTER TABLE analytics.strategy_test_metrics ADD COLUMN IF NOT EXISTS scenario_key String DEFAULT concat(strategy_code, '::', exchange, '::', symbol, '::', timeframe);
+ALTER TABLE analytics.strategy_test_metrics ADD COLUMN IF NOT EXISTS run_attempt UInt32 DEFAULT 0;

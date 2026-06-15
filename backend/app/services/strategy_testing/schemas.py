@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
@@ -15,6 +16,7 @@ StrategyTestScenarioStatus = Literal["queued", "running", "completed", "failed",
 StrategyTestCalibrationDecision = Literal["positive", "negative", "insufficient_sample"]
 StrategyTestEstimateLevel = Literal["small", "medium", "large"]
 StrategyTestEstimateWarningCode = Literal[
+    "estimating_failed",
     "market_data_missing",
     "market_data_duplicates",
     "market_data_below_warmup",
@@ -111,7 +113,7 @@ class StrategyTestRunResponse(BaseModel):
     test_type: StrategyTestType = "historical_backtest"
     requested_matrix: dict[str, Any]
     summary: dict[str, Any] = Field(default_factory=dict)
-    runtime_state: dict[str, Any] = Field(default_factory=dict)
+    runtime_state: dict[str, Any] | StrategyTestRuntimeState = Field(default_factory=dict)
     created_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -145,6 +147,53 @@ class StrategyTestScenarioCheckpoint(BaseModel):
     completed_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class StrategyTestRuntimeCounters(BaseModel):
+    signals: int = Field(default=0, ge=0)
+    execution_candidates: int = Field(default=0, ge=0)
+    pending_armed: int = Field(default=0, ge=0)
+    pending_entries: int = Field(default=0, ge=0)
+    no_entry: int = Field(default=0, ge=0)
+    filled: int = Field(default=0, ge=0)
+    closed: int = Field(default=0, ge=0)
+    risk_rejections: int = Field(default=0, ge=0)
+    execution_rejections: int = Field(default=0, ge=0)
+
+
+class StrategyTestRuntimeState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    scenarios_total: int = Field(default=0, ge=0)
+    scenarios_completed: int = Field(default=0, ge=0)
+    scenarios_failed: int = Field(default=0, ge=0)
+    current_scenario_index: int | None = Field(default=None, ge=0)
+    current_scenario_key: str | None = None
+    current_scenario_bars_processed: int = Field(default=0, ge=0)
+    current_scenario_bars_total: int | None = Field(default=None, ge=0)
+    matrix_bars_processed: int = Field(default=0, ge=0)
+    matrix_bars_total: int | None = Field(default=None, ge=0)
+    bars_pct: float = Field(default=0.0, ge=0)
+    elapsed_seconds: float = Field(default=0.0, ge=0)
+    bars_per_second: float = Field(default=0.0, ge=0)
+    eta_seconds: float | None = Field(default=None, ge=0)
+    phase: str = "queued"
+    last_progress_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    stale_threshold_seconds: int = Field(default=0, ge=0)
+    counters: StrategyTestRuntimeCounters = Field(default_factory=StrategyTestRuntimeCounters)
+
+    @field_validator("bars_pct", "elapsed_seconds", "bars_per_second", mode="before")
+    @classmethod
+    def sanitize_non_negative_float(cls, value: Any) -> float:
+        return _non_negative_finite_float(value, default=0.0)
+
+    @field_validator("eta_seconds", mode="before")
+    @classmethod
+    def sanitize_optional_non_negative_float(cls, value: Any) -> float | None:
+        if value is None:
+            return None
+        return _non_negative_finite_float(value, default=0.0)
 
 
 class StrategyTestFunnelResponse(BaseModel):
@@ -472,3 +521,13 @@ def _dedupe_pairs(pairs: list[StrategyTestPair]) -> list[StrategyTestPair]:
         seen.add(key)
         normalized.append(pair)
     return normalized
+
+
+def _non_negative_finite_float(value: Any, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return max(0.0, parsed)

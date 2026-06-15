@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     scanner_warmup_concurrency: int = 2
     scanner_warmup_timeout_seconds: float = 8.0
     scanner_market_data_stale_seconds: float = 30.0
+    strategy_test_max_bars_per_run: int = 1_000_000
+    strategy_test_max_scenarios_per_run: int = 96
+    strategy_test_worker_heartbeat_seconds: float = 5.0
+    strategy_test_lease_seconds: int = 900
 
 
 settings = Settings()

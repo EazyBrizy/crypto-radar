@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.config import settings
 from app.core.clickhouse_client import create_clickhouse_client
 from app.core.database import SessionLocal
 from app.models.strategy_testing import StrategyTestRun, StrategyTestScenario
@@ -1177,7 +1178,7 @@ def _run_to_detail(
             test_type=cast(StrategyTestType, run.test_type),
             requested_matrix=_requested_matrix(run),
             summary=_json_object(run.summary),
-            runtime_state=_json_object(run.runtime_state),
+            runtime_state=_runtime_state_for_response(run),
             created_at=run.created_at,
             started_at=run.started_at,
             finished_at=run.finished_at,
@@ -1208,6 +1209,14 @@ def _requested_matrix(run: StrategyTestRun) -> dict[str, Any]:
         "tags": list(run.tags),
         "scenario_count": len(run.requested_strategies) * len(run.requested_pairs) * len(run.requested_timeframes),
     }
+
+
+def _runtime_state_for_response(run: StrategyTestRun) -> dict[str, Any]:
+    runtime_state = _json_object(run.runtime_state)
+    if run.last_heartbeat_at is not None:
+        runtime_state["last_heartbeat_at"] = run.last_heartbeat_at.isoformat()
+    runtime_state.setdefault("stale_threshold_seconds", max(1, int(settings.strategy_test_lease_seconds)))
+    return runtime_state
 
 
 def _json_object(value: Any) -> dict[str, Any]:

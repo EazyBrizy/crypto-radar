@@ -225,7 +225,7 @@ class StrategyTestMatrixRunner:
         scenario_index = 0
         candle_cache: dict[str, Any] = {}
         feature_cache: dict[str, Any] = {}
-        bars_by_pair_timeframe, matrix_bars_total = self._estimate_matrix_bars(request)
+        bars_by_pair_timeframe, matrix_bars_total, matrix_bars_warning = self._estimate_matrix_bars(request)
         bars_completed_before = 0
 
         for strategy in request.strategies:
@@ -278,18 +278,14 @@ class StrategyTestMatrixRunner:
                             bars_completed_before=bars_completed_before,
                             scenario_bars_total=scenario_bars_total,
                             matrix_bars_total=matrix_bars_total,
+                            matrix_bars_warning=matrix_bars_warning,
                         )
-                        partial_summary = _partial_summary(
-                            run_id=run_id,
+                        partial_summary = _progress_partial_summary(
                             scenario_count=scenario_count,
                             completed=completed,
                             failed=failed,
                             scenario_summaries=scenario_summaries,
                             errors=errors,
-                            trades=trades,
-                            signal_events=signal_events,
-                            metrics=metrics,
-                            metric_set=request.metric_set,
                         )
                         on_scenario_progress(context, progress, partial_summary)
 
@@ -394,10 +390,13 @@ class StrategyTestMatrixRunner:
     def _estimate_matrix_bars(
         self,
         request: StrategyTestRunRequest,
-    ) -> tuple[dict[tuple[str, str, str], int], int | None]:
+    ) -> tuple[dict[tuple[str, str, str], int], int | None, dict[str, Any] | None]:
         count_bars = getattr(self._scenario_runner, "count_scenario_bars", None)
         if not callable(count_bars):
-            return {}, None
+            return {}, None, {
+                "code": "estimating_failed",
+                "message": "Scenario runner cannot count historical bars before execution.",
+            }
 
         bars_by_pair_timeframe: dict[tuple[str, str, str], int] = {}
         for pair in request.pairs:
@@ -405,23 +404,35 @@ class StrategyTestMatrixRunner:
                 key = _bar_count_key(pair, timeframe)
                 if key in bars_by_pair_timeframe:
                     continue
-                bars_by_pair_timeframe[key] = max(
-                    0,
-                    int(
-                        count_bars(
-                            request=request,
-                            pair=pair,
-                            timeframe=timeframe,
-                        )
-                    ),
-                )
+                try:
+                    bars_by_pair_timeframe[key] = max(
+                        0,
+                        int(
+                            count_bars(
+                                request=request,
+                                pair=pair,
+                                timeframe=timeframe,
+                            )
+                        ),
+                    )
+                except Exception as exc:
+                    return {}, None, {
+                        "code": "estimating_failed",
+                        "message": (
+                            "Unable to count deduped historical bars before execution for "
+                            f"{pair.exchange}:{pair.symbol}:{timeframe}: {exc}"
+                        ),
+                        "exchange": pair.exchange,
+                        "symbol": pair.symbol,
+                        "timeframe": timeframe,
+                    }
 
         total_bars = 0
         for _strategy in request.strategies:
             for pair in request.pairs:
                 for timeframe in request.timeframes:
                     total_bars += bars_by_pair_timeframe.get(_bar_count_key(pair, timeframe), 0)
-        return bars_by_pair_timeframe, total_bars
+        return bars_by_pair_timeframe, total_bars, None
 
 
 def _partial_summary(
@@ -449,6 +460,41 @@ def _partial_summary(
         metrics=metrics,
         metric_set=metric_set,
     ).summary()
+
+
+def _progress_partial_summary(
+    *,
+    scenario_count: int,
+    completed: int,
+    failed: int,
+    scenario_summaries: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    summary_signals_seen = sum(_int_from_summary(item, "signals_seen") for item in scenario_summaries)
+    summary_signals_count = sum(_int_from_summary(item, "signals_count") for item in scenario_summaries)
+    entry_touched = sum(_summary_touched(item) for item in scenario_summaries)
+    return {
+        "scenario_count": scenario_count,
+        "completed_scenarios": completed,
+        "failed_scenarios": failed,
+        "trades_count": sum(_int_from_summary(item, "trades_count") for item in scenario_summaries),
+        "signals_seen": summary_signals_seen or summary_signals_count,
+        "signals_count": summary_signals_count or summary_signals_seen,
+        "execution_candidates": sum(_int_from_summary(item, "execution_candidates") for item in scenario_summaries),
+        "pending_armed": sum(_int_from_summary(item, "pending_armed") for item in scenario_summaries),
+        "touched": entry_touched,
+        "entry_touched": entry_touched,
+        "filled": sum(_int_from_summary(item, "filled") for item in scenario_summaries),
+        "closed": sum(_int_from_summary(item, "closed") for item in scenario_summaries),
+        "wins": sum(_int_from_summary(item, "wins") for item in scenario_summaries),
+        "losses": sum(_int_from_summary(item, "losses") for item in scenario_summaries),
+        "no_entry": sum(_int_from_summary(item, "no_entry") for item in scenario_summaries),
+        "not_selected": sum(_int_from_summary(item, "not_selected") for item in scenario_summaries),
+        "risk_rejections": sum(_int_from_summary(item, "risk_rejections") for item in scenario_summaries),
+        "execution_rejections": sum(_int_from_summary(item, "execution_rejections") for item in scenario_summaries),
+        "errors": list(errors),
+        "scenarios": list(scenario_summaries),
+    }
 
 
 def _bar_count_key(pair: StrategyTestPair, timeframe: str) -> tuple[str, str, str]:
@@ -514,21 +560,35 @@ def _matrix_progress(
     bars_completed_before: int,
     scenario_bars_total: int | None,
     matrix_bars_total: int | None,
+    matrix_bars_warning: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     updated = dict(progress)
     scenario_bars_processed = _int_from_summary(updated, "bars_processed")
     existing_scenario_total = _int_from_summary(updated, "bars_total")
     scenario_total = scenario_bars_total if scenario_bars_total is not None else existing_scenario_total
+    matrix_bars_processed = bars_completed_before + scenario_bars_processed
     updated["scenario_bars_processed"] = scenario_bars_processed
     updated["scenario_bars_total"] = scenario_total
+    updated["current_scenario_bars_processed"] = scenario_bars_processed
+    updated["current_scenario_bars_total"] = scenario_total
+    updated["matrix_bars_processed"] = matrix_bars_processed
+    updated["matrix_bars_total"] = matrix_bars_total
+    if matrix_bars_warning is not None:
+        updated["matrix_bars_estimate_status"] = "estimating_failed"
+        updated["warnings"] = [*list(updated.get("warnings") or []), dict(matrix_bars_warning)]
     if matrix_bars_total is not None:
-        updated["bars_processed"] = min(matrix_bars_total, bars_completed_before + scenario_bars_processed)
+        updated["matrix_bars_processed"] = min(matrix_bars_total, matrix_bars_processed)
+        updated["bars_processed"] = updated["matrix_bars_processed"]
         updated["bars_total"] = matrix_bars_total
         updated["bars_pct"] = (
             round((updated["bars_processed"] / matrix_bars_total) * 100, 2)
             if matrix_bars_total > 0
             else 0.0
         )
+    else:
+        updated["bars_processed"] = matrix_bars_processed
+        updated["bars_total"] = None
+        updated["bars_pct"] = None
     return updated
 
 

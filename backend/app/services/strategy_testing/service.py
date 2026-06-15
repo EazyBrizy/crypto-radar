@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Any, Protocol, Sequence
 from uuid import UUID
@@ -39,6 +40,7 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestRuntimeState,
     StrategyTestSignalEvent,
     StrategyTestTrade,
 )
@@ -100,10 +102,12 @@ class StrategyTestingService:
         self._historical_candle_provider = historical_candle_provider or ClickHouseHistoricalCandleProvider()
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        self._validate_run_request(request)
         created = self._run_store.create_run(request)
         return self.execute_run(created.run.run_id, request)
 
     def enqueue_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        self._validate_run_request(request)
         created = self._run_store.create_run(request)
         if request.test_type == "historical_backtest":
             return self._run_store.update_runtime_state(
@@ -380,7 +384,7 @@ class StrategyTestingService:
             return StrategyTestActiveRunResponse(
                 active_run=None,
                 can_run=True,
-                stale_threshold_seconds=STRATEGY_TEST_STALE_THRESHOLD_SECONDS,
+                stale_threshold_seconds=_strategy_test_stale_threshold_seconds(),
                 allowed_actions=["refresh"],
             )
 
@@ -392,7 +396,7 @@ class StrategyTestingService:
                 disabled_reason_code=None,
                 disabled_reason=None,
                 is_stale=True,
-                stale_threshold_seconds=STRATEGY_TEST_STALE_THRESHOLD_SECONDS,
+                stale_threshold_seconds=_strategy_test_stale_threshold_seconds(),
                 allowed_actions=["refresh", "cancel"],
             )
 
@@ -405,7 +409,7 @@ class StrategyTestingService:
                 "wait for it to finish or cancel it before starting another run."
             ),
             is_stale=False,
-            stale_threshold_seconds=STRATEGY_TEST_STALE_THRESHOLD_SECONDS,
+            stale_threshold_seconds=_strategy_test_stale_threshold_seconds(),
             allowed_actions=["refresh", "cancel"],
         )
 
@@ -468,6 +472,9 @@ class StrategyTestingService:
 
     def heartbeat_forward_runs(self) -> Any:
         return self._forward_runtime.heartbeat_active_runs()
+
+    def _validate_run_request(self, request: StrategyTestRunRequest) -> None:
+        _validate_strategy_test_resource_limits(request, self._historical_candle_provider)
 
     def publish_calibration(self, run_id: UUID) -> StrategyTestCalibrationResponse:
         detail = self._run_store.get_run(run_id)
@@ -543,12 +550,16 @@ def _failure_message(matrix_result: StrategyTestMatrixResult) -> str:
 _HISTORICAL_RUNTIME_PHASES = {
     "queued",
     "running",
+    "estimating_failed",
     "loading_candles",
+    "building_features",
     "running_scenario",
     "writing_results",
+    "building_report",
     "completed",
     "failed",
     "cancelled",
+    "stopping",
 }
 
 
@@ -598,14 +609,37 @@ def _scenario_runtime_state(
     if scenario_summary is not None:
         state["current_scenario_summary"] = dict(scenario_summary)
     if progress:
-        state["bars_processed"] = _int_value(progress.get("bars_processed"))
-        state["bars_total"] = _int_value(progress.get("bars_total"))
-        state["scenario_bars_processed"] = _int_value(progress.get("scenario_bars_processed"))
-        state["scenario_bars_total"] = _int_value(progress.get("scenario_bars_total"))
+        current_bars_processed = _int_value(
+            progress.get("current_scenario_bars_processed", progress.get("scenario_bars_processed"))
+        )
+        current_bars_total = _optional_int_value(
+            progress.get("current_scenario_bars_total", progress.get("scenario_bars_total"))
+        )
+        matrix_bars_processed = _int_value(progress.get("matrix_bars_processed", progress.get("bars_processed")))
+        matrix_bars_total = _optional_int_value(progress.get("matrix_bars_total", progress.get("bars_total")))
+        state["current_scenario_bars_processed"] = current_bars_processed
+        state["current_scenario_bars_total"] = current_bars_total
+        state["matrix_bars_processed"] = matrix_bars_processed
+        state["matrix_bars_total"] = matrix_bars_total
+        state["bars_processed"] = matrix_bars_processed
+        state["bars_total"] = matrix_bars_total
+        state["scenario_bars_processed"] = current_bars_processed
+        state["scenario_bars_total"] = current_bars_total
         state["pending_entries_count"] = _int_value(progress.get("pending_entries_count"))
-        for key in ("bars_pct", "elapsed_ms", "bars_per_second", "eta_seconds"):
-            state[key] = _float_value(progress.get(key), default=None)
-    return state
+        state["bars_pct"] = _non_negative_float(progress.get("bars_pct"), default=0.0)
+        elapsed_seconds = progress.get("elapsed_seconds")
+        if elapsed_seconds is None and progress.get("elapsed_ms") is not None:
+            elapsed_seconds = _non_negative_float(progress.get("elapsed_ms"), default=0.0) / 1000
+        state["elapsed_seconds"] = _non_negative_float(elapsed_seconds, default=0.0)
+        state["elapsed_ms"] = round(state["elapsed_seconds"] * 1000, 3)
+        state["bars_per_second"] = _non_negative_float(progress.get("bars_per_second"), default=0.0)
+        state["eta_seconds"] = _non_negative_float(progress.get("eta_seconds"), default=0.0)
+        if progress.get("matrix_bars_estimate_status") is not None:
+            state["matrix_bars_estimate_status"] = str(progress["matrix_bars_estimate_status"])
+        warnings = progress.get("warnings")
+        if isinstance(warnings, list):
+            state["warnings"] = list(warnings)
+    return _validated_runtime_state(state)
 
 
 def _terminal_runtime_state(
@@ -630,11 +664,15 @@ def _terminal_runtime_state(
             "current_timeframe": None,
             "current_scenario_key": None,
             "current_scenario_index": None,
+            "current_scenario_bars_processed": 0,
+            "current_scenario_bars_total": None,
+            "scenario_bars_processed": 0,
+            "scenario_bars_total": None,
             "scenario_status": None,
             "current_scenario_summary": None,
         }
     )
-    return state
+    return _validated_runtime_state(state)
 
 
 def _runtime_state_base(
@@ -647,8 +685,12 @@ def _runtime_state_base(
     normalized_phase = _runtime_phase(phase, fallback="running")
     partial_summary = _normalize_summary(partial_summary)
     scenario_total = _summary_int(partial_summary, "scenario_count", _scenario_total(request))
-    return {
+    counters = _runtime_counters(partial_summary)
+    return _validated_runtime_state({
         "phase": normalized_phase,
+        "scenarios_total": scenario_total,
+        "scenarios_completed": _summary_int(partial_summary, "completed_scenarios", 0),
+        "scenarios_failed": _summary_int(partial_summary, "failed_scenarios", 0),
         "scenario_total": scenario_total,
         "scenario_completed": _summary_int(partial_summary, "completed_scenarios", 0),
         "scenario_failed": _summary_int(partial_summary, "failed_scenarios", 0),
@@ -658,24 +700,40 @@ def _runtime_state_base(
         "current_timeframe": None,
         "current_scenario_key": None,
         "current_scenario_index": None,
+        "current_scenario_bars_processed": 0,
+        "current_scenario_bars_total": None,
+        "matrix_bars_processed": 0,
+        "matrix_bars_total": None,
+        "bars_processed": 0,
+        "bars_total": None,
+        "bars_pct": 0.0,
+        "elapsed_seconds": 0.0,
+        "elapsed_ms": 0.0,
+        "bars_per_second": 0.0,
+        "eta_seconds": None,
         "scenario_status": None,
         "current_scenario_summary": None,
-        "signals_seen": _summary_int(partial_summary, "signals_seen", 0),
-        "execution_candidates": _summary_int(partial_summary, "execution_candidates", 0),
-        "pending_armed": _summary_int(partial_summary, "pending_armed", 0),
+        "signals_seen": counters["signals"],
+        "signals_count": counters["signals"],
+        "execution_candidates": counters["execution_candidates"],
+        "pending_armed": counters["pending_armed"],
         "touched": _summary_int(partial_summary, "touched", 0),
         "entry_touched": _summary_int(partial_summary, "entry_touched", 0),
-        "filled": _summary_int(partial_summary, "filled", 0),
-        "closed": _summary_int(partial_summary, "closed", 0),
-        "no_entry": _summary_int(partial_summary, "no_entry", 0),
+        "filled": counters["filled"],
+        "closed": counters["closed"],
+        "no_entry": counters["no_entry"],
         "not_selected": _summary_int(partial_summary, "not_selected", 0),
         "trades_count": _summary_int(partial_summary, "trades_count", 0),
-        "risk_rejections": _summary_int(partial_summary, "risk_rejections", 0),
-        "execution_rejections": _summary_int(partial_summary, "execution_rejections", 0),
+        "risk_rejections": counters["risk_rejections"],
+        "execution_rejections": counters["execution_rejections"],
+        "pending_entries_count": counters["pending_entries"],
+        "counters": counters,
         "last_progress_at": _now_iso(),
+        "last_heartbeat_at": None,
+        "stale_threshold_seconds": _strategy_test_stale_threshold_seconds(),
         "last_error": last_error,
         "partial_summary": dict(partial_summary),
-    }
+    })
 
 
 def _partial_summary_with_progress(
@@ -779,6 +837,31 @@ def _scenario_total(request: StrategyTestRunRequest) -> int:
     return len(request.strategies) * len(request.pairs) * len(request.timeframes)
 
 
+def _validate_strategy_test_resource_limits(
+    request: StrategyTestRunRequest,
+    provider: HistoricalCandleProvider,
+) -> None:
+    scenario_count = _scenario_total(request)
+    max_scenarios = max(1, int(settings.strategy_test_max_scenarios_per_run))
+    if scenario_count > max_scenarios:
+        raise ValueError(
+            "strategy_test_max_scenarios_per_run exceeded: "
+            f"{scenario_count} scenarios requested, max is {max_scenarios}."
+        )
+    if request.test_type != "historical_backtest":
+        return
+    estimate = _estimate_historical_run(request, provider)
+    failed_warnings = [warning for warning in estimate.warnings if warning.code == "estimating_failed"]
+    if failed_warnings:
+        return
+    max_bars = max(1, int(settings.strategy_test_max_bars_per_run))
+    if estimate.total_bars > max_bars:
+        raise ValueError(
+            "strategy_test_max_bars_per_run exceeded: "
+            f"{estimate.total_bars} bars requested, max is {max_bars}."
+        )
+
+
 def _estimate_historical_run(
     request: StrategyTestRunRequest,
     provider: HistoricalCandleProvider,
@@ -802,15 +885,35 @@ def _estimate_historical_run(
             key = (pair.exchange, pair.symbol, timeframe)
             if key in counts_by_key:
                 continue
-            deduped_candles = _run_awaitable_sync(
-                provider.count_candles(
-                    exchange=pair.exchange,
-                    symbol=pair.symbol,
-                    timeframe=timeframe,
-                    start_at=request.start_at,
-                    end_at=request.end_at,
+            try:
+                deduped_candles = _run_awaitable_sync(
+                    provider.count_candles(
+                        exchange=pair.exchange,
+                        symbol=pair.symbol,
+                        timeframe=timeframe,
+                        start_at=request.start_at,
+                        end_at=request.end_at,
+                    )
                 )
-            )
+            except Exception as exc:
+                warnings.append(
+                    StrategyTestEstimateWarning(
+                        code="estimating_failed",
+                        exchange=pair.exchange,
+                        symbol=pair.symbol,
+                        timeframe=timeframe,
+                        message=(
+                            "Unable to count deduped historical candles for "
+                            f"{pair.exchange}:{pair.symbol}:{timeframe}: {exc}"
+                        ),
+                    )
+                )
+                counts_by_key[key] = {
+                    "deduped_candles": 0,
+                    "raw_rows": 0,
+                    "warning_codes": ["estimating_failed"],
+                }
+                continue
             raw_rows = _raw_candle_count(
                 provider,
                 exchange=pair.exchange,
@@ -994,13 +1097,52 @@ def _int_value(value: object, *, default: int = 0) -> int:
         return default
 
 
+def _optional_int_value(value: object) -> int | None:
+    if value is None:
+        return None
+    return max(0, _int_value(value, default=0))
+
+
 def _float_value(value: object, *, default: float | None = 0.0) -> float | None:
     if value is None:
         return default
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return default
+    if not math.isfinite(parsed):
+        return default
+    return parsed
+
+
+def _non_negative_float(value: object, *, default: float) -> float:
+    parsed = _float_value(value, default=default)
+    if parsed is None:
+        return default
+    return max(0.0, parsed)
+
+
+def _runtime_counters(summary: dict[str, Any]) -> dict[str, int]:
+    signals = _summary_int(summary, "signals_count", 0) or _summary_int(summary, "signals_seen", 0)
+    return {
+        "signals": signals,
+        "execution_candidates": _summary_int(summary, "execution_candidates", 0),
+        "pending_armed": _summary_int(summary, "pending_armed", 0),
+        "pending_entries": _summary_int(summary, "pending_entries_count", 0),
+        "no_entry": _summary_int(summary, "no_entry", 0),
+        "filled": _summary_int(summary, "filled", 0),
+        "closed": _summary_int(summary, "closed", 0),
+        "risk_rejections": _summary_int(summary, "risk_rejections", 0),
+        "execution_rejections": _summary_int(summary, "execution_rejections", 0),
+    }
+
+
+def _validated_runtime_state(state: dict[str, Any]) -> dict[str, Any]:
+    return StrategyTestRuntimeState.model_validate(state).model_dump(mode="json")
+
+
+def _strategy_test_stale_threshold_seconds() -> int:
+    return max(1, int(settings.strategy_test_lease_seconds))
 
 
 def _now_iso() -> str:
@@ -1641,7 +1783,6 @@ def _text(value: object) -> str:
 
 
 STRATEGY_TEST_ACTIVE_STATUSES: tuple[StrategyTestRunStatus, ...] = ("queued", "running", "stopping")
-STRATEGY_TEST_STALE_THRESHOLD_SECONDS = 900
 STRATEGY_TEST_DUPLICATE_WARNING_RATIO = 1.2
 STRATEGY_TEST_MEDIUM_ESTIMATE_BARS = 50_000
 STRATEGY_TEST_LARGE_ESTIMATE_BARS = 250_000
@@ -1688,7 +1829,7 @@ def _is_stale_run(run: StrategyTestRunResponse) -> bool:
     if heartbeat_at is None:
         return False
     age_seconds = (datetime.now(timezone.utc) - heartbeat_at.astimezone(timezone.utc)).total_seconds()
-    return age_seconds > STRATEGY_TEST_STALE_THRESHOLD_SECONDS
+    return age_seconds > _strategy_test_stale_threshold_seconds()
 
 
 def _stale_reference_time(run: StrategyTestRunResponse) -> datetime | None:

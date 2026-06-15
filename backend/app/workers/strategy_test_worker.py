@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.core.config import settings
 from app.services.strategy_testing.schemas import StrategyTestRunDetailResponse, StrategyTestRunResponse
 from app.services.strategy_testing.service import StrategyTestingService
 from app.services.strategy_testing.stores import PostgresStrategyTestRunStore, StrategyTestRunStore
@@ -14,8 +15,6 @@ from app.services.strategy_testing.stores import PostgresStrategyTestRunStore, S
 
 logger = logging.getLogger(__name__)
 DEFAULT_STRATEGY_TEST_WORKER_INTERVAL_SECONDS = 5.0
-DEFAULT_STRATEGY_TEST_WORKER_HEARTBEAT_SECONDS = 5.0
-DEFAULT_STRATEGY_TEST_WORKER_LEASE_SECONDS = 60
 
 
 class StrategyTestExecutionService(Protocol):
@@ -50,15 +49,18 @@ class StrategyTestWorker:
         service: StrategyTestExecutionService | None = None,
         run_store: StrategyTestRunStore | None = None,
         worker_id: str | None = None,
-        lease_seconds: int = DEFAULT_STRATEGY_TEST_WORKER_LEASE_SECONDS,
-        heartbeat_interval_seconds: float = DEFAULT_STRATEGY_TEST_WORKER_HEARTBEAT_SECONDS,
+        lease_seconds: int | None = None,
+        heartbeat_interval_seconds: float | None = None,
         idle_interval_seconds: float = DEFAULT_STRATEGY_TEST_WORKER_INTERVAL_SECONDS,
     ) -> None:
         self._run_store = run_store or PostgresStrategyTestRunStore()
         self._service = service or StrategyTestingService(run_store=self._run_store)
         self._worker_id = worker_id or _default_worker_id()
-        self._lease_seconds = max(1, int(lease_seconds))
-        self._heartbeat_interval_seconds = max(0.1, float(heartbeat_interval_seconds))
+        self._lease_seconds = max(1, int(lease_seconds or settings.strategy_test_lease_seconds))
+        self._heartbeat_interval_seconds = max(
+            0.1,
+            float(heartbeat_interval_seconds or settings.strategy_test_worker_heartbeat_seconds),
+        )
         self._idle_interval_seconds = max(0.1, float(idle_interval_seconds))
         self._stopping = False
 

@@ -10,7 +10,13 @@ import unittest
 from app.schemas.backtest import BacktestRunResult
 from app.schemas.candle import OHLCVCandle
 from app.schemas.market import Features
-from app.services.backtest_runner import BacktestDetailedRunResult, ProductionBacktestRunner
+from app.core.config import settings
+from app.services.backtest_runner import (
+    BacktestDetailedRunResult,
+    BacktestRunCancelled,
+    DEFAULT_WARMUP_CANDLES,
+    ProductionBacktestRunner,
+)
 from app.services.strategy_testing.assumptions import build_strategy_test_assumptions
 from app.services.strategy_testing.matrix_runner import (
     StrategyTestMatrixResult,
@@ -26,10 +32,11 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestRuntimeState,
     StrategyTestSignalEvent,
     StrategyTestTrade,
 )
-from app.services.strategy_testing.service import StrategyTestingService
+from app.services.strategy_testing.service import StrategyTestingService, _scenario_runtime_state
 
 
 RUN_ID = UUID("11111111-1111-4111-8111-111111111111")
@@ -37,6 +44,46 @@ USER_ID = UUID("22222222-2222-4222-8222-222222222222")
 
 
 class StrategyTestMatrixRunnerTest(unittest.TestCase):
+    def test_runtime_state_schema_accepts_historical_progress_contract(self) -> None:
+        state = StrategyTestRuntimeState.model_validate(
+            {
+                "scenarios_total": 16,
+                "scenarios_completed": 2,
+                "scenarios_failed": 1,
+                "current_scenario_index": 3,
+                "current_scenario_key": "s1::bybit::BTCUSDT::15m",
+                "current_scenario_bars_processed": 49750,
+                "current_scenario_bars_total": 86597,
+                "matrix_bars_processed": 149750,
+                "matrix_bars_total": 386597,
+                "bars_pct": 38.74,
+                "elapsed_seconds": 120.5,
+                "bars_per_second": 1242.73,
+                "eta_seconds": 190.4,
+                "phase": "running_scenario",
+                "last_progress_at": "2026-06-02T00:01:00+00:00",
+                "last_heartbeat_at": "2026-06-02T00:01:05+00:00",
+                "stale_threshold_seconds": 900,
+                "counters": {
+                    "signals": 30,
+                    "execution_candidates": 20,
+                    "pending_armed": 8,
+                    "pending_entries": 2,
+                    "no_entry": 4,
+                    "filled": 3,
+                    "closed": 2,
+                    "risk_rejections": 1,
+                    "execution_rejections": 5,
+                },
+            }
+        )
+
+        dumped = state.model_dump(mode="json")
+        self.assertEqual(dumped["scenarios_total"], 16)
+        self.assertEqual(dumped["current_scenario_bars_processed"], 49750)
+        self.assertEqual(dumped["matrix_bars_processed"], 149750)
+        self.assertEqual(dumped["counters"]["signals"], 30)
+
     def test_matrix_expands_three_strategies_ten_pairs_three_timeframes(self) -> None:
         request = _matrix_request(
             strategies=["s1", "s2", "s3"],
@@ -170,7 +217,7 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         request = _matrix_request(strategies=["s1", "s2"], timeframes=["15m"])
         scenario_runner = _ProgressCountingScenarioRunner(bars_per_pair_timeframe={("bybit", "BTCUSDT", "15m"): 3})
         matrix_runner = StrategyTestMatrixRunner(scenario_runner)
-        progress_updates: list[tuple[int, int, int, int, int]] = []
+        progress_updates: list[tuple[int, int, int, int, int, int, int, int, int]] = []
 
         matrix_runner.run_matrix(
             request=request,
@@ -183,6 +230,10 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
                     progress["bars_total"],
                     progress["scenario_bars_processed"],
                     progress["scenario_bars_total"],
+                    progress["matrix_bars_processed"],
+                    progress["matrix_bars_total"],
+                    progress["current_scenario_bars_processed"],
+                    progress["current_scenario_bars_total"],
                 )
             ),
         )
@@ -190,11 +241,66 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         self.assertEqual(
             progress_updates,
             [
-                (1, 1, 6, 1, 3),
-                (2, 4, 6, 1, 3),
+                (1, 1, 6, 1, 3, 1, 6, 1, 3),
+                (2, 4, 6, 1, 3, 4, 6, 1, 3),
             ],
         )
         self.assertEqual(scenario_runner.count_calls, [("bybit", "BTCUSDT", "15m")])
+
+    def test_runtime_progress_sanitizes_eta_and_rates(self) -> None:
+        context = StrategyTestScenarioContext(
+            index=1,
+            total=1,
+            strategy="s1",
+            pair=StrategyTestPair(exchange="bybit", symbol="BTCUSDT"),
+            timeframe="15m",
+        )
+
+        state = _scenario_runtime_state(
+            context=context,
+            request=_matrix_request(strategies=["s1"], timeframes=["15m"]),
+            phase="running_scenario",
+            partial_summary={},
+            progress={
+                "bars_pct": -5,
+                "bars_per_second": float("nan"),
+                "eta_seconds": -12,
+                "elapsed_seconds": -1,
+            },
+            scenario_status="running",
+        )
+
+        self.assertEqual(state["bars_pct"], 0.0)
+        self.assertEqual(state["bars_per_second"], 0.0)
+        self.assertEqual(state["eta_seconds"], 0.0)
+        self.assertEqual(state["elapsed_seconds"], 0.0)
+
+    def test_backtest_runner_cancels_inside_long_candle_loop(self) -> None:
+        candles = _many_historical_candles(count=20)
+        provider = _CountingHistoricalCandleProvider(candles)
+        feature_engine = _CountingFeatureEngine()
+        backtest_runner = ProductionBacktestRunner(
+            feature_engine=feature_engine,  # type: ignore[arg-type]
+            strategy_engine=_NoSignalStrategyEngine(),  # type: ignore[arg-type]
+            historical_candle_provider=provider,
+        )
+        checks = 0
+
+        def is_cancelled() -> bool:
+            nonlocal checks
+            checks += 1
+            return checks >= 2
+
+        with self.assertRaises(BacktestRunCancelled):
+            backtest_runner.run_detailed(
+                _backtest_request(),
+                mode="research_virtual",
+                options={},
+                is_cancelled=is_cancelled,
+                progress_interval_bars=10_000,
+            )
+
+        self.assertLessEqual(feature_engine.calls, 1)
 
     def test_matrix_stops_before_next_scenario_when_cancelled(self) -> None:
         request = _matrix_request(strategies=["s1", "s2", "s3"])
@@ -678,6 +784,64 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         cancelled = service.execute_run(created.run.run_id, _matrix_request())
         self.assertEqual(cancelled.status, "cancelled")
         self.assertEqual(run_store.detail.run.runtime_state["phase"], "cancelled")  # type: ignore[union-attr]
+
+    def test_stale_running_run_allows_new_run_and_cancel_action(self) -> None:
+        run_store = _EphemeralRunStore()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            matrix_runner=_StaticMatrixRunner(StrategyTestMatrixResult(run_id=RUN_ID, scenario_count=1, completed_scenarios=1, failed_scenarios=0)),
+        )
+        created = run_store.create_run(_matrix_request())
+        run_store.mark_running(created.run.run_id)
+        assert run_store.detail is not None
+        stale_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=settings.strategy_test_lease_seconds + 1)
+        run_store.detail = StrategyTestRunDetailResponse(
+            run=run_store.detail.run.model_copy(update={"last_heartbeat_at": stale_heartbeat})
+        )
+
+        active = service.get_active_run(user_id=str(USER_ID))
+
+        self.assertTrue(active.is_stale)
+        self.assertTrue(active.can_run)
+        self.assertIn("cancel", active.allowed_actions)
+        self.assertEqual(active.stale_threshold_seconds, settings.strategy_test_lease_seconds)
+
+    def test_enqueue_historical_run_validates_resource_limits_before_creating_run(self) -> None:
+        old_max_bars = settings.strategy_test_max_bars_per_run
+        settings.strategy_test_max_bars_per_run = 10
+        run_store = _EphemeralRunStore()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            historical_candle_provider=_FixedCountHistoricalCandleProvider(candles_count=DEFAULT_WARMUP_CANDLES + 11),
+        )
+
+        try:
+            with self.assertRaisesRegex(ValueError, "strategy_test_max_bars_per_run"):
+                service.enqueue_run(_matrix_request())
+        finally:
+            settings.strategy_test_max_bars_per_run = old_max_bars
+
+        self.assertIsNone(run_store.detail)
+
+    def test_enqueue_historical_run_validates_scenario_limit_before_creating_run(self) -> None:
+        old_max_scenarios = settings.strategy_test_max_scenarios_per_run
+        settings.strategy_test_max_scenarios_per_run = 1
+        run_store = _EphemeralRunStore()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            historical_candle_provider=_FixedCountHistoricalCandleProvider(candles_count=DEFAULT_WARMUP_CANDLES),
+        )
+
+        try:
+            with self.assertRaisesRegex(ValueError, "strategy_test_max_scenarios_per_run"):
+                service.enqueue_run(_matrix_request(strategies=["s1", "s2"]))
+        finally:
+            settings.strategy_test_max_scenarios_per_run = old_max_scenarios
+
+        self.assertIsNone(run_store.detail)
 
     def test_service_marks_failed_with_runtime_last_error_when_scenario_errors(self) -> None:
         run_store = _EphemeralRunStore()
@@ -1686,6 +1850,23 @@ class _CountingHistoricalCandleProvider:
         return len({candle.open_time for candle in self._candles if candle.is_closed})
 
 
+class _FixedCountHistoricalCandleProvider:
+    def __init__(self, *, candles_count: int) -> None:
+        self._candles_count = candles_count
+
+    async def count_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        _ = exchange, symbol, timeframe, start_at, end_at
+        return self._candles_count
+
+
 class _SilentFeatureEngine:
     def process_candles(self, candles: list[OHLCVCandle]) -> Features:
         latest = candles[-1]
@@ -1713,6 +1894,15 @@ class _SilentFeatureEngine:
             history_length=len(candles),
             atr_14=1.0,
         )
+
+
+class _CountingFeatureEngine(_SilentFeatureEngine):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def process_candles(self, candles: list[OHLCVCandle]) -> Features:
+        self.calls += 1
+        return super().process_candles(candles)
 
 
 class _NoSignalStrategyEngine:
@@ -1743,6 +1933,45 @@ def _historical_candles() -> list[OHLCVCandle]:
             )
         )
     return candles
+
+
+def _many_historical_candles(*, count: int) -> list[OHLCVCandle]:
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    candles: list[OHLCVCandle] = []
+    for index in range(count):
+        open_time = int((start + timedelta(hours=index)).timestamp() * 1000)
+        candles.append(
+            OHLCVCandle(
+                exchange="bybit",
+                symbol="BTCUSDT",
+                timeframe="1h",
+                open_time=open_time,
+                close_time=open_time + 3_599_999,
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.0,
+                volume=100.0,
+                trades=10,
+                is_closed=True,
+            )
+        )
+    return candles
+
+
+def _backtest_request() -> Any:
+    request = _matrix_request(
+        strategies=["trend_pullback_continuation"],
+        params={"warmup_candles": 3, "rolling_window_candles": 3},
+    )
+    from app.services.strategy_testing.runner import _backtest_request_from_scenario
+
+    return _backtest_request_from_scenario(
+        request=request,
+        strategy="trend_pullback_continuation",
+        pair=request.pairs[0],
+        timeframe=request.timeframes[0],
+    )
 
 
 def _assumption_kwargs(mode: str) -> dict[str, Any]:

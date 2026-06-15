@@ -594,9 +594,9 @@ class ProductionBacktestRunner:
                 feature_cache[feature_cache_key] = features_by_index
         progress_interval = max(1, progress_interval_bars)
         for index in range(warmup, len(candles)):
+            _raise_if_cancelled(is_cancelled)
             bars_processed = index - warmup + 1
             if bars_processed == 1 or bars_processed % progress_interval == 0:
-                _raise_if_cancelled(is_cancelled)
                 _emit_backtest_progress(
                     on_progress,
                     phase="running_scenario",
@@ -690,6 +690,26 @@ class ProductionBacktestRunner:
 
             features = features_by_index[index] if features_by_index is not None else None
             if features is None:
+                if bars_processed == 1 or bars_processed % progress_interval == 0:
+                    _emit_backtest_progress(
+                        on_progress,
+                        phase="building_features",
+                        bars_processed=bars_processed,
+                        bars_total=bars_total,
+                        signals_seen=state.signals_seen,
+                        trades_count=len(state.closed_positions) + len(state.open_positions),
+                        pending_entries_count=len(pending_entries),
+                        execution_candidates=state.execution_candidates,
+                        pending_armed=state.pending_armed,
+                        entry_touched=state.entry_touched,
+                        filled=state.filled,
+                        closed=len(state.closed_positions),
+                        no_entry=state.no_entry,
+                        not_selected=state.not_selected,
+                        risk_rejections=state.risk_rejections,
+                        execution_rejections=state.execution_rejections,
+                        started_at=total_started,
+                    )
                 feature_started = time.perf_counter()
                 features = self._feature_engine.process_candles(
                     candles[max(0, index - rolling_window + 1) : index + 1]
@@ -3388,6 +3408,7 @@ def _emit_backtest_progress(
             "risk_rejections": risk_rejections,
             "execution_rejections": execution_rejections,
             "elapsed_ms": elapsed_ms,
+            "elapsed_seconds": round(elapsed_seconds, 3),
             "bars_per_second": round(bars_per_second, 8),
             "eta_seconds": eta_seconds,
         }

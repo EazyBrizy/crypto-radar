@@ -38,8 +38,10 @@ async def create_strategy_test_run(
 ) -> StrategyTestRunResponse:
     try:
         run = service.enqueue_run(request)
-    except (LookupError, ValueError) as exc:
+    except LookupError as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return run
 
 

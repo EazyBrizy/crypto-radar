@@ -34,6 +34,17 @@ class HistoricalCandleProvider(Protocol):
     ) -> int:
         ...
 
+    async def count_raw_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        ...
+
 
 class ClickHouseQueryClient(Protocol):
     def query(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
@@ -78,6 +89,25 @@ class ClickHouseHistoricalCandleProvider:
             timeframe=timeframe,
             start_at=start_at,
             end_at=end_at,
+        )
+
+    async def count_raw_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._count_candles_sync,
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+            deduped=False,
         )
 
     def _load_candles_sync(
@@ -150,24 +180,40 @@ class ClickHouseHistoricalCandleProvider:
         timeframe: str,
         start_at: datetime,
         end_at: datetime,
+        deduped: bool = True,
     ) -> int:
         table = OHLCV_TABLES_BY_TIMEFRAME.get(timeframe)
         if table is None:
             raise ValueError(f"unsupported_timeframe: {timeframe}")
 
-        query = f"""
-            SELECT count() AS candles_count
-            FROM (
-                SELECT ts
+        inner_query = f"""
+            SELECT ts
+            FROM {table}
+            WHERE exchange = {{exchange:String}}
+              AND symbol = {{symbol:String}}
+              AND ts >= {{start_at:DateTime64(3, 'UTC')}}
+              AND ts <= {{closed_open_end_at:DateTime64(3, 'UTC')}}
+              AND toUnixTimestamp(ts) % {{timeframe_seconds:UInt32}} = 0
+        """
+        query = (
+            f"""
+                SELECT count() AS candles_count
+                FROM (
+                    {inner_query}
+                    GROUP BY ts
+                )
+            """
+            if deduped
+            else f"""
+                SELECT count() AS candles_count
                 FROM {table}
                 WHERE exchange = {{exchange:String}}
                   AND symbol = {{symbol:String}}
                   AND ts >= {{start_at:DateTime64(3, 'UTC')}}
                   AND ts <= {{closed_open_end_at:DateTime64(3, 'UTC')}}
                   AND toUnixTimestamp(ts) % {{timeframe_seconds:UInt32}} = 0
-                GROUP BY ts
-            )
-        """
+            """
+        )
         client = self._client()
         try:
             result = client.query(
@@ -240,6 +286,30 @@ class InMemoryHistoricalCandleProvider:
                 start_at=start_at,
                 end_at=end_at,
             )
+        )
+
+    async def count_raw_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        start_ms = _datetime_to_ms(start_at)
+        end_ms = _datetime_to_ms(end_at)
+        return len(
+            [
+                candle
+                for candle in self._candles
+                if candle.exchange == exchange
+                and candle.symbol == symbol
+                and candle.timeframe == timeframe
+                and candle.is_closed
+                and start_ms <= candle.open_time <= end_ms
+                and candle.close_time <= end_ms
+            ]
         )
 
 

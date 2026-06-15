@@ -10,6 +10,7 @@ import {
   usePublishStrategyTestCalibration,
   useRunStrategyTest,
   useStrategyTestActiveRun,
+  useStrategyTestEstimate,
   useStrategyTestRun,
   useStrategyTestReport,
   useStrategyTestRuns
@@ -18,6 +19,7 @@ import { StrategyTestReport } from "./StrategyTestReport";
 import { StrategyTestRunsTable } from "./StrategyTestRunsTable";
 import type {
   StrategyTestActiveRunResponse,
+  StrategyTestEstimateResponse,
   StrategyTestMode,
   StrategyTestPair,
   StrategyTestRunRequest,
@@ -39,10 +41,6 @@ const DEFAULT_TEST_TYPE: StrategyTestType = "historical_backtest";
 const DEFAULT_SAME_CANDLE_POLICY: StrategyTestSameCandlePolicy = "stop_first";
 const DEFAULT_PENDING_ENTRY_MAX_WAIT_BARS = "12";
 const SMOKE_PRESET_DAYS = 3;
-const MEDIUM_RUN_TOTAL_BARS = 50_000;
-const LARGE_RUN_TOTAL_BARS = 250_000;
-const MEDIUM_RUN_SCENARIOS = 8;
-const LARGE_RUN_SCENARIOS = 24;
 
 const TEST_TYPE_OPTIONS: Array<{ value: StrategyTestType; label: string }> = [
   { value: "historical_backtest", label: "Historical" },
@@ -117,15 +115,48 @@ export function StrategyTestingPanel({
   const validTimeframes = effectiveTimeframes.filter((timeframe) => timeframeOptions.includes(timeframe));
   const dateError = validateDateRange(startAt, endAt);
   const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps, pendingEntryMaxWaitBars);
-  const runEstimate = useMemo(() => estimateRunSize({
+  const localScenarioCount = effectiveStrategyCodes.length * selectedPairs.length * validTimeframes.length;
+  const estimateRequest = useMemo(() => {
+    if (localScenarioCount <= 0 || dateError || numberError) return null;
+    return buildRunRequest({
+      endAt,
+      feeRate,
+      historicalPendingEntriesEnabled,
+      initialCapital,
+      mode,
+      pendingEntryMaxWaitBars,
+      sameCandlePolicy,
+      selectedPairs,
+      selectedStrategyCodes: effectiveStrategyCodes,
+      selectedTimeframes: validTimeframes,
+      slippageBps,
+      startAt,
+      testType
+    });
+  }, [
+    dateError,
+    effectiveStrategyCodes,
     endAt,
-    selectedPairsCount: selectedPairs.length,
-    selectedStrategyCodesCount: effectiveStrategyCodes.length,
-    selectedTimeframes: validTimeframes,
-    startAt
-  }), [effectiveStrategyCodes.length, endAt, selectedPairs.length, startAt, validTimeframes]);
-  const scenarioEstimate = runEstimate.scenarioCount;
-  const requiresLargeRunConfirmation = runEstimate.level === "large";
+    feeRate,
+    historicalPendingEntriesEnabled,
+    initialCapital,
+    localScenarioCount,
+    mode,
+    numberError,
+    pendingEntryMaxWaitBars,
+    sameCandlePolicy,
+    selectedPairs,
+    slippageBps,
+    startAt,
+    testType,
+    validTimeframes
+  ]);
+  const estimateQuery = useStrategyTestEstimate(estimateRequest, {
+    enabled: Boolean(estimateRequest && testType === "historical_backtest")
+  });
+  const runEstimate = testType === "historical_backtest" && estimateRequest ? estimateQuery.data ?? null : null;
+  const scenarioEstimate = runEstimate?.scenario_count ?? localScenarioCount;
+  const requiresLargeRunConfirmation = runEstimate?.size_level === "large";
   const runConfirmationKey = [
     effectiveStrategyCodes.join(","),
     effectivePairIds.join(","),
@@ -168,7 +199,7 @@ export function StrategyTestingPanel({
   const activeRunBlocksRun = activeRunStateLoaded ? !activeRunState.can_run : Boolean(fallbackActiveRun);
   const activeRunIsStale = Boolean(activeRunState?.active_run && activeRunState.is_stale);
   const showRunInProgress = Boolean((activeRunState?.active_run && !activeRunState.is_stale) || (!activeRunStateLoaded && fallbackActiveRun));
-  const canRun = scenarioEstimate > 0 &&
+  const canRun = localScenarioCount > 0 &&
     !dateError &&
     !numberError &&
     !runMutation.isPending &&
@@ -460,7 +491,12 @@ export function StrategyTestingPanel({
         </label>
       </div>
 
-      <RunEstimatePanel confirmed={largeRunConfirmed} estimate={runEstimate} />
+      <RunEstimatePanel
+        confirmed={largeRunConfirmed}
+        estimate={runEstimate}
+        loading={testType === "historical_backtest" && (estimateQuery.isLoading || estimateQuery.isFetching)}
+        scenarioCount={scenarioEstimate}
+      />
 
       {dateError || numberError || formError || apiError ? (
         <p className="form-error">{formError ?? dateError ?? numberError ?? apiError}</p>
@@ -507,31 +543,49 @@ function SelectionGroup({ children, title }: { children: ReactNode; title: strin
 
 function RunEstimatePanel({
   confirmed,
-  estimate
+  estimate,
+  loading,
+  scenarioCount
 }: {
   confirmed: boolean;
-  estimate: RunEstimate;
+  estimate: StrategyTestEstimateResponse | null;
+  loading: boolean;
+  scenarioCount: number;
 }) {
-  const tone = estimate.level === "large" ? "red" : estimate.level === "medium" ? "yellow" : "green";
+  const level = estimate?.size_level ?? "small";
+  const tone = level === "large" ? "red" : level === "medium" ? "yellow" : "green";
+  const scenarios = estimate?.scenarios ?? [];
+  const warnings = estimate?.warnings ?? [];
   return (
     <section
       aria-label="Strategy test run estimate"
-      className={`strategy-test-estimate strategy-test-estimate-${estimate.level}`}
+      className={`strategy-test-estimate strategy-test-estimate-${level}`}
     >
       <div className="strategy-test-estimate-head">
         <div>
           <strong>Run estimate</strong>
-          <span>{estimateWarningText(estimate)}</span>
+          <span>{loading ? "Loading market-data estimate..." : estimateWarningText(level, warnings.length)}</span>
         </div>
-        <Badge tone={tone}>{runLevelLabel(estimate.level)}</Badge>
+        <Badge tone={tone}>{runLevelLabel(level)}</Badge>
       </div>
       <div className="strategy-test-estimate-grid">
-        {estimateItem("Scenario count", estimate.scenarioCount)}
-        {estimateItem("Bars / scenario", formatBarsPerScenario(estimate.approximateBarsPerScenario))}
-        {estimateItem("Approx total bars", formatTotalBars(estimate.approximateTotalBars))}
-        {estimateItem("Timeframe bars", formatTimeframeBars(estimate.timeframeBars))}
+        {estimateItem("Scenario count", estimate?.scenario_count ?? scenarioCount)}
+        {estimateItem("Bars / scenario", formatBarsPerScenario(estimate?.average_bars_per_scenario ?? null))}
+        {estimateItem("Total bars", formatTotalBars(estimate?.total_bars ?? null))}
+        {estimateItem("Scenario bars", formatScenarioBars(scenarios))}
       </div>
-      {estimate.level === "large" ? (
+      {warnings.length ? (
+        <div className="strategy-test-estimate-warnings" aria-label="Estimate validation warnings">
+          {warnings.map((warning) => (
+            <div className="strategy-test-large-confirmation" key={`${warning.code}:${warning.exchange}:${warning.symbol}:${warning.timeframe}`}>
+              <AlertTriangle size={16} />
+              <span>{warning.message}</span>
+              {warning.timeframe ? <Badge tone="yellow">{warning.timeframe}</Badge> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {level === "large" ? (
         <div className="strategy-test-large-confirmation" aria-label={confirmed ? "Large run confirmation" : undefined}>
           <AlertTriangle size={16} />
           <span>
@@ -554,99 +608,34 @@ function estimateItem(label: string, value: string | number) {
   );
 }
 
-function estimateRunSize({
-  endAt,
-  selectedPairsCount,
-  selectedStrategyCodesCount,
-  selectedTimeframes,
-  startAt
-}: {
-  endAt: string;
-  selectedPairsCount: number;
-  selectedStrategyCodesCount: number;
-  selectedTimeframes: string[];
-  startAt: string;
-}): RunEstimate {
-  const scenarioCount = selectedStrategyCodesCount * selectedPairsCount * selectedTimeframes.length;
-  const durationMs = dateRangeDurationMs(startAt, endAt);
-  const timeframeBars = selectedTimeframes.map((timeframe) => ({
-    bars: durationMs == null ? null : estimateBarsForTimeframe(durationMs, timeframe),
-    timeframe
-  }));
-  const knownTimeframeBars = timeframeBars
-    .map((entry) => entry.bars)
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  const approximateTotalBars = knownTimeframeBars.length === selectedTimeframes.length
-    ? selectedStrategyCodesCount * selectedPairsCount * knownTimeframeBars.reduce((sum, bars) => sum + bars, 0)
-    : null;
-  const approximateBarsPerScenario = approximateTotalBars != null && scenarioCount > 0
-    ? Math.round(approximateTotalBars / scenarioCount)
-    : null;
-  return {
-    approximateBarsPerScenario,
-    approximateTotalBars,
-    level: estimateRunLevel(scenarioCount, approximateTotalBars),
-    scenarioCount,
-    timeframeBars
-  };
-}
-
-function estimateRunLevel(scenarioCount: number, approximateTotalBars: number | null): RunEstimateLevel {
-  const bars = approximateTotalBars ?? 0;
-  if (bars >= LARGE_RUN_TOTAL_BARS || scenarioCount >= LARGE_RUN_SCENARIOS) return "large";
-  if (bars >= MEDIUM_RUN_TOTAL_BARS || scenarioCount >= MEDIUM_RUN_SCENARIOS) return "medium";
-  return "small";
-}
-
-function dateRangeDurationMs(startAt: string, endAt: string): number | null {
-  const start = new Date(startAt);
-  const end = new Date(endAt);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return null;
-  return end.getTime() - start.getTime();
-}
-
-function estimateBarsForTimeframe(durationMs: number, timeframe: string): number | null {
-  const timeframeMs = timeframeToMs(timeframe);
-  if (timeframeMs == null) return null;
-  return Math.max(0, Math.ceil(durationMs / timeframeMs));
-}
-
-function timeframeToMs(timeframe: string): number | null {
-  const match = /^(\d+)(m|h|d)$/u.exec(timeframe.trim());
-  if (!match) return null;
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount) || amount <= 0) return null;
-  const unit = match[2];
-  if (unit === "m") return amount * 60 * 1000;
-  if (unit === "h") return amount * 60 * 60 * 1000;
-  return amount * 24 * 60 * 60 * 1000;
-}
-
 function runLevelLabel(level: RunEstimateLevel): string {
   if (level === "large") return "Large run";
   if (level === "medium") return "Medium run";
   return "Small run";
 }
 
-function estimateWarningText(estimate: RunEstimate): string {
-  if (estimate.level === "large") return "Review before launch; confirmation is required.";
-  if (estimate.level === "medium") return "Reasonable for research, but watch active progress.";
+function estimateWarningText(level: RunEstimateLevel, warningsCount: number): string {
+  if (warningsCount > 0) return "Review backend market-data warnings before launch.";
+  if (level === "large") return "Review before launch; confirmation is required.";
+  if (level === "medium") return "Reasonable for research, but watch active progress.";
   return "Fast enough for a quick validation pass.";
 }
 
 function formatBarsPerScenario(value: number | null): string {
-  return value == null ? "-" : `~${formatInteger(value)} avg`;
+  return value == null ? "-" : `${formatInteger(value)} avg`;
 }
 
 function formatTotalBars(value: number | null): string {
-  return value == null ? "-" : `~${formatInteger(value)} bars total`;
+  return value == null ? "-" : `${formatInteger(value)} bars total`;
 }
 
-function formatTimeframeBars(timeframeBars: RunEstimate["timeframeBars"]): string {
-  if (!timeframeBars.length) return "-";
-  return timeframeBars
-    .map((entry) => entry.bars == null ? `${entry.timeframe}: unknown` : `${entry.timeframe}: ~${formatInteger(entry.bars)}`)
-    .join(" / ");
+function formatScenarioBars(scenarios: NonNullable<StrategyTestEstimateResponse["scenarios"]>): string {
+  if (!scenarios.length) return "-";
+  const visible = scenarios.slice(0, 4).map((scenario) =>
+    `${scenario.strategy} ${scenario.exchange}:${scenario.symbol} ${scenario.timeframe}: ${formatInteger(scenario.bars_total)}`
+  );
+  const remaining = scenarios.length - visible.length;
+  return remaining > 0 ? `${visible.join(" / ")} / +${remaining} more` : visible.join(" / ");
 }
 
 function FunnelSummaryStrip({ run }: { run: StrategyTestRunResponse | null }) {
@@ -665,14 +654,6 @@ function FunnelSummaryStrip({ run }: { run: StrategyTestRunResponse | null }) {
 }
 
 type RunEstimateLevel = "small" | "medium" | "large";
-
-interface RunEstimate {
-  approximateBarsPerScenario: number | null;
-  approximateTotalBars: number | null;
-  level: RunEstimateLevel;
-  scenarioCount: number;
-  timeframeBars: Array<{ timeframe: string; bars: number | null }>;
-}
 
 function enabledStrategyOptions(strategyConfigs: StrategyConfig[]): StrategyConfig[] {
   const seen = new Set<string>();

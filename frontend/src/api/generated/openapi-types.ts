@@ -1002,6 +1002,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/strategy-tests/runs/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Estimate Strategy Test Run */
+        post: operations["estimate_strategy_test_run_api_v1_strategy_tests_runs_estimate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/strategy-tests/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -6316,6 +6333,46 @@ export interface components {
              */
             confidence: "low" | "medium" | "high";
         };
+        /** StrategyTestEstimateResponse */
+        StrategyTestEstimateResponse: {
+            /** Scenario Count */
+            scenario_count: number;
+            /** Total Bars */
+            total_bars: number;
+            /** Average Bars Per Scenario */
+            average_bars_per_scenario?: number | null;
+            /**
+             * Size Level
+             * @enum {string}
+             */
+            size_level: "small" | "medium" | "large";
+            /** Scenarios */
+            scenarios?: components["schemas"]["StrategyTestScenarioEstimate"][];
+            /** Warnings */
+            warnings?: components["schemas"]["StrategyTestEstimateWarning"][];
+        };
+        /** StrategyTestEstimateWarning */
+        StrategyTestEstimateWarning: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "market_data_missing" | "market_data_duplicates" | "market_data_below_warmup";
+            /** Message */
+            message: string;
+            /** Exchange */
+            exchange?: string | null;
+            /** Symbol */
+            symbol?: string | null;
+            /** Timeframe */
+            timeframe?: string | null;
+            /** Raw Rows */
+            raw_rows?: number | null;
+            /** Deduped Candles */
+            deduped_candles?: number | null;
+            /** Duplicate Ratio */
+            duplicate_ratio?: number | null;
+        };
         /** StrategyTestFunnelResponse */
         StrategyTestFunnelResponse: {
             /**
@@ -6598,6 +6655,29 @@ export interface components {
             last_heartbeat_at?: string | null;
             /** Error */
             error?: string | null;
+        };
+        /** StrategyTestScenarioEstimate */
+        StrategyTestScenarioEstimate: {
+            /** Strategy */
+            strategy: string;
+            /** Exchange */
+            exchange: string;
+            /** Symbol */
+            symbol: string;
+            /** Timeframe */
+            timeframe: string;
+            /** Candles Count */
+            candles_count: number;
+            /** Raw Rows */
+            raw_rows: number;
+            /** Duplicate Rows */
+            duplicate_rows: number;
+            /** Warmup Bars */
+            warmup_bars: number;
+            /** Bars Total */
+            bars_total: number;
+            /** Warning Codes */
+            warning_codes?: ("market_data_missing" | "market_data_duplicates" | "market_data_below_warmup")[];
         };
         /** StrategyTestSignalEvent */
         StrategyTestSignalEvent: {
@@ -10338,6 +10418,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StrategyTestActiveRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    estimate_strategy_test_run_api_v1_strategy_tests_runs_estimate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyTestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyTestEstimateResponse"];
                 };
             };
             /** @description Validation Error */

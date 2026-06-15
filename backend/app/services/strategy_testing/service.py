@@ -6,6 +6,8 @@ from typing import Any, Protocol, Sequence
 from uuid import UUID
 
 from app.core.config import settings
+from app.services.backtest_runner import DEFAULT_WARMUP_CANDLES, _run_awaitable_sync
+from app.services.historical_candle_provider import ClickHouseHistoricalCandleProvider, HistoricalCandleProvider
 from app.services.strategy_testing.eligibility_profiles import StrategyExecutionEligibilityProfileUpdater
 from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
 from app.services.strategy_testing.matrix_runner import (
@@ -26,6 +28,10 @@ from app.services.strategy_testing.schemas import (
     StrategyTestCalibrationProfile,
     StrategyTestCalibrationResponse,
     StrategyTestActiveRunResponse,
+    StrategyTestEstimateResponse,
+    StrategyTestEstimateWarning,
+    StrategyTestEstimateWarningCode,
+    StrategyTestScenarioEstimate,
     StrategyTestFunnelResponse,
     StrategyTestMetricRow,
     StrategyTestReport,
@@ -81,6 +87,7 @@ class StrategyTestingService:
         matrix_runner: StrategyTestMatrixRunner | None = None,
         forward_runtime: ForwardStrategyTestRuntime | None = None,
         eligibility_profile_updater: StrategyExecutionEligibilityProfileUpdateService | None = None,
+        historical_candle_provider: HistoricalCandleProvider | None = None,
     ) -> None:
         self._run_store = run_store or PostgresStrategyTestRunStore()
         self._trade_store = trade_store or ClickHouseStrategyTestStore()
@@ -90,6 +97,7 @@ class StrategyTestingService:
             trade_store=self._trade_store,
         )
         self._eligibility_profile_updater = eligibility_profile_updater or StrategyExecutionEligibilityProfileUpdater()
+        self._historical_candle_provider = historical_candle_provider or ClickHouseHistoricalCandleProvider()
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
         created = self._run_store.create_run(request)
@@ -391,6 +399,9 @@ class StrategyTestingService:
             stale_threshold_seconds=STRATEGY_TEST_STALE_THRESHOLD_SECONDS,
             allowed_actions=["refresh", "cancel"],
         )
+
+    def estimate_run(self, request: StrategyTestRunRequest) -> StrategyTestEstimateResponse:
+        return _estimate_historical_run(request, self._historical_candle_provider)
 
     def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
         return self._run_store.get_run(run_id)
@@ -754,6 +765,201 @@ def _summary_from_run(run: StrategyTestRunResponse) -> dict[str, Any] | None:
 
 def _scenario_total(request: StrategyTestRunRequest) -> int:
     return len(request.strategies) * len(request.pairs) * len(request.timeframes)
+
+
+def _estimate_historical_run(
+    request: StrategyTestRunRequest,
+    provider: HistoricalCandleProvider,
+) -> StrategyTestEstimateResponse:
+    scenario_count = _scenario_total(request)
+    if request.test_type != "historical_backtest":
+        return StrategyTestEstimateResponse(
+            scenario_count=scenario_count,
+            total_bars=0,
+            average_bars_per_scenario=0 if scenario_count else None,
+            size_level=_estimate_level(scenario_count, 0),
+            scenarios=[],
+            warnings=[],
+        )
+
+    warmup_bars = _estimate_warmup_bars(request)
+    counts_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    warnings: list[StrategyTestEstimateWarning] = []
+    for pair in request.pairs:
+        for timeframe in request.timeframes:
+            key = (pair.exchange, pair.symbol, timeframe)
+            if key in counts_by_key:
+                continue
+            deduped_candles = _run_awaitable_sync(
+                provider.count_candles(
+                    exchange=pair.exchange,
+                    symbol=pair.symbol,
+                    timeframe=timeframe,
+                    start_at=request.start_at,
+                    end_at=request.end_at,
+                )
+            )
+            raw_rows = _raw_candle_count(
+                provider,
+                exchange=pair.exchange,
+                symbol=pair.symbol,
+                timeframe=timeframe,
+                start_at=request.start_at,
+                end_at=request.end_at,
+                fallback=deduped_candles,
+            )
+            warning_codes, key_warnings = _estimate_count_warnings(
+                exchange=pair.exchange,
+                symbol=pair.symbol,
+                timeframe=timeframe,
+                deduped_candles=deduped_candles,
+                raw_rows=raw_rows,
+                warmup_bars=warmup_bars,
+            )
+            warnings.extend(key_warnings)
+            counts_by_key[key] = {
+                "deduped_candles": deduped_candles,
+                "raw_rows": raw_rows,
+                "warning_codes": warning_codes,
+            }
+
+    scenarios: list[StrategyTestScenarioEstimate] = []
+    for strategy in request.strategies:
+        for pair in request.pairs:
+            for timeframe in request.timeframes:
+                counts = counts_by_key[(pair.exchange, pair.symbol, timeframe)]
+                deduped_candles = int(counts["deduped_candles"])
+                raw_rows = int(counts["raw_rows"])
+                scenarios.append(
+                    StrategyTestScenarioEstimate(
+                        strategy=strategy,
+                        exchange=pair.exchange,
+                        symbol=pair.symbol,
+                        timeframe=timeframe,
+                        candles_count=deduped_candles,
+                        raw_rows=raw_rows,
+                        duplicate_rows=max(0, raw_rows - deduped_candles),
+                        warmup_bars=warmup_bars,
+                        bars_total=max(0, deduped_candles - warmup_bars),
+                        warning_codes=list(counts["warning_codes"]),
+                    )
+                )
+
+    total_bars = sum(scenario.bars_total for scenario in scenarios)
+    average = round(total_bars / scenario_count) if scenario_count else None
+    return StrategyTestEstimateResponse(
+        scenario_count=scenario_count,
+        total_bars=total_bars,
+        average_bars_per_scenario=average,
+        size_level=_estimate_level(scenario_count, total_bars),
+        scenarios=scenarios,
+        warnings=warnings,
+    )
+
+
+def _raw_candle_count(
+    provider: HistoricalCandleProvider,
+    *,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    start_at: datetime,
+    end_at: datetime,
+    fallback: int,
+) -> int:
+    count_raw = getattr(provider, "count_raw_candles", None)
+    if not callable(count_raw):
+        return fallback
+    return int(
+        _run_awaitable_sync(
+            count_raw(
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                start_at=start_at,
+                end_at=end_at,
+            )
+        )
+    )
+
+
+def _estimate_count_warnings(
+    *,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    deduped_candles: int,
+    raw_rows: int,
+    warmup_bars: int,
+) -> tuple[list[StrategyTestEstimateWarningCode], list[StrategyTestEstimateWarning]]:
+    codes: list[StrategyTestEstimateWarningCode] = []
+    warnings: list[StrategyTestEstimateWarning] = []
+    if deduped_candles == 0:
+        codes.append("market_data_missing")
+        warnings.append(
+            StrategyTestEstimateWarning(
+                code="market_data_missing",
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                message=f"No closed candles found for {exchange}:{symbol}:{timeframe}.",
+                raw_rows=raw_rows,
+                deduped_candles=deduped_candles,
+            )
+        )
+        return codes, warnings
+
+    if deduped_candles <= warmup_bars:
+        codes.append("market_data_below_warmup")
+        warnings.append(
+            StrategyTestEstimateWarning(
+                code="market_data_below_warmup",
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                message=(
+                    f"{exchange}:{symbol}:{timeframe} has {deduped_candles} deduped candles, "
+                    f"which does not exceed the {warmup_bars} warmup bars."
+                ),
+                raw_rows=raw_rows,
+                deduped_candles=deduped_candles,
+            )
+        )
+
+    duplicate_ratio = raw_rows / deduped_candles if deduped_candles else 0.0
+    if raw_rows > deduped_candles and duplicate_ratio >= STRATEGY_TEST_DUPLICATE_WARNING_RATIO:
+        codes.append("market_data_duplicates")
+        warnings.append(
+            StrategyTestEstimateWarning(
+                code="market_data_duplicates",
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                message=(
+                    f"{exchange}:{symbol}:{timeframe} has {raw_rows} raw candle rows for "
+                    f"{deduped_candles} deduped candles."
+                ),
+                raw_rows=raw_rows,
+                deduped_candles=deduped_candles,
+                duplicate_ratio=round(duplicate_ratio, 4),
+            )
+        )
+    return codes, warnings
+
+
+def _estimate_warmup_bars(request: StrategyTestRunRequest) -> int:
+    value = request.params.get("warmup_candles")
+    if value is None:
+        return DEFAULT_WARMUP_CANDLES
+    return max(1, _int_value(value, default=DEFAULT_WARMUP_CANDLES))
+
+
+def _estimate_level(scenario_count: int, total_bars: int) -> str:
+    if total_bars >= STRATEGY_TEST_LARGE_ESTIMATE_BARS or scenario_count >= STRATEGY_TEST_LARGE_ESTIMATE_SCENARIOS:
+        return "large"
+    if total_bars >= STRATEGY_TEST_MEDIUM_ESTIMATE_BARS or scenario_count >= STRATEGY_TEST_MEDIUM_ESTIMATE_SCENARIOS:
+        return "medium"
+    return "small"
 
 
 def _runtime_phase(value: object, *, fallback: str) -> str:
@@ -1335,6 +1541,11 @@ def _text(value: object) -> str:
 STRATEGY_TEST_ACTIVE_STATUSES: tuple[StrategyTestRunStatus, ...] = ("queued", "running", "stopping")
 STRATEGY_TEST_STALE_THRESHOLD_SECONDS = 900
 ANALYTICS_IDEMPOTENCY_LOOKBACK_LIMIT = 1_000_000
+STRATEGY_TEST_DUPLICATE_WARNING_RATIO = 1.2
+STRATEGY_TEST_MEDIUM_ESTIMATE_BARS = 50_000
+STRATEGY_TEST_LARGE_ESTIMATE_BARS = 250_000
+STRATEGY_TEST_MEDIUM_ESTIMATE_SCENARIOS = 8
+STRATEGY_TEST_LARGE_ESTIMATE_SCENARIOS = 24
 
 
 def _active_run_candidates(

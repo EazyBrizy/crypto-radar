@@ -3,6 +3,7 @@ import type { components } from "@/api/generated/openapi-types";
 type StrategyTestRunRequestDto = components["schemas"]["StrategyTestRunRequest"];
 type StrategyTestRunResponseDto = components["schemas"]["StrategyTestRunResponse"];
 type StrategyTestActiveRunResponseDto = components["schemas"]["StrategyTestActiveRunResponse"];
+type StrategyTestEstimateResponseDto = components["schemas"]["StrategyTestEstimateResponse"];
 type StrategyTestSignalEventDto = components["schemas"]["StrategyTestSignalEvent"];
 type StrategyTestFunnelResponseDto = components["schemas"]["StrategyTestFunnelResponse"];
 type StrategyTestCalibrationResponseDto = components["schemas"]["StrategyTestCalibrationResponse"];
@@ -98,6 +99,8 @@ export interface StrategyTestActiveRunResponse {
   stale_threshold_seconds: StrategyTestActiveRunResponseDto["stale_threshold_seconds"];
   allowed_actions: NonNullable<StrategyTestActiveRunResponseDto["allowed_actions"]>;
 }
+
+export type StrategyTestEstimateResponse = StrategyTestEstimateResponseDto;
 
 export interface StrategyTestRunDetailResponse {
   run: StrategyTestRunResponse;

@@ -6,6 +6,7 @@ import { isExecutionCandidateStatus } from "@/domain/signal-status";
 import type {
   StrategyTestActiveRunResponse,
   StrategyTestCalibrationResponse,
+  StrategyTestEstimateResponse,
   StrategyTestFunnelResponse,
   StrategyTestReport,
   StrategyTestRunRequest,
@@ -271,6 +272,15 @@ export function useStrategyTestActiveRun(userId?: string | null, options: Planne
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval,
     staleTime: serverStatePolicy.realtimeStaleTimeMs
+  });
+}
+
+export function useStrategyTestEstimate(request: StrategyTestRunRequest | null, options: PlannedQueryOptions = {}) {
+  return useQuery<StrategyTestEstimateResponse>({
+    queryKey: serverStateKeys.strategyTests.estimate(request),
+    queryFn: () => api.strategyTests.estimate(request as StrategyTestRunRequest),
+    enabled: options.enabled ?? Boolean(request),
+    staleTime: serverStatePolicy.defaultStaleTimeMs
   });
 }
 

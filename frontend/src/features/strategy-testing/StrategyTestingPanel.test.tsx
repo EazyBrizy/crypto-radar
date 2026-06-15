@@ -9,6 +9,18 @@ import { StrategyTestingPanel } from "./StrategyTestingPanel";
 const mocks = vi.hoisted(() => ({
   activeRun: null as unknown,
   cancelStrategyTest: vi.fn(),
+  estimate: {
+    average_bars_per_scenario: 200,
+    scenario_count: 3,
+    scenarios: [],
+    size_level: "small",
+    total_bars: 600,
+    warnings: []
+  } as unknown,
+  estimateQueries: [] as Array<{
+    options?: { enabled?: boolean };
+    request: unknown;
+  }>,
   publishCalibration: vi.fn(),
   report: null as unknown,
   reportQueries: [] as Array<{
@@ -42,6 +54,18 @@ vi.mock("@/hooks/use-radar-queries", () => ({
     isPending: false,
     mutateAsync: mocks.runStrategyTest
   }),
+  useStrategyTestEstimate: (
+    request: unknown,
+    options?: { enabled?: boolean }
+  ) => {
+    mocks.estimateQueries.push({ request, options });
+    return {
+      data: mocks.estimate,
+      error: null,
+      isFetching: false,
+      isLoading: false
+    };
+  },
   useStrategyTestReport: (
     runId: string | null,
     options?: { enabled?: boolean; refetchInterval?: number | false }
@@ -97,6 +121,8 @@ describe("StrategyTestingPanel", () => {
   afterEach(() => {
     mocks.activeRun = null;
     mocks.cancelStrategyTest.mockReset();
+    mocks.estimate = strategyTestEstimate();
+    mocks.estimateQueries = [];
     mocks.publishCalibration.mockReset();
     mocks.report = null;
     mocks.reportQueries = [];
@@ -132,6 +158,12 @@ describe("StrategyTestingPanel", () => {
       marketPair("BNBUSDT", "BNB"),
       marketPair("LINKUSDT", "LINK")
     ];
+    mocks.estimate = strategyTestEstimate({
+      average_bars_per_scenario: 25_920,
+      scenario_count: 16,
+      size_level: "large",
+      total_bars: 414_720
+    });
 
     renderPanel({
       availablePairs,
@@ -144,7 +176,7 @@ describe("StrategyTestingPanel", () => {
 
     const estimate = screen.getByLabelText("Strategy test run estimate");
     expect(within(estimate).getByText("16")).toBeInTheDocument();
-    expect(within(estimate).getByText(/414,720 bars total/u)).toBeInTheDocument();
+    expect(within(estimate).getByText("414,720 bars total")).toBeInTheDocument();
     expect(within(estimate).getByText(/Large run/u)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Run strategy test/u }));
@@ -152,6 +184,51 @@ describe("StrategyTestingPanel", () => {
     expect(mocks.runStrategyTest).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Large run confirmation")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Confirm large run/u })).toBeInTheDocument();
+  });
+
+  it("shows backend market-data validation warnings from the estimate", () => {
+    const candlesCount = expectedCandles(30, 15);
+    const rawRows = candlesCount * 30 + 197;
+    const barsTotal = candlesCount - 200;
+    mocks.estimate = strategyTestEstimate({
+      scenario_count: 1,
+      scenarios: [
+        {
+          bars_total: barsTotal,
+          candles_count: candlesCount,
+          duplicate_rows: rawRows - candlesCount,
+          exchange: "bybit",
+          raw_rows: rawRows,
+          strategy: "trend_pullback_continuation",
+          symbol: "BTCUSDT",
+          timeframe: "15m",
+          warmup_bars: 200,
+          warning_codes: ["market_data_duplicates"]
+        }
+      ],
+      size_level: "small",
+      total_bars: barsTotal,
+      warnings: [
+        {
+          code: "market_data_duplicates",
+          deduped_candles: candlesCount,
+          duplicate_ratio: 30.0684,
+          exchange: "bybit",
+          message: `bybit:BTCUSDT:15m has ${rawRows} raw candle rows for ${candlesCount} deduped candles.`,
+          raw_rows: rawRows,
+          symbol: "BTCUSDT",
+          timeframe: "15m"
+        }
+      ]
+    });
+
+    renderPanel();
+
+    const estimate = screen.getByLabelText("Strategy test run estimate");
+    expect(
+      within(estimate).getByText(`bybit:BTCUSDT:15m has ${rawRows} raw candle rows for ${candlesCount} deduped candles.`)
+    ).toBeInTheDocument();
+    expect(within(estimate).getByText("15m")).toBeInTheDocument();
   });
 
   it("builds the smoke preset request with one pair, one timeframe, three days, and production-like mode", async () => {
@@ -741,6 +818,35 @@ function activeRunState(overrides: Record<string, unknown> = {}) {
     stale_threshold_seconds: 900,
     ...overrides
   };
+}
+
+function strategyTestEstimate(overrides: Record<string, unknown> = {}) {
+  return {
+    average_bars_per_scenario: 200,
+    scenario_count: 3,
+    scenarios: [
+      {
+        bars_total: 200,
+        candles_count: 400,
+        duplicate_rows: 0,
+        exchange: "bybit",
+        raw_rows: 400,
+        strategy: "trend_pullback_continuation",
+        symbol: "BTCUSDT",
+        timeframe: "1m",
+        warmup_bars: 200,
+        warning_codes: []
+      }
+    ],
+    size_level: "small",
+    total_bars: 600,
+    warnings: [],
+    ...overrides
+  };
+}
+
+function expectedCandles(days: number, timeframeMinutes: number): number {
+  return days * 24 * 60 / timeframeMinutes;
 }
 
 function strategyTestRun(overrides: Record<string, unknown> = {}) {

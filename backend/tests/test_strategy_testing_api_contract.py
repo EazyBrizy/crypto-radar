@@ -584,6 +584,79 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(data["disabled_reason_code"], "active_strategy_test_run")
         self.assertEqual(data["active_run"]["run_id"], str(active.run_id))
 
+    def test_estimate_endpoint_returns_deduped_bars_for_30_day_5m_15m_run(self) -> None:
+        five_minute_candles = _expected_candles(days=30, timeframe_minutes=5)
+        fifteen_minute_candles = _expected_candles(days=30, timeframe_minutes=15)
+        duplicate_raw_rows = fifteen_minute_candles * 30 + 197
+        service = StrategyTestingService(
+            run_store=_EphemeralStrategyTestRunStore(),
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            historical_candle_provider=_CountingEstimateCandleProvider(
+                counts={
+                    ("bybit", "BTCUSDT", "5m"): five_minute_candles,
+                    ("bybit", "BTCUSDT", "15m"): fifteen_minute_candles,
+                },
+                raw_counts={
+                    ("bybit", "BTCUSDT", "5m"): five_minute_candles,
+                    ("bybit", "BTCUSDT", "15m"): duplicate_raw_rows,
+                },
+            ),
+        )
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+        payload = {
+            **_payload(),
+            "strategies": ["trend_pullback_continuation"],
+            "pairs": [{"exchange": "bybit", "symbol": "BTCUSDT"}],
+            "timeframes": ["5m", "15m"],
+        }
+
+        try:
+            response = client.post("/api/v1/strategy-tests/runs/estimate", json=payload)
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["scenario_count"], 2)
+        self.assertGreater(data["total_bars"], 10_000)
+        self.assertLess(data["total_bars"], 20_000)
+        self.assertNotEqual(data["total_bars"], duplicate_raw_rows)
+        self.assertEqual(
+            [(item["timeframe"], item["bars_total"]) for item in data["scenarios"]],
+            [
+                ("5m", five_minute_candles - 200),
+                ("15m", fifteen_minute_candles - 200),
+            ],
+        )
+        self.assertEqual(data["warnings"][0]["code"], "market_data_duplicates")
+        self.assertEqual(data["warnings"][0]["timeframe"], "15m")
+
+    def test_estimate_service_warns_when_market_data_is_missing(self) -> None:
+        service = StrategyTestingService(
+            run_store=_EphemeralStrategyTestRunStore(),
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            historical_candle_provider=_CountingEstimateCandleProvider(
+                counts={("bybit", "BTCUSDT", "15m"): 0},
+                raw_counts={("bybit", "BTCUSDT", "15m"): 0},
+            ),
+        )
+
+        estimate = service.estimate_run(
+            StrategyTestRunRequest(
+                strategies=["trend_pullback_continuation"],
+                pairs=[StrategyTestPair(exchange="bybit", symbol="BTCUSDT")],
+                timeframes=["15m"],
+                start_at=_now() - timedelta(days=30),
+                end_at=_now(),
+            )
+        )
+
+        self.assertEqual(estimate.total_bars, 0)
+        self.assertEqual(estimate.warnings[0].code, "market_data_missing")
+
     def test_cancel_run_endpoint_marks_running_run_stopping(self) -> None:
         store = _EphemeralStrategyTestRunStore()
         heartbeat = datetime.now(timezone.utc)
@@ -697,6 +770,10 @@ class StrategyTestingApiContractTest(unittest.TestCase):
 
 def _now() -> datetime:
     return datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def _expected_candles(*, days: int, timeframe_minutes: int) -> int:
+    return days * 24 * 60 // timeframe_minutes
 
 
 def _request(
@@ -872,6 +949,45 @@ class _EphemeralStrategyTestTradeStore:
         offset: int = 0,
     ) -> list[StrategyTestSignalEvent]:
         return [event for event in self.signal_events if event.run_id == run_id][offset : offset + limit]
+
+
+class _CountingEstimateCandleProvider:
+    def __init__(
+        self,
+        *,
+        counts: dict[tuple[str, str, str], int],
+        raw_counts: dict[tuple[str, str, str], int] | None = None,
+    ) -> None:
+        self._counts = counts
+        self._raw_counts = raw_counts or counts
+
+    async def load_candles(self, **kwargs: Any) -> list[Any]:
+        _ = kwargs
+        return []
+
+    async def count_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        _ = start_at, end_at
+        return self._counts.get((exchange, symbol, timeframe), 0)
+
+    async def count_raw_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        _ = start_at, end_at
+        return self._raw_counts.get((exchange, symbol, timeframe), 0)
 
 
 class _NoopStrategyTestMatrixRunner:

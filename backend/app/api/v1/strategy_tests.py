@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status as http_sta
 from app.services.strategy_testing.schemas import (
     StrategyTestCalibrationResponse,
     StrategyTestActiveRunResponse,
+    StrategyTestEstimateResponse,
     StrategyTestFunnelResponse,
     StrategyTestReport,
     StrategyTestRunDetailResponse,
@@ -51,6 +52,17 @@ async def get_active_strategy_test_run(
         return service.get_active_run(user_id=user_id)
     except (LookupError, ValueError) as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/runs/estimate", response_model=StrategyTestEstimateResponse)
+async def estimate_strategy_test_run(
+    request: StrategyTestRunRequest,
+    service: StrategyTestingService = Depends(get_strategy_testing_service),
+) -> StrategyTestEstimateResponse:
+    try:
+        return service.estimate_run(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/runs", response_model=list[StrategyTestRunResponse])

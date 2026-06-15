@@ -587,6 +587,32 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertIn("bars_per_second", timings)
         self.assertGreaterEqual(timings["bars_per_second"], 0)
 
+    def test_backtest_progress_and_timings_count_deduped_candles(self) -> None:
+        candles = _candles()
+        duplicate = candles[4].model_copy(update={"close": candles[4].close + 0.5})
+        candles_with_duplicate = [*candles[:5], duplicate, *candles[5:]]
+        progress_events: list[dict[str, object]] = []
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=AlphaRecordingStrategyEngine(),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles_with_duplicate),
+        )
+
+        result = runner.run_detailed(
+            _request(candles),
+            on_progress=progress_events.append,
+            progress_interval_bars=1,
+        )
+
+        expected_bars = len(candles) - 3
+        self.assertEqual(result.assumptions["timings"]["bars_total"], expected_bars)
+        running_progress = [
+            event for event in progress_events if event.get("phase") == "running_scenario"
+        ]
+        self.assertTrue(running_progress)
+        self.assertEqual(running_progress[0]["bars_total"], expected_bars)
+        self.assertEqual(running_progress[-1]["bars_processed"], expected_bars)
+
     def test_backtest_progress_payload_includes_runtime_counters(self) -> None:
         candles = _candles()
         signal_candle = candles[3]

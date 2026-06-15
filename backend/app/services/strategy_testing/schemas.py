@@ -12,6 +12,12 @@ StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
 StrategyTestType = Literal["historical_backtest", "forward_virtual"]
 StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "stopping"]
 StrategyTestCalibrationDecision = Literal["positive", "negative", "insufficient_sample"]
+StrategyTestEstimateLevel = Literal["small", "medium", "large"]
+StrategyTestEstimateWarningCode = Literal[
+    "market_data_missing",
+    "market_data_duplicates",
+    "market_data_below_warmup",
+]
 StrategyTestSameCandlePolicy = Literal[
     "conservative_stop_first",
     "target_first",
@@ -147,6 +153,39 @@ class StrategyTestActiveRunResponse(BaseModel):
     is_stale: bool = False
     stale_threshold_seconds: int
     allowed_actions: list[str] = Field(default_factory=list)
+
+
+class StrategyTestEstimateWarning(BaseModel):
+    code: StrategyTestEstimateWarningCode
+    message: str
+    exchange: str | None = None
+    symbol: str | None = None
+    timeframe: str | None = None
+    raw_rows: int | None = Field(default=None, ge=0)
+    deduped_candles: int | None = Field(default=None, ge=0)
+    duplicate_ratio: float | None = Field(default=None, ge=0)
+
+
+class StrategyTestScenarioEstimate(BaseModel):
+    strategy: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    candles_count: int = Field(ge=0)
+    raw_rows: int = Field(ge=0)
+    duplicate_rows: int = Field(ge=0)
+    warmup_bars: int = Field(ge=0)
+    bars_total: int = Field(ge=0)
+    warning_codes: list[StrategyTestEstimateWarningCode] = Field(default_factory=list)
+
+
+class StrategyTestEstimateResponse(BaseModel):
+    scenario_count: int = Field(ge=0)
+    total_bars: int = Field(ge=0)
+    average_bars_per_scenario: int | None = Field(default=None, ge=0)
+    size_level: StrategyTestEstimateLevel
+    scenarios: list[StrategyTestScenarioEstimate] = Field(default_factory=list)
+    warnings: list[StrategyTestEstimateWarning] = Field(default_factory=list)
 
 
 class StrategyTestCalibrationProfile(BaseModel):

@@ -3,6 +3,7 @@ import { currentUserId } from "./user-identity";
 import type {
   StrategyTestActiveRunResponse,
   StrategyTestCalibrationResponse,
+  StrategyTestEstimateResponse,
   StrategyTestFunnelResponse,
   StrategyTestReport,
   StrategyTestRunDetailResponse,
@@ -57,6 +58,30 @@ export const strategyTestsApi = {
     const resolvedUserId = userId ?? await currentUserId();
     const query = new URLSearchParams({ user_id: resolvedUserId });
     return rawJson<StrategyTestActiveRunResponse>(`/api/v1/strategy-tests/runs/active?${query.toString()}`);
+  },
+  async estimate(request: StrategyTestRunRequest): Promise<StrategyTestEstimateResponse> {
+    const userId = request.user_id ?? await currentUserId();
+    return rawJson<StrategyTestEstimateResponse>("/api/v1/strategy-tests/runs/estimate", {
+      body: JSON.stringify({
+        user_id: userId,
+        test_type: request.test_type ?? "historical_backtest",
+        strategies: request.strategies,
+        pairs: request.pairs,
+        timeframes: request.timeframes,
+        start_at: request.start_at,
+        end_at: request.end_at,
+        mode: request.mode,
+        initial_capital: request.initial_capital,
+        fee_rate: request.fee_rate,
+        slippage_bps: request.slippage_bps,
+        same_candle_policy: request.same_candle_policy,
+        params: request.params ?? {},
+        metric_set: request.metric_set ?? [],
+        tags: request.tags ?? ["backtest"]
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST"
+    });
   },
   async cancelRun(runId: string): Promise<StrategyTestRunResponse> {
     return rawJson<StrategyTestRunResponse>(`/api/v1/strategy-tests/runs/${encodeURIComponent(runId)}/cancel`, {

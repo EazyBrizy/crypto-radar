@@ -3661,6 +3661,47 @@
         }
       }
     },
+    "/api/v1/strategy-tests/runs/estimate": {
+      "post": {
+        "tags": [
+          "strategy-tests"
+        ],
+        "summary": "Estimate Strategy Test Run",
+        "operationId": "estimate_strategy_test_run_api_v1_strategy_tests_runs_estimate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyTestRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyTestEstimateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/strategy-tests/runs/{run_id}": {
       "get": {
         "tags": [
@@ -19220,6 +19261,154 @@
         ],
         "title": "StrategyTestCandidateAdjustment"
       },
+      "StrategyTestEstimateResponse": {
+        "properties": {
+          "scenario_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Scenario Count"
+          },
+          "total_bars": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Total Bars"
+          },
+          "average_bars_per_scenario": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Bars Per Scenario"
+          },
+          "size_level": {
+            "type": "string",
+            "enum": [
+              "small",
+              "medium",
+              "large"
+            ],
+            "title": "Size Level"
+          },
+          "scenarios": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyTestScenarioEstimate"
+            },
+            "type": "array",
+            "title": "Scenarios"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyTestEstimateWarning"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scenario_count",
+          "total_bars",
+          "size_level"
+        ],
+        "title": "StrategyTestEstimateResponse"
+      },
+      "StrategyTestEstimateWarning": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "market_data_missing",
+              "market_data_duplicates",
+              "market_data_below_warmup"
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "timeframe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeframe"
+          },
+          "raw_rows": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Rows"
+          },
+          "deduped_candles": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deduped Candles"
+          },
+          "duplicate_ratio": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Ratio"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "StrategyTestEstimateWarning"
+      },
       "StrategyTestFunnelResponse": {
         "properties": {
           "run_id": {
@@ -19813,6 +20002,76 @@
           "requested_matrix"
         ],
         "title": "StrategyTestRunResponse"
+      },
+      "StrategyTestScenarioEstimate": {
+        "properties": {
+          "strategy": {
+            "type": "string",
+            "title": "Strategy"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "candles_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Candles Count"
+          },
+          "raw_rows": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Raw Rows"
+          },
+          "duplicate_rows": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Duplicate Rows"
+          },
+          "warmup_bars": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Warmup Bars"
+          },
+          "bars_total": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Bars Total"
+          },
+          "warning_codes": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "market_data_missing",
+                "market_data_duplicates",
+                "market_data_below_warmup"
+              ]
+            },
+            "type": "array",
+            "title": "Warning Codes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy",
+          "exchange",
+          "symbol",
+          "timeframe",
+          "candles_count",
+          "raw_rows",
+          "duplicate_rows",
+          "warmup_bars",
+          "bars_total"
+        ],
+        "title": "StrategyTestScenarioEstimate"
       },
       "StrategyTestSignalEvent": {
         "properties": {

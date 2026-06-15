@@ -104,32 +104,32 @@ CREATE TABLE IF NOT EXISTS market.ohlcv_1m
     trades_count UInt64,
     created_at DateTime64(3, 'UTC')
 )
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(ts)
 ORDER BY (exchange, symbol, ts);
 
 CREATE TABLE IF NOT EXISTS market.ohlcv_5m AS market.ohlcv_1m
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(ts)
 ORDER BY (exchange, symbol, ts);
 
 CREATE TABLE IF NOT EXISTS market.ohlcv_15m AS market.ohlcv_1m
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(ts)
 ORDER BY (exchange, symbol, ts);
 
 CREATE TABLE IF NOT EXISTS market.ohlcv_1h AS market.ohlcv_1m
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(ts)
 ORDER BY (exchange, symbol, ts);
 
 CREATE TABLE IF NOT EXISTS market.ohlcv_4h AS market.ohlcv_1m
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(ts)
 ORDER BY (exchange, symbol, ts);
 
 CREATE TABLE IF NOT EXISTS market.ohlcv_1d AS market.ohlcv_1m
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree(created_at)
 PARTITION BY toYYYYMM(ts)
 ORDER BY (exchange, symbol, ts);
 

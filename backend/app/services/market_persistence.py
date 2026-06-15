@@ -25,6 +25,12 @@ OHLCV_TABLES_BY_TIMEFRAME = {
 
 
 class ClickHouseInsertClient(Protocol):
+    def command(self, command: str) -> Any:
+        ...
+
+    def query(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
+        ...
+
     def insert(
         self,
         table: str,
@@ -145,6 +151,8 @@ class MarketDataPersistenceService:
     ) -> None:
         self._clickhouse_client_factory = clickhouse_client_factory
         self._redis_client_factory = redis_client_factory
+        self._ohlcv_schema_checked = False
+        self._ohlcv_schema_warnings: list[dict[str, str]] = []
 
     def persist_tick(self, tick: MarketData) -> None:
         source_id = _tick_source_id(tick)
@@ -161,13 +169,38 @@ class MarketDataPersistenceService:
             if table is None:
                 continue
             grouped_rows[table].append(self._candle_row(candle))
+        if not grouped_rows:
+            return 0
 
+        if not self._ohlcv_schema_checked:
+            self.ensure_ohlcv_schema()
         client = self._clickhouse()
         rows_written = 0
         for table, rows in grouped_rows.items():
             client.insert(table, rows, column_names=self._candle_columns)
             rows_written += len(rows)
         return rows_written
+
+    def ensure_ohlcv_schema(self) -> list[dict[str, str]]:
+        client = self._clickhouse()
+        for table in OHLCV_TABLES_BY_TIMEFRAME.values():
+            client.command(_ohlcv_table_ddl(table))
+
+        warnings: list[dict[str, str]] = []
+        for table in OHLCV_TABLES_BY_TIMEFRAME.values():
+            engine = _table_engine(client, table)
+            if engine and engine != "ReplacingMergeTree":
+                warnings.append(
+                    {
+                        "table": table,
+                        "engine": engine,
+                        "expected_engine": "ReplacingMergeTree",
+                        "reason": "legacy_ohlcv_engine_requires_operator_migration",
+                    }
+                )
+        self._ohlcv_schema_warnings = warnings
+        self._ohlcv_schema_checked = True
+        return list(warnings)
 
     def persist_features(self, features: Features) -> None:
         self._clickhouse().insert(
@@ -338,3 +371,44 @@ class MarketDataPersistenceService:
 
 
 market_data_persistence_service = MarketDataPersistenceService()
+
+
+def _ohlcv_table_ddl(table: str) -> str:
+    return f"""
+        CREATE TABLE IF NOT EXISTS {table}
+        (
+            exchange LowCardinality(String),
+            symbol LowCardinality(String),
+            ts DateTime('UTC'),
+            open Decimal(38, 18),
+            high Decimal(38, 18),
+            low Decimal(38, 18),
+            close Decimal(38, 18),
+            volume_base Decimal(38, 18),
+            volume_quote Decimal(38, 18),
+            trades_count UInt64,
+            created_at DateTime64(3, 'UTC')
+        )
+        ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY toYYYYMM(ts)
+        ORDER BY (exchange, symbol, ts)
+    """
+
+
+def _table_engine(client: ClickHouseInsertClient, table: str) -> str | None:
+    database, name = table.split(".", 1)
+    result = client.query(
+        """
+            SELECT engine
+            FROM system.tables
+            WHERE database = {database:String}
+              AND name = {name:String}
+            LIMIT 1
+        """,
+        parameters={"database": database, "name": name},
+    )
+    rows = result.named_results() if hasattr(result, "named_results") else []
+    if not rows:
+        return None
+    engine = rows[0].get("engine") if isinstance(rows[0], dict) else None
+    return str(engine) if engine else None

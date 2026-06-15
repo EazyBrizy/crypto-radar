@@ -11,8 +11,11 @@ from app.services.market_scanner import MarketScanner
 
 
 class FakeClickHouseClient:
-    def __init__(self) -> None:
+    def __init__(self, engines: dict[str, str] | None = None) -> None:
         self.inserts: list[tuple[str, list[list[object]], list[str]]] = []
+        self.commands: list[str] = []
+        self.queries: list[tuple[str, dict[str, object] | None]] = []
+        self.engines = engines or {}
 
     def insert(
         self,
@@ -21,6 +24,25 @@ class FakeClickHouseClient:
         column_names: list[str],
     ) -> None:
         self.inserts.append((table, data, column_names))
+
+    def command(self, command: str) -> None:
+        self.commands.append(command)
+
+    def query(self, query: str, parameters: dict[str, object] | None = None) -> "_QueryResult":
+        self.queries.append((query, parameters))
+        database = str((parameters or {}).get("database", ""))
+        name = str((parameters or {}).get("name", ""))
+        table = f"{database}.{name}" if database and name else ""
+        engine = self.engines.get(table, "ReplacingMergeTree")
+        return _QueryResult([{"engine": engine}])
+
+
+class _QueryResult:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self._rows = rows
+
+    def named_results(self) -> list[dict[str, object]]:
+        return list(self._rows)
 
 
 class FakeRedisClient:
@@ -164,6 +186,33 @@ class MarketDataPersistenceContractTest(unittest.TestCase):
         self.assertEqual(row[0:2], ["bybit", "BTCUSDT"])
         self.assertEqual(row[7], Decimal("2"))
         self.assertEqual(row[8], Decimal("134500"))
+
+    def test_ensure_ohlcv_schema_uses_replacing_tables_and_warns_for_legacy_engine(self) -> None:
+        clickhouse = FakeClickHouseClient(engines={"market.ohlcv_15m": "MergeTree"})
+        service = MarketDataPersistenceService(
+            clickhouse_client_factory=lambda: clickhouse,
+            redis_client_factory=lambda: self.redis,
+        )
+
+        warnings = service.ensure_ohlcv_schema()
+
+        self.assertEqual(len(clickhouse.commands), 6)
+        self.assertTrue(all("ENGINE = ReplacingMergeTree(created_at)" in command for command in clickhouse.commands))
+        destructive_sql = "\n".join(clickhouse.commands).upper()
+        self.assertNotIn("TRUNCATE", destructive_sql)
+        self.assertNotIn("DELETE", destructive_sql)
+        self.assertNotIn("DROP", destructive_sql)
+        self.assertEqual(
+            warnings,
+            [
+                {
+                    "table": "market.ohlcv_15m",
+                    "engine": "MergeTree",
+                    "expected_engine": "ReplacingMergeTree",
+                    "reason": "legacy_ohlcv_engine_requires_operator_migration",
+                }
+            ],
+        )
 
     def test_features_write_indicator_values(self) -> None:
         features = Features(

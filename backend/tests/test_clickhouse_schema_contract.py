@@ -7,6 +7,14 @@ CLICKHOUSE_SCHEMA = ROOT_DIR / "infra" / "clickhouse" / "init" / "002_market_ana
 
 
 class ClickHouseSchemaContractTest(unittest.TestCase):
+    def test_ohlcv_tables_use_created_at_versioned_replacing_mergetree(self) -> None:
+        schema = CLICKHOUSE_SCHEMA.read_text(encoding="utf-8")
+
+        for table_name in ("1m", "5m", "15m", "1h", "4h", "1d"):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS market.ohlcv_{table_name}", schema)
+        self.assertEqual(schema.count("ENGINE = ReplacingMergeTree(created_at)"), 6)
+        self.assertIn("ORDER BY (exchange, symbol, ts)", schema)
+
     def test_liquidity_snapshots_table_is_defined_for_market_analytics(self) -> None:
         schema = CLICKHOUSE_SCHEMA.read_text(encoding="utf-8")
 

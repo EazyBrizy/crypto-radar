@@ -57,7 +57,13 @@ Codex guide for the current FastAPI backend. Use this file before changing backe
 
 - `ProductionBacktestRunner` keeps RiskGate in the entry path. Backtests must normalize strategy signals into production-compatible trade plans before RiskGate; they must not bypass risk, sizing, take-profit, stop, or lifecycle validation.
 - The backtest normalizer reuses pipeline invalidation, exit-plan, risk/reward, trade-plan enrichment, and trade-plan completeness services. Legacy strategy fields are accepted only after they become a complete `TradePlan` with invalidation conditions and executable targets.
-- `production_like` stays strict. `research_virtual` and `discovery` may record assumptions and warnings, but base price/stop/target invariants still belong to backend services.
+- Mode semantics are explicit:
+  - `discovery`: signal discovery only. It does not run virtual execution, does not arm historical pending entries, and produces no trades.
+  - `research_virtual`: virtual execution is enabled, RiskGate/R:R hard blocks are converted to research warnings, and historical pending-entry replay is enabled by default.
+  - `production_like`: virtual execution is enabled, RiskGate/R:R behavior stays strict, and historical pending-entry replay is enabled by default.
+- Historical pending-entry replay applies to waiting-entry signals such as `wait_for_pullback` only when the signal has `execution_gate.can_arm_pending=true` and a valid entry zone. The replay arms a pending event, waits for a later candle to touch the entry zone, fills at the historical touch price, and then opens the simulated trade through the normal RiskGate and virtual execution path.
+- `params.historical_pending_entries_enabled=false` disables historical pending-entry replay for `research_virtual` and `production_like`. `params.historical_pending_entries_enabled=null` or an omitted value uses the mode default. `preserve_legacy_backtest=true` always disables the new pending-entry logic.
+- `params.historical_pending_max_wait_bars`, `params.pending_entry_max_wait_bars`, and `params.max_wait_bars` set the maximum number of closed bars to wait before a pending entry records `pending_entry_expired_before_touch`; the default is 12 bars.
 - Backtest metrics and assumptions preserve diagnostics: `signals_seen`, `risk_rejections`, `execution_rejections`, `trade_plan_completion_warnings`, `risk_gate_blockers`, and `backtest_trade_plan_assumptions`.
 
 ## Signal Snapshot Serialization Boundary

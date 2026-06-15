@@ -3109,6 +3109,37 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   color: #eff6ff;
 }
 
+.strategy-test-advanced-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px);
+  align-items: end;
+  gap: 8px;
+}
+
+.strategy-test-toggle {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+  color: #cbd5e1;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.strategy-test-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
+}
+
+.strategy-test-toggle:has(input:disabled) {
+  color: #64748b;
+  opacity: 0.78;
+}
+
 .strategy-test-runs-table .data-table-scroll {
   max-height: 360px;
 }
@@ -3547,6 +3578,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .compact-risk-grid,
   .strategy-test-grid,
   .strategy-test-controls,
+  .strategy-test-advanced-controls,
   .strategy-test-active-run-meta,
   .strategy-test-metric-grid,
     .strategy-test-summary-grid,
@@ -3602,6 +3634,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .watch-pair-grid,
   .strategy-test-grid,
   .strategy-test-controls,
+  .strategy-test-advanced-controls,
   .strategy-test-active-run-meta,
   .strategy-test-metric-grid,
   .strategy-test-summary-grid,
@@ -3637,6 +3670,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .strategy-pair-grid,
   .strategy-test-grid,
   .strategy-test-controls,
+  .strategy-test-advanced-controls,
   .strategy-test-active-run-meta,
   .strategy-test-mode-row,
   .strategy-test-metric-grid,

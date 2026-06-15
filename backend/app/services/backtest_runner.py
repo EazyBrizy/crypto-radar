@@ -71,6 +71,7 @@ _RESERVED_PARAM_KEYS = {
     "risk_gate_enabled",
     "virtual_execution_enabled",
     "lifecycle_enabled",
+    "historical_pending_entries_enabled",
     "signal_selection_policy",
     "max_concurrent_positions",
     "max_positions_per_symbol",
@@ -234,6 +235,8 @@ class _PositionConstraints:
 class BacktestExecutionPolicy:
     mode: str
     production_mode: bool
+    virtual_execution_enabled: bool = True
+    historical_pending_entries_enabled: bool = False
     preserve_legacy_backtest: bool = False
     entry_timing: str = "same_candle_close"
 
@@ -1067,6 +1070,9 @@ class ProductionBacktestRunner:
     ) -> _SimulatedPosition | None:
         if signal is None:
             return None
+        if not execution_policy.virtual_execution_enabled:
+            state.execution_policy_no_entries.append(_execution_disabled_reason(execution_policy))
+            return None
         signal = _normalize_signal_for_backtest(
             signal=signal,
             features=features,
@@ -1261,6 +1267,12 @@ def _execution_policy_for_backtest(
     return BacktestExecutionPolicy(
         mode=mode,
         production_mode=mode == "production_like",
+        virtual_execution_enabled=_bool_param(assumptions, "virtual_execution_enabled", mode != "discovery"),
+        historical_pending_entries_enabled=_bool_param(
+            assumptions,
+            "historical_pending_entries_enabled",
+            False,
+        ),
         preserve_legacy_backtest=bool(assumptions.get("preserve_legacy_backtest")),
         entry_timing=str(assumptions.get("entry_timing") or _entry_timing_for_backtest(mode, assumptions)),
     )
@@ -1272,8 +1284,29 @@ def _entry_timing_for_backtest(mode: str, assumptions: Mapping[str, Any]) -> str
     return "same_candle_close"
 
 
+def _resolve_historical_pending_entries_enabled(
+    *,
+    request: BacktestRunRequest,
+    mode: str,
+    assumptions: Mapping[str, Any],
+) -> bool:
+    if mode == "discovery" or bool(assumptions.get("preserve_legacy_backtest")):
+        return False
+    explicit_request = _optional_bool_param(request.params, "historical_pending_entries_enabled")
+    if explicit_request is not None:
+        return explicit_request
+    explicit_assumption = _optional_bool_param(assumptions, "historical_pending_entries_enabled")
+    if explicit_assumption is not None:
+        return explicit_assumption
+    return mode in {"research_virtual", "production_like"}
+
+
 def _historical_pending_entries_enabled(execution_policy: BacktestExecutionPolicy) -> bool:
-    return execution_policy.production_mode and not execution_policy.preserve_legacy_backtest
+    return (
+        execution_policy.historical_pending_entries_enabled
+        and execution_policy.virtual_execution_enabled
+        and not execution_policy.preserve_legacy_backtest
+    )
 
 
 def _should_arm_historical_pending(
@@ -1681,6 +1714,7 @@ def _assumptions_for_backtest(
 ) -> dict[str, Any]:
     values = dict(options or {})
     values.setdefault("mode", mode)
+    preserve_legacy = bool(values.get("preserve_legacy_backtest"))
     values["entry_timing"] = _entry_timing_for_backtest(mode, values)
     values.setdefault("bar_level_sequencing_policy", "pending_entries_before_position_management")
     values.setdefault("fee_rate", str(request.fee_rate))
@@ -1763,11 +1797,16 @@ def _assumptions_for_backtest(
         values.setdefault("virtual_execution_enabled", True)
         values.setdefault("lifecycle_enabled", True)
     else:
-        preserve_legacy = bool(values.get("preserve_legacy_backtest"))
         values.setdefault("risk_gate_enabled", True)
         values.setdefault("rr_hard_gate_enabled", False if preserve_legacy else True)
         values.setdefault("virtual_execution_enabled", True)
         values.setdefault("lifecycle_enabled", True)
+    values["historical_pending_entries_enabled"] = _resolve_historical_pending_entries_enabled(
+        request=request,
+        mode=mode,
+        assumptions=values,
+    )
+    values.setdefault("historical_pending_max_wait_bars", _historical_pending_max_wait_bars(request))
     return values
 
 
@@ -1900,6 +1939,12 @@ def _decision_for_mode(decision: RiskDecision, mode: str) -> RiskDecision:
             "notes": _dedupe_strings([*decision.notes, *warnings]),
         }
     )
+
+
+def _execution_disabled_reason(execution_policy: BacktestExecutionPolicy) -> str:
+    if execution_policy.mode == "discovery":
+        return "execution_disabled_for_discovery"
+    return "virtual_execution_disabled"
 
 
 def _backtest_signal_event_from_strategy_signal(
@@ -3203,6 +3248,12 @@ def _bool_param(params: Mapping[str, Any], key: str, default: bool) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return default
+
+
+def _optional_bool_param(params: Mapping[str, Any], key: str) -> bool | None:
+    if key not in params or params.get(key) is None:
+        return None
+    return _bool_param(params, key, False)
 
 
 def _float_param(params: Mapping[str, Any], key: str, default: float | None) -> float | None:

@@ -76,6 +76,7 @@ Strategy Testing request/response unions in `frontend/src/features/strategy-test
 - Cancel and refresh controls are rendered from backend active-run state and allowed actions; cancelling a run calls the backend cancel endpoint.
 - The frontend may display these fields and form validation state, but it must not compute stale decisions, eligibility, risk, PnL, or execution readiness.
 - `forward_virtual` and `historical_backtest` are API values from the backend contract, not separate frontend workflows.
+- Historical backtest runs must send explicit pending-entry policy params from the Strategy Testing panel: `historical_pending_entries_enabled` and `pending_entry_max_wait_bars`. The default UI state is enabled with 12 bars; `discovery` sends pending replay disabled because that mode is signal-only.
 - For fronttests, display backend `runtime_state.status` and counters such as `processed_ticks`, `processed_signals`, `opened_trades`, `trades_written`, and `metrics_written` as received. Common runtime statuses include `listening`, `processing`, `degraded`, and `cancelled`; the backend owns their meaning.
 - `StrategyTestingPanel.test.tsx` is the UI contract smoke for active-run behavior: backend reasons are shown, Run is disabled or enabled from `can_run`, and stale or active runs can be cancelled only when `allowed_actions` includes `cancel`.
 

@@ -90,6 +90,7 @@ class _RecordingBacktestRunner:
     def __init__(self) -> None:
         self.requests: list[BacktestRunRequest] = []
         self.modes: list[str] = []
+        self.options: list[dict[str, Any]] = []
 
     def run_detailed(
         self,
@@ -102,6 +103,7 @@ class _RecordingBacktestRunner:
         _ = kwargs
         self.requests.append(request)
         self.modes.append(mode)
+        self.options.append(dict(options or {}))
         return BacktestDetailedRunResult(
             run_result=BacktestRunResult(status="completed", result=None),
             trades=[],
@@ -242,6 +244,8 @@ class StrategyTestSignalSelectionTest(unittest.TestCase):
         self.assertEqual(params["signal_selection_policy"], "all_non_overlapping")
         self.assertEqual(params["max_concurrent_positions"], 10)
         self.assertEqual(params["max_positions_per_symbol"], 1)
+        self.assertTrue(backtest_runner.options[0]["historical_pending_entries_enabled"])
+        self.assertEqual(backtest_runner.options[0]["historical_pending_max_wait_bars"], 12)
 
     def test_strategy_test_production_like_keeps_legacy_defaults(self) -> None:
         backtest_runner = _RecordingBacktestRunner()
@@ -260,6 +264,31 @@ class StrategyTestSignalSelectionTest(unittest.TestCase):
         params = backtest_runner.requests[0].params
         self.assertEqual(params["signal_selection_policy"], "first_actionable")
         self.assertEqual(params["max_concurrent_positions"], 1)
+        self.assertTrue(backtest_runner.options[0]["historical_pending_entries_enabled"])
+
+    def test_strategy_test_can_disable_historical_pending_entries(self) -> None:
+        backtest_runner = _RecordingBacktestRunner()
+        scenario_runner = StrategyTestScenarioRunner(backtest_runner)  # type: ignore[arg-type]
+        request = _strategy_test_request(mode="research_virtual").model_copy(
+            update={
+                "params": {
+                    "historical_pending_entries_enabled": False,
+                    "pending_entry_max_wait_bars": 4,
+                }
+            }
+        )
+
+        scenario_runner.run_scenario(
+            run_id=UUID("11111111-1111-4111-8111-111111111111"),
+            user_id=UUID("22222222-2222-4222-8222-222222222222"),
+            request=request,
+            strategy="volatility_squeeze_breakout",
+            pair=request.pairs[0],
+            timeframe=request.timeframes[0],
+        )
+
+        self.assertFalse(backtest_runner.options[0]["historical_pending_entries_enabled"])
+        self.assertEqual(backtest_runner.options[0]["historical_pending_max_wait_bars"], 4)
 
     def test_strategy_test_defaults_do_not_override_explicit_params(self) -> None:
         backtest_runner = _RecordingBacktestRunner()

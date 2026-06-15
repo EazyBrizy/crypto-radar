@@ -386,6 +386,141 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertTrue(event.no_entry)
         self.assertEqual(event.blocked_reason_code, "entry_zone_missed_wait_for_retest")
 
+    def test_research_virtual_arms_and_fills_historical_pending_entry(self) -> None:
+        candles = _pending_entry_candles(touch_index=6)
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=ArmablePullbackStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "historical_pending_max_wait_bars": 5,
+                }
+            }
+        )
+
+        result = runner.run_detailed(request, mode="research_virtual")
+
+        self.assertTrue(result.assumptions["historical_pending_entries_enabled"])
+        self.assertEqual(len(result.trades), 1)
+        self.assertEqual(result.trades[0].entry_time, _datetime_from_ms(candles[6].open_time))
+        self.assertEqual(result.trades[0].bars_to_entry, 3)
+        event = result.signal_events[0]
+        self.assertTrue(event.entry_touched)
+        self.assertTrue(event.filled)
+        self.assertIn(event.funnel_stage, {"filled", "closed"})
+        self.assertIn("pending_armed", event.metadata["funnel_stages"])
+        self.assertIn("entry_zone_touched", event.metadata["funnel_stages"])
+
+    def test_research_virtual_historical_pending_entry_expires_before_touch(self) -> None:
+        candles = _pending_entry_candles(touch_index=None)
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=ArmablePullbackStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "pending_entry_max_wait_bars": 2,
+                }
+            }
+        )
+
+        result = runner.run_detailed(request, mode="research_virtual")
+
+        self.assertEqual(len(result.trades), 0)
+        event = result.signal_events[0]
+        self.assertTrue(event.no_entry)
+        self.assertEqual(event.funnel_stage, "expired_before_touch")
+        self.assertEqual(event.blocked_reason_code, "pending_entry_expired_before_touch")
+
+    def test_research_virtual_historical_pending_entry_can_be_disabled(self) -> None:
+        candles = _pending_entry_candles(touch_index=6)
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=ArmablePullbackStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "historical_pending_entries_enabled": False,
+                    "historical_pending_max_wait_bars": 5,
+                }
+            }
+        )
+
+        result = runner.run_detailed(request, mode="research_virtual")
+
+        self.assertFalse(result.assumptions["historical_pending_entries_enabled"])
+        self.assertEqual(len(result.trades), 0)
+        self.assertEqual(result.signal_events[0].blocked_reason_code, "not_selected")
+
+    def test_discovery_mode_does_not_execute_trades(self) -> None:
+        candles = _candles()
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=DeterministicStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(_request(candles), mode="discovery")
+
+        self.assertFalse(result.assumptions["virtual_execution_enabled"])
+        self.assertFalse(result.assumptions["historical_pending_entries_enabled"])
+        self.assertEqual(len(result.trades), 0)
+        self.assertTrue(result.signal_events[0].no_entry)
+        self.assertEqual(result.signal_events[0].blocked_reason_code, "execution_disabled_for_discovery")
+
+    def test_preserve_legacy_backtest_disables_historical_pending_entries(self) -> None:
+        candles = _pending_entry_candles(touch_index=6)
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=ArmablePullbackStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(
+            _request(candles),
+            mode="production_like",
+            options={"preserve_legacy_backtest": True},
+        )
+
+        self.assertFalse(result.assumptions["historical_pending_entries_enabled"])
+        self.assertEqual(len(result.trades), 0)
+        self.assertEqual(result.signal_events[0].blocked_reason_code, "not_selected")
+
+    def test_production_like_keeps_strict_risk_gate(self) -> None:
+        candles = _candles()
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=DeterministicStrategyEngine(candles[3].close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+        request = _request(candles).model_copy(
+            update={
+                "params": {
+                    **_request(candles).params,
+                    "risk_settings": {
+                        "min_rr_ratio": 10,
+                        "max_price_deviation_bps": 1000,
+                    },
+                }
+            }
+        )
+
+        result = runner.run_detailed(request, mode="production_like")
+
+        self.assertEqual(len(result.trades), 0)
+        self.assertEqual(result.risk_rejections, 1)
+        self.assertTrue(result.signal_events[0].risk_rejected)
+
     def test_historical_pending_entry_fills_when_zone_touched_after_three_bars(self) -> None:
         candles = _pending_entry_candles(touch_index=6)
         runner = ProductionBacktestRunner(

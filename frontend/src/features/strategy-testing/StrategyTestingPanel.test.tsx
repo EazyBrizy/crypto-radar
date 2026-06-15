@@ -112,6 +112,10 @@ describe("StrategyTestingPanel", () => {
     renderPanel();
 
     expect(screen.getByRole("button", { name: "Research virtual" })).toHaveClass("active");
+    expect(screen.getByRole("button", { name: "Research virtual" })).toHaveAttribute(
+      "title",
+      expect.stringContaining("virtual execution")
+    );
     expect(screen.getByRole("button", { name: "Production-like" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Forward virtual" })).toBeInTheDocument();
   });
@@ -256,11 +260,64 @@ describe("StrategyTestingPanel", () => {
       initial_capital: 1000,
       mode: "research_virtual",
       pairs: [{ exchange: "bybit", symbol: "BTCUSDT" }],
+      params: {
+        historical_pending_entries_enabled: true,
+        pending_entry_max_wait_bars: 12
+      },
       same_candle_policy: "stop_first",
       slippage_bps: 0,
       strategies: ["trend_pullback_continuation"],
       tags: ["backtest"],
       timeframes: ["1m", "5m", "15m"]
+    }));
+  });
+
+  it("runs with advanced historical pending settings", async () => {
+    const user = userEvent.setup();
+    mocks.runStrategyTest.mockResolvedValue(strategyTestRun({
+      status: "queued",
+      test_type: "historical_backtest"
+    }));
+
+    renderPanel();
+
+    await user.click(screen.getByRole("checkbox", { name: /Historical pending entries/u }));
+    await user.clear(screen.getByLabelText("Pending max wait bars"));
+    await user.type(screen.getByLabelText("Pending max wait bars"), "4");
+    const runButton = screen.getByRole("button", { name: /Run strategy test/u });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    await user.click(runButton);
+
+    await waitFor(() => expect(mocks.runStrategyTest).toHaveBeenCalledTimes(1));
+    expect(mocks.runStrategyTest).toHaveBeenCalledWith(expect.objectContaining({
+      params: {
+        historical_pending_entries_enabled: false,
+        pending_entry_max_wait_bars: 4
+      }
+    }));
+  });
+
+  it("disables historical pending params for discovery mode", async () => {
+    const user = userEvent.setup();
+    mocks.runStrategyTest.mockResolvedValue(strategyTestRun({
+      status: "queued",
+      test_type: "historical_backtest"
+    }));
+
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Discovery" }));
+    const runButton = screen.getByRole("button", { name: /Run strategy test/u });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    await user.click(runButton);
+
+    await waitFor(() => expect(mocks.runStrategyTest).toHaveBeenCalledTimes(1));
+    expect(mocks.runStrategyTest).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "discovery",
+      params: {
+        historical_pending_entries_enabled: false,
+        pending_entry_max_wait_bars: 12
+      }
     }));
   });
 

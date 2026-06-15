@@ -37,6 +37,7 @@ const DEFAULT_SELECTED_TIMEFRAMES = ["1m", "5m", "15m"];
 const DEFAULT_MODE: StrategyTestMode = "research_virtual";
 const DEFAULT_TEST_TYPE: StrategyTestType = "historical_backtest";
 const DEFAULT_SAME_CANDLE_POLICY: StrategyTestSameCandlePolicy = "stop_first";
+const DEFAULT_PENDING_ENTRY_MAX_WAIT_BARS = "12";
 
 const TEST_TYPE_OPTIONS: Array<{ value: StrategyTestType; label: string }> = [
   { value: "historical_backtest", label: "Historical" },
@@ -47,6 +48,12 @@ const MODE_LABELS: Record<StrategyTestMode, string> = {
   discovery: "Discovery",
   research_virtual: "Research virtual",
   production_like: "Production-like"
+};
+
+const MODE_DESCRIPTIONS: Record<StrategyTestMode, string> = {
+  discovery: "Signals only; no virtual execution and no trades.",
+  research_virtual: "Research mode with virtual execution, soft risk blocks, and historical pending entries.",
+  production_like: "Strict risk checks with production-style historical pending entries."
 };
 
 const POLICY_LABELS: Record<StrategyTestSameCandlePolicy, string> = {
@@ -83,6 +90,8 @@ export function StrategyTestingPanel({
   const [feeRate, setFeeRate] = useState("0.001");
   const [slippageBps, setSlippageBps] = useState("0");
   const [sameCandlePolicy, setSameCandlePolicy] = useState<StrategyTestSameCandlePolicy>(DEFAULT_SAME_CANDLE_POLICY);
+  const [historicalPendingEntriesEnabled, setHistoricalPendingEntriesEnabled] = useState(true);
+  const [pendingEntryMaxWaitBars, setPendingEntryMaxWaitBars] = useState(DEFAULT_PENDING_ENTRY_MAX_WAIT_BARS);
   const [formError, setFormError] = useState<string | null>(null);
   const [selectedReportRunId, setSelectedReportRunId] = useState<string | null>(null);
   const defaultStrategySelection = useMemo(() => defaultStrategyCodes(strategyOptions), [strategyOptions]);
@@ -98,7 +107,7 @@ export function StrategyTestingPanel({
   );
   const validTimeframes = effectiveTimeframes.filter((timeframe) => timeframeOptions.includes(timeframe));
   const dateError = validateDateRange(startAt, endAt);
-  const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps);
+  const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps, pendingEntryMaxWaitBars);
   const scenarioEstimate = effectiveStrategyCodes.length * selectedPairs.length * validTimeframes.length;
   const runs = runsQuery.data ?? [];
   const mutationRunIsMissingFromList = Boolean(
@@ -157,6 +166,8 @@ export function StrategyTestingPanel({
         feeRate,
         initialCapital,
         mode,
+        historicalPendingEntriesEnabled,
+        pendingEntryMaxWaitBars,
         sameCandlePolicy,
         selectedPairs,
         selectedStrategyCodes: effectiveStrategyCodes,
@@ -309,6 +320,7 @@ export function StrategyTestingPanel({
             className={mode === option ? "active" : ""}
             key={option}
             onClick={() => setMode(option)}
+            title={MODE_DESCRIPTIONS[option]}
             type="button"
           >
             {MODE_LABELS[option]}
@@ -327,6 +339,31 @@ export function StrategyTestingPanel({
             {option.label}
           </button>
         ))}
+      </div>
+
+      <div className="strategy-test-advanced-controls" aria-label="Historical pending entry policy">
+        <label className="strategy-test-toggle" title="Replay wait-for-entry signals as pending entries during historical backtests.">
+          <input
+            checked={mode !== "discovery" && historicalPendingEntriesEnabled}
+            disabled={mode === "discovery" || testType !== "historical_backtest"}
+            onChange={(event) => setHistoricalPendingEntriesEnabled(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Historical pending entries</span>
+        </label>
+        <label className="strategy-test-field" title="Maximum closed candles to wait for the entry zone touch.">
+          <span>Pending max wait bars</span>
+          <input
+            aria-label="Pending max wait bars"
+            disabled={testType !== "historical_backtest"}
+            inputMode="numeric"
+            min="1"
+            onChange={(event) => setPendingEntryMaxWaitBars(event.target.value)}
+            step="1"
+            type="number"
+            value={pendingEntryMaxWaitBars}
+          />
+        </label>
       </div>
 
       {dateError || numberError || formError || apiError ? (
@@ -450,10 +487,11 @@ function validateDateRange(startAt: string, endAt: string): string | null {
   return null;
 }
 
-function validateNumericInputs(initialCapital: string, feeRate: string, slippageBps: string): string | null {
+function validateNumericInputs(initialCapital: string, feeRate: string, slippageBps: string, pendingEntryMaxWaitBars: string): string | null {
   if (toPositiveNumber(initialCapital) == null) return "Initial capital must be greater than zero.";
   if (toNonNegativeNumber(feeRate) == null) return "Fee rate must be zero or greater.";
   if (toNonNegativeNumber(slippageBps) == null) return "Slippage bps must be zero or greater.";
+  if (toPositiveInteger(pendingEntryMaxWaitBars) == null) return "Pending max wait bars must be a positive integer.";
   return null;
 }
 
@@ -465,6 +503,11 @@ function toPositiveNumber(value: string): number | null {
 function toNonNegativeNumber(value: string): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function toPositiveInteger(value: string): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function defaultDateRange(): { startAt: string; endAt: string } {
@@ -490,8 +533,10 @@ function toDateTimeLocal(date: Date): string {
 function buildRunRequest({
   endAt,
   feeRate,
+  historicalPendingEntriesEnabled,
   initialCapital,
   mode,
+  pendingEntryMaxWaitBars,
   sameCandlePolicy,
   selectedPairs,
   selectedStrategyCodes,
@@ -502,8 +547,10 @@ function buildRunRequest({
 }: {
   endAt: string;
   feeRate: string;
+  historicalPendingEntriesEnabled: boolean;
   initialCapital: string;
   mode: StrategyTestMode;
+  pendingEntryMaxWaitBars: string;
   sameCandlePolicy: StrategyTestSameCandlePolicy;
   selectedPairs: MarketPairOption[];
   selectedStrategyCodes: string[];
@@ -512,13 +559,19 @@ function buildRunRequest({
   startAt: string;
   testType: StrategyTestType;
 }): StrategyTestRunRequest {
+  const params = testType === "historical_backtest"
+    ? {
+        historical_pending_entries_enabled: mode !== "discovery" && historicalPendingEntriesEnabled,
+        pending_entry_max_wait_bars: toPositiveInteger(pendingEntryMaxWaitBars) ?? Number(DEFAULT_PENDING_ENTRY_MAX_WAIT_BARS)
+      }
+    : {};
   return {
     end_at: new Date(endAt).toISOString(),
     fee_rate: Number(feeRate),
     initial_capital: Number(initialCapital),
     mode,
     pairs: selectedPairs.map(toStrategyTestPair),
-    params: {},
+    params,
     same_candle_policy: sameCandlePolicy,
     slippage_bps: Number(slippageBps),
     start_at: new Date(startAt).toISOString(),

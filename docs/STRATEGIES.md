@@ -54,6 +54,8 @@ Backtest and strategy-test flows may record explicit legacy assumptions when enr
 
 Open/forming candles are previews only when previews are enabled. They must not notify or enter while `settings.execution_closed_candle_only` is true.
 
+Waiting-entry statuses such as `wait_for_pullback` are valid historical backtest candidates only when the finalized signal also carries `execution_gate.can_arm_pending=true` and an entry zone. Historical backtests then replay signal -> pending -> entry-zone touch -> fill -> trade according to the mode policy in `docs/BACKEND.md`; they expire with `pending_entry_expired_before_touch` after the configured max wait bars.
+
 ## Edge And Eligibility
 
 `edge_calibration_service.evaluate_signal_edge()` attaches `SignalEdgeSnapshot` before gate evaluation.

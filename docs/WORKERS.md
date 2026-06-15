@@ -53,6 +53,12 @@ Reports for `running`, `stopping`, `cancelled`, and `failed` historical runs are
 
 `backend/app/workers/forward_strategy_test_worker.py` is the minimal worker entrypoint. Its loop refreshes forward-run heartbeats and finalizes `stopping` runs as `cancelled`; market-data integrations can call `process_market_tick()` to feed scanner ticks into the runtime. `cancelled` runs are ignored by the runtime.
 
+Forward virtual requires the lifespan-managed `ForwardStrategyTestWorker`. For closed-loop scanner operation, the `ScannerRunner` must also run: `MarketScanner` forwards matching market ticks to `process_market_tick()`, and `ScannerRunner` forwards generated `StrategySignal` objects to `process_strategy_signal()`. If scanner autostart is disabled, a forward run can still be created and kept alive by the forward worker, but it will remain `waiting_for_market_data` until the scanner is started or another market-data integration feeds matching ticks.
+
+The `/health` root endpoint exposes `forward_strategy_test_running`, `forward_strategy_test_stopping`, and `forward_strategy_test_last_result`. Use that payload to confirm the worker loop is alive, then read the strategy-test run detail for the UI-facing reason in `runtime_state.status` and `runtime_state.last_heartbeat_reason`.
+
+Forward pending entries are stored as a compact runtime snapshot, not as an analytics ledger. The current field is `runtime_state.pending_entries`; older design notes may refer to the same snapshot as `runtime_state.forward_pending_entries`. Active pending entries are retained, while terminal entries (`filled`, `expired`, `blocked`, `cancelled`, `failed`) are capped to the most recent 200. Use strategy-test signal events and trades for durable reporting; do not treat the runtime pending-entry snapshot as complete history.
+
 Forward runtime tests use fake stores, scanners, signal writers, and virtual trading adapters instead of real exchange credentials. The behavior under test is still backend-owned: active-run filtering, gate-driven action selection, virtual trade creation, strategy-test row writes, heartbeat updates, and cancellation of `stopping` runs.
 
 ## Signal Outcome Workers

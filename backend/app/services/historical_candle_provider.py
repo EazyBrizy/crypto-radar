@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Protocol
 
 from app.core.clickhouse_client import create_clickhouse_client
@@ -63,37 +64,52 @@ class ClickHouseHistoricalCandleProvider:
         if table is None:
             raise ValueError(f"unsupported_timeframe: {timeframe}")
 
+        tie_breaker = (
+            "tuple(created_at, open, high, low, close, "
+            "volume_base, volume_quote, trades_count)"
+        )
         query = f"""
             SELECT
                 exchange,
                 symbol,
                 ts,
-                open,
-                high,
-                low,
-                close,
-                volume_base,
-                trades_count
+                argMax(open, {tie_breaker}) AS open,
+                argMax(high, {tie_breaker}) AS high,
+                argMax(low, {tie_breaker}) AS low,
+                argMax(close, {tie_breaker}) AS close,
+                argMax(volume_base, {tie_breaker}) AS volume_base,
+                argMax(trades_count, {tie_breaker}) AS trades_count,
+                max(created_at) AS created_at
             FROM {table}
             WHERE exchange = {{exchange:String}}
               AND symbol = {{symbol:String}}
               AND ts >= {{start_at:DateTime64(3, 'UTC')}}
-              AND ts <= {{end_at:DateTime64(3, 'UTC')}}
+              AND ts <= {{closed_open_end_at:DateTime64(3, 'UTC')}}
+              AND toUnixTimestamp(ts) % {{timeframe_seconds:UInt32}} = 0
+            GROUP BY exchange, symbol, ts
             ORDER BY ts ASC
         """
         client = self._client()
         try:
+            closed_open_end_at = _closed_open_end_at(end_at, timeframe)
             result = client.query(
                 query,
                 parameters={
                     "exchange": exchange,
                     "symbol": symbol,
                     "start_at": _as_utc(start_at),
-                    "end_at": _as_utc(end_at),
+                    "closed_open_end_at": closed_open_end_at,
+                    "timeframe_seconds": TIMEFRAME_MS[timeframe] // 1000,
                 },
             )
             rows = result.named_results() if hasattr(result, "named_results") else []
-            return [_row_to_candle(row, timeframe) for row in rows]
+            rows = _dedupe_rows(rows)
+            end_ms = _datetime_to_ms(end_at)
+            return [
+                _row_to_candle(row, timeframe)
+                for row in rows
+                if _is_expected_closed_row(row, timeframe=timeframe, end_ms=end_ms)
+            ]
         finally:
             self._close_client(client)
 
@@ -153,6 +169,50 @@ def _row_to_candle(row: dict[str, Any], timeframe: str) -> OHLCVCandle:
         trades=int(row.get("trades_count") or 0),
         is_closed=True,
     )
+
+
+def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for row in rows:
+        key = (str(row["exchange"]), str(row["symbol"]), _datetime_to_ms(row["ts"]))
+        current = deduped.get(key)
+        if current is None or _row_tie_breaker(row) > _row_tie_breaker(current):
+            deduped[key] = row
+    return sorted(deduped.values(), key=lambda row: _datetime_to_ms(row["ts"]))
+
+
+def _row_tie_breaker(row: dict[str, Any]) -> tuple[int, Decimal, Decimal, Decimal, Decimal, Decimal, int]:
+    created_at = row.get("created_at")
+    created_at_ms = _datetime_to_ms(created_at) if isinstance(created_at, datetime) else 0
+    return (
+        created_at_ms,
+        _decimal_sort_value(row.get("open")),
+        _decimal_sort_value(row.get("high")),
+        _decimal_sort_value(row.get("low")),
+        _decimal_sort_value(row.get("close")),
+        _decimal_sort_value(row.get("volume_base")),
+        int(row.get("trades_count") or 0),
+    )
+
+
+def _decimal_sort_value(value: Any) -> Decimal:
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def _is_expected_closed_row(row: dict[str, Any], *, timeframe: str, end_ms: int) -> bool:
+    open_time = _datetime_to_ms(row["ts"])
+    timeframe_ms = TIMEFRAME_MS[timeframe]
+    close_time = open_time + timeframe_ms - 1
+    return open_time % timeframe_ms == 0 and close_time <= end_ms
+
+
+def _closed_open_end_at(end_at: datetime, timeframe: str) -> datetime:
+    timeframe_ms = TIMEFRAME_MS[timeframe]
+    return _as_utc(end_at) - timedelta(milliseconds=timeframe_ms - 1)
 
 
 def _datetime_to_ms(value: datetime) -> int:

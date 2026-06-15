@@ -452,6 +452,109 @@ class BacktestRunnerTest(unittest.TestCase):
         self.assertIn("bars_per_second", timings)
         self.assertGreaterEqual(timings["bars_per_second"], 0)
 
+    def test_backtest_progress_payload_includes_runtime_counters(self) -> None:
+        candles = _candles()
+        signal_candle = candles[3]
+        progress_events: list[dict[str, object]] = []
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=DualPendingStrategyEngine(signal_candle.close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        runner.run_detailed(
+            _request(candles),
+            mode="production_like",
+            on_progress=progress_events.append,
+            progress_interval_bars=1,
+        )
+
+        running_progress = [
+            event for event in progress_events if event.get("phase") == "running_scenario"
+        ]
+        self.assertTrue(running_progress)
+        first_running = running_progress[0]
+        self.assertEqual(first_running["bars_total"], len(candles) - 3)
+        active_progress = running_progress[1]
+        for key in (
+            "bars_pct",
+            "pending_entries_count",
+            "signals_seen",
+            "execution_candidates",
+            "pending_armed",
+            "entry_touched",
+            "touched",
+            "filled",
+            "closed",
+            "no_entry",
+            "not_selected",
+            "risk_rejections",
+            "execution_rejections",
+            "elapsed_ms",
+            "bars_per_second",
+            "eta_seconds",
+        ):
+            self.assertIn(key, active_progress)
+        self.assertEqual(active_progress["pending_entries_count"], 1)
+        self.assertEqual(active_progress["execution_candidates"], 1)
+        self.assertEqual(active_progress["not_selected"], 1)
+        self.assertEqual(active_progress["no_entry"], 1)
+
+    def test_final_backtest_progress_matches_signal_event_summary(self) -> None:
+        candles = _candles()
+        signal_candle = candles[3]
+        progress_events: list[dict[str, object]] = []
+        runner = ProductionBacktestRunner(
+            feature_engine=RecordingFeatureEngine(),  # type: ignore[arg-type]
+            strategy_engine=DualPendingStrategyEngine(signal_candle.close_time),  # type: ignore[arg-type]
+            historical_candle_provider=InMemoryHistoricalCandleProvider(candles),
+        )
+
+        result = runner.run_detailed(
+            _request(candles),
+            mode="production_like",
+            on_progress=progress_events.append,
+            progress_interval_bars=1,
+        )
+
+        final_progress = [
+            event for event in progress_events if event.get("phase") == "running_scenario"
+        ][-1]
+        self.assertEqual(
+            {
+                "signals_seen": result.signals_seen,
+                "execution_candidates": sum(1 for event in result.signal_events if event.execution_candidate),
+                "pending_armed": sum(
+                    1
+                    for event in result.signal_events
+                    if "pending_armed" in event.metadata.get("funnel_stages", [])
+                ),
+                "entry_touched": sum(1 for event in result.signal_events if event.entry_touched),
+                "touched": sum(1 for event in result.signal_events if event.entry_touched),
+                "filled": sum(1 for event in result.signal_events if event.filled),
+                "closed": sum(1 for event in result.signal_events if event.closed),
+                "no_entry": sum(1 for event in result.signal_events if event.no_entry),
+                "not_selected": sum(
+                    1 for event in result.signal_events if event.blocked_reason_code == "not_selected"
+                ),
+                "risk_rejections": sum(1 for event in result.signal_events if event.risk_rejected),
+                "execution_rejections": sum(1 for event in result.signal_events if event.execution_rejected),
+            },
+            {
+                "signals_seen": final_progress["signals_seen"],
+                "execution_candidates": final_progress["execution_candidates"],
+                "pending_armed": final_progress["pending_armed"],
+                "entry_touched": final_progress["entry_touched"],
+                "touched": final_progress["touched"],
+                "filled": final_progress["filled"],
+                "closed": final_progress["closed"],
+                "no_entry": final_progress["no_entry"],
+                "not_selected": final_progress["not_selected"],
+                "risk_rejections": final_progress["risk_rejections"],
+                "execution_rejections": final_progress["execution_rejections"],
+            },
+        )
+
     def test_production_like_opens_closed_candle_signal_on_next_candle_open(self) -> None:
         candles = _candles()
         signal_candle = candles[3]

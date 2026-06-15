@@ -111,6 +111,11 @@ class StrategyTestMatrixResult:
             if self.signal_events
             else sum(_int_from_summary(item, "no_entry") for item in self.scenario_summaries)
         )
+        not_selected = (
+            sum(1 for event in self.signal_events if event.blocked_reason_code == "not_selected")
+            if self.signal_events
+            else sum(_int_from_summary(item, "not_selected") for item in self.scenario_summaries)
+        )
         risk_rejections = (
             sum(1 for event in self.signal_events if event.risk_rejected)
             if self.signal_events
@@ -138,6 +143,7 @@ class StrategyTestMatrixResult:
             "wins": wins,
             "losses": losses,
             "no_entry": no_entry,
+            "not_selected": not_selected,
             "risk_rejections": risk_rejections,
             "execution_rejections": execution_rejections,
             "errors": list(self.errors),

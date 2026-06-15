@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { StrategyTestReport } from "./StrategyTestReport";
@@ -79,6 +79,56 @@ describe("StrategyTestReport", () => {
     expect(screen.getByText("Partial summary")).toBeInTheDocument();
     expect(screen.getByText("1 / 2")).toBeInTheDocument();
     expect(screen.queryByText("No report selected")).not.toBeInTheDocument();
+  });
+
+  it("renders active runtime progress counters", () => {
+    render(
+      <StrategyTestReport
+        report={null}
+        run={run({
+          last_heartbeat_at: "2026-06-02T00:01:00.000Z",
+          runtime_state: {
+            bars_per_second: 50,
+            bars_pct: 25,
+            bars_processed: 250,
+            bars_total: 1000,
+            closed: 1,
+            current_exchange: "bybit",
+            current_strategy: "trend_pullback_continuation",
+            current_symbol: "BTCUSDT",
+            current_timeframe: "15m",
+            elapsed_ms: 5000,
+            entry_touched: 3,
+            eta_seconds: 15,
+            execution_candidates: 12,
+            filled: 2,
+            no_entry: 5,
+            not_selected: 4,
+            pending_armed: 4,
+            pending_entries_count: 1,
+            phase: "running_scenario",
+            scenario_completed: 0,
+            scenario_total: 16,
+            signals_seen: 20,
+            touched: 3,
+            trades_count: 0
+          },
+          status: "running",
+          summary: {},
+          test_type: "historical_backtest"
+        })}
+      />
+    );
+
+    const progress = screen.getByLabelText("Active run progress");
+    expect(within(progress).getByText("250 / 1000 (25%)")).toBeInTheDocument();
+    expect(within(progress).getByText("50 bars/s")).toBeInTheDocument();
+    expect(within(progress).getByText("15s")).toBeInTheDocument();
+    expect(within(progress).getByText("Execution candidates")).toBeInTheDocument();
+    expect(within(progress).getByText("Pending armed")).toBeInTheDocument();
+    expect(within(progress).getByText("Entry touched")).toBeInTheDocument();
+    expect(within(progress).getByText("Not selected")).toBeInTheDocument();
+    expect(within(progress).getByText("Pending entries")).toBeInTheDocument();
   });
 
   it("renders signal funnel stages and no-entry signals", () => {

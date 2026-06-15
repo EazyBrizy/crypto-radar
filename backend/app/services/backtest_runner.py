@@ -161,6 +161,12 @@ class _BacktestState:
     closed_positions: list[_SimulatedPosition] = field(default_factory=list)
     equity_curve: list[dict[str, Any]] = field(default_factory=list)
     signals_seen: int = 0
+    execution_candidates: int = 0
+    pending_armed: int = 0
+    entry_touched: int = 0
+    filled: int = 0
+    no_entry: int = 0
+    not_selected: int = 0
     risk_rejections: int = 0
     execution_rejections: int = 0
     trade_plan_completion_warnings: list[str] = field(default_factory=list)
@@ -329,6 +335,16 @@ class BacktestRunCancelled(Exception):
     """Raised when a backtest cancellation predicate becomes true."""
 
 
+def _append_signal_event(state: _BacktestState, event: BacktestSignalEvent) -> None:
+    state.signal_events.append(event)
+    if event.filled:
+        state.filled += 1
+    if event.no_entry:
+        state.no_entry += 1
+    if event.blocked_reason_code == "not_selected":
+        state.not_selected += 1
+
+
 class BacktestExecutionSimulator:
     def __init__(self, execution_engine: VirtualExecutionEngine | None = None) -> None:
         self._execution_engine = execution_engine or VirtualExecutionEngine()
@@ -481,6 +497,7 @@ class ProductionBacktestRunner:
             trades_count=0,
             risk_rejections=0,
             execution_rejections=0,
+            started_at=total_started,
         )
         candle_cache_key = _candle_cache_key(request)
         candle_load_started = time.perf_counter()
@@ -549,8 +566,17 @@ class ProductionBacktestRunner:
                     bars_total=bars_total,
                     signals_seen=state.signals_seen,
                     trades_count=len(state.closed_positions) + len(state.open_positions),
+                    pending_entries_count=len(pending_entries),
+                    execution_candidates=state.execution_candidates,
+                    pending_armed=state.pending_armed,
+                    entry_touched=state.entry_touched,
+                    filled=state.filled,
+                    closed=len(state.closed_positions),
+                    no_entry=state.no_entry,
+                    not_selected=state.not_selected,
                     risk_rejections=state.risk_rejections,
                     execution_rejections=state.execution_rejections,
+                    started_at=total_started,
                 )
             candle = candles[index]
             if pending_entries:
@@ -590,12 +616,13 @@ class ProductionBacktestRunner:
                         )
                     ):
                         state.risk_rejections += 1
-                        state.signal_events.append(
+                        _append_signal_event(
+                            state,
                             _mark_signal_event_rejected(
                                 pending.signal_event,
                                 risk_rejected=True,
                                 reason_code="position_constraints_blocked",
-                            )
+                            ),
                         )
                         continue
                     self._record_open_position_attempt(
@@ -670,6 +697,7 @@ class ProductionBacktestRunner:
                         execution_candidate=True,
                         funnel_stage="execution_candidate",
                     )
+                    state.execution_candidates += 1
                     if _should_arm_historical_pending(signal, execution_policy):
                         signal_event = _mark_signal_event_armable(signal_event)
                     if not _can_open_position_for_signal(
@@ -684,12 +712,13 @@ class ProductionBacktestRunner:
                         current_index=index,
                     ):
                         state.risk_rejections += 1
-                        state.signal_events.append(
+                        _append_signal_event(
+                            state,
                             _mark_signal_event_rejected(
                                 signal_event,
                                 risk_rejected=True,
                                 reason_code="position_constraints_blocked",
-                            )
+                            ),
                         )
                         continue
                     previous_risk_rejections = state.risk_rejections
@@ -697,6 +726,7 @@ class ProductionBacktestRunner:
                     previous_execution_policy_no_entries = len(state.execution_policy_no_entries)
                     previous_execution_policy_rejections = len(state.execution_policy_rejections)
                     if _should_arm_historical_pending(signal, execution_policy):
+                        state.pending_armed += 1
                         pending_entries.append(
                             _PendingSignalEntry(
                                 signal=signal,
@@ -744,8 +774,9 @@ class ProductionBacktestRunner:
                     signal_key = _strategy_signal_key(request, signal)
                     if signal_key in attempted_signal_keys:
                         continue
-                    state.signal_events.append(
-                        _mark_signal_event_not_selected(base_signal_events[signal_key])
+                    _append_signal_event(
+                        state,
+                        _mark_signal_event_not_selected(base_signal_events[signal_key]),
                     )
 
             state.equity_curve.append(_equity_point(candle, _current_equity(state), float(request.initial_capital)))
@@ -756,7 +787,7 @@ class ProductionBacktestRunner:
                 if pending.wait_for_entry_zone
                 else "no_next_candle_for_entry"
             )
-            state.signal_events.append(_mark_signal_event_no_entry(pending.signal_event, reason_code))
+            _append_signal_event(state, _mark_signal_event_no_entry(pending.signal_event, reason_code))
         pending_entries = []
 
         if state.open_positions:
@@ -773,6 +804,8 @@ class ProductionBacktestRunner:
             )
 
         _raise_if_cancelled(is_cancelled)
+        state.signal_events = _closed_signal_events(state.signal_events, state.closed_positions)
+        timings.total_ms = _elapsed_ms(total_started)
         _emit_backtest_progress(
             on_progress,
             phase="running_scenario",
@@ -780,12 +813,19 @@ class ProductionBacktestRunner:
             bars_total=bars_total,
             signals_seen=state.signals_seen,
             trades_count=len(state.closed_positions),
+            pending_entries_count=0,
+            execution_candidates=state.execution_candidates,
+            pending_armed=state.pending_armed,
+            entry_touched=state.entry_touched,
+            filled=state.filled,
+            closed=len(state.closed_positions),
+            no_entry=state.no_entry,
+            not_selected=state.not_selected,
             risk_rejections=state.risk_rejections,
             execution_rejections=state.execution_rejections,
+            started_at=total_started,
         )
-        state.signal_events = _closed_signal_events(state.signal_events, state.closed_positions)
         metrics = _metrics_from_state(state)
-        timings.total_ms = _elapsed_ms(total_started)
         assumptions = _assumptions_with_runtime_diagnostics(assumptions, state, timings=timings)
         final_equity = state.cash_equity
         initial_capital = float(request.initial_capital)
@@ -836,22 +876,24 @@ class ProductionBacktestRunner:
         timings: _BacktestTimingDiagnostics,
     ) -> bool:
         if _historical_pending_expired(pending, candle, index):
-            state.signal_events.append(
+            _append_signal_event(
+                state,
                 _mark_signal_event_no_entry(
                     pending.signal_event,
                     "pending_entry_expired_before_touch",
-                )
+                ),
             )
             return True
 
         touched = _entry_zone_touched(pending.signal, candle)
         if not touched:
             if _pending_invalidated_before_touch(pending.signal, candle):
-                state.signal_events.append(
+                _append_signal_event(
+                    state,
                     _mark_signal_event_no_entry(
                         pending.signal_event,
                         "pending_entry_invalidated_before_touch",
-                    )
+                    ),
                 )
                 return True
             return False
@@ -860,6 +902,7 @@ class ProductionBacktestRunner:
             pending.signal_event,
             candle=candle,
         )
+        state.entry_touched += 1
         if (
             len(state.open_positions) >= constraints.max_concurrent_positions
             or not _can_open_position_for_signal(
@@ -875,12 +918,13 @@ class ProductionBacktestRunner:
             )
         ):
             state.risk_rejections += 1
-            state.signal_events.append(
+            _append_signal_event(
+                state,
                 _mark_signal_event_rejected(
                     touched_event,
                     risk_rejected=True,
                     reason_code="position_constraints_blocked",
-                )
+                ),
             )
             return True
 
@@ -968,17 +1012,21 @@ class ProductionBacktestRunner:
         )
         if position is not None:
             state.open_positions.append(position)
-            state.signal_events.append(_mark_signal_event_filled(signal_event, position))
+            if not signal_event.entry_touched:
+                state.entry_touched += 1
+            _append_signal_event(state, _mark_signal_event_filled(signal_event, position))
         elif state.risk_rejections > previous_risk_rejections:
-            state.signal_events.append(
+            _append_signal_event(
+                state,
                 _mark_signal_event_rejected(
                     signal_event,
                     risk_rejected=True,
                     reason_code=_last_reason_code(state.risk_gate_blockers, "risk_gate_rejected"),
-                )
+                ),
             )
         elif state.execution_rejections > previous_execution_rejections:
-            state.signal_events.append(
+            _append_signal_event(
+                state,
                 _mark_signal_event_rejected(
                     signal_event,
                     execution_rejected=True,
@@ -987,17 +1035,18 @@ class ProductionBacktestRunner:
                         if len(state.execution_policy_rejections) > previous_execution_policy_rejections
                         else "virtual_execution_rejected"
                     ),
-                )
+                ),
             )
         elif len(state.execution_policy_no_entries) > previous_execution_policy_no_entries:
-            state.signal_events.append(
+            _append_signal_event(
+                state,
                 _mark_signal_event_no_entry(
                     signal_event,
                     _last_reason_code(state.execution_policy_no_entries, "not_filled"),
-                )
+                ),
             )
         else:
-            state.signal_events.append(_mark_signal_event_no_entry(signal_event, "not_filled"))
+            _append_signal_event(state, _mark_signal_event_no_entry(signal_event, "not_filled"))
         return position
 
     def _try_open_position(
@@ -3214,18 +3263,47 @@ def _emit_backtest_progress(
     trades_count: int,
     risk_rejections: int,
     execution_rejections: int,
+    pending_entries_count: int = 0,
+    execution_candidates: int = 0,
+    pending_armed: int = 0,
+    entry_touched: int = 0,
+    filled: int = 0,
+    closed: int = 0,
+    no_entry: int = 0,
+    not_selected: int = 0,
+    started_at: float | None = None,
 ) -> None:
     if on_progress is None:
         return
+    elapsed_ms = _round_ms(_elapsed_ms(started_at)) if started_at is not None else 0.0
+    elapsed_seconds = elapsed_ms / 1000 if elapsed_ms > 0 else 0.0
+    bars_per_second = bars_processed / elapsed_seconds if elapsed_seconds > 0 else 0.0
+    remaining_bars = max(0, bars_total - bars_processed)
+    eta_seconds = round(remaining_bars / bars_per_second, 3) if bars_per_second > 0 else None
+    bars_pct = round((bars_processed / bars_total) * 100, 2) if bars_total > 0 else 0.0
     on_progress(
         {
             "phase": phase,
             "bars_processed": bars_processed,
             "bars_total": bars_total,
+            "bars_pct": bars_pct,
+            "pending_entries_count": pending_entries_count,
             "signals_seen": signals_seen,
+            "signals_count": signals_seen,
+            "execution_candidates": execution_candidates,
+            "pending_armed": pending_armed,
+            "entry_touched": entry_touched,
+            "touched": entry_touched,
+            "filled": filled,
+            "closed": closed,
+            "no_entry": no_entry,
+            "not_selected": not_selected,
             "trades_count": trades_count,
             "risk_rejections": risk_rejections,
             "execution_rejections": execution_rejections,
+            "elapsed_ms": elapsed_ms,
+            "bars_per_second": round(bars_per_second, 8),
+            "eta_seconds": eta_seconds,
         }
     )
 

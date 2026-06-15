@@ -524,6 +524,9 @@ def _scenario_runtime_state(
     if progress:
         state["bars_processed"] = _int_value(progress.get("bars_processed"))
         state["bars_total"] = _int_value(progress.get("bars_total"))
+        state["pending_entries_count"] = _int_value(progress.get("pending_entries_count"))
+        for key in ("bars_pct", "elapsed_ms", "bars_per_second", "eta_seconds"):
+            state[key] = _float_value(progress.get(key), default=None)
     return state
 
 
@@ -579,6 +582,7 @@ def _runtime_state_base(
         "filled": _summary_int(partial_summary, "filled", 0),
         "closed": _summary_int(partial_summary, "closed", 0),
         "no_entry": _summary_int(partial_summary, "no_entry", 0),
+        "not_selected": _summary_int(partial_summary, "not_selected", 0),
         "trades_count": _summary_int(partial_summary, "trades_count", 0),
         "risk_rejections": _summary_int(partial_summary, "risk_rejections", 0),
         "execution_rejections": _summary_int(partial_summary, "execution_rejections", 0),
@@ -603,6 +607,7 @@ def _partial_summary_with_progress(
         "filled",
         "closed",
         "no_entry",
+        "not_selected",
         "trades_count",
         "risk_rejections",
         "execution_rejections",
@@ -631,6 +636,7 @@ def _empty_partial_summary(scenario_total: int) -> dict[str, Any]:
         "filled": 0,
         "closed": 0,
         "no_entry": 0,
+        "not_selected": 0,
         "risk_rejections": 0,
         "execution_rejections": 0,
         "errors": [],
@@ -654,6 +660,7 @@ def _normalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "filled",
         "closed",
         "no_entry",
+        "not_selected",
         "risk_rejections",
         "execution_rejections",
     ):
@@ -702,6 +709,15 @@ def _summary_int(summary: dict[str, Any], key: str, default: int = 0) -> int:
 def _int_value(value: object, *, default: int = 0) -> int:
     try:
         return int(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_value(value: object, *, default: float | None = 0.0) -> float | None:
+    if value is None:
+        return default
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return default
 

@@ -175,6 +175,9 @@ function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
   const phase = runtimeText(run, "phase") ?? run.status;
   const scenarioCompleted = runtimeNumber(run, "scenario_completed") ?? summaryNumber(run, "completed_scenarios") ?? 0;
   const scenarioTotal = runtimeNumber(run, "scenario_total") ?? requestedScenarioCount(run) ?? summaryNumber(run, "scenario_count") ?? 0;
+  const barsProcessed = runtimeNumber(run, "bars_processed");
+  const barsTotal = runtimeNumber(run, "bars_total");
+  const barsPct = runtimeNumber(run, "bars_pct");
   const currentPair = currentPairLabel(run);
   const lastError = runtimeText(run, "last_error") ?? run.error;
   return (
@@ -188,7 +191,18 @@ function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
           {summaryItem("Strategy", runtimeText(run, "current_strategy") ?? "-")}
           {summaryItem("Pair", currentPair)}
           {summaryItem("Timeframe", runtimeText(run, "current_timeframe") ?? "-")}
+          {summaryItem("Bars", formatBarsProgress(barsProcessed, barsTotal, barsPct))}
+          {summaryItem("Throughput", formatBarsPerSecond(runtimeNumber(run, "bars_per_second")))}
+          {summaryItem("ETA", formatSeconds(runtimeNumber(run, "eta_seconds")))}
           {summaryItem("Signals", runtimeNumber(run, "signals_seen") ?? summaryNumber(run, "signals_seen") ?? 0)}
+          {summaryItem("Execution candidates", runtimeNumber(run, "execution_candidates") ?? summaryNumber(run, "execution_candidates") ?? 0)}
+          {summaryItem("Pending armed", runtimeNumber(run, "pending_armed") ?? summaryNumber(run, "pending_armed") ?? 0)}
+          {summaryItem("Entry touched", runtimeNumber(run, "entry_touched") ?? runtimeNumber(run, "touched") ?? summaryNumber(run, "entry_touched") ?? 0)}
+          {summaryItem("Filled", runtimeNumber(run, "filled") ?? summaryNumber(run, "filled") ?? 0)}
+          {summaryItem("Closed", runtimeNumber(run, "closed") ?? summaryNumber(run, "closed") ?? 0)}
+          {summaryItem("No entry", runtimeNumber(run, "no_entry") ?? summaryNumber(run, "no_entry") ?? 0)}
+          {summaryItem("Not selected", runtimeNumber(run, "not_selected") ?? summaryNumber(run, "not_selected") ?? 0)}
+          {summaryItem("Pending entries", runtimeNumber(run, "pending_entries_count") ?? 0)}
           {summaryItem("Trades", runtimeNumber(run, "trades_count") ?? summaryNumber(run, "trades_count") ?? 0)}
           {summaryItem("Risk rejections", runtimeNumber(run, "risk_rejections") ?? summaryNumber(run, "risk_rejections") ?? 0)}
           {summaryItem("Execution rejections", runtimeNumber(run, "execution_rejections") ?? summaryNumber(run, "execution_rejections") ?? 0)}
@@ -548,6 +562,38 @@ function heartbeatAgeLabel(value: string | null): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
+}
+
+function formatBarsProgress(processed: number | null, total: number | null, pct: number | null): string {
+  if (processed == null && total == null) return "-";
+  const processedValue = processed ?? 0;
+  const totalValue = total ?? 0;
+  const computedPct = pct ?? (totalValue > 0 ? (processedValue / totalValue) * 100 : null);
+  const percent = computedPct == null ? null : formatNumber(computedPct);
+  return percent == null ? `${processedValue} / ${totalValue}` : `${processedValue} / ${totalValue} (${percent}%)`;
+}
+
+function formatBarsPerSecond(value: number | null): string {
+  if (value == null) return "-";
+  return `${formatNumber(value)} bars/s`;
+}
+
+function formatSeconds(value: number | null): string {
+  if (value == null) return "-";
+  const seconds = Math.max(0, Math.round(value));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  const rounded = Math.round(value * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/u, "").replace(/\.$/u, "");
 }
 
 function columnLabel(column: string): string {

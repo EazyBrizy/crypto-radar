@@ -355,17 +355,46 @@ describe("StrategyTestingPanel", () => {
     });
   });
 
+  it("explains that an active historical scenario can take a while", () => {
+    mocks.activeRun = activeRunState({
+      active_run: strategyTestRun({
+        run_id: "67676767-6767-4767-8767-676767676767",
+        status: "running",
+        test_type: "historical_backtest"
+      }),
+      can_run: false,
+      is_stale: false
+    });
+
+    renderPanel();
+
+    const notice = screen.getByLabelText("Active strategy test run");
+    expect(within(notice).getByText("Run is receiving heartbeats. Large historical scenarios can stay on the same scenario for a while.")).toBeInTheDocument();
+  });
+
   it("renders selected active run progress instead of an empty report state", async () => {
     const user = userEvent.setup();
     const activeRun = strategyTestRun({
       run_id: "77777777-7777-4777-8777-777777777777",
       runtime_state: {
+        bars_per_second: 40,
+        bars_pct: 50,
+        bars_processed: 500,
+        bars_total: 1000,
         current_exchange: "bybit",
         current_strategy: "trend_pullback_continuation",
         current_symbol: "BTCUSDT",
         current_timeframe: "15m",
+        entry_touched: 3,
+        eta_seconds: 12,
+        execution_candidates: 8,
         execution_rejections: 1,
+        filled: 2,
         last_progress_at: "2026-06-02T00:01:30.000Z",
+        no_entry: 4,
+        not_selected: 3,
+        pending_armed: 1,
+        pending_entries_count: 2,
         phase: "running_scenario",
         risk_rejections: 2,
         scenario_completed: 2,
@@ -394,6 +423,11 @@ describe("StrategyTestingPanel", () => {
     expect(within(progress).getByText("trend_pullback_continuation")).toBeInTheDocument();
     expect(within(progress).getByText("bybit:BTCUSDT")).toBeInTheDocument();
     expect(within(progress).getByText("15m")).toBeInTheDocument();
+    expect(within(progress).getByText("500 / 1000 (50%)")).toBeInTheDocument();
+    expect(within(progress).getByText("40 bars/s")).toBeInTheDocument();
+    expect(within(progress).getByText("12s")).toBeInTheDocument();
+    expect(within(progress).getByText("Not selected")).toBeInTheDocument();
+    expect(within(progress).getByText("Pending entries")).toBeInTheDocument();
     expect(screen.queryByText("No report selected")).not.toBeInTheDocument();
     expect(screen.queryByText("No summary metrics")).not.toBeInTheDocument();
   });

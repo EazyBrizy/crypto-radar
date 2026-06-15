@@ -567,6 +567,9 @@ function ActiveRunNotice({
       {activeRunState?.disabled_reason ? (
         <p className="strategy-test-active-run-reason">{activeRunState.disabled_reason}</p>
       ) : null}
+      {run.test_type === "historical_backtest" && !activeRunState?.is_stale ? (
+        <p className="strategy-test-active-run-reason">Run is receiving heartbeats. Large historical scenarios can stay on the same scenario for a while.</p>
+      ) : null}
       <dl className="strategy-test-active-run-meta">
         <div>
           <dt>Run ID</dt>

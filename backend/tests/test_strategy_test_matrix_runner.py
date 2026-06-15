@@ -421,6 +421,37 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         self.assertEqual(scenario_updates[-1]["signals_seen"], 3)
         self.assertIsNotNone(scenario_updates[-1]["last_progress_at"])
 
+    def test_service_merges_absolute_active_progress_without_double_counting(self) -> None:
+        run_store = _EphemeralRunStore()
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            matrix_runner=_RepeatedProgressMatrixRunner(),
+        )
+
+        response = service.create_run(_matrix_request(strategies=["done", "active"]))
+
+        self.assertEqual(response.status, "completed")
+        progress_updates = [
+            update for update in run_store.runtime_updates if update.get("bars_processed") == 10
+        ]
+        self.assertEqual(len(progress_updates), 2)
+        for update in progress_updates:
+            self.assertEqual(update["signals_seen"], 8)
+            self.assertEqual(update["execution_candidates"], 6)
+            self.assertEqual(update["pending_armed"], 3)
+            self.assertEqual(update["entry_touched"], 2)
+            self.assertEqual(update["filled"], 1)
+            self.assertEqual(update["closed"], 1)
+            self.assertEqual(update["no_entry"], 3)
+            self.assertEqual(update["not_selected"], 2)
+            self.assertEqual(update["pending_entries_count"], 4)
+            partial = update["partial_summary"]
+            self.assertEqual(partial["signals_seen"], 8)
+            self.assertEqual(partial["execution_candidates"], 6)
+            self.assertEqual(partial["no_entry"], 3)
+            self.assertEqual(partial["not_selected"], 2)
+
     def test_cancel_running_run_moves_to_stopping_then_runner_marks_cancelled(self) -> None:
         run_store = _EphemeralRunStore()
         service = StrategyTestingService(
@@ -607,6 +638,85 @@ class _CallbackMatrixRunner:
             completed_scenarios=completed,
             failed_scenarios=0,
             scenario_summaries=summaries,
+        )
+
+
+class _RepeatedProgressMatrixRunner:
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+        on_scenario_started: Any = None,
+        on_scenario_completed: Any = None,
+        on_scenario_failed: Any = None,
+        on_scenario_progress: Any = None,
+        is_cancelled: Any = None,
+    ) -> StrategyTestMatrixResult:
+        _ = user_uuid, on_scenario_started, on_scenario_completed, on_scenario_failed, is_cancelled
+        completed_summary = {
+            "scenario_count": len(request.strategies),
+            "completed_scenarios": 1,
+            "failed_scenarios": 0,
+            "trades_count": 1,
+            "signals_seen": 3,
+            "signals_count": 3,
+            "execution_candidates": 2,
+            "pending_armed": 1,
+            "touched": 1,
+            "entry_touched": 1,
+            "filled": 1,
+            "closed": 1,
+            "no_entry": 1,
+            "not_selected": 1,
+            "risk_rejections": 0,
+            "execution_rejections": 0,
+            "errors": [],
+            "scenarios": [],
+        }
+        progress = {
+            "phase": "running_scenario",
+            "bars_processed": 10,
+            "bars_total": 40,
+            "bars_pct": 25.0,
+            "pending_entries_count": 4,
+            "signals_seen": 5,
+            "signals_count": 5,
+            "execution_candidates": 4,
+            "pending_armed": 2,
+            "touched": 1,
+            "entry_touched": 1,
+            "filled": 0,
+            "closed": 0,
+            "no_entry": 2,
+            "not_selected": 1,
+            "trades_count": 0,
+            "risk_rejections": 0,
+            "execution_rejections": 0,
+            "elapsed_ms": 1000.0,
+            "bars_per_second": 10.0,
+            "eta_seconds": 3.0,
+        }
+        if on_scenario_progress is not None:
+            context = type(
+                "ScenarioContext",
+                (),
+                {
+                    "strategy": request.strategies[-1],
+                    "exchange": request.pairs[0].exchange,
+                    "symbol": request.pairs[0].symbol,
+                    "timeframe": request.timeframes[0],
+                },
+            )()
+            on_scenario_progress(context, progress, dict(completed_summary))
+            on_scenario_progress(context, progress, dict(completed_summary))
+        return StrategyTestMatrixResult(
+            run_id=run_id,
+            scenario_count=len(request.strategies),
+            completed_scenarios=1,
+            failed_scenarios=0,
+            scenario_summaries=[completed_summary],
         )
 
 

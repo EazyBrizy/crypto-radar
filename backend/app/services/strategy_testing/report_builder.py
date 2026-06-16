@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, Sequence, cast
 from uuid import UUID
 
-from app.services.strategy_testing.metrics import MetricRegistry, MetricResult, build_base_metric_registry
+from app.services.strategy_testing.metrics import (
+    MetricRegistry,
+    MetricResult,
+    build_base_metric_registry,
+    metric_results_from_rows,
+)
 from app.services.strategy_testing.schemas import (
     StrategyTestCandidateAdjustment,
     StrategyTestFunnelResponse,
@@ -16,7 +21,9 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunDetailResponse,
     StrategyTestRunStatus,
     StrategyTestSignalEvent,
+    StrategyTestSignalEventsSummary,
     StrategyTestTrade,
+    StrategyTestTradesSummary,
 )
 
 
@@ -106,6 +113,7 @@ REJECTION_CODES = (
     "risk_rejection_rate",
     "execution_rejection_rate",
 )
+REPORT_SAMPLE_LIMIT = 200
 
 
 class ReportRunStore(Protocol):
@@ -126,6 +134,29 @@ class ReportAnalyticsStore(Protocol):
         ...
 
     def list_signal_events(self, run_id: UUID, limit: int = 1000, offset: int = 0) -> list[StrategyTestSignalEvent]:
+        ...
+
+    def summarize_signal_events(self, run_id: UUID) -> StrategyTestSignalEventsSummary:
+        ...
+
+    def summarize_trades(self, run_id: UUID) -> StrategyTestTradesSummary:
+        ...
+
+    def summarize_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
+        ...
+
+    def list_signal_event_samples(
+        self,
+        run_id: UUID,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[StrategyTestSignalEvent]:
+        ...
+
+    def list_trade_samples(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
+        ...
+
+    def list_metric_rows(self, run_id: UUID) -> list[StrategyTestMetricRow]:
         ...
 
 
@@ -155,22 +186,48 @@ class StrategyTestReportBuilder:
     def _build_report(self, run_detail: StrategyTestRunDetailResponse) -> StrategyTestReport:
         run = run_detail.run
         analytics_warnings: list[str] = []
-        trades = _dedupe_trades(_list_trades_or_empty(self._analytics_store, run.run_id, analytics_warnings))
-        signal_events = _dedupe_signal_events(
-            _list_signal_events_or_empty(self._analytics_store, run.run_id, analytics_warnings)
-        )
-        aggregate_funnel = _aggregate_signal_funnel_or_none(
+        signal_summary = _summarize_signal_events_or_none(
             self._analytics_store,
             run.run_id,
             analytics_warnings,
         )
-        source_summary = _run_summary_source(run_detail)
-        metric_results = build_report_metric_results(
-            trades,
-            signal_events=signal_events,
-            registry=self._metric_registry,
+        trade_summary = _summarize_trades_or_none(self._analytics_store, run.run_id, analytics_warnings)
+        aggregate_funnel = _summarize_funnel_or_none(self._analytics_store, run.run_id, analytics_warnings)
+        trades = _dedupe_trades(_list_trade_samples_or_empty(self._analytics_store, run.run_id, analytics_warnings))
+        signal_events = _dedupe_signal_events(
+            _list_signal_event_samples_or_empty(self._analytics_store, run.run_id, analytics_warnings)
         )
-        if not trades and not signal_events and source_summary:
+        source_summary = _run_summary_source(run_detail)
+        source_summary = _merge_aggregate_summary_source(
+            source_summary,
+            signal_summary=signal_summary,
+            trade_summary=trade_summary,
+            funnel=aggregate_funnel,
+        )
+        metric_rows = _list_metric_rows_or_empty(
+            self._analytics_store,
+            run.run_id,
+            analytics_warnings,
+        )
+        has_aggregate_summary = signal_summary is not None or trade_summary is not None or aggregate_funnel is not None
+        if metric_rows and run.status == "completed":
+            metric_results = metric_results_from_rows(metric_rows, registry=self._metric_registry)
+            metric_results = _merge_metric_results(
+                metric_results,
+                _summary_metric_results(source_summary),
+            )
+        else:
+            metric_results = build_report_metric_results(
+                trades,
+                signal_events=signal_events,
+                registry=self._metric_registry,
+            )
+            if has_aggregate_summary:
+                metric_results = _merge_metric_results(
+                    _summary_metric_results(source_summary),
+                    metric_results,
+                )
+        if not metric_results and source_summary:
             metric_results = _merge_metric_results(
                 _summary_metric_results(source_summary),
                 metric_results,
@@ -425,6 +482,23 @@ def _list_trades_or_empty(
         return []
 
 
+def _list_trade_samples_or_empty(
+    analytics_store: ReportAnalyticsStore,
+    run_id: UUID,
+    warnings: list[str],
+) -> list[StrategyTestTrade]:
+    list_samples = getattr(analytics_store, "list_trade_samples", None)
+    if callable(list_samples):
+        try:
+            return list_samples(run_id, limit=REPORT_SAMPLE_LIMIT, offset=0)
+        except NotImplementedError:
+            pass
+        except Exception as exc:
+            warnings.append(f"analytics_trade_samples_unavailable:{exc}")
+            return []
+    return _list_trades_or_empty(analytics_store, run_id, warnings)
+
+
 def _list_signal_events_or_empty(
     analytics_store: ReportAnalyticsStore,
     run_id: UUID,
@@ -440,19 +514,96 @@ def _list_signal_events_or_empty(
         return []
 
 
-def _aggregate_signal_funnel_or_none(
+def _list_signal_event_samples_or_empty(
+    analytics_store: ReportAnalyticsStore,
+    run_id: UUID,
+    warnings: list[str],
+) -> list[StrategyTestSignalEvent]:
+    list_samples = getattr(analytics_store, "list_signal_event_samples", None)
+    if callable(list_samples):
+        try:
+            return list_samples(run_id, limit=REPORT_SAMPLE_LIMIT, offset=0)
+        except NotImplementedError:
+            pass
+        except Exception as exc:
+            warnings.append(f"analytics_signal_event_samples_unavailable:{exc}")
+            return []
+    return _list_signal_events_or_empty(analytics_store, run_id, warnings)
+
+
+def _summarize_signal_events_or_none(
+    analytics_store: ReportAnalyticsStore,
+    run_id: UUID,
+    warnings: list[str],
+) -> StrategyTestSignalEventsSummary | None:
+    summarize = getattr(analytics_store, "summarize_signal_events", None)
+    if not callable(summarize):
+        return None
+    try:
+        return summarize(run_id)
+    except NotImplementedError:
+        return None
+    except Exception as exc:
+        warnings.append(f"analytics_signal_summary_unavailable:{exc}")
+        return None
+
+
+def _summarize_trades_or_none(
+    analytics_store: ReportAnalyticsStore,
+    run_id: UUID,
+    warnings: list[str],
+) -> StrategyTestTradesSummary | None:
+    summarize = getattr(analytics_store, "summarize_trades", None)
+    if not callable(summarize):
+        return None
+    try:
+        return summarize(run_id)
+    except NotImplementedError:
+        return None
+    except Exception as exc:
+        warnings.append(f"analytics_trade_summary_unavailable:{exc}")
+        return None
+
+
+def _summarize_funnel_or_none(
     analytics_store: ReportAnalyticsStore,
     run_id: UUID,
     warnings: list[str],
 ) -> StrategyTestFunnelResponse | None:
+    summarize_funnel = getattr(analytics_store, "summarize_funnel", None)
+    if callable(summarize_funnel):
+        try:
+            return summarize_funnel(run_id)
+        except NotImplementedError:
+            pass
+        except Exception as exc:
+            warnings.append(f"analytics_signal_funnel_unavailable:{exc}")
+            return None
     aggregate_funnel = getattr(analytics_store, "aggregate_signal_funnel", None)
-    if not callable(aggregate_funnel):
-        return None
+    if callable(aggregate_funnel):
+        try:
+            return aggregate_funnel(run_id)
+        except Exception as exc:
+            warnings.append(f"analytics_signal_funnel_unavailable:{exc}")
+            return None
+    return None
+
+
+def _list_metric_rows_or_empty(
+    analytics_store: ReportAnalyticsStore,
+    run_id: UUID,
+    warnings: list[str],
+) -> list[StrategyTestMetricRow]:
+    list_metric_rows = getattr(analytics_store, "list_metric_rows", None)
+    if not callable(list_metric_rows):
+        return []
     try:
-        return aggregate_funnel(run_id)
+        return list_metric_rows(run_id)
+    except NotImplementedError:
+        return []
     except Exception as exc:
-        warnings.append(f"analytics_signal_funnel_unavailable:{exc}")
-        return None
+        warnings.append(f"analytics_metric_rows_unavailable:{exc}")
+        return []
 
 
 def _dedupe_trades(trades: Sequence[StrategyTestTrade]) -> list[StrategyTestTrade]:
@@ -707,7 +858,7 @@ def _build_summary(
         "no_entry_rate": funnel.no_entry_rate,
         "false_signal_rate": funnel.false_signal_rate,
         "signal_funnel": funnel.model_dump(mode="json"),
-        "total_trades": len(trades),
+        "total_trades": _summary_int(source, "total_trades", len(trades)),
         "trades_count": trades_count if trades_count is not None else _summary_int(source, "trades_count", len(trades)),
         "winrate": _metric_value(all_metrics, "winrate"),
         "expectancy_r": _metric_value(all_metrics, "expectancy_r"),
@@ -1330,6 +1481,62 @@ def _run_summary_source(run_detail: StrategyTestRunDetailResponse) -> dict[str, 
     source: dict[str, Any] = dict(runtime_summary) if isinstance(runtime_summary, dict) else {}
     source.update(run_detail.run.summary)
     return _normalize_summary_source(source)
+
+
+def _merge_aggregate_summary_source(
+    source: dict[str, Any],
+    *,
+    signal_summary: StrategyTestSignalEventsSummary | None,
+    trade_summary: StrategyTestTradesSummary | None,
+    funnel: StrategyTestFunnelResponse | None,
+) -> dict[str, Any]:
+    merged = dict(source)
+    if signal_summary is not None:
+        merged.update(
+            {
+                "signals_seen": signal_summary.signals_count,
+                "signals_count": signal_summary.signals_count,
+                "execution_candidates": signal_summary.execution_candidates,
+                "entry_touched": signal_summary.entry_touched,
+                "touched": signal_summary.entry_touched,
+                "filled": signal_summary.filled,
+                "closed": signal_summary.closed,
+                "wins": signal_summary.wins,
+                "losses": signal_summary.losses,
+                "no_entry": signal_summary.no_entry,
+                "risk_rejections": signal_summary.risk_rejected,
+                "execution_rejections": signal_summary.execution_rejected,
+                "false_signals": signal_summary.false_signals,
+                "signal_event_groups": list(signal_summary.groups),
+            }
+        )
+    if trade_summary is not None:
+        merged.update(
+            {
+                "trades_count": trade_summary.trades_count,
+                "total_trades": trade_summary.trades_count,
+                "executed_trades_count": trade_summary.executed_trades_count,
+                "trade_wins": trade_summary.wins,
+                "trade_losses": trade_summary.losses,
+                "trade_risk_rejections": trade_summary.risk_rejected,
+                "trade_execution_rejections": trade_summary.execution_rejected,
+                "realized_r_sum": trade_summary.realized_r_sum,
+                "realized_r_count": trade_summary.realized_r_count,
+                "pnl_total": trade_summary.pnl_total,
+                "fees_total": trade_summary.fees_total,
+                "slippage_total": trade_summary.slippage_total,
+                "trade_groups": list(trade_summary.groups),
+            }
+        )
+        if trade_summary.realized_r_count > 0:
+            merged["expectancy_r"] = trade_summary.realized_r_sum / trade_summary.realized_r_count
+            merged["expectancy_after_costs_r"] = merged["expectancy_r"]
+    if funnel is not None:
+        merged["signal_funnel"] = funnel.model_dump(mode="json")
+        merged["entry_touch_rate"] = funnel.entry_touch_rate
+        merged["no_entry_rate"] = funnel.no_entry_rate
+        merged["false_signal_rate"] = funnel.false_signal_rate
+    return _normalize_summary_source(merged)
 
 
 def _normalize_summary_source(summary: dict[str, Any]) -> dict[str, Any]:

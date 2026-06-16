@@ -6,7 +6,7 @@ from decimal import Decimal
 from statistics import median
 from typing import Callable, Sequence
 
-from app.services.strategy_testing.schemas import StrategyTestSignalEvent, StrategyTestTrade
+from app.services.strategy_testing.schemas import StrategyTestMetricRow, StrategyTestSignalEvent, StrategyTestTrade
 
 
 MetricValue = float | int | None
@@ -55,6 +55,15 @@ BASE_METRIC_CODES = (
 )
 
 _GROUP_FIELD_MAP = {
+    "strategy": "strategy_code",
+    "exchange": "exchange",
+    "symbol": "symbol",
+    "timeframe": "timeframe",
+    "regime": "market_regime",
+    "score_bucket": "score_bucket",
+    "direction": "direction",
+}
+_ROW_GROUP_FIELD_MAP = {
     "strategy": "strategy_code",
     "exchange": "exchange",
     "symbol": "symbol",
@@ -185,6 +194,27 @@ def build_base_metric_registry() -> MetricRegistry:
     for definition in base_metric_definitions():
         registry.register(definition)
     return registry
+
+
+def metric_results_from_rows(
+    rows: Sequence[StrategyTestMetricRow],
+    *,
+    registry: MetricRegistry | None = None,
+) -> list[MetricResult]:
+    metric_registry = registry or build_base_metric_registry()
+    results: list[MetricResult] = []
+    for row in rows:
+        results.append(
+            MetricResult(
+                code=row.metric_code,
+                label=_metric_row_label(row.metric_code, metric_registry),
+                value=_normalize_metric_value(row.metric_value),
+                sample_size=max(0, int(row.sample_size)),
+                group=_metric_row_group(row),
+                warnings=_metadata_warnings(row.metadata),
+            )
+        )
+    return results
 
 
 def base_metric_definitions() -> tuple[MetricDefinition, ...]:
@@ -459,6 +489,38 @@ def _group_value(item: StrategyTestTrade | StrategyTestSignalEvent, group_key: s
     value = getattr(item, _GROUP_FIELD_MAP[group_key], None)
     text = str(value).strip() if value is not None else ""
     return text or "unknown"
+
+
+def _metric_row_group(row: StrategyTestMetricRow) -> dict[str, str]:
+    group = {
+        group_key: value
+        for group_key, field_name in _ROW_GROUP_FIELD_MAP.items()
+        if (value := _row_dimension(row, field_name)) != "all"
+    }
+    return group or {"all": "all"}
+
+
+def _row_dimension(row: StrategyTestMetricRow, field_name: str) -> str:
+    value = getattr(row, field_name)
+    text = str(value).strip() if value is not None else ""
+    return text or "all"
+
+
+def _metric_row_label(metric_code: str, registry: MetricRegistry) -> str:
+    get_definition = getattr(registry, "get", None)
+    if not callable(get_definition):
+        return metric_code.replace("_", " ").title()
+    try:
+        return get_definition(metric_code).label
+    except ValueError:
+        return metric_code.replace("_", " ").title()
+
+
+def _metadata_warnings(metadata: dict[str, object]) -> list[str]:
+    warnings = metadata.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    return _dedupe_strings([str(warning) for warning in warnings if str(warning).strip()])
 
 
 def _metric_warnings(

@@ -13,12 +13,16 @@ from app.main import app
 from app.services.strategy_testing.metrics import MetricRegistry, MetricResult, build_base_metric_registry
 from app.services.strategy_testing.report_builder import StrategyTestReportBuilder
 from app.services.strategy_testing.schemas import (
+    StrategyTestFunnelResponse,
+    StrategyTestMetricRow,
     StrategyTestReport,
     StrategyTestRunDetailResponse,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
     StrategyTestSignalEvent,
+    StrategyTestSignalEventsSummary,
     StrategyTestTrade,
+    StrategyTestTradesSummary,
 )
 
 
@@ -178,6 +182,134 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertEqual(report.summary["trades_count"], 1)
         self.assertEqual(report.summary["signals_count"], 1)
 
+    def test_large_signal_report_uses_aggregate_summary_without_capped_event_list(self) -> None:
+        signal_events = [_signal_event(f"signal-{index}") for index in range(10050)]
+        analytics_store = _AnalyticsStore(
+            [],
+            signal_events,
+            signal_summary=StrategyTestSignalEventsSummary(
+                run_id=RUN_ID,
+                signals_count=12050,
+                execution_candidates=8000,
+                entry_touched=5000,
+                filled=4500,
+                closed=4400,
+                wins=2400,
+                losses=2000,
+                no_entry=3000,
+                risk_rejected=250,
+                execution_rejected=150,
+                false_signals=3000,
+                groups=[
+                    {
+                        "strategy_code": "trend_pullback_continuation",
+                        "exchange": "bybit",
+                        "symbol": "BTCUSDT",
+                        "timeframe": "1h",
+                        "direction": "long",
+                        "market_regime": "trend",
+                        "score_bucket": "80-89",
+                        "signals_count": 12050,
+                        "execution_candidates": 8000,
+                        "entry_touched": 5000,
+                        "filled": 4500,
+                        "closed": 4400,
+                        "wins": 2400,
+                        "losses": 2000,
+                        "no_entry": 3000,
+                        "risk_rejected": 250,
+                        "execution_rejected": 150,
+                        "false_signals": 3000,
+                    }
+                ],
+            ),
+        )
+
+        report = _builder([], analytics_store=analytics_store).build_report(RUN_ID)
+
+        self.assertEqual(report.summary["signals_count"], 12050)
+        self.assertEqual(report.summary["signal_funnel"]["signals_count"], 12050)
+        self.assertEqual(analytics_store.list_signal_events_calls, 0)
+        self.assertEqual(analytics_store.list_signal_event_samples_calls, 1)
+
+    def test_completed_report_uses_persisted_metric_rows(self) -> None:
+        registry = _SpyMetricRegistry()
+        analytics_store = _AnalyticsStore(
+            [],
+            metric_rows=[
+                _metric_row("signals_count", 12050, sample_size=12050),
+                _metric_row("trades_count", 40, sample_size=40),
+                _metric_row(
+                    "expectancy_after_costs_r",
+                    0.24,
+                    group={
+                        "strategy": "trend_pullback_continuation",
+                        "exchange": "bybit",
+                        "symbol": "BTCUSDT",
+                        "timeframe": "1h",
+                        "regime": "trend",
+                        "score_bucket": "80-89",
+                        "direction": "long",
+                    },
+                    sample_size=40,
+                ),
+            ],
+            signal_summary=StrategyTestSignalEventsSummary(
+                run_id=RUN_ID,
+                signals_count=12050,
+                execution_candidates=8000,
+                entry_touched=5000,
+                no_entry=3000,
+            ),
+            trade_summary=StrategyTestTradesSummary(
+                run_id=RUN_ID,
+                trades_count=40,
+                executed_trades_count=40,
+                wins=28,
+                losses=12,
+                realized_r_sum=9.6,
+                realized_r_count=40,
+            ),
+        )
+
+        report = _builder([], analytics_store=analytics_store, registry=registry).build_report(RUN_ID)
+
+        self.assertEqual(analytics_store.list_metric_rows_calls, 1)
+        self.assertEqual(registry.compute_calls, [])
+        self.assertEqual(report.summary["signals_count"], 12050)
+        self.assertEqual(report.trades_count, 40)
+        self.assertTrue(any(metric["code"] == "signals_count" and metric["value"] == 12050 for metric in report.summary_metrics))
+        self.assertTrue(
+            any(
+                metric["code"] == "expectancy_after_costs_r"
+                and metric["group"].get("strategy") == "trend_pullback_continuation"
+                for metric in report.grouped_metrics
+            )
+        )
+
+    def test_duplicate_event_keys_are_not_double_counted_when_aggregate_is_available(self) -> None:
+        duplicate_events = [
+            _signal_event("signal-1", no_entry=True, outcome="no_entry", funnel_stage="no_entry"),
+            _signal_event("signal-1", no_entry=True, outcome="no_entry", funnel_stage="no_entry"),
+        ]
+        analytics_store = _AnalyticsStore(
+            [],
+            duplicate_events,
+            signal_summary=StrategyTestSignalEventsSummary(
+                run_id=RUN_ID,
+                signals_count=1,
+                execution_candidates=1,
+                no_entry=1,
+                false_signals=1,
+            ),
+        )
+
+        report = _builder([], analytics_store=analytics_store).build_report(RUN_ID)
+
+        self.assertEqual(report.summary["signals_count"], 1)
+        self.assertEqual(report.summary["signal_funnel"]["no_entry"], 1)
+        self.assertEqual(analytics_store.list_signal_events_calls, 0)
+
     def test_signal_funnel_section_lists_no_entry_signals(self) -> None:
         report = _builder(
             [],
@@ -239,6 +371,22 @@ class _SpyMetricRegistry:
         self.compute_calls.append({"metric_set": list(metric_set or []), "group_by": list(group_by or [])})
         return self._registry.compute(trades, metric_set=metric_set, group_by=group_by)
 
+    def compute_with_signals(
+        self,
+        trades: Sequence[StrategyTestTrade],
+        *,
+        signal_events: Sequence[StrategyTestSignalEvent] = (),
+        metric_set: Sequence[str] | None = None,
+        group_by: Sequence[str] | None = None,
+    ) -> list[MetricResult]:
+        self.compute_calls.append({"metric_set": list(metric_set or []), "group_by": list(group_by or [])})
+        return self._registry.compute_with_signals(
+            trades,
+            signal_events=signal_events,
+            metric_set=metric_set,
+            group_by=group_by,
+        )
+
 
 class _RunStore:
     def __init__(self, detail: StrategyTestRunDetailResponse) -> None:
@@ -264,13 +412,32 @@ class _AnalyticsStore:
         self,
         trades: Sequence[StrategyTestTrade],
         signal_events: Sequence[StrategyTestSignalEvent] = (),
+        *,
+        metric_rows: Sequence[StrategyTestMetricRow] = (),
+        signal_summary: StrategyTestSignalEventsSummary | None = None,
+        trade_summary: StrategyTestTradesSummary | None = None,
     ) -> None:
         self._trades = list(trades)
         self._signal_events = list(signal_events)
+        self._metric_rows = list(metric_rows)
+        self._signal_summary = signal_summary
+        self._trade_summary = trade_summary
+        self.list_signal_events_calls = 0
+        self.list_signal_event_samples_calls = 0
+        self.list_metric_rows_calls = 0
 
     def list_trades(self, run_id: UUID) -> list[StrategyTestTrade]:
         _ = run_id
         return list(self._trades)
+
+    def list_trade_samples(
+        self,
+        run_id: UUID,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[StrategyTestTrade]:
+        _ = run_id
+        return list(self._trades)[offset : offset + limit]
 
     def list_signal_events(
         self,
@@ -279,7 +446,58 @@ class _AnalyticsStore:
         offset: int = 0,
     ) -> list[StrategyTestSignalEvent]:
         _ = run_id
+        self.list_signal_events_calls += 1
         return list(self._signal_events)[offset : offset + limit]
+
+    def list_signal_event_samples(
+        self,
+        run_id: UUID,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[StrategyTestSignalEvent]:
+        _ = run_id
+        self.list_signal_event_samples_calls += 1
+        return list(self._signal_events)[offset : offset + limit]
+
+    def list_metric_rows(self, run_id: UUID) -> list[StrategyTestMetricRow]:
+        _ = run_id
+        self.list_metric_rows_calls += 1
+        return list(self._metric_rows)
+
+    def summarize_signal_events(self, run_id: UUID) -> StrategyTestSignalEventsSummary:
+        _ = run_id
+        if self._signal_summary is None:
+            raise NotImplementedError
+        return self._signal_summary
+
+    def summarize_trades(self, run_id: UUID) -> StrategyTestTradesSummary:
+        _ = run_id
+        if self._trade_summary is None:
+            raise NotImplementedError
+        return self._trade_summary
+
+    def summarize_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
+        summary = self.summarize_signal_events(run_id)
+        return StrategyTestFunnelResponse(
+            run_id=run_id,
+            signals_count=summary.signals_count,
+            execution_candidates=summary.execution_candidates,
+            entry_touched=summary.entry_touched,
+            filled=summary.filled,
+            closed=summary.closed,
+            wins=summary.wins,
+            losses=summary.losses,
+            no_entry=summary.no_entry,
+            risk_rejected=summary.risk_rejected,
+            execution_rejected=summary.execution_rejected,
+            entry_touch_rate=summary.entry_touched / summary.signals_count if summary.signals_count else None,
+            no_entry_rate=summary.no_entry / summary.signals_count if summary.signals_count else None,
+            risk_rejection_rate=summary.risk_rejected / summary.signals_count if summary.signals_count else None,
+            execution_rejection_rate=(
+                summary.execution_rejected / summary.execution_candidates if summary.execution_candidates else None
+            ),
+            false_signal_rate=summary.false_signals / summary.signals_count if summary.signals_count else None,
+        )
 
 
 class _MissingReportService:
@@ -296,6 +514,7 @@ class _CrashingReportService:
 def _builder(
     trades: Sequence[StrategyTestTrade],
     *,
+    analytics_store: _AnalyticsStore | None = None,
     error: str | None = None,
     signal_events: Sequence[StrategyTestSignalEvent] = (),
     registry: MetricRegistry | _SpyMetricRegistry | None = None,
@@ -329,7 +548,7 @@ def _builder(
     )
     return StrategyTestReportBuilder(
         run_store=_RunStore(detail),
-        analytics_store=_AnalyticsStore(trades, signal_events),
+        analytics_store=analytics_store or _AnalyticsStore(trades, signal_events),
         metric_registry=registry,  # type: ignore[arg-type]
     )
 
@@ -449,6 +668,33 @@ def _signal_event(
         trade_plan={},
         metadata={},
         tags=["backtest"],
+        created_at=NOW,
+    )
+
+
+def _metric_row(
+    metric_code: str,
+    value: float | int | None,
+    *,
+    group: dict[str, str] | None = None,
+    sample_size: int = 1,
+) -> StrategyTestMetricRow:
+    group = dict(group or {"all": "all"})
+    return StrategyTestMetricRow(
+        run_id=RUN_ID,
+        user_id=USER_ID,
+        mode="research_virtual",
+        strategy_code=group.get("strategy", "all"),
+        exchange=group.get("exchange", "all"),
+        symbol=group.get("symbol", "all"),
+        timeframe=group.get("timeframe", "all"),
+        market_regime=group.get("regime", "all"),
+        score_bucket=group.get("score_bucket", "all"),
+        direction=group.get("direction", "all"),
+        metric_code=metric_code,
+        metric_value=float(value) if value is not None else None,
+        sample_size=sample_size,
+        metadata={},
         created_at=NOW,
     )
 

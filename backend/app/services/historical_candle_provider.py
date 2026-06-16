@@ -161,7 +161,7 @@ class ClickHouseHistoricalCandleProvider:
                     "timeframe_seconds": TIMEFRAME_MS[timeframe] // 1000,
                 },
             )
-            rows = result.named_results() if hasattr(result, "named_results") else []
+            rows = _named_result_rows(result)
             rows = _dedupe_rows(rows)
             end_ms = _datetime_to_ms(end_at)
             return [
@@ -400,7 +400,7 @@ def _closed_open_end_at(end_at: datetime, timeframe: str) -> datetime:
 
 
 def _count_from_result(result: Any) -> int:
-    rows = result.named_results() if hasattr(result, "named_results") else []
+    rows = _named_result_rows(result)
     if not rows:
         return 0
     first = rows[0]
@@ -409,6 +409,11 @@ def _count_from_result(result: Any) -> int:
             if key in first:
                 return int(first[key] or 0)
     return 0
+
+
+def _named_result_rows(result: Any) -> list[dict[str, Any]]:
+    rows = result.named_results() if hasattr(result, "named_results") else []
+    return list(rows)
 
 
 def _datetime_to_ms(value: datetime) -> int:

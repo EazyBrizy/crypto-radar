@@ -407,7 +407,7 @@ def _table_engine(client: ClickHouseInsertClient, table: str) -> str | None:
         """,
         parameters={"database": database, "name": name},
     )
-    rows = result.named_results() if hasattr(result, "named_results") else []
+    rows = list(result.named_results()) if hasattr(result, "named_results") else []
     if not rows:
         return None
     engine = rows[0].get("engine") if isinstance(rows[0], dict) else None

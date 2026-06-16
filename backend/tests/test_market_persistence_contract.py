@@ -45,6 +45,11 @@ class _QueryResult:
         return list(self._rows)
 
 
+class _GeneratorQueryResult(_QueryResult):
+    def named_results(self) -> object:
+        return (row for row in self._rows)
+
+
 class FakeRedisClient:
     def __init__(self) -> None:
         self.values: dict[str, tuple[int, str]] = {}
@@ -213,6 +218,26 @@ class MarketDataPersistenceContractTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_ensure_ohlcv_schema_accepts_generator_named_results(self) -> None:
+        class GeneratorClickHouseClient(FakeClickHouseClient):
+            def query(self, query: str, parameters: dict[str, object] | None = None) -> _GeneratorQueryResult:
+                self.queries.append((query, parameters))
+                database = str((parameters or {}).get("database", ""))
+                name = str((parameters or {}).get("name", ""))
+                table = f"{database}.{name}" if database and name else ""
+                engine = self.engines.get(table, "ReplacingMergeTree")
+                return _GeneratorQueryResult([{"engine": engine}])
+
+        clickhouse = GeneratorClickHouseClient()
+        service = MarketDataPersistenceService(
+            clickhouse_client_factory=lambda: clickhouse,
+            redis_client_factory=lambda: self.redis,
+        )
+
+        warnings = service.ensure_ohlcv_schema()
+
+        self.assertEqual(warnings, [])
 
     def test_features_write_indicator_values(self) -> None:
         features = Features(

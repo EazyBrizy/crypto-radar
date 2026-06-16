@@ -20,9 +20,15 @@ class _QueryResult:
         return list(self._rows)
 
 
+class _GeneratorQueryResult(_QueryResult):
+    def named_results(self) -> Any:
+        return (row for row in self._rows)
+
+
 class _FakeClickHouseClient:
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
+    def __init__(self, rows: list[dict[str, Any]], *, generator_results: bool = False) -> None:
         self.rows = rows
+        self.generator_results = generator_results
         self.queries: list[str] = []
         self.parameters: list[dict[str, Any] | None] = []
         self.closed = False
@@ -30,6 +36,8 @@ class _FakeClickHouseClient:
     def query(self, query: str, parameters: dict[str, Any] | None = None) -> _QueryResult:
         self.queries.append(query)
         self.parameters.append(parameters)
+        if self.generator_results:
+            return _GeneratorQueryResult(self.rows)
         return _QueryResult(self.rows)
 
     def close(self) -> None:
@@ -111,6 +119,20 @@ class ClickHouseHistoricalCandleProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FROM (", query)
         self.assertIn("SELECT ts", query)
         self.assertIn("GROUP BY ts", query)
+
+    async def test_count_candles_accepts_generator_named_results(self) -> None:
+        client = _FakeClickHouseClient([{"candles_count": 2}], generator_results=True)
+        provider = ClickHouseHistoricalCandleProvider(lambda: client)
+
+        count = await provider.count_candles(
+            exchange="bybit",
+            symbol="BTCUSDT",
+            timeframe="15m",
+            start_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            end_at=datetime(2026, 6, 1, 13, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(count, 2)
 
     async def test_in_memory_count_candles_counts_unique_closed_timestamps(self) -> None:
         first = _candle(open_time=1780315200000, close=101.0)

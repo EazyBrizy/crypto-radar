@@ -97,6 +97,8 @@ class ClickHouseHistoricalCandleProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("argMax(volume_base", query)
         self.assertIn("argMax(trades_count", query)
         self.assertIn("tuple(created_at", query)
+        self.assertIn("max(created_at) AS latest_created_at", query)
+        self.assertNotIn("AS created_at", query)
         self.assertIn("GROUP BY", query)
         self.assertIn("exchange, symbol, ts", query)
         self.assertIn("ORDER BY ts ASC", query)

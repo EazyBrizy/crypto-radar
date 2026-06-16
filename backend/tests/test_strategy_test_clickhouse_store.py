@@ -265,6 +265,10 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(trade_client.queries[0][1], {"run_id": RUN_ID, "limit": 11, "offset": 5})
         self.assertIn("GROUP BY run_id, scenario_key, event_key", signal_client.queries[0][0])
         self.assertIn("GROUP BY run_id, scenario_key, event_key", trade_client.queries[0][0])
+        self.assertIn("max(created_at) AS dedup_created_at", signal_client.queries[0][0])
+        self.assertIn("dedup_created_at AS created_at", signal_client.queries[0][0])
+        self.assertIn("max(created_at) AS dedup_created_at", trade_client.queries[0][0])
+        self.assertIn("dedup_created_at AS created_at", trade_client.queries[0][0])
 
     def test_aggregate_signal_funnel_deduplicates_in_clickhouse(self) -> None:
         client = FakeClickHouseClient(
@@ -294,6 +298,8 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertEqual(funnel.execution_rejection_rate, 1 / 3)
         query = client.queries[0][0]
         self.assertIn("argMax", query)
+        self.assertIn("max(created_at) AS dedup_created_at", query)
+        self.assertNotIn("max(created_at) AS created_at", query)
         self.assertIn("GROUP BY run_id, scenario_key, event_key", query)
 
     def test_summarize_funnel_uses_clickhouse_counts(self) -> None:
@@ -308,6 +314,10 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         query = client.queries[0][0]
         self.assertIn("countIf", query)
         self.assertIn("argMax", query)
+        self.assertIn("max(created_at) AS dedup_created_at", query)
+        self.assertNotIn("max(created_at) AS created_at", query)
+        self.assertIn("no_entry_count AS no_entry", query)
+        self.assertNotRegex(query, r"countIf\(no_entry = 1\) AS no_entry\b")
         self.assertIn("GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket", query)
 
     def test_summarize_signal_events_returns_grouped_dimensions(self) -> None:
@@ -335,6 +345,10 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertIn("countIf", query)
         self.assertIn("sum", query)
         self.assertIn("argMax", query)
+        self.assertIn("max(created_at) AS dedup_created_at", query)
+        self.assertNotIn("max(created_at) AS created_at", query)
+        self.assertIn("risk_rejected_count AS risk_rejected", query)
+        self.assertNotRegex(query, r"countIf\(risk_rejected = 1\) AS risk_rejected\b")
         self.assertIn("GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket", query)
 
     def test_clickhouse_init_file_contains_strategy_test_tables(self) -> None:

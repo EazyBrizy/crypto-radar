@@ -132,20 +132,33 @@ class ClickHouseHistoricalCandleProvider:
                 exchange,
                 symbol,
                 ts,
-                argMax(open, {tie_breaker}) AS open,
-                argMax(high, {tie_breaker}) AS high,
-                argMax(low, {tie_breaker}) AS low,
-                argMax(close, {tie_breaker}) AS close,
-                argMax(volume_base, {tie_breaker}) AS volume_base,
-                argMax(trades_count, {tie_breaker}) AS trades_count,
-                max(created_at) AS created_at
-            FROM {table}
-            WHERE exchange = {{exchange:String}}
-              AND symbol = {{symbol:String}}
-              AND ts >= {{start_at:DateTime64(3, 'UTC')}}
-              AND ts <= {{closed_open_end_at:DateTime64(3, 'UTC')}}
-              AND toUnixTimestamp(ts) % {{timeframe_seconds:UInt32}} = 0
-            GROUP BY exchange, symbol, ts
+                selected_open AS open,
+                selected_high AS high,
+                selected_low AS low,
+                selected_close AS close,
+                selected_volume_base AS volume_base,
+                selected_trades_count AS trades_count,
+                latest_created_at
+            FROM (
+                SELECT
+                    exchange,
+                    symbol,
+                    ts,
+                    argMax(open, {tie_breaker}) AS selected_open,
+                    argMax(high, {tie_breaker}) AS selected_high,
+                    argMax(low, {tie_breaker}) AS selected_low,
+                    argMax(close, {tie_breaker}) AS selected_close,
+                    argMax(volume_base, {tie_breaker}) AS selected_volume_base,
+                    argMax(trades_count, {tie_breaker}) AS selected_trades_count,
+                    max(created_at) AS latest_created_at
+                FROM {table}
+                WHERE exchange = {{exchange:String}}
+                  AND symbol = {{symbol:String}}
+                  AND ts >= {{start_at:DateTime64(3, 'UTC')}}
+                  AND ts <= {{closed_open_end_at:DateTime64(3, 'UTC')}}
+                  AND toUnixTimestamp(ts) % {{timeframe_seconds:UInt32}} = 0
+                GROUP BY exchange, symbol, ts
+            )
             ORDER BY ts ASC
         """
         client = self._client()
@@ -366,7 +379,7 @@ def _candle_tie_breaker(candle: OHLCVCandle) -> tuple[float, float, float, float
 
 
 def _row_tie_breaker(row: dict[str, Any]) -> tuple[int, Decimal, Decimal, Decimal, Decimal, Decimal, int]:
-    created_at = row.get("created_at")
+    created_at = row.get("created_at") or row.get("latest_created_at")
     created_at_ms = _datetime_to_ms(created_at) if isinstance(created_at, datetime) else 0
     return (
         created_at_ms,

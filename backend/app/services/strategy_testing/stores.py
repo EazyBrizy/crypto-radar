@@ -479,10 +479,14 @@ class ClickHouseStrategyTestStore:
 
         query = f"""
             SELECT
-                {_dedup_select_columns_sql(self._trade_columns, _trade_dedup_group_columns())}
-            FROM analytics.strategy_test_trades
-            WHERE run_id = {{run_id:UUID}}
-            GROUP BY run_id, scenario_key, event_key
+                {_dedup_projection_columns_sql(self._trade_columns)}
+            FROM (
+                SELECT
+                    {_dedup_select_columns_sql(self._trade_columns, _trade_dedup_group_columns())}
+                FROM analytics.strategy_test_trades
+                WHERE run_id = {{run_id:UUID}}
+                GROUP BY run_id, scenario_key, event_key
+            )
             ORDER BY entry_time ASC, trade_id ASC
             LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
         """
@@ -531,10 +535,14 @@ class ClickHouseStrategyTestStore:
 
         query = f"""
             SELECT
-                {_dedup_select_columns_sql(self._signal_event_columns, _signal_event_dedup_group_columns())}
-            FROM analytics.strategy_test_signals
-            WHERE run_id = {{run_id:UUID}}
-            GROUP BY run_id, scenario_key, event_key
+                {_dedup_projection_columns_sql(self._signal_event_columns)}
+            FROM (
+                SELECT
+                    {_dedup_select_columns_sql(self._signal_event_columns, _signal_event_dedup_group_columns())}
+                FROM analytics.strategy_test_signals
+                WHERE run_id = {{run_id:UUID}}
+                GROUP BY run_id, scenario_key, event_key
+            )
             ORDER BY candle_time ASC, signal_key ASC
             LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}
         """
@@ -561,25 +569,40 @@ class ClickHouseStrategyTestStore:
         query = f"""
             SELECT
                 {_signal_summary_dimensions_sql()},
-                count() AS signals_count,
-                countIf(execution_candidate = 1) AS execution_candidates,
-                countIf(entry_touched = 1) AS entry_touched,
-                countIf(filled = 1) AS filled,
-                countIf(closed = 1) AS closed,
-                countIf(lowerUTF8(ifNull(outcome, '')) = 'win') AS wins,
-                countIf(lowerUTF8(ifNull(outcome, '')) = 'loss') AS losses,
-                countIf(no_entry = 1) AS no_entry,
-                countIf(risk_rejected = 1) AS risk_rejected,
-                countIf(execution_rejected = 1) AS execution_rejected,
-                countIf(no_entry = 1 OR lowerUTF8(ifNull(outcome, '')) IN ('no_entry', 'invalidated')) AS false_signals
+                signals_count,
+                execution_candidates_count AS execution_candidates,
+                entry_touched_count AS entry_touched,
+                filled_count AS filled,
+                closed_count AS closed,
+                wins_count AS wins,
+                losses_count AS losses,
+                no_entry_count AS no_entry,
+                risk_rejected_count AS risk_rejected,
+                execution_rejected_count AS execution_rejected,
+                false_signals
             FROM (
                 SELECT
-                    {_dedup_select_columns_sql(self._signal_event_columns, _signal_event_dedup_group_columns())}
-                FROM analytics.strategy_test_signals
-                WHERE run_id = {{run_id:UUID}}
-                GROUP BY run_id, scenario_key, event_key
+                    {_signal_summary_dimensions_sql()},
+                    count() AS signals_count,
+                    countIf(execution_candidate = 1) AS execution_candidates_count,
+                    countIf(entry_touched = 1) AS entry_touched_count,
+                    countIf(filled = 1) AS filled_count,
+                    countIf(closed = 1) AS closed_count,
+                    countIf(lowerUTF8(ifNull(outcome, '')) = 'win') AS wins_count,
+                    countIf(lowerUTF8(ifNull(outcome, '')) = 'loss') AS losses_count,
+                    countIf(no_entry = 1) AS no_entry_count,
+                    countIf(risk_rejected = 1) AS risk_rejected_count,
+                    countIf(execution_rejected = 1) AS execution_rejected_count,
+                    countIf(no_entry = 1 OR lowerUTF8(ifNull(outcome, '')) IN ('no_entry', 'invalidated')) AS false_signals
+                FROM (
+                    SELECT
+                        {_dedup_select_columns_sql(self._signal_event_columns, _signal_event_dedup_group_columns())}
+                    FROM analytics.strategy_test_signals
+                    WHERE run_id = {{run_id:UUID}}
+                    GROUP BY run_id, scenario_key, event_key
+                )
+                GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket
             )
-            GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket
             ORDER BY strategy_code ASC, exchange ASC, symbol ASC, timeframe ASC, direction ASC, market_regime ASC, score_bucket ASC
         """
         client = self._client()
@@ -609,25 +632,40 @@ class ClickHouseStrategyTestStore:
         query = f"""
             SELECT
                 {_signal_summary_dimensions_sql()},
-                count() AS trades_count,
-                countIf(risk_rejected = 0 AND execution_rejected = 0) AS executed_trades_count,
-                countIf(lowerUTF8(outcome) = 'win') AS wins,
-                countIf(lowerUTF8(outcome) = 'loss') AS losses,
-                countIf(risk_rejected = 1) AS risk_rejected,
-                countIf(execution_rejected = 1) AS execution_rejected,
-                sumIf(ifNull(realized_r, 0), isNotNull(realized_r)) AS realized_r_sum,
-                countIf(isNotNull(realized_r)) AS realized_r_count,
-                sum(toFloat64(pnl)) AS pnl_total,
-                sum(toFloat64(fees)) AS fees_total,
-                sum(toFloat64(slippage)) AS slippage_total
+                trades_count,
+                executed_trades_count,
+                wins_count AS wins,
+                losses_count AS losses,
+                risk_rejected_count AS risk_rejected,
+                execution_rejected_count AS execution_rejected,
+                realized_r_sum,
+                realized_r_count,
+                pnl_total,
+                fees_total,
+                slippage_total
             FROM (
                 SELECT
-                    {_dedup_select_columns_sql(self._trade_columns, _trade_dedup_group_columns())}
-                FROM analytics.strategy_test_trades
-                WHERE run_id = {{run_id:UUID}}
-                GROUP BY run_id, scenario_key, event_key
+                    {_signal_summary_dimensions_sql()},
+                    count() AS trades_count,
+                    countIf(risk_rejected = 0 AND execution_rejected = 0) AS executed_trades_count,
+                    countIf(lowerUTF8(outcome) = 'win') AS wins_count,
+                    countIf(lowerUTF8(outcome) = 'loss') AS losses_count,
+                    countIf(risk_rejected = 1) AS risk_rejected_count,
+                    countIf(execution_rejected = 1) AS execution_rejected_count,
+                    sumIf(ifNull(realized_r, 0), isNotNull(realized_r)) AS realized_r_sum,
+                    countIf(isNotNull(realized_r)) AS realized_r_count,
+                    sum(toFloat64(pnl)) AS pnl_total,
+                    sum(toFloat64(fees)) AS fees_total,
+                    sum(toFloat64(slippage)) AS slippage_total
+                FROM (
+                    SELECT
+                        {_dedup_select_columns_sql(self._trade_columns, _trade_dedup_group_columns())}
+                    FROM analytics.strategy_test_trades
+                    WHERE run_id = {{run_id:UUID}}
+                    GROUP BY run_id, scenario_key, event_key
+                )
+                GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket
             )
-            GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket
             ORDER BY strategy_code ASC, exchange ASC, symbol ASC, timeframe ASC, direction ASC, market_regime ASC, score_bucket ASC
         """
         client = self._client()
@@ -757,20 +795,24 @@ class ClickHouseStrategyTestStore:
     def list_metric_rows(self, run_id: UUID) -> list[StrategyTestMetricRow]:
         query = f"""
             SELECT
-                {_dedup_select_columns_sql(self._metric_columns, _metric_dedup_group_columns())}
-            FROM analytics.strategy_test_metrics
-            WHERE run_id = {{run_id:UUID}}
-            GROUP BY
-                run_id,
-                scenario_key,
-                strategy_code,
-                exchange,
-                symbol,
-                timeframe,
-                market_regime,
-                score_bucket,
-                direction,
-                metric_code
+                {_dedup_projection_columns_sql(self._metric_columns)}
+            FROM (
+                SELECT
+                    {_dedup_select_columns_sql(self._metric_columns, _metric_dedup_group_columns())}
+                FROM analytics.strategy_test_metrics
+                WHERE run_id = {{run_id:UUID}}
+                GROUP BY
+                    run_id,
+                    scenario_key,
+                    strategy_code,
+                    exchange,
+                    symbol,
+                    timeframe,
+                    market_regime,
+                    score_bucket,
+                    direction,
+                    metric_code
+            )
             ORDER BY
                 strategy_code ASC,
                 exchange ASC,
@@ -1426,9 +1468,14 @@ def _dedup_select_columns_sql(columns: Sequence[str], group_columns: set[str]) -
         if column in group_columns:
             expressions.append(column)
         elif column == "created_at":
-            expressions.append("max(created_at) AS created_at")
+            expressions.append("max(created_at) AS dedup_created_at")
         else:
             expressions.append(f"argMax({column}, created_at) AS {column}")
+    return ",\n                ".join(expressions)
+
+
+def _dedup_projection_columns_sql(columns: Sequence[str]) -> str:
+    expressions = ["dedup_created_at AS created_at" if column == "created_at" else column for column in columns]
     return ",\n                ".join(expressions)
 
 

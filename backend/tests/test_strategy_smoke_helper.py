@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
+from app.tools import api_request
 from app.tools import strategy_smoke
 
 
@@ -53,6 +55,39 @@ class StrategySmokeHelperTest(unittest.TestCase):
         assert signal.execution_gate is not None
         self.assertTrue(signal.execution_gate.can_arm_pending)
         self.assertFalse(signal.execution_gate.can_enter_now)
+
+    def test_api_request_uses_backend_container_loopback_and_dev_user(self) -> None:
+        response = _UrlopenResponse(b'{"ok":true}')
+        with patch.object(api_request.urllib.request, "urlopen", return_value=response) as urlopen:
+            result = api_request.request_backend_api(
+                method="post",
+                path="/api/v1/strategy-tests/runs",
+                body='{"test_type":"historical_backtest"}',
+                base_url="http://127.0.0.1:8000/",
+                user_id="usr_demo",
+            )
+
+        self.assertEqual(result, '{"ok":true}')
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:8000/api/v1/strategy-tests/runs")
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.data, b'{"test_type":"historical_backtest"}')
+        self.assertEqual(request.get_header("X-dev-user"), "usr_demo")
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+
+
+class _UrlopenResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def __enter__(self) -> "_UrlopenResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._payload
 
 
 if __name__ == "__main__":

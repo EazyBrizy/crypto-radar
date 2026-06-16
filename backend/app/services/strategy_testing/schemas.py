@@ -13,6 +13,7 @@ StrategyTestMode = Literal["discovery", "research_virtual", "production_like"]
 StrategyTestType = Literal["historical_backtest", "forward_virtual"]
 StrategyTestRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "stopping"]
 StrategyTestScenarioStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+StrategyTestDataCompleteness = Literal["complete", "partial"]
 StrategyTestCalibrationDecision = Literal["positive", "negative", "insufficient_sample"]
 StrategyTestEstimateLevel = Literal["small", "medium", "large"]
 StrategyTestEstimateWarningCode = Literal[
@@ -480,6 +481,8 @@ class StrategyTestReport(BaseModel):
     run_id: UUID
     status: StrategyTestRunStatus
     mode: StrategyTestMode
+    is_partial: bool = False
+    data_completeness: StrategyTestDataCompleteness = "complete"
     requested_matrix: dict[str, Any] = Field(default_factory=dict)
     assumptions: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] = Field(default_factory=dict)
@@ -508,6 +511,8 @@ class StrategyTestReportResponse(BaseModel):
     run_id: UUID
     status: StrategyTestRunStatus | None = None
     mode: StrategyTestMode | None = None
+    is_partial: bool = False
+    data_completeness: StrategyTestDataCompleteness = "complete"
     requested_matrix: dict[str, Any] = Field(default_factory=dict)
     assumptions: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] = Field(default_factory=dict)

@@ -185,6 +185,8 @@ class StrategyTestReportBuilder:
 
     def _build_report(self, run_detail: StrategyTestRunDetailResponse) -> StrategyTestReport:
         run = run_detail.run
+        is_partial = _is_partial_report(run.status)
+        data_completeness = "partial" if is_partial else "complete"
         analytics_warnings: list[str] = []
         signal_summary = _summarize_signal_events_or_none(
             self._analytics_store,
@@ -251,6 +253,8 @@ class StrategyTestReportBuilder:
             source_summary=source_summary,
             analytics_warnings=analytics_warnings,
             funnel_override=aggregate_funnel,
+            data_completeness=data_completeness,
+            is_partial=is_partial,
         )
         sections = _build_sections(
             trades=trades,
@@ -266,6 +270,8 @@ class StrategyTestReportBuilder:
             run_id=run.run_id,
             status=run.status,
             mode=_run_mode(run.requested_matrix),
+            is_partial=is_partial,
+            data_completeness=data_completeness,
             requested_matrix=dict(run.requested_matrix),
             assumptions=_assumptions_from_run(run_detail),
             summary=summary,
@@ -805,6 +811,8 @@ def _build_summary(
     source_summary: dict[str, Any] | None = None,
     analytics_warnings: Sequence[str] = (),
     funnel_override: StrategyTestFunnelResponse | None = None,
+    data_completeness: str = "complete",
+    is_partial: bool = False,
 ) -> dict[str, Any]:
     run = run_detail.run
     requested = run.requested_matrix
@@ -833,6 +841,8 @@ def _build_summary(
         "run_id": str(run.run_id),
         "status": run.status,
         "mode": _run_mode(requested),
+        "is_partial": is_partial,
+        "data_completeness": data_completeness,
         "scenario_count": _summary_value(source, "scenario_count", requested.get("scenario_count")),
         "completed_scenarios": completed_scenarios,
         "failed_scenarios": _summary_int(source, "failed_scenarios", 0),
@@ -1643,6 +1653,10 @@ def _run_mode(requested_matrix: dict[str, Any]) -> StrategyTestMode:
     if value in {"discovery", "research_virtual", "production_like"}:
         return cast(StrategyTestMode, value)
     return "research_virtual"
+
+
+def _is_partial_report(status: StrategyTestRunStatus) -> bool:
+    return status != "completed"
 
 
 def _list_value(value: object) -> list[Any]:

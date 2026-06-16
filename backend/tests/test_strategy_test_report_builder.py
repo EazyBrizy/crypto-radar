@@ -181,6 +181,16 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertEqual(report.summary["completed_scenarios"], 1)
         self.assertEqual(report.summary["trades_count"], 1)
         self.assertEqual(report.summary["signals_count"], 1)
+        self.assertTrue(report.is_partial)
+        self.assertEqual(report.data_completeness, "partial")
+        self.assertEqual(report.summary["data_completeness"], "partial")
+
+    def test_completed_report_is_marked_complete(self) -> None:
+        report = _builder([_trade("trade-1")]).build_report(RUN_ID)
+
+        self.assertFalse(report.is_partial)
+        self.assertEqual(report.data_completeness, "complete")
+        self.assertEqual(report.summary["data_completeness"], "complete")
 
     def test_large_signal_report_uses_aggregate_summary_without_capped_event_list(self) -> None:
         signal_events = [_signal_event(f"signal-{index}") for index in range(10050)]

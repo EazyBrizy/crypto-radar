@@ -217,6 +217,18 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertIn("GROUP BY", query)
         self.assertIn("scenario_key", query)
 
+    def test_list_metric_rows_deduplicates_by_metric_key(self) -> None:
+        client = FakeClickHouseClient(rows=[_metric_row()])
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        rows = store.list_metric_rows(RUN_ID)
+
+        self.assertEqual(rows[0].metric_code, "winrate")
+        query = client.queries[0][0]
+        self.assertIn("argMax", query)
+        self.assertIn("GROUP BY", query)
+        self.assertIn("metric_code", query)
+
     def test_list_signal_events_parses_json_decimal_and_flags(self) -> None:
         client = FakeClickHouseClient(rows=[_signal_event_row()])
         store = ClickHouseStrategyTestStore(lambda: client)
@@ -237,6 +249,22 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertIn("argMax", query)
         self.assertIn("GROUP BY", query)
         self.assertIn("event_key", query)
+
+    def test_sample_methods_use_paginated_dedup_queries(self) -> None:
+        signal_client = FakeClickHouseClient(rows=[_signal_event_row()])
+        signal_store = ClickHouseStrategyTestStore(lambda: signal_client)
+        trade_client = FakeClickHouseClient(rows=[_trade_row()])
+        trade_store = ClickHouseStrategyTestStore(lambda: trade_client)
+
+        signal_rows = signal_store.list_signal_event_samples(RUN_ID, limit=7, offset=3)
+        trade_rows = trade_store.list_trade_samples(RUN_ID, limit=11, offset=5)
+
+        self.assertEqual(signal_rows[0].synthetic_signal_id, "signal-1")
+        self.assertEqual(trade_rows[0].trade_id, "trade-1")
+        self.assertEqual(signal_client.queries[0][1], {"run_id": RUN_ID, "limit": 7, "offset": 3})
+        self.assertEqual(trade_client.queries[0][1], {"run_id": RUN_ID, "limit": 11, "offset": 5})
+        self.assertIn("GROUP BY run_id, scenario_key, event_key", signal_client.queries[0][0])
+        self.assertIn("GROUP BY run_id, scenario_key, event_key", trade_client.queries[0][0])
 
     def test_aggregate_signal_funnel_deduplicates_in_clickhouse(self) -> None:
         client = FakeClickHouseClient(
@@ -267,6 +295,47 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         query = client.queries[0][0]
         self.assertIn("argMax", query)
         self.assertIn("GROUP BY run_id, scenario_key, event_key", query)
+
+    def test_summarize_funnel_uses_clickhouse_counts(self) -> None:
+        client = FakeClickHouseClient(rows=[_signal_summary_row()])
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        funnel = store.summarize_funnel(RUN_ID)
+
+        self.assertEqual(funnel.signals_count, 12050)
+        self.assertEqual(funnel.execution_candidates, 8000)
+        self.assertEqual(funnel.no_entry, 3000)
+        query = client.queries[0][0]
+        self.assertIn("countIf", query)
+        self.assertIn("argMax", query)
+        self.assertIn("GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket", query)
+
+    def test_summarize_signal_events_returns_grouped_dimensions(self) -> None:
+        client = FakeClickHouseClient(rows=[_signal_summary_row()])
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        summary = store.summarize_signal_events(RUN_ID)
+
+        self.assertEqual(summary.signals_count, 12050)
+        self.assertEqual(summary.groups[0]["strategy_code"], "trend_pullback_continuation")
+        self.assertEqual(summary.groups[0]["score_bucket"], "80-89")
+        self.assertEqual(summary.groups[0]["signals_count"], 12050)
+
+    def test_summarize_trades_returns_grouped_dimensions(self) -> None:
+        client = FakeClickHouseClient(rows=[_trade_summary_row()])
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        summary = store.summarize_trades(RUN_ID)
+
+        self.assertEqual(summary.trades_count, 40)
+        self.assertEqual(summary.executed_trades_count, 38)
+        self.assertEqual(summary.wins, 25)
+        self.assertEqual(summary.groups[0]["exchange"], "bybit")
+        query = client.queries[0][0]
+        self.assertIn("countIf", query)
+        self.assertIn("sum", query)
+        self.assertIn("argMax", query)
+        self.assertIn("GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket", query)
 
     def test_clickhouse_init_file_contains_strategy_test_tables(self) -> None:
         schema = DDL_FILE.read_text(encoding="utf-8")
@@ -505,6 +574,52 @@ def _metric_row() -> dict[str, Any]:
         "sample_size": "10",
         "metadata_json": '{"source":"grouped"}',
         "created_at": CREATED_AT.replace(tzinfo=None),
+    }
+
+
+def _signal_summary_row() -> dict[str, Any]:
+    return {
+        "strategy_code": "trend_pullback_continuation",
+        "exchange": "bybit",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "direction": "long",
+        "market_regime": "trend:strong:aligned",
+        "score_bucket": "80-89",
+        "signals_count": 12050,
+        "execution_candidates": 8000,
+        "entry_touched": 5000,
+        "filled": 4500,
+        "closed": 4400,
+        "wins": 2400,
+        "losses": 2000,
+        "no_entry": 3000,
+        "risk_rejected": 250,
+        "execution_rejected": 150,
+        "false_signals": 3000,
+    }
+
+
+def _trade_summary_row() -> dict[str, Any]:
+    return {
+        "strategy_code": "trend_pullback_continuation",
+        "exchange": "bybit",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "direction": "long",
+        "market_regime": "trend:strong:aligned",
+        "score_bucket": "80-89",
+        "trades_count": 40,
+        "executed_trades_count": 38,
+        "wins": 25,
+        "losses": 13,
+        "risk_rejected": 1,
+        "execution_rejected": 1,
+        "realized_r_sum": 8.5,
+        "realized_r_count": 38,
+        "pnl_total": "122.5",
+        "fees_total": "4.0",
+        "slippage_total": "1.5",
     }
 
 

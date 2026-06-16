@@ -216,6 +216,38 @@ class StrategyTestFunnelResponse(BaseModel):
     stages: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class StrategyTestSignalEventsSummary(BaseModel):
+    run_id: UUID
+    signals_count: int = Field(default=0, ge=0)
+    execution_candidates: int = Field(default=0, ge=0)
+    entry_touched: int = Field(default=0, ge=0)
+    filled: int = Field(default=0, ge=0)
+    closed: int = Field(default=0, ge=0)
+    wins: int = Field(default=0, ge=0)
+    losses: int = Field(default=0, ge=0)
+    no_entry: int = Field(default=0, ge=0)
+    risk_rejected: int = Field(default=0, ge=0)
+    execution_rejected: int = Field(default=0, ge=0)
+    false_signals: int = Field(default=0, ge=0)
+    groups: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class StrategyTestTradesSummary(BaseModel):
+    run_id: UUID
+    trades_count: int = Field(default=0, ge=0)
+    executed_trades_count: int = Field(default=0, ge=0)
+    wins: int = Field(default=0, ge=0)
+    losses: int = Field(default=0, ge=0)
+    risk_rejected: int = Field(default=0, ge=0)
+    execution_rejected: int = Field(default=0, ge=0)
+    realized_r_sum: float = 0.0
+    realized_r_count: int = Field(default=0, ge=0)
+    pnl_total: float = 0.0
+    fees_total: float = 0.0
+    slippage_total: float = 0.0
+    groups: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class StrategyTestActiveRunResponse(BaseModel):
     active_run: StrategyTestRunResponse | None = None
     can_run: bool

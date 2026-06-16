@@ -22,8 +22,10 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunStatus,
     StrategyTestScenarioCheckpoint,
     StrategyTestSignalEvent,
+    StrategyTestSignalEventsSummary,
     StrategyTestType,
     StrategyTestTrade,
+    StrategyTestTradesSummary,
 )
 from app.services.user_identity import resolve_app_user
 
@@ -488,6 +490,14 @@ class ClickHouseStrategyTestStore:
         finally:
             self._close_client(client)
 
+    def list_trade_samples(
+        self,
+        run_id: UUID,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[StrategyTestTrade]:
+        return self.list_trades(run_id, limit=limit, offset=offset)
+
     def write_signal_events(self, signal_events: Sequence[StrategyTestSignalEvent]) -> None:
         if not signal_events:
             return
@@ -532,19 +542,29 @@ class ClickHouseStrategyTestStore:
         finally:
             self._close_client(client)
 
-    def aggregate_signal_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
+    def list_signal_event_samples(
+        self,
+        run_id: UUID,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[StrategyTestSignalEvent]:
+        return self.list_signal_events(run_id, limit=limit, offset=offset)
+
+    def summarize_signal_events(self, run_id: UUID) -> StrategyTestSignalEventsSummary:
         query = f"""
             SELECT
+                {_signal_summary_dimensions_sql()},
                 count() AS signals_count,
-                sum(toUInt64(execution_candidate)) AS execution_candidates,
-                sum(toUInt64(entry_touched)) AS entry_touched,
-                sum(toUInt64(filled)) AS filled,
-                sum(toUInt64(closed)) AS closed,
-                sum(if(lowerUTF8(ifNull(outcome, '')) = 'win', 1, 0)) AS wins,
-                sum(if(lowerUTF8(ifNull(outcome, '')) = 'loss', 1, 0)) AS losses,
-                sum(toUInt64(no_entry)) AS no_entry,
-                sum(toUInt64(risk_rejected)) AS risk_rejected,
-                sum(toUInt64(execution_rejected)) AS execution_rejected
+                countIf(execution_candidate = 1) AS execution_candidates,
+                countIf(entry_touched = 1) AS entry_touched,
+                countIf(filled = 1) AS filled,
+                countIf(closed = 1) AS closed,
+                countIf(lowerUTF8(ifNull(outcome, '')) = 'win') AS wins,
+                countIf(lowerUTF8(ifNull(outcome, '')) = 'loss') AS losses,
+                countIf(no_entry = 1) AS no_entry,
+                countIf(risk_rejected = 1) AS risk_rejected,
+                countIf(execution_rejected = 1) AS execution_rejected,
+                countIf(no_entry = 1 OR lowerUTF8(ifNull(outcome, '')) IN ('no_entry', 'invalidated')) AS false_signals
             FROM (
                 SELECT
                     {_dedup_select_columns_sql(self._signal_event_columns, _signal_event_dedup_group_columns())}
@@ -552,39 +572,104 @@ class ClickHouseStrategyTestStore:
                 WHERE run_id = {{run_id:UUID}}
                 GROUP BY run_id, scenario_key, event_key
             )
+            GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket
+            ORDER BY strategy_code ASC, exchange ASC, symbol ASC, timeframe ASC, direction ASC, market_regime ASC, score_bucket ASC
         """
         client = self._client()
         try:
             result = client.query(query, parameters={"run_id": run_id})
             rows = result.named_results() if hasattr(result, "named_results") else []
-            row = rows[0] if rows else {}
-            signals_count = _int_from_row(row, "signals_count")
-            execution_candidates = _int_from_row(row, "execution_candidates")
-            entry_touched = _int_from_row(row, "entry_touched")
-            no_entry = _int_from_row(row, "no_entry")
-            risk_rejected = _int_from_row(row, "risk_rejected")
-            execution_rejected = _int_from_row(row, "execution_rejected")
-            return StrategyTestFunnelResponse(
+            groups = [_signal_summary_group(row) for row in rows]
+            return StrategyTestSignalEventsSummary(
                 run_id=run_id,
-                signals_count=signals_count,
-                execution_candidates=execution_candidates,
-                entry_touched=entry_touched,
-                filled=_int_from_row(row, "filled"),
-                closed=_int_from_row(row, "closed"),
-                wins=_int_from_row(row, "wins"),
-                losses=_int_from_row(row, "losses"),
-                no_entry=no_entry,
-                risk_rejected=risk_rejected,
-                execution_rejected=execution_rejected,
-                entry_touch_rate=_safe_rate(entry_touched, signals_count),
-                no_entry_rate=_safe_rate(no_entry, signals_count),
-                risk_rejection_rate=_safe_rate(risk_rejected, signals_count),
-                execution_rejection_rate=_safe_rate(execution_rejected, execution_candidates),
-                false_signal_rate=_safe_rate(no_entry, signals_count),
-                stages=[],
+                signals_count=_sum_group_int(groups, "signals_count"),
+                execution_candidates=_sum_group_int(groups, "execution_candidates"),
+                entry_touched=_sum_group_int(groups, "entry_touched"),
+                filled=_sum_group_int(groups, "filled"),
+                closed=_sum_group_int(groups, "closed"),
+                wins=_sum_group_int(groups, "wins"),
+                losses=_sum_group_int(groups, "losses"),
+                no_entry=_sum_group_int(groups, "no_entry"),
+                risk_rejected=_sum_group_int(groups, "risk_rejected"),
+                execution_rejected=_sum_group_int(groups, "execution_rejected"),
+                false_signals=_sum_group_int(groups, "false_signals"),
+                groups=groups,
             )
         finally:
             self._close_client(client)
+
+    def summarize_trades(self, run_id: UUID) -> StrategyTestTradesSummary:
+        query = f"""
+            SELECT
+                {_signal_summary_dimensions_sql()},
+                count() AS trades_count,
+                countIf(risk_rejected = 0 AND execution_rejected = 0) AS executed_trades_count,
+                countIf(lowerUTF8(outcome) = 'win') AS wins,
+                countIf(lowerUTF8(outcome) = 'loss') AS losses,
+                countIf(risk_rejected = 1) AS risk_rejected,
+                countIf(execution_rejected = 1) AS execution_rejected,
+                sumIf(ifNull(realized_r, 0), isNotNull(realized_r)) AS realized_r_sum,
+                countIf(isNotNull(realized_r)) AS realized_r_count,
+                sum(toFloat64(pnl)) AS pnl_total,
+                sum(toFloat64(fees)) AS fees_total,
+                sum(toFloat64(slippage)) AS slippage_total
+            FROM (
+                SELECT
+                    {_dedup_select_columns_sql(self._trade_columns, _trade_dedup_group_columns())}
+                FROM analytics.strategy_test_trades
+                WHERE run_id = {{run_id:UUID}}
+                GROUP BY run_id, scenario_key, event_key
+            )
+            GROUP BY strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket
+            ORDER BY strategy_code ASC, exchange ASC, symbol ASC, timeframe ASC, direction ASC, market_regime ASC, score_bucket ASC
+        """
+        client = self._client()
+        try:
+            result = client.query(query, parameters={"run_id": run_id})
+            rows = result.named_results() if hasattr(result, "named_results") else []
+            groups = [_trade_summary_group(row) for row in rows]
+            return StrategyTestTradesSummary(
+                run_id=run_id,
+                trades_count=_sum_group_int(groups, "trades_count"),
+                executed_trades_count=_sum_group_int(groups, "executed_trades_count"),
+                wins=_sum_group_int(groups, "wins"),
+                losses=_sum_group_int(groups, "losses"),
+                risk_rejected=_sum_group_int(groups, "risk_rejected"),
+                execution_rejected=_sum_group_int(groups, "execution_rejected"),
+                realized_r_sum=_sum_group_float(groups, "realized_r_sum"),
+                realized_r_count=_sum_group_int(groups, "realized_r_count"),
+                pnl_total=_sum_group_float(groups, "pnl_total"),
+                fees_total=_sum_group_float(groups, "fees_total"),
+                slippage_total=_sum_group_float(groups, "slippage_total"),
+                groups=groups,
+            )
+        finally:
+            self._close_client(client)
+
+    def summarize_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
+        summary = self.summarize_signal_events(run_id)
+        return StrategyTestFunnelResponse(
+            run_id=run_id,
+            signals_count=summary.signals_count,
+            execution_candidates=summary.execution_candidates,
+            entry_touched=summary.entry_touched,
+            filled=summary.filled,
+            closed=summary.closed,
+            wins=summary.wins,
+            losses=summary.losses,
+            no_entry=summary.no_entry,
+            risk_rejected=summary.risk_rejected,
+            execution_rejected=summary.execution_rejected,
+            entry_touch_rate=_safe_rate(summary.entry_touched, summary.signals_count),
+            no_entry_rate=_safe_rate(summary.no_entry, summary.signals_count),
+            risk_rejection_rate=_safe_rate(summary.risk_rejected, summary.signals_count),
+            execution_rejection_rate=_safe_rate(summary.execution_rejected, summary.execution_candidates),
+            false_signal_rate=_safe_rate(summary.false_signals, summary.signals_count),
+            stages=_summary_funnel_stages(summary),
+        )
+
+    def aggregate_signal_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
+        return self.summarize_funnel(run_id)
 
     def list_journal_trades(
         self,
@@ -660,6 +745,9 @@ class ClickHouseStrategyTestStore:
             self._close_client(client)
 
     def list_metrics(self, run_id: UUID) -> list[StrategyTestMetricRow]:
+        return self.list_metric_rows(run_id)
+
+    def list_metric_rows(self, run_id: UUID) -> list[StrategyTestMetricRow]:
         query = f"""
             SELECT
                 {_dedup_select_columns_sql(self._metric_columns, _metric_dedup_group_columns())}
@@ -1230,6 +1318,10 @@ def _signal_event_select_columns_sql() -> str:
     return ",\n                ".join(ClickHouseStrategyTestStore._signal_event_columns)
 
 
+def _signal_summary_dimensions_sql() -> str:
+    return "strategy_code, exchange, symbol, timeframe, direction, market_regime, score_bucket"
+
+
 def _dedup_select_columns_sql(columns: Sequence[str], group_columns: set[str]) -> str:
     expressions: list[str] = []
     for column in columns:
@@ -1602,6 +1694,86 @@ def _optional_int(value: Any) -> int | None:
 
 def _int_from_row(row: dict[str, Any], key: str) -> int:
     return _non_negative_int(row.get(key))
+
+
+def _signal_summary_group(row: dict[str, Any]) -> dict[str, Any]:
+    group = _dimension_group(row)
+    for key in (
+        "signals_count",
+        "execution_candidates",
+        "entry_touched",
+        "filled",
+        "closed",
+        "wins",
+        "losses",
+        "no_entry",
+        "risk_rejected",
+        "execution_rejected",
+    ):
+        group[key] = _int_from_row(row, key)
+    group["false_signals"] = _int_from_row(row, "false_signals") or group["no_entry"]
+    return group
+
+
+def _trade_summary_group(row: dict[str, Any]) -> dict[str, Any]:
+    group = _dimension_group(row)
+    for key in (
+        "trades_count",
+        "executed_trades_count",
+        "wins",
+        "losses",
+        "risk_rejected",
+        "execution_rejected",
+        "realized_r_count",
+    ):
+        group[key] = _int_from_row(row, key)
+    for key in ("realized_r_sum", "pnl_total", "fees_total", "slippage_total"):
+        group[key] = _float(row.get(key))
+    return group
+
+
+def _dimension_group(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "strategy_code": _text_from_row(row, "strategy_code"),
+        "exchange": _text_from_row(row, "exchange"),
+        "symbol": _text_from_row(row, "symbol"),
+        "timeframe": _text_from_row(row, "timeframe"),
+        "direction": _text_from_row(row, "direction"),
+        "market_regime": _text_from_row(row, "market_regime"),
+        "score_bucket": _text_from_row(row, "score_bucket"),
+    }
+
+
+def _text_from_row(row: dict[str, Any], key: str) -> str:
+    value = row.get(key)
+    text = str(value).strip() if value is not None else ""
+    return text or "all"
+
+
+def _sum_group_int(groups: Sequence[dict[str, Any]], key: str) -> int:
+    return sum(_non_negative_int(group.get(key)) for group in groups)
+
+
+def _sum_group_float(groups: Sequence[dict[str, Any]], key: str) -> float:
+    return sum(_float(group.get(key)) for group in groups)
+
+
+def _summary_funnel_stages(summary: StrategyTestSignalEventsSummary) -> list[dict[str, Any]]:
+    if summary.signals_count <= 0:
+        return []
+    stage_counts = (
+        ("signal", summary.signals_count),
+        ("execution_candidate", summary.execution_candidates),
+        ("entry_touched", summary.entry_touched),
+        ("filled", summary.filled),
+        ("closed", summary.closed),
+        ("no_entry", summary.no_entry),
+    )
+    return [
+        {"stage": stage, "count": count, "rate": _safe_rate(count, summary.signals_count)}
+        for stage, count in stage_counts
+        if count > 0 or stage == "signal"
+    ]
 
 
 def _safe_rate(numerator: int, denominator: int) -> float | None:

@@ -419,8 +419,15 @@ class StrategyTestingService:
     def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
         return self._run_store.get_run(run_id)
 
-    def cancel_run(self, run_id: UUID) -> StrategyTestRunResponse:
+    def get_run_for_user(self, run_id: UUID, *, user_id: str) -> StrategyTestRunDetailResponse | None:
         detail = self._run_store.get_run(run_id)
+        if detail is None:
+            return None
+        self._ensure_run_belongs_to_user(detail, user_id=user_id)
+        return detail
+
+    def cancel_run(self, run_id: UUID, *, user_id: str | None = None) -> StrategyTestRunResponse:
+        detail = self._run_detail(run_id, user_id=user_id)
         if detail is None:
             raise LookupError(f"Strategy test run is not found: {run_id}")
         if detail.run.status == "cancelled":
@@ -476,8 +483,8 @@ class StrategyTestingService:
     def _validate_run_request(self, request: StrategyTestRunRequest) -> None:
         _validate_strategy_test_resource_limits(request, self._historical_candle_provider)
 
-    def publish_calibration(self, run_id: UUID) -> StrategyTestCalibrationResponse:
-        detail = self._run_store.get_run(run_id)
+    def publish_calibration(self, run_id: UUID, *, user_id: str | None = None) -> StrategyTestCalibrationResponse:
+        detail = self._run_detail(run_id, user_id=user_id)
         if detail is None:
             raise LookupError(f"Strategy test run is not found: {run_id}")
         run = detail.run
@@ -499,8 +506,15 @@ class StrategyTestingService:
             raise ValueError("Strategy test run has no eligibility profiles suitable for calibration.")
         return _calibration_response(run_id=run_id, profiles=profiles)
 
-    def list_trades(self, run_id: UUID, limit: int = 500, offset: int = 0) -> list[StrategyTestTrade]:
-        if self._run_store.get_run(run_id) is None:
+    def list_trades(
+        self,
+        run_id: UUID,
+        limit: int = 500,
+        offset: int = 0,
+        *,
+        user_id: str | None = None,
+    ) -> list[StrategyTestTrade]:
+        if self._run_detail(run_id, user_id=user_id) is None:
             raise ValueError(f"Strategy test run is not found: {run_id}")
         return self._trade_store.list_trades(run_id, limit=limit, offset=offset)
 
@@ -509,26 +523,32 @@ class StrategyTestingService:
         run_id: UUID,
         limit: int = 1000,
         offset: int = 0,
+        *,
+        user_id: str | None = None,
     ) -> list[StrategyTestSignalEvent]:
-        if self._run_store.get_run(run_id) is None:
+        if self._run_detail(run_id, user_id=user_id) is None:
             raise ValueError(f"Strategy test run is not found: {run_id}")
         list_events = getattr(self._trade_store, "list_signal_events", None)
         if not callable(list_events):
             return []
         return list_events(run_id, limit=limit, offset=offset)
 
-    def get_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
-        if self._run_store.get_run(run_id) is None:
+    def get_funnel(self, run_id: UUID, *, user_id: str | None = None) -> StrategyTestFunnelResponse:
+        if self._run_detail(run_id, user_id=user_id) is None:
             raise ValueError(f"Strategy test run is not found: {run_id}")
         aggregate_funnel = getattr(self._trade_store, "aggregate_signal_funnel", None)
         if callable(aggregate_funnel):
             return aggregate_funnel(run_id)
         return build_signal_funnel_response(
             run_id,
-            self.list_signal_events(run_id, limit=10000, offset=0),
+            self.list_signal_events(run_id, limit=10000, offset=0, user_id=user_id),
         )
 
-    def build_report(self, run_id: UUID) -> StrategyTestReport:
+    def build_report(self, run_id: UUID, *, user_id: str | None = None) -> StrategyTestReport:
+        if user_id is not None:
+            detail = self._run_detail(run_id, user_id=user_id)
+            if detail is None:
+                raise ValueError(f"Strategy test run is not found: {run_id}")
         return self._report_builder().build_report(run_id)
 
     def list_reports(self, user_id: str = "demo_user", limit: int = 50) -> list[StrategyTestReport]:
@@ -539,6 +559,25 @@ class StrategyTestingService:
             run_store=self._run_store,
             analytics_store=self._trade_store,
         )
+
+    def _run_detail(self, run_id: UUID, *, user_id: str | None = None) -> StrategyTestRunDetailResponse | None:
+        detail = self._run_store.get_run(run_id)
+        if detail is None or user_id is None:
+            return detail
+        self._ensure_run_belongs_to_user(detail, user_id=user_id)
+        return detail
+
+    def _ensure_run_belongs_to_user(self, detail: StrategyTestRunDetailResponse, *, user_id: str) -> None:
+        requested_user_id = _run_requested_user_id(detail.run)
+        if requested_user_id == user_id:
+            return
+        get_run_for_user = getattr(self._run_store, "get_run_for_user", None)
+        if callable(get_run_for_user) and get_run_for_user(detail.run.run_id, user_id=user_id) is not None:
+            return
+        for owned_detail in self._run_store.list_runs(user_id=user_id, limit=500, status=None):
+            if owned_detail.run.run_id == detail.run.run_id:
+                return
+        raise PermissionError("Cannot access strategy test run for another user.")
 
 
 def _failure_message(matrix_result: StrategyTestMatrixResult) -> str:
@@ -1631,6 +1670,11 @@ def _auto_publish_calibration(request: StrategyTestRunRequest) -> bool:
 
 def _request_from_run(run: StrategyTestRunResponse) -> StrategyTestRunRequest:
     return StrategyTestRunRequest(**dict(run.requested_matrix))
+
+
+def _run_requested_user_id(run: StrategyTestRunResponse) -> str | None:
+    value = run.requested_matrix.get("user_id")
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _metric_results_from_run_summary(summary: dict[str, Any]) -> list[MetricResult]:

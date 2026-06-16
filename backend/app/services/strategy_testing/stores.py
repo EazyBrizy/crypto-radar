@@ -206,6 +206,9 @@ class StrategyTestRunStore(Protocol):
     def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
         ...
 
+    def get_run_for_user(self, run_id: UUID, *, user_id: str) -> StrategyTestRunDetailResponse | None:
+        ...
+
     def claim_next_run(
         self,
         *,
@@ -854,6 +857,17 @@ class PostgresStrategyTestRunStore:
             if run is None:
                 return None
             return _run_to_detail(run)
+
+    def get_run_for_user(self, run_id: UUID, *, user_id: str) -> StrategyTestRunDetailResponse | None:
+        with self._session_factory() as session:
+            user = resolve_app_user(session, user_id)
+            statement = (
+                select(StrategyTestRun)
+                .where(StrategyTestRun.id == run_id)
+                .where(StrategyTestRun.user_id == user.id)
+            )
+            run = session.scalars(statement).first()
+            return _run_to_detail(run) if run is not None else None
 
     def claim_next_run(
         self,

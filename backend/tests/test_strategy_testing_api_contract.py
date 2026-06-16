@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Sequence
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -149,6 +150,33 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(list_response.json()[0]["test_type"], "historical_backtest")
         self.assertEqual(list_response.json()[0]["runtime_state"]["phase"], "queued")
 
+    def test_post_runs_normalizes_payload_user_id_from_request_identity(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            response = client.post(
+                "/api/v1/strategy-tests/runs",
+                json={**_payload(), "user_id": "other_user"},
+                headers={"x-auth-user-id": "usr_strategy_owner"},
+            )
+            list_response = client.get(
+                "/api/v1/strategy-tests/runs",
+                headers={"x-auth-user-id": "usr_strategy_owner"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["requested_matrix"]["user_id"], "usr_strategy_owner")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()[0]["requested_matrix"]["user_id"], "usr_strategy_owner")
+
     def test_post_forward_virtual_run_starts_runtime_without_historical_matrix(self) -> None:
         store = _EphemeralStrategyTestRunStore()
         app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
@@ -274,7 +302,10 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         completed = service.execute_run(created.run.run_id, _request())
 
         try:
-            response = client.post(f"/api/v1/strategy-tests/runs/{completed.run_id}/calibration")
+            response = client.post(
+                f"/api/v1/strategy-tests/runs/{completed.run_id}/calibration",
+                headers={"x-auth-user-id": "demo_user"},
+            )
         finally:
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 
@@ -308,7 +339,10 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         created = store.create_run(_request())
 
         try:
-            response = client.post(f"/api/v1/strategy-tests/runs/{created.run.run_id}/calibration")
+            response = client.post(
+                f"/api/v1/strategy-tests/runs/{created.run.run_id}/calibration",
+                headers={"x-auth-user-id": "demo_user"},
+            )
         finally:
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 
@@ -330,7 +364,10 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         completed = service.execute_run(created.run.run_id, _request())
 
         try:
-            response = client.post(f"/api/v1/strategy-tests/runs/{completed.run_id}/calibration")
+            response = client.post(
+                f"/api/v1/strategy-tests/runs/{completed.run_id}/calibration",
+                headers={"x-auth-user-id": "demo_user"},
+            )
         finally:
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 
@@ -377,6 +414,60 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(data["active_run"]["run_id"], str(active.run_id))
         self.assertIn("refresh", data["allowed_actions"])
         self.assertIn("cancel", data["allowed_actions"])
+
+    def test_active_run_endpoint_uses_request_identity_without_user_query(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        heartbeat = datetime.now(timezone.utc)
+        active = StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="running",
+            test_type="forward_virtual",
+            requested_matrix={"user_id": "usr_strategy_owner", "scenario_count": 1},
+            summary={},
+            runtime_state={"status": "listening"},
+            created_at=heartbeat,
+            started_at=heartbeat,
+            last_heartbeat_at=heartbeat,
+        )
+        store.upsert(active)
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            response = client.get(
+                "/api/v1/strategy-tests/runs/active",
+                headers={"x-auth-user-id": "usr_strategy_owner"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["active_run"]["run_id"], str(active.run_id))
+        self.assertFalse(response.json()["can_run"])
+
+    def test_active_run_query_user_id_mismatch_is_rejected_in_production(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            with patch("app.api.v1.strategy_tests.settings.app_env", "production"):
+                response = client.get(
+                    "/api/v1/strategy-tests/runs/active?user_id=other_user",
+                    headers={"x-auth-user-id": "usr_strategy_owner"},
+                )
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 403)
 
     def test_active_run_endpoint_allows_run_when_active_run_is_stale(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -680,13 +771,49 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         client = TestClient(app)
 
         try:
-            response = client.post(f"/api/v1/strategy-tests/runs/{active.run_id}/cancel")
+            response = client.post(
+                f"/api/v1/strategy-tests/runs/{active.run_id}/cancel",
+                headers={"x-auth-user-id": "demo_user"},
+            )
         finally:
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "stopping")
         self.assertEqual(store.get_run(active.run_id).run.status, "stopping")  # type: ignore[union-attr]
+
+    def test_cancel_run_endpoint_rejects_run_owned_by_another_user(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        heartbeat = datetime.now(timezone.utc)
+        active = StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="running",
+            test_type="forward_virtual",
+            requested_matrix={"user_id": "usr_strategy_owner", "scenario_count": 1},
+            summary={},
+            runtime_state={},
+            created_at=heartbeat,
+            started_at=heartbeat,
+            last_heartbeat_at=heartbeat,
+        )
+        store.upsert(active)
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            response = client.post(
+                f"/api/v1/strategy-tests/runs/{active.run_id}/cancel",
+                headers={"x-auth-user-id": "usr_intruder"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(store.get_run(active.run_id).run.status, "running")  # type: ignore[union-attr]
 
     def test_cancel_forward_run_becomes_cancelled_on_runtime_heartbeat(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -713,7 +840,10 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         client = TestClient(app)
 
         try:
-            response = client.post(f"/api/v1/strategy-tests/runs/{active.run_id}/cancel")
+            response = client.post(
+                f"/api/v1/strategy-tests/runs/{active.run_id}/cancel",
+                headers={"x-auth-user-id": "demo_user"},
+            )
         finally:
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 
@@ -752,7 +882,10 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         client = TestClient(app)
 
         try:
-            response = client.post(f"/api/v1/strategy-tests/runs/{active.run_id}/cancel")
+            response = client.post(
+                f"/api/v1/strategy-tests/runs/{active.run_id}/cancel",
+                headers={"x-auth-user-id": "demo_user"},
+            )
         finally:
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 
@@ -787,8 +920,14 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         client = TestClient(app)
 
         try:
-            signals_response = client.get(f"/api/v1/strategy-tests/runs/{run.run_id}/signals")
-            funnel_response = client.get(f"/api/v1/strategy-tests/runs/{run.run_id}/funnel")
+            signals_response = client.get(
+                f"/api/v1/strategy-tests/runs/{run.run_id}/signals",
+                headers={"x-auth-user-id": "demo_user"},
+            )
+            funnel_response = client.get(
+                f"/api/v1/strategy-tests/runs/{run.run_id}/funnel",
+                headers={"x-auth-user-id": "demo_user"},
+            )
         finally:
             app.dependency_overrides.pop(get_strategy_testing_service, None)
 

@@ -59,7 +59,7 @@ class StrategyTestPair(BaseModel):
 
 
 class StrategyTestRunRequest(BaseModel):
-    user_id: str = "demo_user"
+    user_id: str | None = None
     test_type: StrategyTestType = "historical_backtest"
     strategies: list[str]
     pairs: list[StrategyTestPair]

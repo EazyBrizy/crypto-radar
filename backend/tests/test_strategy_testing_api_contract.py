@@ -180,6 +180,12 @@ class StrategyTestingApiContractTest(unittest.TestCase):
 
         self.assertEqual(request.strategies, ["breakout", "trend_pullback_continuation"])
         self.assertEqual(request.timeframes, ["1h", "4h"])
+        self.assertIsNone(request.user_id)
+
+    def test_request_user_id_schema_has_no_demo_default(self) -> None:
+        user_id_schema = StrategyTestRunRequest.model_json_schema()["properties"]["user_id"]
+
+        self.assertNotEqual(user_id_schema.get("default"), "demo_user")
 
     def test_tags_always_include_backtest(self) -> None:
         request = _request(tags=["research"])
@@ -1044,9 +1050,11 @@ def _request(
     tags: list[str] | None = None,
     test_type: str = "historical_backtest",
     params: dict[str, Any] | None = None,
+    user_id: str = "demo_user",
 ) -> StrategyTestRunRequest:
     now = _now()
     request_kwargs = {
+        "user_id": user_id,
         "test_type": test_type,
         "strategies": [
             "trend_pullback_continuation",

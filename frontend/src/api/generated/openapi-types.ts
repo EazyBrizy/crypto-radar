@@ -6609,11 +6609,8 @@ export interface components {
         };
         /** StrategyTestRunRequest */
         StrategyTestRunRequest: {
-            /**
-             * User Id
-             * @default demo_user
-             */
-            user_id: string;
+            /** User Id */
+            user_id?: string | null;
             /**
              * Test Type
              * @default historical_backtest

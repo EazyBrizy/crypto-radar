@@ -32,6 +32,8 @@ cd frontend
 corepack pnpm openapi:generate
 ```
 
+The export script first tries `NEXT_PUBLIC_FASTAPI_HTTP_URL` before importing the local FastAPI app. If a stale backend is running on that URL, stop it or point `NEXT_PUBLIC_FASTAPI_HTTP_URL` at a non-listening local URL for the generation command so generated files come from the current checkout.
+
 Strategy Testing request/response unions in `frontend/src/features/strategy-testing/types.ts` should derive from `frontend/src/api/generated/openapi-types.ts` where possible. Keep local types as UI-facing adapters only; do not redefine backend status, test type, active-run, or same-candle-policy contracts by hand.
 
 ## Runtime Env
@@ -71,6 +73,7 @@ Strategy Testing request/response unions in `frontend/src/features/strategy-test
 ## Strategy Testing Fields
 
 - Strategy test run responses include backend-owned `test_type`, `status`, `summary`, `runtime_state`, and `last_heartbeat_at`.
+- Strategy Testing API wrappers must not inject a default `user_id`. The backend resolves the current user from the request; explicit `user_id` query usage is only for backend-supported dev/admin compatibility.
 - The Strategy Testing panel must call the backend active-run endpoint and display `can_run`, `disabled_reason`, `disabled_reason_code`, `is_stale`, `stale_threshold_seconds`, and `allowed_actions` as received.
 - The Run button is enabled only when the backend active-run response says `can_run=true` and the local form is valid. Active-run stale detection is not a frontend calculation.
 - Cancel and refresh controls are rendered from backend active-run state and allowed actions; cancelling a run calls the backend cancel endpoint.

@@ -23,8 +23,10 @@ from app.services.strategy_testing.schemas import (
     StrategyTestRunRequest,
     StrategyTestRunResponse,
     StrategyTestRunStatus,
+    StrategyTestRuntimeState,
     StrategyTestSignalEvent,
     StrategyTestTrade,
+    StrategyTestReport,
 )
 from app.services.strategy_testing.service import StrategyTestingService
 from app.services.strategy_testing.eligibility_profiles import build_profile_upserts_from_metric_results
@@ -73,6 +75,88 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(payload["summary"], {"scenario_count": 1})
         self.assertEqual(payload["runtime_state"], {"processed_candles": 3})
         self.assertEqual(payload["last_heartbeat_at"], "2026-01-01T00:00:00Z")
+
+    def test_run_response_schema_exposes_worker_and_lease_fields(self) -> None:
+        heartbeat = _now()
+
+        response = StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="running",
+            test_type="historical_backtest",
+            requested_matrix={},
+            worker_id="strategy-worker-a",
+            worker_attempt=2,
+            claimed_at=heartbeat,
+            lease_expires_at=heartbeat + timedelta(seconds=30),
+        )
+        payload = response.model_dump(mode="json")
+        schema_properties = StrategyTestRunResponse.model_json_schema()["properties"]
+
+        self.assertEqual(payload["worker_id"], "strategy-worker-a")
+        self.assertEqual(payload["worker_attempt"], 2)
+        self.assertEqual(payload["claimed_at"], "2026-01-01T00:00:00Z")
+        self.assertEqual(payload["lease_expires_at"], "2026-01-01T00:00:30Z")
+        self.assertIn("worker_id", schema_properties)
+        self.assertIn("worker_attempt", schema_properties)
+        self.assertIn("claimed_at", schema_properties)
+        self.assertIn("lease_expires_at", schema_properties)
+
+    def test_runtime_state_schema_exposes_progress_and_forward_status_fields(self) -> None:
+        state = StrategyTestRuntimeState(
+            status="waiting_for_market_data",
+            phase="running_scenario",
+            matrix_bars_processed=120,
+            matrix_bars_total=240,
+            bars_pct=50,
+            current_scenario_key="trend::bybit::BTCUSDT::1h",
+            current_scenario_bars_processed=12,
+            current_scenario_bars_total=24,
+            last_heartbeat_reason="waiting_for_market_data",
+            processed_ticks=0,
+            processed_signals=0,
+            opened_trades=0,
+            trades_written=0,
+            metrics_written=0,
+        )
+        payload = state.model_dump(mode="json")
+        schema_properties = StrategyTestRuntimeState.model_json_schema()["properties"]
+
+        self.assertEqual(payload["status"], "waiting_for_market_data")
+        self.assertEqual(payload["matrix_bars_processed"], 120)
+        self.assertEqual(payload["last_heartbeat_reason"], "waiting_for_market_data")
+        for field_name in (
+            "status",
+            "last_heartbeat_reason",
+            "processed_ticks",
+            "processed_signals",
+            "opened_trades",
+            "trades_written",
+            "metrics_written",
+            "pending_entries",
+        ):
+            self.assertIn(field_name, schema_properties)
+
+    def test_report_schema_exposes_completeness_calibration_gate_fields(self) -> None:
+        report = StrategyTestReport(
+            run_id=uuid4(),
+            status="running",
+            mode="research_virtual",
+            is_partial=True,
+            data_completeness="partial",
+            generated_at=_now(),
+            can_publish_calibration=False,
+            calibration_disabled_reason_code="report_not_complete",
+            calibration_disabled_reason="Strategy test report is still partial.",
+        )
+        payload = report.model_dump(mode="json")
+        schema_properties = StrategyTestReport.model_json_schema()["properties"]
+
+        self.assertFalse(payload["can_publish_calibration"])
+        self.assertEqual(payload["calibration_disabled_reason_code"], "report_not_complete")
+        self.assertEqual(payload["calibration_disabled_reason"], "Strategy test report is still partial.")
+        self.assertIn("can_publish_calibration", schema_properties)
+        self.assertIn("calibration_disabled_reason_code", schema_properties)
+        self.assertIn("calibration_disabled_reason", schema_properties)
 
     def test_end_at_must_be_after_start_at(self) -> None:
         request = _request()

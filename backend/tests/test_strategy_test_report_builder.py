@@ -548,13 +548,14 @@ class _AnalyticsStore:
 
 
 class _MissingReportService:
-    def build_report(self, run_id: UUID) -> StrategyTestReport:
+    def build_report(self, run_id: UUID, *, user_id: str | None = None) -> StrategyTestReport:
+        _ = user_id
         raise ValueError(f"Strategy test run is not found: {run_id}")
 
 
 class _CrashingReportService:
-    def build_report(self, run_id: UUID) -> StrategyTestReport:
-        _ = run_id
+    def build_report(self, run_id: UUID, *, user_id: str | None = None) -> StrategyTestReport:
+        _ = run_id, user_id
         raise RuntimeError("analytics store is unavailable")
 
 

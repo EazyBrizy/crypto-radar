@@ -1366,6 +1366,10 @@ def _run_to_detail(
             finished_at=run.finished_at,
             last_heartbeat_at=run.last_heartbeat_at,
             error=run.error,
+            worker_id=run.worker_id,
+            worker_attempt=int(run.worker_attempt or 0),
+            claimed_at=run.claimed_at,
+            lease_expires_at=run.lease_expires_at,
         ),
     )
 

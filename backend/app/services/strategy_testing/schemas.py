@@ -120,6 +120,10 @@ class StrategyTestRunResponse(BaseModel):
     finished_at: datetime | None = None
     last_heartbeat_at: datetime | None = None
     error: str | None = None
+    worker_id: str | None = None
+    worker_attempt: int = Field(default=0, ge=0)
+    claimed_at: datetime | None = None
+    lease_expires_at: datetime | None = None
 
 
 class StrategyTestRunDetailResponse(BaseModel):
@@ -165,15 +169,19 @@ class StrategyTestRuntimeCounters(BaseModel):
 class StrategyTestRuntimeState(BaseModel):
     model_config = ConfigDict(extra="allow")
 
+    status: str | None = None
     scenarios_total: int = Field(default=0, ge=0)
     scenarios_completed: int = Field(default=0, ge=0)
     scenarios_failed: int = Field(default=0, ge=0)
+    scenario_status: str | None = None
     current_scenario_index: int | None = Field(default=None, ge=0)
     current_scenario_key: str | None = None
     current_scenario_bars_processed: int = Field(default=0, ge=0)
     current_scenario_bars_total: int | None = Field(default=None, ge=0)
+    current_scenario_summary: dict[str, Any] | None = None
     matrix_bars_processed: int = Field(default=0, ge=0)
     matrix_bars_total: int | None = Field(default=None, ge=0)
+    matrix_bars_estimate_status: str | None = None
     bars_pct: float = Field(default=0.0, ge=0)
     elapsed_seconds: float = Field(default=0.0, ge=0)
     bars_per_second: float = Field(default=0.0, ge=0)
@@ -181,8 +189,18 @@ class StrategyTestRuntimeState(BaseModel):
     phase: str = "queued"
     last_progress_at: datetime | None = None
     last_heartbeat_at: datetime | None = None
+    last_heartbeat_reason: str | None = None
+    last_forward_event: str | None = None
     stale_threshold_seconds: int = Field(default=0, ge=0)
     counters: StrategyTestRuntimeCounters = Field(default_factory=StrategyTestRuntimeCounters)
+    partial_summary: dict[str, Any] = Field(default_factory=dict)
+    processed_ticks: int = Field(default=0, ge=0)
+    processed_signals: int = Field(default=0, ge=0)
+    opened_trades: int = Field(default=0, ge=0)
+    pending_entries_armed: int = Field(default=0, ge=0)
+    trades_written: int = Field(default=0, ge=0)
+    metrics_written: int = Field(default=0, ge=0)
+    pending_entries: list[dict[str, Any]] = Field(default_factory=list)
 
     @field_validator("bars_pct", "elapsed_seconds", "bars_per_second", mode="before")
     @classmethod
@@ -483,6 +501,9 @@ class StrategyTestReport(BaseModel):
     mode: StrategyTestMode
     is_partial: bool = False
     data_completeness: StrategyTestDataCompleteness = "complete"
+    can_publish_calibration: bool = True
+    calibration_disabled_reason_code: str | None = None
+    calibration_disabled_reason: str | None = None
     requested_matrix: dict[str, Any] = Field(default_factory=dict)
     assumptions: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] = Field(default_factory=dict)
@@ -513,6 +534,9 @@ class StrategyTestReportResponse(BaseModel):
     mode: StrategyTestMode | None = None
     is_partial: bool = False
     data_completeness: StrategyTestDataCompleteness = "complete"
+    can_publish_calibration: bool = True
+    calibration_disabled_reason_code: str | None = None
+    calibration_disabled_reason: str | None = None
     requested_matrix: dict[str, Any] = Field(default_factory=dict)
     assumptions: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] = Field(default_factory=dict)

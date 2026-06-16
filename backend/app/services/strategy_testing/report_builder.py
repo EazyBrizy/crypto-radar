@@ -265,6 +265,7 @@ class StrategyTestReportBuilder:
             warnings=warnings,
             rejections=rejections,
         )
+        calibration_state = _calibration_publish_state(run, is_partial=is_partial)
 
         return StrategyTestReport(
             run_id=run.run_id,
@@ -272,6 +273,9 @@ class StrategyTestReportBuilder:
             mode=_run_mode(run.requested_matrix),
             is_partial=is_partial,
             data_completeness=data_completeness,
+            can_publish_calibration=calibration_state["can_publish_calibration"],
+            calibration_disabled_reason_code=calibration_state["calibration_disabled_reason_code"],
+            calibration_disabled_reason=calibration_state["calibration_disabled_reason"],
             requested_matrix=dict(run.requested_matrix),
             assumptions=_assumptions_from_run(run_detail),
             summary=summary,
@@ -285,6 +289,20 @@ class StrategyTestReportBuilder:
             warnings=warnings,
             rejections=rejections,
         )
+
+
+def _calibration_publish_state(run: StrategyTestRunResponse, *, is_partial: bool) -> dict[str, object]:
+    if run.status != "completed" or is_partial:
+        return {
+            "can_publish_calibration": False,
+            "calibration_disabled_reason_code": "report_not_complete",
+            "calibration_disabled_reason": "Strategy test report is still partial.",
+        }
+    return {
+        "can_publish_calibration": True,
+        "calibration_disabled_reason_code": None,
+        "calibration_disabled_reason": None,
+    }
 
 
 def build_matrix_metric_results(

@@ -3548,8 +3548,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           },
@@ -3631,8 +3637,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           }
@@ -4027,8 +4039,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "demo_user",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "User Id"
             }
           },
@@ -19642,6 +19660,33 @@
             "title": "Data Completeness",
             "default": "complete"
           },
+          "can_publish_calibration": {
+            "type": "boolean",
+            "title": "Can Publish Calibration",
+            "default": true
+          },
+          "calibration_disabled_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Disabled Reason Code"
+          },
+          "calibration_disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Disabled Reason"
+          },
           "requested_matrix": {
             "additionalProperties": true,
             "type": "object",
@@ -20060,6 +20105,47 @@
               }
             ],
             "title": "Error"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          },
+          "worker_attempt": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Worker Attempt",
+            "default": 0
+          },
+          "claimed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed At"
+          },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
           }
         },
         "type": "object",
@@ -20132,6 +20218,17 @@
       },
       "StrategyTestRuntimeState": {
         "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
           "scenarios_total": {
             "type": "integer",
             "minimum": 0,
@@ -20149,6 +20246,17 @@
             "minimum": 0,
             "title": "Scenarios Failed",
             "default": 0
+          },
+          "scenario_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scenario Status"
           },
           "current_scenario_index": {
             "anyOf": [
@@ -20191,6 +20299,18 @@
             ],
             "title": "Current Scenario Bars Total"
           },
+          "current_scenario_summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Scenario Summary"
+          },
           "matrix_bars_processed": {
             "type": "integer",
             "minimum": 0,
@@ -20208,6 +20328,17 @@
               }
             ],
             "title": "Matrix Bars Total"
+          },
+          "matrix_bars_estimate_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matrix Bars Estimate Status"
           },
           "bars_pct": {
             "type": "number",
@@ -20268,6 +20399,28 @@
             ],
             "title": "Last Heartbeat At"
           },
+          "last_heartbeat_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat Reason"
+          },
+          "last_forward_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Forward Event"
+          },
           "stale_threshold_seconds": {
             "type": "integer",
             "minimum": 0,
@@ -20276,6 +20429,55 @@
           },
           "counters": {
             "$ref": "#/components/schemas/StrategyTestRuntimeCounters"
+          },
+          "partial_summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Partial Summary"
+          },
+          "processed_ticks": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Processed Ticks",
+            "default": 0
+          },
+          "processed_signals": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Processed Signals",
+            "default": 0
+          },
+          "opened_trades": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Opened Trades",
+            "default": 0
+          },
+          "pending_entries_armed": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Pending Entries Armed",
+            "default": 0
+          },
+          "trades_written": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Trades Written",
+            "default": 0
+          },
+          "metrics_written": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Metrics Written",
+            "default": 0
+          },
+          "pending_entries": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Pending Entries"
           }
         },
         "additionalProperties": true,

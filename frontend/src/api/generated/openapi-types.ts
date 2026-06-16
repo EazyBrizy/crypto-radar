@@ -6517,6 +6517,15 @@ export interface components {
              * @enum {string}
              */
             data_completeness: "complete" | "partial";
+            /**
+             * Can Publish Calibration
+             * @default true
+             */
+            can_publish_calibration: boolean;
+            /** Calibration Disabled Reason Code */
+            calibration_disabled_reason_code?: string | null;
+            /** Calibration Disabled Reason */
+            calibration_disabled_reason?: string | null;
             /** Requested Matrix */
             requested_matrix?: {
                 [key: string]: unknown;
@@ -6703,6 +6712,17 @@ export interface components {
             last_heartbeat_at?: string | null;
             /** Error */
             error?: string | null;
+            /** Worker Id */
+            worker_id?: string | null;
+            /**
+             * Worker Attempt
+             * @default 0
+             */
+            worker_attempt: number;
+            /** Claimed At */
+            claimed_at?: string | null;
+            /** Lease Expires At */
+            lease_expires_at?: string | null;
         };
         /** StrategyTestRuntimeCounters */
         StrategyTestRuntimeCounters: {
@@ -6754,6 +6774,8 @@ export interface components {
         };
         /** StrategyTestRuntimeState */
         StrategyTestRuntimeState: {
+            /** Status */
+            status?: string | null;
             /**
              * Scenarios Total
              * @default 0
@@ -6769,6 +6791,8 @@ export interface components {
              * @default 0
              */
             scenarios_failed: number;
+            /** Scenario Status */
+            scenario_status?: string | null;
             /** Current Scenario Index */
             current_scenario_index?: number | null;
             /** Current Scenario Key */
@@ -6780,6 +6804,10 @@ export interface components {
             current_scenario_bars_processed: number;
             /** Current Scenario Bars Total */
             current_scenario_bars_total?: number | null;
+            /** Current Scenario Summary */
+            current_scenario_summary?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Matrix Bars Processed
              * @default 0
@@ -6787,6 +6815,8 @@ export interface components {
             matrix_bars_processed: number;
             /** Matrix Bars Total */
             matrix_bars_total?: number | null;
+            /** Matrix Bars Estimate Status */
+            matrix_bars_estimate_status?: string | null;
             /**
              * Bars Pct
              * @default 0
@@ -6813,12 +6843,54 @@ export interface components {
             last_progress_at?: string | null;
             /** Last Heartbeat At */
             last_heartbeat_at?: string | null;
+            /** Last Heartbeat Reason */
+            last_heartbeat_reason?: string | null;
+            /** Last Forward Event */
+            last_forward_event?: string | null;
             /**
              * Stale Threshold Seconds
              * @default 0
              */
             stale_threshold_seconds: number;
             counters?: components["schemas"]["StrategyTestRuntimeCounters"];
+            /** Partial Summary */
+            partial_summary?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Processed Ticks
+             * @default 0
+             */
+            processed_ticks: number;
+            /**
+             * Processed Signals
+             * @default 0
+             */
+            processed_signals: number;
+            /**
+             * Opened Trades
+             * @default 0
+             */
+            opened_trades: number;
+            /**
+             * Pending Entries Armed
+             * @default 0
+             */
+            pending_entries_armed: number;
+            /**
+             * Trades Written
+             * @default 0
+             */
+            trades_written: number;
+            /**
+             * Metrics Written
+             * @default 0
+             */
+            metrics_written: number;
+            /** Pending Entries */
+            pending_entries?: {
+                [key: string]: unknown;
+            }[];
         } & {
             [key: string]: unknown;
         };
@@ -10547,7 +10619,7 @@ export interface operations {
     list_strategy_test_runs_api_v1_strategy_tests_runs_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
                 status?: ("queued" | "running" | "completed" | "failed" | "cancelled" | "stopping") | null;
                 limit?: number;
             };
@@ -10613,7 +10685,7 @@ export interface operations {
     get_active_strategy_test_run_api_v1_strategy_tests_runs_active_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -10869,7 +10941,7 @@ export interface operations {
     list_strategy_test_reports_api_v1_strategy_tests_reports_get: {
         parameters: {
             query?: {
-                user_id?: string;
+                user_id?: string | null;
                 limit?: number;
             };
             header?: never;

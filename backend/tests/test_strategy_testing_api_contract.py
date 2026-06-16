@@ -688,6 +688,47 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(response.json()["status"], "stopping")
         self.assertEqual(store.get_run(active.run_id).run.status, "stopping")  # type: ignore[union-attr]
 
+    def test_cancel_forward_run_becomes_cancelled_on_runtime_heartbeat(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        trade_store = _EphemeralStrategyTestTradeStore()
+        heartbeat = datetime.now(timezone.utc)
+        active = StrategyTestRunResponse(
+            run_id=uuid4(),
+            status="running",
+            test_type="forward_virtual",
+            requested_matrix={"user_id": "demo_user", "scenario_count": 1},
+            summary={},
+            runtime_state={"status": "listening"},
+            created_at=heartbeat,
+            started_at=heartbeat,
+            last_heartbeat_at=heartbeat,
+        )
+        store.upsert(active)
+        service = StrategyTestingService(
+            run_store=store,
+            trade_store=trade_store,
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+
+        try:
+            response = client.post(f"/api/v1/strategy-tests/runs/{active.run_id}/cancel")
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "stopping")
+
+        heartbeat_result = service.heartbeat_forward_runs()
+
+        final = store.get_run(active.run_id)
+        self.assertEqual(heartbeat_result.cancelled_runs, 1)
+        self.assertIsNotNone(final)
+        self.assertEqual(final.run.status, "cancelled")  # type: ignore[union-attr]
+        self.assertEqual(final.run.runtime_state["status"], "cancelled")  # type: ignore[union-attr]
+        self.assertEqual(final.run.runtime_state["cancelled_reason"], "forward_runtime_stopping")  # type: ignore[union-attr]
+
     def test_cancel_run_endpoint_marks_stale_running_run_cancelled(self) -> None:
         store = _EphemeralStrategyTestRunStore()
         stale_heartbeat = _now() - timedelta(hours=1)

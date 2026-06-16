@@ -322,6 +322,41 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertEqual(report.summary["signal_funnel"]["no_entry"], 1)
         self.assertEqual(analytics_store.list_signal_events_calls, 0)
 
+    def test_forward_report_uses_durable_events_not_runtime_pending_snapshot(self) -> None:
+        terminal_entries = [
+            {"signal_id": f"terminal-{index}", "status": "expired", "reason_code": "entry_not_touched"}
+            for index in range(200)
+        ]
+        analytics_store = _AnalyticsStore(
+            [],
+            [_signal_event("durable-1", no_entry=True, outcome="no_entry", funnel_stage="no_entry")],
+            signal_summary=StrategyTestSignalEventsSummary(
+                run_id=RUN_ID,
+                signals_count=250,
+                execution_candidates=250,
+                no_entry=250,
+                false_signals=250,
+            ),
+        )
+
+        report = _builder(
+            [],
+            analytics_store=analytics_store,
+            status="running",
+            runtime_state={
+                "status": "listening",
+                "pending_entries": terminal_entries,
+                "pending_entries_count": len(terminal_entries),
+            },
+        ).build_report(RUN_ID)
+
+        self.assertEqual(report.summary["signals_count"], 250)
+        self.assertEqual(report.summary["signal_funnel"]["no_entry"], 250)
+        self.assertEqual(report.summary["pending_armed"], 0)
+        self.assertNotIn("pending_entries", report.summary)
+        self.assertEqual(analytics_store.list_signal_events_calls, 0)
+        self.assertEqual(analytics_store.list_signal_event_samples_calls, 1)
+
     def test_signal_funnel_section_lists_no_entry_signals(self) -> None:
         report = _builder(
             [],

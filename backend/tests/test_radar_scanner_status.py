@@ -174,11 +174,25 @@ class MainForwardStrategyTestWorkerWiringTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_health_reports_no_in_app_forward_strategy_test_worker(self) -> None:
         from app import main as app_main
+        from app.schemas.health import StrategyTestWorkerLeaseState
 
         app_main.app.state.forward_strategy_test_worker = None
 
         try:
-            with patch("app.main.get_storage_health", return_value={"status": "ok"}):
+            with (
+                patch("app.main.get_storage_health", return_value={"status": "ok"}),
+                patch(
+                    "app.main.get_strategy_test_worker_lease_state",
+                    return_value=StrategyTestWorkerLeaseState(
+                        status="active",
+                        worker_id="strategy-test-worker-a",
+                        run_status="running",
+                        test_type="forward_virtual",
+                        lease_active=True,
+                        runtime_status="listening",
+                    ),
+                ),
+            ):
                 status = await app_main.health()
         finally:
             app_main.app.state._state.pop("forward_strategy_test_worker", None)
@@ -186,6 +200,10 @@ class MainForwardStrategyTestWorkerWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(status["forward_strategy_test_running"])
         self.assertFalse(status["forward_strategy_test_stopping"])
         self.assertEqual(status["forward_strategy_test_last_result"], {})
+        self.assertEqual(status["strategy_test_worker"]["status"], "active")
+        self.assertEqual(status["strategy_test_worker"]["worker_id"], "strategy-test-worker-a")
+        self.assertTrue(status["strategy_test_worker"]["lease_active"])
+        self.assertEqual(status["strategy_test_worker"]["runtime_status"], "listening")
 
 
 class FakeScannerRunner:

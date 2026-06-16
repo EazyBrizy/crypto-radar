@@ -2782,6 +2782,43 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HealthResponse */
+        HealthResponse: {
+            /** Status */
+            status: string;
+            /**
+             * Scanner Enabled
+             * @default false
+             */
+            scanner_enabled: boolean;
+            /**
+             * Scanner Running
+             * @default false
+             */
+            scanner_running: boolean;
+            /**
+             * Scanner Stopping
+             * @default false
+             */
+            scanner_stopping: boolean;
+            /**
+             * Forward Strategy Test Running
+             * @default false
+             */
+            forward_strategy_test_running: boolean;
+            /**
+             * Forward Strategy Test Stopping
+             * @default false
+             */
+            forward_strategy_test_stopping: boolean;
+            /** Forward Strategy Test Last Result */
+            forward_strategy_test_last_result?: {
+                [key: string]: unknown;
+            };
+            strategy_test_worker?: components["schemas"]["StrategyTestWorkerLeaseState"];
+        } & {
+            [key: string]: unknown;
+        };
         /** LifecycleTrace */
         LifecycleTrace: {
             /** Signal Id */
@@ -7069,6 +7106,50 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** StrategyTestWorkerLeaseState */
+        StrategyTestWorkerLeaseState: {
+            /**
+             * Status
+             * @default idle
+             */
+            status: string;
+            /** Worker Id */
+            worker_id?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Run Status */
+            run_status?: string | null;
+            /** Test Type */
+            test_type?: string | null;
+            /**
+             * Worker Attempt
+             * @default 0
+             */
+            worker_attempt: number;
+            /** Claimed At */
+            claimed_at?: string | null;
+            /** Lease Expires At */
+            lease_expires_at?: string | null;
+            /** Last Heartbeat At */
+            last_heartbeat_at?: string | null;
+            /**
+             * Lease Active
+             * @default false
+             */
+            lease_active: boolean;
+            /** Lease Expires In Seconds */
+            lease_expires_in_seconds?: number | null;
+            /** Runtime Status */
+            runtime_status?: string | null;
+            /** Last Heartbeat Reason */
+            last_heartbeat_reason?: string | null;
+            /** Last Forward Event */
+            last_forward_event?: string | null;
+            /** Error */
+            error?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** TakeProfitPlan */
         TakeProfitPlan: {
@@ -11959,9 +12040,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["HealthResponse"];
                 };
             };
         };

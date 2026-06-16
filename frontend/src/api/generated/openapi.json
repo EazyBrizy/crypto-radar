@@ -5913,9 +5913,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Health Health Get"
+                  "$ref": "#/components/schemas/HealthResponse"
                 }
               }
             }
@@ -9084,6 +9082,53 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "scanner_enabled": {
+            "type": "boolean",
+            "title": "Scanner Enabled",
+            "default": false
+          },
+          "scanner_running": {
+            "type": "boolean",
+            "title": "Scanner Running",
+            "default": false
+          },
+          "scanner_stopping": {
+            "type": "boolean",
+            "title": "Scanner Stopping",
+            "default": false
+          },
+          "forward_strategy_test_running": {
+            "type": "boolean",
+            "title": "Forward Strategy Test Running",
+            "default": false
+          },
+          "forward_strategy_test_stopping": {
+            "type": "boolean",
+            "title": "Forward Strategy Test Stopping",
+            "default": false
+          },
+          "forward_strategy_test_last_result": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Forward Strategy Test Last Result"
+          },
+          "strategy_test_worker": {
+            "$ref": "#/components/schemas/StrategyTestWorkerLeaseState"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse"
       },
       "LifecycleTrace": {
         "properties": {
@@ -20892,6 +20937,165 @@
           "created_at"
         ],
         "title": "StrategyTestTrade"
+      },
+      "StrategyTestWorkerLeaseState": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "idle"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "run_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Status"
+          },
+          "test_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Type"
+          },
+          "worker_attempt": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Worker Attempt",
+            "default": 0
+          },
+          "claimed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed At"
+          },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
+          "lease_active": {
+            "type": "boolean",
+            "title": "Lease Active",
+            "default": false
+          },
+          "lease_expires_in_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires In Seconds"
+          },
+          "runtime_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Status"
+          },
+          "last_heartbeat_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat Reason"
+          },
+          "last_forward_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Forward Event"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "StrategyTestWorkerLeaseState"
       },
       "TakeProfitPlan": {
         "properties": {

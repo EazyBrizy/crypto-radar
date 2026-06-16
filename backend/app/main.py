@@ -13,11 +13,12 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from app.api.v1.router import api_router
 from app.core.clickhouse_client import close_clickhouse_client
 from app.core.database import dispose_database_engine
-from app.core.health import get_storage_health
+from app.core.health import get_storage_health, get_strategy_test_worker_lease_state
 from app.core.migrations import warn_if_migrations_outdated
 from app.core.redis_client import close_redis_client
 from app.core.config import settings
 from app.core.request_timing import add_request_timing_middleware
+from app.schemas.health import HealthResponse
 from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
 from app.services.realtime_gateway import realtime_gateway
 from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
@@ -156,7 +157,7 @@ app.add_middleware(
 app.include_router(api_router)
 
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse)
 async def health() -> dict[str, object]:
     runner = getattr(app.state, "scanner_runner", None)
     instrument_rule_runner = getattr(app.state, "exchange_instrument_rule_sync_runner", None)
@@ -166,6 +167,7 @@ async def health() -> dict[str, object]:
     forward_strategy_test_worker = getattr(app.state, "forward_strategy_test_worker", None)
     scanner_status = runner.scanner_status if runner else {}
     storage_health = await asyncio.to_thread(get_storage_health)
+    strategy_test_worker = await asyncio.to_thread(get_strategy_test_worker_lease_state)
     scanner_running = bool(runner and runner.is_running)
     kill_switch = scanner_kill_switch_payload(
         scanner_status,
@@ -232,6 +234,7 @@ async def health() -> dict[str, object]:
             if forward_strategy_test_worker is not None
             else {}
         ),
+        "strategy_test_worker": strategy_test_worker.model_dump(mode="json"),
         "processed_signals": runner.processed_signals if runner else 0,
         "scanner_pairs_count": scanner_status.get("scanner_pairs_count", 0),
         "scanner_universe_source": scanner_status.get("scanner_universe_source", "default"),

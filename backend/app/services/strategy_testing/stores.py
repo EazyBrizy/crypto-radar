@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.clickhouse_client import create_clickhouse_client
 from app.core.database import SessionLocal
 from app.models.strategy_testing import StrategyTestRun, StrategyTestScenario
+from app.schemas.health import StrategyTestWorkerLeaseState
 from app.services.strategy_testing.schemas import (
     StrategyTestFunnelResponse,
     StrategyTestMetricRow,
@@ -223,6 +224,9 @@ class StrategyTestRunStore(Protocol):
         ...
 
     def recover_expired_leases(self, *, worker_id: str) -> dict[str, int]:
+        ...
+
+    def get_worker_lease_state(self) -> StrategyTestWorkerLeaseState:
         ...
 
     def mark_running(self, run_id: UUID) -> StrategyTestRunDetailResponse:
@@ -939,6 +943,25 @@ class PostgresStrategyTestRunStore:
             session.commit()
         return recovered
 
+    def get_worker_lease_state(self) -> StrategyTestWorkerLeaseState:
+        now = _utc_now()
+        with self._session_factory() as session:
+            statement = (
+                select(StrategyTestRun)
+                .where(StrategyTestRun.status.in_(("queued", "running", "stopping")))
+                .order_by(StrategyTestRun.created_at.desc())
+                .limit(500)
+            )
+            runs = [
+                run
+                for run in session.scalars(statement).all()
+                if run.worker_id or run.lease_expires_at is not None
+            ]
+            if not runs:
+                return StrategyTestWorkerLeaseState()
+            run = max(runs, key=_worker_lease_sort_key)
+            return _worker_lease_state_from_run(run, now)
+
     def mark_running(self, run_id: UUID) -> StrategyTestRunDetailResponse:
         with self._session_factory() as session:
             run = _get_run_or_raise(session, run_id)
@@ -1239,6 +1262,63 @@ def _scenario_to_checkpoint(scenario: StrategyTestScenario) -> StrategyTestScena
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _worker_lease_state_from_run(
+    run: StrategyTestRun,
+    now: datetime,
+) -> StrategyTestWorkerLeaseState:
+    runtime_state = _json_object(run.runtime_state)
+    lease_expires_at = _aware_utc(run.lease_expires_at)
+    lease_expires_in_seconds = (
+        (lease_expires_at - now).total_seconds() if lease_expires_at is not None else None
+    )
+    lease_active = bool(
+        lease_expires_in_seconds is not None
+        and lease_expires_in_seconds > 0
+        and run.status in {"queued", "running", "stopping"}
+    )
+    return StrategyTestWorkerLeaseState(
+        status="active" if lease_active else "expired",
+        worker_id=run.worker_id,
+        run_id=run.id,
+        run_status=run.status,
+        test_type=run.test_type,
+        worker_attempt=int(run.worker_attempt or 0),
+        claimed_at=_aware_utc(run.claimed_at),
+        lease_expires_at=lease_expires_at,
+        last_heartbeat_at=_aware_utc(run.last_heartbeat_at),
+        lease_active=lease_active,
+        lease_expires_in_seconds=lease_expires_in_seconds,
+        runtime_status=str(runtime_state.get("status") or runtime_state.get("phase") or "") or None,
+        last_heartbeat_reason=_optional_string(runtime_state.get("last_heartbeat_reason")),
+        last_forward_event=_optional_string(runtime_state.get("last_forward_event")),
+        error=run.error,
+    )
+
+
+def _worker_lease_sort_key(run: StrategyTestRun) -> tuple[datetime, datetime, datetime]:
+    minimum = datetime.min.replace(tzinfo=timezone.utc)
+    return (
+        _aware_utc(run.lease_expires_at) or minimum,
+        _aware_utc(run.claimed_at) or minimum,
+        _aware_utc(run.created_at) or minimum,
+    )
+
+
+def _aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _optional_string(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _lease_expires_at(now: datetime, lease_seconds: int) -> datetime:

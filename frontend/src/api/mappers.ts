@@ -68,6 +68,7 @@ import type {
   RiskStateResponse,
   SignalStatus,
   StopLossPlan,
+  StrategyTestWorkerLeaseState,
   TakeProfitPlan,
   TradeCloseReason,
   TradeMode,
@@ -2110,6 +2111,27 @@ function normalizeExchangeOrderPlacementMode(value: unknown): ExchangeConnection
   return "dry_run";
 }
 
+function normalizeStrategyTestWorkerLeaseState(value: unknown): StrategyTestWorkerLeaseState | null {
+  if (!isRecord(value)) return null;
+  return {
+    status: String(value.status ?? "idle"),
+    worker_id: optionalString(value.worker_id),
+    run_id: optionalString(value.run_id),
+    run_status: optionalString(value.run_status),
+    test_type: optionalString(value.test_type),
+    worker_attempt: Number(value.worker_attempt ?? 0),
+    claimed_at: optionalString(value.claimed_at),
+    lease_expires_at: optionalString(value.lease_expires_at),
+    last_heartbeat_at: optionalString(value.last_heartbeat_at),
+    lease_active: Boolean(value.lease_active),
+    lease_expires_in_seconds: optionalNumber(value.lease_expires_in_seconds),
+    runtime_status: optionalString(value.runtime_status),
+    last_heartbeat_reason: optionalString(value.last_heartbeat_reason),
+    last_forward_event: optionalString(value.last_forward_event),
+    error: optionalString(value.error)
+  };
+}
+
 export function normalizeHealth(value: unknown): HealthStatus {
   const health = value as Partial<HealthStatus>;
   const scannerRunning = Boolean(health.scanner_running);
@@ -2142,7 +2164,8 @@ export function normalizeHealth(value: unknown): HealthStatus {
     max_scanner_pairs: health.max_scanner_pairs == null ? null : Number(health.max_scanner_pairs),
     last_symbol: health.last_symbol ?? null,
     last_price: health.last_price ?? null,
-    kill_switch: normalizeKillSwitchStatus(health.kill_switch)
+    kill_switch: normalizeKillSwitchStatus(health.kill_switch),
+    strategy_test_worker: normalizeStrategyTestWorkerLeaseState(health.strategy_test_worker)
   };
 }
 

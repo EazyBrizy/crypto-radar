@@ -305,6 +305,33 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
             self.assertIsNotNone(run.claimed_at)
             self.assertIsNotNone(run.lease_expires_at)
 
+    def test_worker_lease_state_exposes_active_forward_worker_from_db(self) -> None:
+        created = self.store.create_run(_request(test_type="forward_virtual"))
+        self.store.claim_next_run(worker_id="strategy-test-worker-a", lease_seconds=30)
+        self.store.mark_running(created.run.run_id)
+        self.store.update_runtime_state(
+            created.run.run_id,
+            {
+                "status": "listening",
+                "last_heartbeat_reason": "market_data_received",
+                "last_forward_event": "market_tick",
+            },
+        )
+
+        state = self.store.get_worker_lease_state()
+
+        self.assertEqual(state.status, "active")
+        self.assertEqual(state.run_id, created.run.run_id)
+        self.assertEqual(state.run_status, "running")
+        self.assertEqual(state.test_type, "forward_virtual")
+        self.assertEqual(state.worker_id, "strategy-test-worker-a")
+        self.assertEqual(state.worker_attempt, 1)
+        self.assertTrue(state.lease_active)
+        self.assertGreater(state.lease_expires_in_seconds or 0, 0)
+        self.assertEqual(state.runtime_status, "listening")
+        self.assertEqual(state.last_heartbeat_reason, "market_data_received")
+        self.assertEqual(state.last_forward_event, "market_tick")
+
     def test_create_run_persists_forward_virtual_test_type(self) -> None:
         detail = self.store.create_run(_request(test_type="forward_virtual"))
 

@@ -1256,6 +1256,24 @@ export interface KillSwitchStatus {
   metrics?: Record<string, number>;
 }
 
+export interface StrategyTestWorkerLeaseState {
+  status: string;
+  worker_id?: string | null;
+  run_id?: string | null;
+  run_status?: string | null;
+  test_type?: string | null;
+  worker_attempt?: number;
+  claimed_at?: string | null;
+  lease_expires_at?: string | null;
+  last_heartbeat_at?: string | null;
+  lease_active?: boolean;
+  lease_expires_in_seconds?: number | null;
+  runtime_status?: string | null;
+  last_heartbeat_reason?: string | null;
+  last_forward_event?: string | null;
+  error?: string | null;
+}
+
 export interface HealthStatus {
   status: string;
   scanner_enabled: boolean;
@@ -1286,6 +1304,7 @@ export interface HealthStatus {
   last_symbol?: string | null;
   last_price?: number | null;
   kill_switch?: KillSwitchStatus | null;
+  strategy_test_worker?: StrategyTestWorkerLeaseState | null;
 }
 
 export interface RadarStatus extends HealthStatus {

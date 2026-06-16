@@ -163,7 +163,7 @@ Important rules:
 - Strategy performance: `backend/app/workers/strategy_performance_worker.py`
 - Signal outcomes: `backend/app/workers/signal_outcome_worker.py`
 
-FastAPI lifespan starts only API-local scanner, expiry, and optional sync workers according to settings. The forward strategy-test loop is not started from FastAPI lifespan; the durable `strategy-test-worker` Docker service owns queued run claims, forward run startup, and forward heartbeats through database leases. The FastAPI `/health` root endpoint reports no in-process forward worker by default (`forward_strategy_test_running=false`) and should expose DB-readable worker/lease state instead of process-local loop state.
+FastAPI lifespan starts only API-local scanner, expiry, and optional sync workers according to settings. The forward strategy-test loop is not started from FastAPI lifespan; the durable `strategy-test-worker` Docker service owns queued run claims, forward run startup, and forward heartbeats through database leases. The FastAPI `/health` root endpoint reports no in-process forward worker by default (`forward_strategy_test_running=false`) and exposes DB-readable `strategy_test_worker` lease state instead of process-local loop state.
 
 Local MVP defaults keep scanner autostart and optional external sync workers disabled:
 

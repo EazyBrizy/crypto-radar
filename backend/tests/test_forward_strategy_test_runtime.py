@@ -517,6 +517,39 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime_state["last_signal_id"], "sig_1")
         self.assertIsNotNone(run_store.get_run(RUN_ID).run.last_heartbeat_at)  # type: ignore[union-attr]
 
+    async def test_duplicate_forward_signal_is_ignored_without_duplicate_virtual_writes(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        trade_store = _RecordingTradeStore()
+        signal_writer = _SignalWriter(_radar_signal(execution_gate=_gate(can_enter_now=True)))
+        virtual_trading = _VirtualTrading()
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=trade_store,
+            signal_writer=signal_writer,
+            virtual_trading=virtual_trading,
+        )
+        signal = _strategy_signal()
+
+        first = await runtime.process_strategy_signal(signal)
+        duplicate = await runtime.process_strategy_signal(signal)
+
+        self.assertEqual(first.signals_processed, 1)
+        self.assertEqual(first.opened_trades, 1)
+        self.assertEqual(duplicate.signals_processed, 0)
+        self.assertEqual(duplicate.signals_skipped, 1)
+        self.assertEqual(duplicate.opened_trades, 0)
+        self.assertEqual(len(virtual_trading.open_calls), 1)
+        self.assertEqual(len(trade_store.trades), 1)
+        self.assertEqual(len(trade_store.signal_events), 1)
+        self.assertEqual(len(trade_store.metrics), 1)
+        runtime_state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        self.assertEqual(runtime_state["processed_signals"], 1)
+        self.assertEqual(runtime_state["opened_trades"], 1)
+        self.assertEqual(runtime_state["trades_written"], 1)
+        self.assertEqual(runtime_state["signal_events_written"], 1)
+        self.assertEqual(runtime_state["metrics_written"], 1)
+        self.assertEqual(runtime_state["last_forward_event"], "duplicate_signal_ignored")
+
     async def test_process_strategy_signal_blocks_when_forward_portfolio_limit_is_reached(self) -> None:
         run_store = _ForwardRunStore(
             [

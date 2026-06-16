@@ -40,6 +40,7 @@ from app.services.trade_plan_fingerprint import fingerprint_signal_trade_plan
 
 
 FORWARD_PENDING_TERMINAL_RETENTION_LIMIT = 200
+FORWARD_PROCESSED_SIGNAL_RETENTION_LIMIT = 500
 _FORWARD_PENDING_TERMINAL_STATUSES = {
     "blocked",
     "cancelled",
@@ -302,6 +303,21 @@ class ForwardStrategyTestRuntime:
         for run in runs:
             try:
                 radar_signal = self._radar_signal_for_forward_run(run, signal)
+                processing_key = _forward_signal_processing_key(run, radar_signal)
+                if _forward_signal_was_processed(run, processing_key):
+                    result.signals_skipped += 1
+                    self._run_store.update_runtime_state(
+                        run.run_id,
+                        {
+                            "last_signal_id": radar_signal.id,
+                            "last_forward_event": "duplicate_signal_ignored",
+                            "last_heartbeat_reason": "duplicate_forward_signal",
+                            "last_processed_at": _now_iso(),
+                        },
+                    )
+                    result.runtime_state_updates += 1
+                    continue
+                processed_signal_patch = _forward_processed_signal_runtime_patch(run, processing_key)
                 gate = radar_signal.execution_gate or self._execution_gate.evaluate(radar_signal)
                 result.signals_processed += 1
                 if gate.can_enter_now:
@@ -338,6 +354,7 @@ class ForwardStrategyTestRuntime:
                                         )
                                     ),
                                     "signal_events_written": 1,
+                                    **processed_signal_patch,
                                     "last_signal_id": radar_signal.id,
                                     "last_gate_status": gate.status,
                                     "last_feed_kind": gate.feed_kind,
@@ -363,6 +380,7 @@ class ForwardStrategyTestRuntime:
                             {
                                 "processed_signals": 1,
                                 "signal_events_written": 1,
+                                **processed_signal_patch,
                                 "last_signal_id": radar_signal.id,
                                 "last_gate_status": gate.status,
                                 "last_feed_kind": gate.feed_kind,
@@ -395,6 +413,7 @@ class ForwardStrategyTestRuntime:
                             {
                                 "processed_signals": 1,
                                 "signal_events_written": 1,
+                                **processed_signal_patch,
                                 "last_signal_id": radar_signal.id,
                                 "last_gate_status": gate.status,
                                 "last_feed_kind": gate.feed_kind,
@@ -428,6 +447,7 @@ class ForwardStrategyTestRuntime:
                             "trades_written": 1,
                             "signal_events_written": 1,
                             "metrics_written": 1,
+                            **processed_signal_patch,
                             "last_signal_id": radar_signal.id,
                             "last_gate_status": gate.status,
                             "last_feed_kind": gate.feed_kind,
@@ -458,6 +478,7 @@ class ForwardStrategyTestRuntime:
                                 )
                             ),
                             "signal_events_written": 1,
+                            **processed_signal_patch,
                             "last_signal_id": radar_signal.id,
                             "last_gate_status": gate.status,
                             "last_feed_kind": gate.feed_kind,
@@ -478,6 +499,7 @@ class ForwardStrategyTestRuntime:
                         {
                             "processed_signals": 1,
                             "signal_events_written": 1,
+                            **processed_signal_patch,
                             "last_signal_id": radar_signal.id,
                             "last_gate_status": gate.status,
                             "last_feed_kind": gate.feed_kind,
@@ -1959,6 +1981,33 @@ def _forward_signal_key(run: StrategyTestRunResponse, signal: RadarSignal) -> st
             signal.created_at.astimezone(timezone.utc).isoformat(),
         ]
     )
+
+
+def _forward_signal_processing_key(run: StrategyTestRunResponse, signal: RadarSignal) -> str:
+    signal_id = str(signal.id or "").strip()
+    if signal_id:
+        return signal_id
+    return _forward_signal_key(run, signal)
+
+
+def _forward_signal_was_processed(run: StrategyTestRunResponse, processing_key: str) -> bool:
+    return processing_key in set(_forward_processed_signal_keys(run))
+
+
+def _forward_processed_signal_runtime_patch(
+    run: StrategyTestRunResponse,
+    processing_key: str,
+) -> dict[str, Any]:
+    keys = [key for key in _forward_processed_signal_keys(run) if key != processing_key]
+    keys.append(processing_key)
+    return {"processed_signal_keys": keys[-FORWARD_PROCESSED_SIGNAL_RETENTION_LIMIT:]}
+
+
+def _forward_processed_signal_keys(run: StrategyTestRunResponse) -> list[str]:
+    raw_keys = run.runtime_state.get("processed_signal_keys")
+    if not isinstance(raw_keys, list):
+        return []
+    return [str(key) for key in raw_keys if str(key or "").strip()]
 
 
 def _forward_trade_id(signal_id: str) -> str:

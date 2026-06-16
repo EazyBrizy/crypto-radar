@@ -95,6 +95,38 @@ class StrategyTestWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail.run.runtime_state["forward_account"]["initial_capital"], "1000")
         self.assertGreaterEqual(run_store.renew_lease_calls, 1)
 
+    async def test_run_once_heartbeats_existing_running_forward_run_when_idle(self) -> None:
+        running = _run(status="running", test_type="forward_virtual").model_copy(
+            update={"runtime_state": {"status": "listening", "processed_ticks": 0}}
+        )
+        run_store = _WorkerRunStore([running])
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            matrix_runner=_FailingForwardMatrixRunner(),  # type: ignore[arg-type]
+            eligibility_profile_updater=_NoopEligibilityUpdater(),
+        )
+        worker = StrategyTestWorker(
+            service=service,
+            run_store=run_store,
+            worker_id="worker-a",
+            lease_seconds=30,
+            heartbeat_interval_seconds=0.01,
+        )
+
+        result = await worker.run_once()
+
+        detail = run_store.get_run(RUN_ID)
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(result.claimed_runs, 0)
+        self.assertEqual(result.forward_heartbeat_updates, 1)
+        self.assertEqual(detail.run.status, "running")
+        self.assertEqual(detail.run.runtime_state["status"], "waiting_for_market_data")
+        self.assertEqual(detail.run.runtime_state["last_heartbeat_reason"], "waiting_for_market_data")
+        self.assertEqual(detail.run.runtime_state["processed_ticks"], 0)
+        self.assertIsNotNone(detail.run.last_heartbeat_at)
+
     async def test_run_once_recovers_expired_running_and_stopping_leases(self) -> None:
         running = _run(
             run_id=RUN_ID,

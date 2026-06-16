@@ -244,6 +244,20 @@ Virtual trading mechanics smoke:
 make smoke-virtual
 ```
 
+Strategy backtest/forward Docker smoke:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_strategy_tests.ps1
+```
+
+Linux/macOS wrapper, when PowerShell is available:
+
+```sh
+./scripts/smoke_strategy_tests.sh
+```
+
+The strategy smoke runs through Docker Compose, not local Python. It starts infra with `--profile infra`, applies Alembic from the Docker backend image, seeds demo identity and duplicate OHLCV candles, starts `backend-dev` plus `strategy-test-worker`, then verifies a historical backtest and forward virtual pending-fill/cancel chain. Timeouts and seed sizing are configurable with `SMOKE_RUN_TIMEOUT_SECONDS`, `SMOKE_FORWARD_TIMEOUT_SECONDS`, `SMOKE_BACKEND_HEALTH_TIMEOUT_SECONDS`, `SMOKE_POLL_INTERVAL_SECONDS`, `SMOKE_CANDLES_PER_TIMEFRAME`, `SMOKE_WARMUP_CANDLES`, `SMOKE_START_AT`, and `SMOKE_LOG_TAIL_LINES`.
+
 ## Virtual, Testnet, Mainnet
 
 - Virtual pending execution is implemented. The local MVP flow should use virtual mode and the scanner tick path to validate pending-entry behavior.

@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.request_timing import add_request_timing_middleware
 from app.services.market_scanner import DEFAULT_SYMBOLS, MarketScanner
 from app.services.realtime_gateway import realtime_gateway
+from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
 from app.services.trading_kill_switch import scanner_kill_switch_payload
 from app.workers.derivative_snapshot_worker import DerivativeSnapshotSyncRunner
 from app.workers.exchange_instrument_worker import ExchangeInstrumentRuleSyncRunner
@@ -59,7 +60,8 @@ def _real_position_sync_enabled() -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    runner = ScannerRunner()
+    forward_strategy_test_runtime = ForwardStrategyTestRuntime()
+    runner = ScannerRunner(forward_strategy_tests=forward_strategy_test_runtime)
     instrument_rule_runner = ExchangeInstrumentRuleSyncRunner()
     derivative_snapshot_runner = DerivativeSnapshotSyncRunner()
     orderbook_snapshot_worker = OrderbookSnapshotWorker()
@@ -79,6 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.orderbook_snapshot_worker = orderbook_snapshot_worker
     app.state.signal_expiry_worker = signal_expiry_worker
     app.state.real_position_sync_worker = real_position_sync_worker
+    app.state.forward_strategy_test_runtime = forward_strategy_test_runtime
     app.state.forward_strategy_test_worker = None
     app.state.scanner_autostart_enabled = scanner_autostart_enabled
     app.state.exchange_instrument_rule_sync_enabled = instrument_rule_sync_enabled

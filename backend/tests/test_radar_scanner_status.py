@@ -131,7 +131,7 @@ class RadarScannerStatusTest(unittest.IsolatedAsyncioTestCase):
 
 
 class MainForwardStrategyTestWorkerWiringTest(unittest.IsolatedAsyncioTestCase):
-    async def test_lifespan_does_not_start_forward_worker_when_scanner_autostart_is_disabled(self) -> None:
+    async def test_lifespan_wires_scanner_to_forward_runtime_without_starting_worker_loop(self) -> None:
         from app import main as app_main
 
         events: list[str] = []
@@ -146,6 +146,7 @@ class MainForwardStrategyTestWorkerWiringTest(unittest.IsolatedAsyncioTestCase):
             patch("app.main.SignalExpiryWorker", _worker_factory("expiry", events)),
             patch("app.main.RealPositionSyncWorker", _worker_factory("positions", events)),
             patch("app.main.BybitRealPositionSyncClient", object),
+            patch("app.main.ForwardStrategyTestRuntime", FakeForwardStrategyTestRuntime, create=True),
             patch("app.main._scanner_enabled", return_value=False),
             patch("app.main._instrument_rule_sync_enabled", return_value=False),
             patch("app.main._derivative_snapshot_sync_enabled", return_value=False),
@@ -159,7 +160,11 @@ class MainForwardStrategyTestWorkerWiringTest(unittest.IsolatedAsyncioTestCase):
         ):
             async with app_main.lifespan(fake_app):  # type: ignore[arg-type]
                 self.assertIsNone(fake_app.state.forward_strategy_test_worker)
-                self.assertIsNone(FakeScannerRunner.instances[0].forward_strategy_tests)
+                self.assertIsInstance(fake_app.state.forward_strategy_test_runtime, FakeForwardStrategyTestRuntime)
+                self.assertIs(
+                    FakeScannerRunner.instances[0].forward_strategy_tests,
+                    fake_app.state.forward_strategy_test_runtime,
+                )
                 self.assertFalse(FakeScannerRunner.instances[0].started)
 
             self.assertLess(
@@ -212,6 +217,10 @@ class FakeScannerRunner:
 
     async def stop(self) -> None:
         _wiring_events().append("scanner.stop")
+
+
+class FakeForwardStrategyTestRuntime:
+    pass
 
 
 class FakeRealtimeGateway:

@@ -57,7 +57,7 @@ class ForwardStrategyTestAppIntegrationTest(unittest.TestCase):
 
                 runner = app.state.scanner_runner
                 self.assertIsNone(app.state.forward_strategy_test_worker)
-                self.assertIsNone(runner._forward_strategy_tests)  # type: ignore[attr-defined]
+                self.assertIsNotNone(runner._forward_strategy_tests)  # type: ignore[attr-defined]
 
                 strategy_worker = StrategyTestWorker(
                     service=service,
@@ -66,7 +66,7 @@ class ForwardStrategyTestAppIntegrationTest(unittest.TestCase):
                     heartbeat_interval_seconds=0.01,
                 )
                 worker_result = asyncio.run(strategy_worker.run_once())
-                runtime = ForwardStrategyTestRuntime(run_store=run_store, trade_store=trade_store)
+                runtime = runner._forward_strategy_tests  # type: ignore[attr-defined]
 
                 asyncio.run(
                     runtime.process_market_tick(
@@ -201,6 +201,13 @@ def _patched_lifespan(
         stack.enter_context(patch("app.main.close_redis_client", return_value=None))
         stack.enter_context(patch("app.main.dispose_database_engine", return_value=None))
         stack.enter_context(patch("app.main.get_storage_health", return_value={"status": "ok"}))
+        stack.enter_context(
+            patch(
+                "app.main.ForwardStrategyTestRuntime",
+                side_effect=lambda: ForwardStrategyTestRuntime(run_store=run_store, trade_store=trade_store),
+                create=True,
+            )
+        )
         stack.enter_context(patch("app.workers.signal_worker.radar_config_service", _FakeRadarConfigService()))
         yield
 

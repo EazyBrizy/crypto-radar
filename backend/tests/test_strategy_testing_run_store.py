@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401
+from app.core.config import settings
 from app.models import strategy_testing as strategy_testing_models
 from app.core.database import Base
 from app.models.strategy_testing import StrategyTestRun
@@ -217,7 +218,10 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
         self.assertEqual(detail.run.status, "queued")
         self.assertEqual(detail.run.test_type, "historical_backtest")
         self.assertEqual(detail.run.summary, {})
-        self.assertEqual(detail.run.runtime_state, {})
+        self.assertEqual(
+            detail.run.runtime_state,
+            {"stale_threshold_seconds": settings.strategy_test_lease_seconds},
+        )
         self.assertIsNone(detail.run.last_heartbeat_at)
         self.assertEqual(detail.run.requested_matrix["scenario_count"], 4)
         matrix = detail.run.requested_matrix

@@ -63,6 +63,38 @@ class StrategyTestWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(run_store.renew_lease_calls, 2)
         self.assertIsNotNone(run_store.get_run(RUN_ID).run.last_heartbeat_at)  # type: ignore[union-attr]
 
+    async def test_run_once_claims_queued_forward_run_and_starts_runtime_listening(self) -> None:
+        run_store = _WorkerRunStore([_run(status="queued", test_type="forward_virtual")])
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            matrix_runner=_FailingForwardMatrixRunner(),  # type: ignore[arg-type]
+            eligibility_profile_updater=_NoopEligibilityUpdater(),
+        )
+        worker = StrategyTestWorker(
+            service=service,
+            run_store=run_store,
+            worker_id="worker-a",
+            lease_seconds=30,
+            heartbeat_interval_seconds=0.01,
+        )
+
+        result = await worker.run_once()
+
+        detail = run_store.get_run(RUN_ID)
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(result.claimed_runs, 1)
+        self.assertEqual(result.started_forward_runs, 1)
+        self.assertEqual(result.completed_runs, 0)
+        self.assertEqual(detail.run.status, "running")
+        self.assertEqual(detail.run.runtime_state["status"], "listening")
+        self.assertEqual(detail.run.runtime_state["test_type"], "forward_virtual")
+        self.assertEqual(detail.run.runtime_state["processed_ticks"], 0)
+        self.assertEqual(detail.run.runtime_state["processed_signals"], 0)
+        self.assertEqual(detail.run.runtime_state["forward_account"]["initial_capital"], "1000")
+        self.assertGreaterEqual(run_store.renew_lease_calls, 1)
+
     async def test_run_once_recovers_expired_running_and_stopping_leases(self) -> None:
         running = _run(
             run_id=RUN_ID,
@@ -338,6 +370,12 @@ class _CancellingMatrixRunner:
             failed_scenarios=0,
             cancelled=bool(is_cancelled()),
         )
+
+
+class _FailingForwardMatrixRunner:
+    def run_matrix(self, **kwargs: Any) -> StrategyTestMatrixResult:
+        _ = kwargs
+        raise AssertionError("forward_virtual must be started by the forward runtime, not the matrix runner")
 
 
 class _RecordingTradeStore:

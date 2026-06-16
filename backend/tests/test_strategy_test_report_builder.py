@@ -288,6 +288,8 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertEqual(registry.compute_calls, [])
         self.assertEqual(report.summary["signals_count"], 12050)
         self.assertEqual(report.trades_count, 40)
+        self.assertNotIn("insufficient_data", report.warnings)
+        self.assertNotIn("signal_events_capped", report.warnings)
         self.assertTrue(any(metric["code"] == "signals_count" and metric["value"] == 12050 for metric in report.summary_metrics))
         self.assertTrue(
             any(

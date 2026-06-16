@@ -1431,9 +1431,13 @@ def _report_warnings(metrics: Sequence[MetricResult], trades: Sequence[StrategyT
             warnings.extend(result.warnings)
     for trade in trades:
         warnings.extend(trade.warnings)
-    if not trades:
+    if not trades and not _has_metric_data(metrics):
         warnings.append("insufficient_data")
     return _dedupe_strings(warnings)
+
+
+def _has_metric_data(metrics: Sequence[MetricResult]) -> bool:
+    return any(result.sample_size > 0 for result in metrics)
 
 
 def _report_rejections(trades: Sequence[StrategyTestTrade]) -> list[str]:

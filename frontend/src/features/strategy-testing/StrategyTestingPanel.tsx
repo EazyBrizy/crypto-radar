@@ -841,6 +841,10 @@ function ActiveRunNotice({
 }) {
   const allowedActions = new Set(activeRunState?.allowed_actions ?? ["refresh"]);
   const stopping = cancelPending || (run.status === "stopping" && !activeRunState?.is_stale);
+  const heartbeatReason = runtimeText(run, "last_heartbeat_reason");
+  const runtimeStatus = runtimeText(run, "status");
+  const displayedRuntimeStatus = runtimeStatus && runtimeStatus !== run.status ? runtimeStatus : null;
+  const marketDataWaiting = isWaitingForMarketData(run);
   return (
     <section aria-label="Active strategy test run" className="strategy-test-active-run">
       <div className="strategy-test-active-run-header">
@@ -853,6 +857,9 @@ function ActiveRunNotice({
       ) : null}
       {run.test_type === "historical_backtest" && !activeRunState?.is_stale ? (
         <p className="strategy-test-active-run-reason">Run is receiving heartbeats. Large historical scenarios can stay on the same scenario for a while.</p>
+      ) : null}
+      {marketDataWaiting ? (
+        <p className="strategy-test-active-run-reason">Waiting for market data</p>
       ) : null}
       <ActiveRunProgress run={run} />
       <dl className="strategy-test-active-run-meta">
@@ -868,6 +875,38 @@ function ActiveRunNotice({
           <dt>Started</dt>
           <dd>{formatOptionalDate(run.started_at)}</dd>
         </div>
+        <div>
+          <dt>Worker lease</dt>
+          <dd>{workerLeaseLabel(run)}</dd>
+        </div>
+        <div>
+          <dt>Worker attempt</dt>
+          <dd>{formatDisplayValue(run.worker_attempt ?? 0)}</dd>
+        </div>
+        <div>
+          <dt>Claimed</dt>
+          <dd>{formatOptionalDate(run.claimed_at ?? null)}</dd>
+        </div>
+        <div>
+          <dt>Lease expires</dt>
+          <dd>{formatOptionalDate(run.lease_expires_at ?? null)}</dd>
+        </div>
+        <div>
+          <dt>Last heartbeat</dt>
+          <dd>{formatOptionalDate(run.last_heartbeat_at)}</dd>
+        </div>
+        {displayedRuntimeStatus ? (
+          <div>
+            <dt>Runtime status</dt>
+            <dd>{displayedRuntimeStatus}</dd>
+          </div>
+        ) : null}
+        {heartbeatReason ? (
+          <div>
+            <dt>Heartbeat reason</dt>
+            <dd>{heartbeatReason}</dd>
+          </div>
+        ) : null}
       </dl>
       <div className="strategy-test-active-run-actions">
         <button className="secondary-action" onClick={onRefresh} type="button">
@@ -896,9 +935,11 @@ function ActiveRunNotice({
 
 function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
   const phase = runtimeText(run, "phase");
+  const displayedPhase = phase && phase !== run.status ? phase : null;
   const scenarioCompleted = runtimeNumber(run, "scenarios_completed") ?? runtimeNumber(run, "scenario_completed") ?? runSummaryNumber(run, "completed_scenarios") ?? 0;
   const scenarioTotal = runtimeNumber(run, "scenarios_total") ?? runtimeNumber(run, "scenario_total") ?? requestedScenarioCount(run) ?? runSummaryNumber(run, "scenario_count") ?? 0;
   const currentScenarioIndex = runtimeNumber(run, "current_scenario_index");
+  const currentScenarioKey = runtimeText(run, "current_scenario_key");
   const matrixBarsProcessed = runtimeNumber(run, "matrix_bars_processed") ?? runtimeNumber(run, "bars_processed");
   const matrixBarsTotal = runtimeNumber(run, "matrix_bars_total") ?? runtimeNumber(run, "bars_total");
   const scenarioBarsProcessed = runtimeNumber(run, "current_scenario_bars_processed") ?? runtimeNumber(run, "scenario_bars_processed");
@@ -913,9 +954,10 @@ function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
 
   return (
     <section aria-label="Active run progress summary" className="strategy-test-active-progress">
-      {phase ? activeProgressItem("Phase", phase) : null}
+      {displayedPhase ? activeProgressItem("Phase", displayedPhase) : null}
       {activeProgressItem("Scenarios", scenarioTotal ? `${scenarioCompleted} / ${scenarioTotal}` : scenarioCompleted)}
       {activeProgressItem("Current scenario", currentScenarioIndex && scenarioTotal ? `${currentScenarioIndex} / ${scenarioTotal}` : currentScenarioIndex ?? "-")}
+      {currentScenarioKey ? activeProgressItem("Scenario key", currentScenarioKey) : null}
       {activeProgressItem("Matrix bars", formatBarsProgress(matrixBarsProcessed, matrixBarsTotal, barsPct))}
       {activeProgressItem("Scenario bars", formatBarsCount(scenarioBarsProcessed, scenarioBarsTotal))}
       {activeProgressItem("Throughput", formatBarsPerSecond(runtimeNumber(run, "bars_per_second")))}
@@ -963,6 +1005,23 @@ function runtimeText(run: StrategyTestRunResponse, key: string): string | null {
   if (typeof value !== "string") return null;
   const text = value.trim();
   return text || null;
+}
+
+function workerLeaseLabel(run: StrategyTestRunResponse): string {
+  if (run.worker_id) return run.worker_id;
+  if (run.status === "queued") return "Waiting for worker";
+  if (run.status === "running" || run.status === "stopping") return "Worker not claimed";
+  return "-";
+}
+
+function isWaitingForMarketData(run: StrategyTestRunResponse): boolean {
+  if (run.test_type !== "forward_virtual") return false;
+  const stateValues = [
+    runtimeText(run, "status"),
+    runtimeText(run, "last_heartbeat_reason"),
+    runtimeText(run, "last_forward_event")
+  ].filter((value): value is string => Boolean(value));
+  return stateValues.some((value) => value === "waiting_for_market_data" || value === "no_matching_market_data");
 }
 
 function runtimeCounterNumber(run: StrategyTestRunResponse, key: string): number | null {

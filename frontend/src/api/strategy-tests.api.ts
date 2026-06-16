@@ -1,5 +1,4 @@
 import { requestJson } from "./client";
-import { currentUserId } from "./user-identity";
 import type {
   StrategyTestActiveRunResponse,
   StrategyTestCalibrationResponse,
@@ -27,10 +26,8 @@ export interface StrategyTestReportListParams {
 
 export const strategyTestsApi = {
   async run(request: StrategyTestRunRequest): Promise<StrategyTestRunResponse> {
-    const userId = request.user_id ?? await currentUserId();
     return rawJson<StrategyTestRunResponse>("/api/v1/strategy-tests/runs", {
       body: JSON.stringify({
-        user_id: userId,
         test_type: request.test_type ?? "historical_backtest",
         strategies: request.strategies,
         pairs: request.pairs,
@@ -51,19 +48,19 @@ export const strategyTestsApi = {
     });
   },
   async listRuns(params: StrategyTestRunListParams = {}): Promise<StrategyTestRunResponse[]> {
-    const userId = params.userId ?? await currentUserId();
-    return rawJson<StrategyTestRunResponse[]>(strategyTestRunsPath({ ...params, userId }));
+    return rawJson<StrategyTestRunResponse[]>(strategyTestRunsPath(params));
   },
   async activeRun(userId?: string): Promise<StrategyTestActiveRunResponse> {
-    const resolvedUserId = userId ?? await currentUserId();
-    const query = new URLSearchParams({ user_id: resolvedUserId });
-    return rawJson<StrategyTestActiveRunResponse>(`/api/v1/strategy-tests/runs/active?${query.toString()}`);
+    const query = new URLSearchParams();
+    if (userId) query.set("user_id", userId);
+    const queryString = query.toString();
+    return rawJson<StrategyTestActiveRunResponse>(
+      queryString ? `/api/v1/strategy-tests/runs/active?${queryString}` : "/api/v1/strategy-tests/runs/active"
+    );
   },
   async estimate(request: StrategyTestRunRequest): Promise<StrategyTestEstimateResponse> {
-    const userId = request.user_id ?? await currentUserId();
     return rawJson<StrategyTestEstimateResponse>("/api/v1/strategy-tests/runs/estimate", {
       body: JSON.stringify({
-        user_id: userId,
         test_type: request.test_type ?? "historical_backtest",
         strategies: request.strategies,
         pairs: request.pairs,

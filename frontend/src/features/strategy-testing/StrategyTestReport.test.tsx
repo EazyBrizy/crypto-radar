@@ -183,6 +183,31 @@ describe("StrategyTestReport", () => {
     expect(onPublishCalibration).not.toHaveBeenCalled();
   });
 
+  it("disables calibration from backend report gate fields", () => {
+    const onPublishCalibration = vi.fn();
+
+    render(
+      <StrategyTestReport
+        onPublishCalibration={onPublishCalibration}
+        report={report({
+          calibration_disabled_reason: "Strategy test report is still partial.",
+          calibration_disabled_reason_code: "report_not_complete",
+          can_publish_calibration: false,
+          data_completeness: "complete",
+          is_partial: false,
+          status: "completed"
+        })}
+        run={run({ status: "completed" })}
+      />
+    );
+
+    const button = screen.getByRole("button", { name: "Use this run for calibration" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText("Strategy test report is still partial.")).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(onPublishCalibration).not.toHaveBeenCalled();
+  });
+
   it("labels partial report data and hides full report sections", () => {
     render(<StrategyTestReport report={report({ data_completeness: "partial", is_partial: true, status: "running" })} run={run({ status: "running" })} />);
 

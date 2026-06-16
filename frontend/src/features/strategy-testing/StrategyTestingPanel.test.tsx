@@ -590,6 +590,7 @@ describe("StrategyTestingPanel", () => {
         current_scenario_bars_processed: 49750,
         current_scenario_bars_total: 86597,
         current_scenario_index: 3,
+        current_scenario_key: "trend_pullback_continuation::bybit::BTCUSDT::15m",
         eta_seconds: 12,
         matrix_bars_processed: 149750,
         matrix_bars_total: 386597,
@@ -615,6 +616,7 @@ describe("StrategyTestingPanel", () => {
     expect(within(progress).getByText("3 / 16")).toBeInTheDocument();
     expect(within(progress).getByText("149750 / 386597 (38.74%)")).toBeInTheDocument();
     expect(within(progress).getByText("49750 / 86597")).toBeInTheDocument();
+    expect(within(progress).getByText("trend_pullback_continuation::bybit::BTCUSDT::15m")).toBeInTheDocument();
     expect(within(progress).getByText("40 bars/s")).toBeInTheDocument();
     expect(within(progress).getByText("12s")).toBeInTheDocument();
     expect(within(progress).getByText("6542")).toBeInTheDocument();
@@ -622,6 +624,58 @@ describe("StrategyTestingPanel", () => {
     expect(within(progress).getByText("Pending armed")).toBeInTheDocument();
     expect(within(progress).getByText("No entry")).toBeInTheDocument();
     expect(within(progress).getByText("Filled")).toBeInTheDocument();
+  });
+
+  it("renders queued active run as waiting for worker lease", () => {
+    mocks.activeRun = activeRunState({
+      active_run: strategyTestRun({
+        last_heartbeat_at: null,
+        run_id: "69696969-6969-4969-8969-696969696969",
+        runtime_state: {
+          phase: "queued",
+          status: "queued"
+        },
+        status: "queued",
+        worker_attempt: 0,
+        worker_id: null
+      }),
+      allowed_actions: ["refresh", "cancel"],
+      can_run: false,
+      is_stale: false
+    });
+
+    renderPanel();
+
+    const notice = screen.getByLabelText("Active strategy test run");
+    expect(within(notice).getByText("queued")).toBeInTheDocument();
+    expect(within(notice).getByText("Waiting for worker")).toBeInTheDocument();
+    expect(within(notice).getByText("Worker lease")).toBeInTheDocument();
+  });
+
+  it("renders forward waiting_for_market_data state from backend runtime", () => {
+    mocks.activeRun = activeRunState({
+      active_run: strategyTestRun({
+        run_id: "70707070-7070-4070-8070-707070707070",
+        runtime_state: {
+          last_heartbeat_reason: "no_matching_market_data",
+          processed_signals: 0,
+          processed_ticks: 0,
+          status: "waiting_for_market_data"
+        },
+        status: "running",
+        test_type: "forward_virtual",
+        worker_id: "strategy-worker-a"
+      }),
+      can_run: false,
+      is_stale: false
+    });
+
+    renderPanel();
+
+    const notice = screen.getByLabelText("Active strategy test run");
+    expect(within(notice).getByText("Waiting for market data")).toBeInTheDocument();
+    expect(within(notice).getByText("no_matching_market_data")).toBeInTheDocument();
+    expect(within(notice).getByText("strategy-worker-a")).toBeInTheDocument();
   });
 
   it("renders selected active run progress instead of an empty report state", async () => {

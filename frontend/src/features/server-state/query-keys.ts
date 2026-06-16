@@ -1,7 +1,6 @@
 import type { MarketUniversePairsQuery, RadarDisplayMode } from "@/features/server-state/types";
 import type { StrategyTestRunRequest, StrategyTestRunStatus } from "@/features/strategy-testing/types";
 import type { SignalActionMode, SignalStatus, Timeframe, TradeMode, TradeSource, TradeStatus } from "@/types";
-import { DEV_FALLBACK_USER_ID } from "@/auth/current-user";
 import { CandleFilterSchema, SignalHistoryFilterSchema, TradeJournalFilterSchema } from "@/validation/filter-schemas";
 
 export type TradeJournalFilters = {
@@ -77,12 +76,12 @@ const normalizeCandleFilters = (filters: CandleFilters) => {
 const normalizeStrategyTestRunFilters = (filters: StrategyTestRunFilters = {}) => ({
   limit: filters.limit ?? 25,
   status: filters.status ?? "all",
-  userId: filters.userId ?? DEV_FALLBACK_USER_ID
+  userId: filters.userId ?? "me"
 });
 
 const normalizeStrategyTestReportFilters = (filters: StrategyTestReportFilters = {}) => ({
   limit: filters.limit ?? 25,
-  userId: filters.userId ?? "all"
+  userId: filters.userId ?? "me"
 });
 
 const normalizeMarketUniverseFilters = (filters: MarketUniversePairsQuery = {}) => ({
@@ -189,7 +188,7 @@ export const serverStateKeys = {
   },
   strategyTests: {
     all: () => [...serverStateKeys.all, "strategy-tests"] as const,
-    active: (userId?: string) => [...serverStateKeys.strategyTests.all(), "active", userId ?? DEV_FALLBACK_USER_ID] as const,
+    active: (userId?: string) => [...serverStateKeys.strategyTests.all(), "active", userId ?? "me"] as const,
     estimate: (request?: StrategyTestRunRequest | null) => [...serverStateKeys.strategyTests.all(), "estimate", request ?? "none"] as const,
     runs: (filters?: StrategyTestRunFilters) => [...serverStateKeys.strategyTests.all(), "runs", normalizeStrategyTestRunFilters(filters)] as const,
     run: (runId: string) => [...serverStateKeys.strategyTests.all(), "run", runId] as const,

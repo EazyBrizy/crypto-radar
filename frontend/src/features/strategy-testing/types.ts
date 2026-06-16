@@ -97,6 +97,10 @@ export interface StrategyTestRunResponse {
   finished_at: string | null;
   last_heartbeat_at: string | null;
   error: string | null;
+  worker_id?: StrategyTestRunResponseDto["worker_id"];
+  worker_attempt?: StrategyTestRunResponseDto["worker_attempt"];
+  claimed_at?: StrategyTestRunResponseDto["claimed_at"];
+  lease_expires_at?: StrategyTestRunResponseDto["lease_expires_at"];
 }
 
 export interface StrategyTestActiveRunResponse {
@@ -211,6 +215,9 @@ export interface StrategyTestReport {
   mode: StrategyTestMode;
   is_partial: boolean;
   data_completeness: StrategyTestDataCompleteness;
+  can_publish_calibration?: StrategyTestReportDto["can_publish_calibration"];
+  calibration_disabled_reason_code?: StrategyTestReportDto["calibration_disabled_reason_code"];
+  calibration_disabled_reason?: StrategyTestReportDto["calibration_disabled_reason"];
   requested_matrix: StrategyTestRequestedMatrix;
   assumptions: Record<string, unknown>;
   summary: StrategyTestRunSummary;

@@ -59,7 +59,11 @@ export function StrategyTestReport({
   const calibrationStatus = report?.status ?? run?.status ?? null;
   const reportIsPartial = isPartialReport(report, run);
   const showCalibrationAction = Boolean(onPublishCalibration && calibrationRunId);
-  const calibrationDisabled = calibrationPending || calibrationStatus !== "completed" || reportIsPartial;
+  const backendCalibrationBlocked = report?.can_publish_calibration === false;
+  const calibrationDisabled = calibrationPending || backendCalibrationBlocked || calibrationStatus !== "completed" || reportIsPartial;
+  const calibrationDisabledReason = showCalibrationAction && !calibrationPending
+    ? calibrationDisabledMessage(report, run, backendCalibrationBlocked, calibrationStatus, reportIsPartial)
+    : null;
   const activeRunWithoutReport = Boolean(run && ACTIVE_RUN_STATUSES.has(run.status) && !report);
   const selectedRunWithoutReport = Boolean(run && !report && !activeRunWithoutReport);
 
@@ -109,6 +113,7 @@ export function StrategyTestReport({
           </div>
 
           {reportIsPartial && report ? <div className="empty-state compact-empty">{partialReportMessage(report, run)}</div> : null}
+          {calibrationDisabledReason ? <div className="empty-state compact-empty">{calibrationDisabledReason}</div> : null}
           {calibrationError ? <p className="form-error">{calibrationError.message}</p> : null}
           {calibrationResult ? <CalibrationPublicationResult result={calibrationResult} /> : null}
 
@@ -456,6 +461,21 @@ function partialReportMessage(report: StrategyTestReportData, run: StrategyTestR
     return "Run is still running; aggregate metrics may change.";
   }
   return "Report is partial; aggregate metrics may be incomplete.";
+}
+
+function calibrationDisabledMessage(
+  report: StrategyTestReportData | null,
+  run: StrategyTestRunResponse | null,
+  backendCalibrationBlocked: boolean,
+  calibrationStatus: string | null,
+  reportIsPartial: boolean
+): string | null {
+  if (backendCalibrationBlocked) {
+    return report?.calibration_disabled_reason ?? report?.calibration_disabled_reason_code ?? "Calibration publication is disabled for this report.";
+  }
+  if (calibrationStatus !== "completed") return "Calibration publication requires a completed run.";
+  if (reportIsPartial && report) return partialReportMessage(report, run);
+  return null;
 }
 
 function summaryFromRun(run: StrategyTestRunResponse | null): StrategyTestRunSummary {

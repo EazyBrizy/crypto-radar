@@ -6469,6 +6469,17 @@ export interface components {
              * @enum {string}
              */
             mode: "discovery" | "research_virtual" | "production_like";
+            /**
+             * Is Partial
+             * @default false
+             */
+            is_partial: boolean;
+            /**
+             * Data Completeness
+             * @default complete
+             * @enum {string}
+             */
+            data_completeness: "complete" | "partial";
             /** Requested Matrix */
             requested_matrix?: {
                 [key: string]: unknown;

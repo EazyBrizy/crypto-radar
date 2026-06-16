@@ -9,10 +9,12 @@ type StrategyTestFunnelResponseDto = components["schemas"]["StrategyTestFunnelRe
 type StrategyTestCalibrationResponseDto = components["schemas"]["StrategyTestCalibrationResponse"];
 type StrategyTestRuntimeCountersDto = components["schemas"]["StrategyTestRuntimeCounters"];
 type StrategyTestRuntimeStateDto = components["schemas"]["StrategyTestRuntimeState"];
+type StrategyTestReportDto = components["schemas"]["StrategyTestReport"];
 
 export type StrategyTestMode = StrategyTestRunRequestDto["mode"];
 export type StrategyTestType = StrategyTestRunResponseDto["test_type"];
 export type StrategyTestRunStatus = StrategyTestRunResponseDto["status"];
+export type StrategyTestDataCompleteness = StrategyTestReportDto["data_completeness"];
 export type StrategyTestCalibrationDecision = StrategyTestCalibrationResponseDto["decision"];
 export type StrategyTestSameCandlePolicy = StrategyTestRunRequestDto["same_candle_policy"];
 
@@ -207,6 +209,8 @@ export interface StrategyTestReport {
   run_id: string;
   status: StrategyTestRunStatus;
   mode: StrategyTestMode;
+  is_partial: boolean;
+  data_completeness: StrategyTestDataCompleteness;
   requested_matrix: StrategyTestRequestedMatrix;
   assumptions: Record<string, unknown>;
   summary: StrategyTestRunSummary;

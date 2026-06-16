@@ -166,6 +166,32 @@ describe("StrategyTestReport", () => {
     expect(onPublishCalibration).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
   });
 
+  it("disables calibration for a non-completed run", () => {
+    const onPublishCalibration = vi.fn();
+
+    render(
+      <StrategyTestReport
+        onPublishCalibration={onPublishCalibration}
+        report={report({ data_completeness: "partial", is_partial: true, status: "running" })}
+        run={run({ status: "running" })}
+      />
+    );
+
+    const button = screen.getByRole("button", { name: "Use this run for calibration" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onPublishCalibration).not.toHaveBeenCalled();
+  });
+
+  it("labels partial report data and hides full report sections", () => {
+    render(<StrategyTestReport report={report({ data_completeness: "partial", is_partial: true, status: "running" })} run={run({ status: "running" })} />);
+
+    expect(screen.getByText("Partial report")).toBeInTheDocument();
+    expect(screen.getByText("Run is still running; aggregate metrics may change.")).toBeInTheDocument();
+    expect(screen.queryByText("Strategy comparison")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recommended strategy adjustments")).not.toBeInTheDocument();
+  });
+
   it("shows calibration publication result", () => {
     render(
       <StrategyTestReport
@@ -246,6 +272,8 @@ function report(overrides: Partial<StrategyTestReportData> = {}): StrategyTestRe
     ],
     generated_at: "2026-06-02T00:00:00.000Z",
     grouped_metrics: [],
+    data_completeness: "complete",
+    is_partial: false,
     metrics: [],
     mode: "research_virtual",
     rejections: [],

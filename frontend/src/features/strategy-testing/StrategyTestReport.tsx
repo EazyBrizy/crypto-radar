@@ -57,7 +57,9 @@ export function StrategyTestReport({
   const adjustments = report?.candidate_adjustments ?? [];
   const calibrationRunId = report?.run_id ?? run?.run_id ?? null;
   const calibrationStatus = report?.status ?? run?.status ?? null;
-  const canPublishCalibration = Boolean(onPublishCalibration && calibrationRunId && calibrationStatus === "completed");
+  const reportIsPartial = isPartialReport(report, run);
+  const showCalibrationAction = Boolean(onPublishCalibration && calibrationRunId);
+  const calibrationDisabled = calibrationPending || calibrationStatus !== "completed" || reportIsPartial;
   const activeRunWithoutReport = Boolean(run && ACTIVE_RUN_STATUSES.has(run.status) && !report);
   const selectedRunWithoutReport = Boolean(run && !report && !activeRunWithoutReport);
 
@@ -69,11 +71,15 @@ export function StrategyTestReport({
           <span>{report ? `${shortRunId(report.run_id)} / ${report.status} / ${report.mode}` : reportFallbackLabel(run)}</span>
         </div>
         <div className="strategy-test-panel-actions">
-          {canPublishCalibration ? (
+          {showCalibrationAction ? (
             <button
               className="secondary-action compact-action"
-              disabled={calibrationPending}
-              onClick={() => onPublishCalibration?.(calibrationRunId as string)}
+              disabled={calibrationDisabled}
+              onClick={() => {
+                if (!calibrationDisabled && calibrationRunId) {
+                  onPublishCalibration?.(calibrationRunId);
+                }
+              }}
               type="button"
             >
               {calibrationPending ? <LoaderCircle size={16} /> : <ShieldCheck size={16} />}
@@ -98,9 +104,11 @@ export function StrategyTestReport({
             <Badge tone="blue">{report?.trades_count ?? metricNumber(fallbackSummary.trades_count)} trades</Badge>
             <Badge tone={report?.warnings?.length ? "yellow" : "green"}>{report?.warnings?.length ?? 0} warnings</Badge>
             <Badge tone={report?.rejections?.length ? "red" : "neutral"}>{report?.rejections?.length ?? 0} rejections</Badge>
+            {reportIsPartial ? <Badge tone="yellow">Partial report</Badge> : null}
             {report ? <Badge tone="purple">{report.sections.length} sections</Badge> : null}
           </div>
 
+          {reportIsPartial && report ? <div className="empty-state compact-empty">{partialReportMessage(report, run)}</div> : null}
           {calibrationError ? <p className="form-error">{calibrationError.message}</p> : null}
           {calibrationResult ? <CalibrationPublicationResult result={calibrationResult} /> : null}
 
@@ -112,18 +120,27 @@ export function StrategyTestReport({
 
           {report ? (
             <div className="strategy-test-report-sections">
-              <ReportSummarySection report={report} />
-              <SignalFunnelSection report={report} />
-              <MetricSection report={report} sectionCode="strategy_comparison" />
-              <MetricSection report={report} sectionCode="pair_timeframe_breakdown" />
-              <MetricSection report={report} sectionCode="regime_breakdown" />
-              <MetricSection report={report} sectionCode="score_bucket_breakdown" />
-              <MetricSection report={report} sectionCode="entry_quality" />
-              <MetricSection report={report} sectionCode="exit_quality" />
-              <DistributionSection report={report} />
-              <RejectionSection report={report} />
-              <TradeListSection report={report} />
-              <CandidateAdjustmentsSection adjustments={adjustments} />
+              {reportIsPartial ? (
+                <>
+                  <ReportSummarySection report={report} />
+                  <SignalFunnelSection report={report} />
+                </>
+              ) : (
+                <>
+                  <ReportSummarySection report={report} />
+                  <SignalFunnelSection report={report} />
+                  <MetricSection report={report} sectionCode="strategy_comparison" />
+                  <MetricSection report={report} sectionCode="pair_timeframe_breakdown" />
+                  <MetricSection report={report} sectionCode="regime_breakdown" />
+                  <MetricSection report={report} sectionCode="score_bucket_breakdown" />
+                  <MetricSection report={report} sectionCode="entry_quality" />
+                  <MetricSection report={report} sectionCode="exit_quality" />
+                  <DistributionSection report={report} />
+                  <RejectionSection report={report} />
+                  <TradeListSection report={report} />
+                  <CandidateAdjustmentsSection adjustments={adjustments} />
+                </>
+              )}
             </div>
           ) : activeRunWithoutReport ? null : selectedRunWithoutReport && run ? (
             <RunSummaryFallback run={run} summary={fallbackSummary} />
@@ -425,6 +442,20 @@ function summaryItem(label: string, value: unknown) {
       <strong>{formatCell(value)}</strong>
     </div>
   );
+}
+
+function isPartialReport(report: StrategyTestReportData | null, run: StrategyTestRunResponse | null): boolean {
+  if (report?.is_partial || report?.data_completeness === "partial") return true;
+  const status = report?.status ?? run?.status ?? null;
+  return Boolean(status && ACTIVE_RUN_STATUSES.has(status));
+}
+
+function partialReportMessage(report: StrategyTestReportData, run: StrategyTestRunResponse | null): string {
+  const status = report.status ?? run?.status;
+  if (status === "running" || status === "stopping" || status === "queued") {
+    return "Run is still running; aggregate metrics may change.";
+  }
+  return "Report is partial; aggregate metrics may be incomplete.";
 }
 
 function summaryFromRun(run: StrategyTestRunResponse | null): StrategyTestRunSummary {

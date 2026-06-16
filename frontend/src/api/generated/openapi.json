@@ -19583,6 +19583,20 @@
             ],
             "title": "Mode"
           },
+          "is_partial": {
+            "type": "boolean",
+            "title": "Is Partial",
+            "default": false
+          },
+          "data_completeness": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial"
+            ],
+            "title": "Data Completeness",
+            "default": "complete"
+          },
           "requested_matrix": {
             "additionalProperties": true,
             "type": "object",

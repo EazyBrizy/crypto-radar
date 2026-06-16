@@ -21,6 +21,7 @@ export function StrategyTestReportPreview({
   run
 }: StrategyTestReportPreviewProps) {
   const metrics = report?.summary_metrics ?? summaryMetricsFromRun(run);
+  const partial = Boolean(report?.is_partial || report?.data_completeness === "partial" || (run && ["queued", "running", "stopping"].includes(run.status)));
   return (
     <section className="strategy-test-report-panel" aria-live="polite">
       <div className="strategy-test-panel-head">
@@ -44,8 +45,10 @@ export function StrategyTestReportPreview({
             <Badge tone="blue">{report?.trades_count ?? metricNumber(run?.summary.trades_count)} trades</Badge>
             <Badge tone={report?.warnings.length ? "yellow" : "green"}>{report?.warnings.length ?? 0} warnings</Badge>
             <Badge tone={report?.rejections.length ? "red" : "neutral"}>{report?.rejections.length ?? 0} rejections</Badge>
+            {partial ? <Badge tone="yellow">Partial report</Badge> : null}
           </div>
 
+          {partial ? <div className="empty-state compact-empty">Run is still running; aggregate metrics may change.</div> : null}
           {metrics.length ? (
             <div className="strategy-test-metric-grid">
               {metrics.slice(0, 6).map((metric, index) => (

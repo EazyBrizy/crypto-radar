@@ -70,12 +70,12 @@ class StrategyTestWorker:
 
     async def run_once(self) -> StrategyTestWorkerResult:
         result = StrategyTestWorkerResult()
+        self._heartbeat_forward_runs(result)
+
         recovered = self._run_store.recover_expired_leases(worker_id=self._worker_id)
         result.recovered_failed_runs += int(recovered.get("failed", 0))
         result.recovered_cancelled_runs += int(recovered.get("cancelled", 0))
         result.recovered_requeued_runs += int(recovered.get("requeued", 0))
-
-        result.forward_heartbeat_updates += self._heartbeat_forward_runs()
 
         claimed = self._run_store.claim_next_run(
             worker_id=self._worker_id,
@@ -141,12 +141,22 @@ class StrategyTestWorker:
         )
         result.lease_renewals += 1
 
-    def _heartbeat_forward_runs(self) -> int:
+    def _heartbeat_forward_runs(self, result: StrategyTestWorkerResult) -> None:
         heartbeat = getattr(self._service, "heartbeat_forward_runs", None)
         if not callable(heartbeat):
-            return 0
+            return
         forward_result = heartbeat()
-        return int(getattr(forward_result, "runtime_state_updates", 0) or 0)
+        result.forward_heartbeat_updates += int(getattr(forward_result, "runtime_state_updates", 0) or 0)
+        for detail in self._run_store.list_runs(user_id=None, limit=500, status="running"):
+            run = detail.run
+            if run.test_type != "forward_virtual":
+                continue
+            self._run_store.renew_lease(
+                run.run_id,
+                worker_id=self._worker_id,
+                lease_seconds=self._lease_seconds,
+            )
+            result.lease_renewals += 1
 
 
 def _default_worker_id() -> str:

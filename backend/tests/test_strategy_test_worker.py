@@ -127,6 +127,41 @@ class StrategyTestWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail.run.runtime_state["processed_ticks"], 0)
         self.assertIsNotNone(detail.run.last_heartbeat_at)
 
+    async def test_run_once_heartbeats_existing_running_forward_run_renews_lease_before_recovery(self) -> None:
+        running = _run(
+            status="running",
+            test_type="forward_virtual",
+            lease_expires_at=NOW - timedelta(seconds=1),
+        ).model_copy(update={"runtime_state": {"status": "listening", "processed_ticks": 0}})
+        run_store = _WorkerRunStore([running])
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            matrix_runner=_FailingForwardMatrixRunner(),  # type: ignore[arg-type]
+            eligibility_profile_updater=_NoopEligibilityUpdater(),
+        )
+        worker = StrategyTestWorker(
+            service=service,
+            run_store=run_store,
+            worker_id="worker-a",
+            lease_seconds=30,
+            heartbeat_interval_seconds=0.01,
+        )
+
+        result = await worker.run_once()
+
+        detail = run_store.get_run(RUN_ID)
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(result.recovered_failed_runs, 0)
+        self.assertEqual(result.forward_heartbeat_updates, 1)
+        self.assertEqual(result.lease_renewals, 1)
+        self.assertEqual(run_store.renew_lease_calls, 1)
+        self.assertEqual(detail.run.status, "running")
+        self.assertEqual(detail.run.runtime_state["status"], "waiting_for_market_data")
+        self.assertEqual(detail.run.runtime_state["last_heartbeat_reason"], "waiting_for_market_data")
+        self.assertGreater(detail.run.lease_expires_at, NOW)
+
     async def test_run_once_recovers_expired_running_and_stopping_leases(self) -> None:
         running = _run(
             run_id=RUN_ID,
@@ -265,10 +300,17 @@ class _WorkerRunStore:
         worker_id: str,
         lease_seconds: int,
     ) -> StrategyTestRunDetailResponse:
-        _ = worker_id, lease_seconds
         self.renew_lease_calls += 1
         detail = self._runs[run_id]
-        updated = detail.run.model_copy(update={"last_heartbeat_at": NOW + timedelta(seconds=self.renew_lease_calls)})
+        renewed_at = NOW + timedelta(seconds=self.renew_lease_calls)
+        updated = detail.run.model_copy(
+            update={
+                "worker_id": worker_id,
+                "claimed_at": renewed_at,
+                "last_heartbeat_at": renewed_at,
+                "lease_expires_at": renewed_at + timedelta(seconds=lease_seconds),
+            }
+        )
         self._runs[run_id] = StrategyTestRunDetailResponse(run=updated)
         return self._runs[run_id]
 

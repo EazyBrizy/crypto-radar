@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
+from app.core.config import settings
 from app.core.clickhouse_client import create_clickhouse_client
+from app.exchanges.bybit import fetch_bybit_klines_range
 from app.schemas.candle import OHLCVCandle
 from app.services.candle_service import TIMEFRAME_MS
-from app.services.market_persistence import OHLCV_TABLES_BY_TIMEFRAME
+from app.services.market_persistence import OHLCV_TABLES_BY_TIMEFRAME, market_data_persistence_service
 
 
 class HistoricalCandleProvider(Protocol):
@@ -48,6 +50,14 @@ class HistoricalCandleProvider(Protocol):
 
 class ClickHouseQueryClient(Protocol):
     def query(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
+        ...
+
+
+RangeKlineFetcher = Callable[..., list[OHLCVCandle]]
+
+
+class CandlePersistenceService(Protocol):
+    def persist_candles(self, candles: list[OHLCVCandle]) -> int:
         ...
 
 
@@ -253,6 +263,174 @@ class ClickHouseHistoricalCandleProvider:
             close()
 
 
+class BackfillingHistoricalCandleProvider:
+    def __init__(
+        self,
+        base_provider: HistoricalCandleProvider | None = None,
+        *,
+        range_fetcher: RangeKlineFetcher = fetch_bybit_klines_range,
+        persistence_service: CandlePersistenceService = market_data_persistence_service,
+        settings_obj: Any = settings,
+        coverage_ratio: float = 0.98,
+    ) -> None:
+        self._base_provider = base_provider or ClickHouseHistoricalCandleProvider()
+        self._range_fetcher = range_fetcher
+        self._persistence_service = persistence_service
+        self._settings = settings_obj
+        self._coverage_ratio = max(0.0, min(float(coverage_ratio), 1.0))
+
+    async def load_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> list[OHLCVCandle]:
+        await self.ensure_candles(
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        return await self._base_provider.load_candles(
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+        )
+
+    async def ensure_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> None:
+        if timeframe not in TIMEFRAME_MS:
+            raise ValueError(f"unsupported_timeframe: {timeframe}")
+        if not _truthy_setting(
+            self._settings,
+            "strategy_test_historical_backfill_enabled",
+            default=True,
+        ):
+            return
+        if exchange.strip().lower() != "bybit":
+            return
+
+        expected_count = _expected_closed_candle_count(
+            start_at=start_at,
+            end_at=end_at,
+            timeframe=timeframe,
+        )
+        if expected_count <= 0:
+            return
+        max_candles = max(
+            1,
+            int(
+                getattr(
+                    self._settings,
+                    "strategy_test_historical_backfill_max_candles_per_pair_timeframe",
+                    500_000,
+                )
+            ),
+        )
+        if expected_count > max_candles:
+            raise ValueError(
+                "historical_backfill_range_too_large: "
+                f"expected {expected_count} candles for {exchange} {symbol} {timeframe}, "
+                f"limit is {max_candles}"
+            )
+
+        actual_count = await self._base_provider.count_candles(
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        if actual_count >= expected_count * self._coverage_ratio:
+            return
+
+        try:
+            candles = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._range_fetcher,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    start_at=_as_utc(start_at),
+                    end_at=_as_utc(end_at),
+                    category="linear",
+                    limit=max(
+                        1,
+                        int(getattr(self._settings, "strategy_test_historical_backfill_batch_limit", 1000)),
+                    ),
+                ),
+                timeout=max(
+                    0.1,
+                    float(getattr(self._settings, "strategy_test_historical_backfill_timeout_seconds", 30.0)),
+                ),
+            )
+            closed_candles = _closed_candles_in_range(
+                candles,
+                timeframe=timeframe,
+                start_at=start_at,
+                end_at=end_at,
+            )
+            if closed_candles:
+                await asyncio.to_thread(self._persistence_service.persist_candles, closed_candles)
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            timeout = float(getattr(self._settings, "strategy_test_historical_backfill_timeout_seconds", 30.0))
+            raise RuntimeError(
+                f"historical_backfill_failed: {exchange} {symbol} {timeframe} "
+                f"timeout after {timeout:g}s"
+            ) from exc
+        except Exception as exc:
+            detail = str(exc) or exc.__class__.__name__
+            raise RuntimeError(
+                f"historical_backfill_failed: {exchange} {symbol} {timeframe} {detail}"
+            ) from exc
+
+    async def count_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        return await self._base_provider.count_candles(
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+        )
+
+    async def count_raw_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> int:
+        return await self._base_provider.count_raw_candles(
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_at=start_at,
+            end_at=end_at,
+        )
+
+
 class InMemoryHistoricalCandleProvider:
     def __init__(self, candles: list[OHLCVCandle] | None = None) -> None:
         self._candles = list(candles or [])
@@ -405,6 +583,56 @@ def _is_expected_closed_row(row: dict[str, Any], *, timeframe: str, end_ms: int)
     timeframe_ms = TIMEFRAME_MS[timeframe]
     close_time = open_time + timeframe_ms - 1
     return open_time % timeframe_ms == 0 and close_time <= end_ms
+
+
+def _closed_candles_in_range(
+    candles: list[OHLCVCandle],
+    *,
+    timeframe: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> list[OHLCVCandle]:
+    start_ms = _datetime_to_ms(start_at)
+    end_ms = _datetime_to_ms(end_at)
+    deduped: dict[int, OHLCVCandle] = {}
+    for candle in candles:
+        if candle.timeframe != timeframe or not candle.is_closed:
+            continue
+        if candle.open_time < start_ms or candle.close_time > end_ms:
+            continue
+        current = deduped.get(candle.open_time)
+        if current is None or _candle_tie_breaker(candle) > _candle_tie_breaker(current):
+            deduped[candle.open_time] = candle
+    return sorted(deduped.values(), key=lambda candle: candle.open_time)
+
+
+def _expected_closed_candle_count(
+    *,
+    start_at: datetime,
+    end_at: datetime,
+    timeframe: str,
+) -> int:
+    timeframe_ms = TIMEFRAME_MS[timeframe]
+    start_ms = _datetime_to_ms(start_at)
+    end_ms = _datetime_to_ms(end_at)
+    first_open_ms = _ceil_to_timeframe_ms(start_ms, timeframe_ms)
+    last_open_ms = ((end_ms - timeframe_ms + 1) // timeframe_ms) * timeframe_ms
+    if last_open_ms < first_open_ms:
+        return 0
+    return ((last_open_ms - first_open_ms) // timeframe_ms) + 1
+
+
+def _ceil_to_timeframe_ms(value_ms: int, timeframe_ms: int) -> int:
+    return ((value_ms + timeframe_ms - 1) // timeframe_ms) * timeframe_ms
+
+
+def _truthy_setting(settings_obj: Any, name: str, *, default: bool) -> bool:
+    value = getattr(settings_obj, name, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)
 
 
 def _closed_open_end_at(end_at: datetime, timeframe: str) -> datetime:

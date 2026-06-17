@@ -23,7 +23,7 @@ from app.schemas.user import RiskManagementSettings
 from app.services.execution_ambiguity import normalize_virtual_execution_ambiguity_policy
 from app.services.execution_policy import ExecutionPolicyContext, execution_policy_resolver
 from app.services.feature_engine import FeatureEngine
-from app.services.historical_candle_provider import ClickHouseHistoricalCandleProvider, HistoricalCandleProvider
+from app.services.historical_candle_provider import BackfillingHistoricalCandleProvider, HistoricalCandleProvider
 from app.services.market_context import MarketContextService, MarketContextSnapshot
 from app.services.risk_gate import RiskContextService, RiskGateService
 from app.services.trade_plan_completeness import trade_plan_completeness_service
@@ -426,7 +426,7 @@ class ProductionBacktestRunner:
         self._signal_pipeline = signal_pipeline or StrategySignalPipeline()
         self._risk_context_service = risk_context_service or RiskContextService()
         self._risk_gate_service = risk_gate_service or RiskGateService()
-        self._historical_candle_provider = historical_candle_provider or ClickHouseHistoricalCandleProvider()
+        self._historical_candle_provider = historical_candle_provider or BackfillingHistoricalCandleProvider()
         self._execution_simulator = execution_simulator or BacktestExecutionSimulator()
         self._warmup_candles = warmup_candles
         self._rolling_window_candles = rolling_window_candles

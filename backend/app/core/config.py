@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     strategy_test_max_scenarios_per_run: int = 96
     strategy_test_worker_heartbeat_seconds: float = 5.0
     strategy_test_lease_seconds: int = 900
+    strategy_test_historical_backfill_enabled: bool = True
+    strategy_test_historical_backfill_concurrency: int = 2
+    strategy_test_historical_backfill_batch_limit: int = 1000
+    strategy_test_historical_backfill_max_candles_per_pair_timeframe: int = 500_000
+    strategy_test_historical_backfill_timeout_seconds: float = 30.0
 
 
 settings = Settings()

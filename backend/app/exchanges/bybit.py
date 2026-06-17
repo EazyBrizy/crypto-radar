@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, List, Optional
 
@@ -1335,6 +1336,166 @@ def fetch_bybit_klines(
             logger.warning("Skipping malformed Bybit kline for %s: %s", symbol, exc)
 
     return sorted(candles, key=lambda candle: candle.open_time)
+
+
+def fetch_bybit_klines_range(
+    symbol: str,
+    timeframe: Timeframe,
+    start_at: datetime,
+    end_at: datetime,
+    *,
+    category: str = "linear",
+    limit: int = 1000,
+    urlopen=urllib.request.urlopen,
+    now: datetime | None = None,
+) -> list[OHLCVCandle]:
+    interval = KLINE_INTERVAL_BY_TIMEFRAME.get(timeframe)
+    timeframe_ms = TIMEFRAME_MS.get(timeframe)
+    if interval is None or timeframe_ms is None:
+        raise ValueError(f"unsupported_timeframe: {timeframe}")
+
+    normalized_category = _normalize_public_category(category)
+    normalized_symbol = _normalize_symbol(symbol)
+    page_limit = max(1, min(int(limit), 1000))
+    start_ms = _datetime_to_ms(start_at)
+    end_ms = _datetime_to_ms(end_at)
+    if end_ms < start_ms:
+        return []
+
+    first_open_ms = _ceil_to_interval_ms(start_ms, timeframe_ms)
+    last_open_ms = _last_closed_open_ms_for_end(end_ms, timeframe_ms)
+    if last_open_ms < first_open_ms:
+        return []
+
+    latest_closed_open_ms = _last_closed_open_ms_for_now(
+        _datetime_to_ms(now or datetime.now(timezone.utc)),
+        timeframe_ms,
+    )
+    request_last_open_ms = min(last_open_ms, latest_closed_open_ms)
+    if request_last_open_ms < first_open_ms:
+        return []
+
+    deduped: dict[int, OHLCVCandle] = {}
+    cursor_ms = first_open_ms
+    while cursor_ms <= request_last_open_ms:
+        chunk_last_open_ms = min(
+            request_last_open_ms,
+            cursor_ms + (page_limit - 1) * timeframe_ms,
+        )
+        chunk_end_ms = chunk_last_open_ms + timeframe_ms - 1
+        params = {
+            "category": normalized_category,
+            "symbol": normalized_symbol,
+            "interval": interval,
+            "start": str(cursor_ms),
+            "end": str(chunk_end_ms),
+            "limit": str(page_limit),
+        }
+        url = f"{BYBIT_KLINE_URL}?{urllib.parse.urlencode(params)}"
+        payload = _fetch_bybit_public_json(
+            url,
+            urlopen=urlopen,
+            timeout_seconds=_bybit_http_timeout_seconds(default_settings),
+            label="kline",
+        )
+        rows = payload.get("result", {}).get("list", [])
+        if isinstance(rows, list):
+            for row in rows:
+                candle = _parse_bybit_kline_row(
+                    row,
+                    symbol=normalized_symbol,
+                    timeframe=timeframe,
+                    timeframe_ms=timeframe_ms,
+                )
+                if candle is None:
+                    continue
+                if candle.open_time < first_open_ms or candle.open_time > request_last_open_ms:
+                    continue
+                if candle.close_time > end_ms:
+                    continue
+                current = deduped.get(candle.open_time)
+                if current is None or _bybit_candle_tie_breaker(candle) > _bybit_candle_tie_breaker(current):
+                    deduped[candle.open_time] = candle
+        cursor_ms = chunk_last_open_ms + timeframe_ms
+
+    return sorted(deduped.values(), key=lambda candle: candle.open_time)
+
+
+def _fetch_bybit_public_json(
+    url: str,
+    *,
+    urlopen,
+    timeout_seconds: float,
+    label: str,
+) -> dict[str, Any]:
+    try:
+        with urlopen(url, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, TimeoutError, json.JSONDecodeError) as exc:
+        raise BybitApiError(f"Bybit {label} request failed: {exc}") from exc
+    ret_code = payload.get("retCode")
+    if ret_code != 0:
+        raise BybitApiError(f"Bybit {label} request failed: {ret_code} {payload.get('retMsg')}")
+    return payload
+
+
+def _parse_bybit_kline_row(
+    row: object,
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    timeframe_ms: int,
+) -> OHLCVCandle | None:
+    if not isinstance(row, list) or len(row) < 6:
+        return None
+    try:
+        open_time = int(row[0])
+        return OHLCVCandle(
+            exchange="bybit",
+            symbol=symbol,
+            timeframe=timeframe,
+            open_time=open_time,
+            close_time=open_time + timeframe_ms - 1,
+            open=float(row[1]),
+            high=float(row[2]),
+            low=float(row[3]),
+            close=float(row[4]),
+            volume=float(row[5]),
+            trades=0,
+            is_closed=True,
+        )
+    except (TypeError, ValueError) as exc:
+        logger.warning("Skipping malformed Bybit kline for %s: %s", symbol, exc)
+        return None
+
+
+def _bybit_candle_tie_breaker(candle: OHLCVCandle) -> tuple[float, float, float, float, float, int]:
+    return (
+        float(candle.open),
+        float(candle.high),
+        float(candle.low),
+        float(candle.close),
+        float(candle.volume),
+        int(candle.trades),
+    )
+
+
+def _datetime_to_ms(value: datetime) -> int:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return int(value.astimezone(timezone.utc).timestamp() * 1000)
+
+
+def _ceil_to_interval_ms(value_ms: int, interval_ms: int) -> int:
+    return ((value_ms + interval_ms - 1) // interval_ms) * interval_ms
+
+
+def _last_closed_open_ms_for_end(end_ms: int, interval_ms: int) -> int:
+    return ((end_ms - interval_ms + 1) // interval_ms) * interval_ms
+
+
+def _last_closed_open_ms_for_now(now_ms: int, interval_ms: int) -> int:
+    return ((now_ms - interval_ms) // interval_ms) * interval_ms
 
 
 def _normalize_public_category(category: str) -> str:

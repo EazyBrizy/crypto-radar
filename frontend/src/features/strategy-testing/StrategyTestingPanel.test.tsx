@@ -6,6 +6,9 @@ import type { MarketPairOption, StrategyConfig } from "@/features/server-state/t
 import { I18nProvider } from "@/i18n";
 import { StrategyTestingPanel } from "./StrategyTestingPanel";
 
+const STRATEGY_TEST_FORM_STORAGE_KEY = "crypto-radar:strategy-testing-panel:v1:demo_user";
+const STRATEGY_TEST_FORM_BASE_STORAGE_KEY = "crypto-radar:strategy-testing-panel:v1";
+
 const mocks = vi.hoisted(() => ({
   activeRun: null as unknown,
   cancelStrategyTest: vi.fn(),
@@ -132,6 +135,8 @@ describe("StrategyTestingPanel", () => {
     mocks.runStrategyTest.mockReset();
     mocks.runs = [];
     window.localStorage.removeItem("crypto-radar:locale");
+    window.localStorage.removeItem(STRATEGY_TEST_FORM_STORAGE_KEY);
+    window.localStorage.removeItem(STRATEGY_TEST_FORM_BASE_STORAGE_KEY);
   });
 
   it("renders the mode selector", () => {
@@ -545,6 +550,147 @@ describe("StrategyTestingPanel", () => {
       tags: ["forward_virtual"],
       test_type: "forward_virtual"
     }));
+  });
+
+  it("persists selected strategies, pairs, and timeframes in localStorage", async () => {
+    const user = userEvent.setup();
+    const availablePairs = [
+      marketPair("BTCUSDT", "BTC"),
+      marketPair("ETHUSDT", "ETH"),
+      marketPair("SOLUSDT", "SOL"),
+      marketPair("XRPUSDT", "XRP")
+    ];
+    const strategyConfigs = [
+      strategyConfig({ timeframes: ["1m", "5m", "15m", "1h"] }),
+      strategyConfig({
+        id: "strategy_config_2",
+        name: "Mean reversion",
+        strategy_code: "mean_reversion",
+        strategy_name: "Mean Reversion",
+        strategy_version_id: "strategy_version_2",
+        timeframes: ["1m", "5m", "15m", "1h"]
+      })
+    ];
+
+    renderPanel({ availablePairs, strategyConfigs });
+
+    await user.click(screen.getByRole("checkbox", { name: /Mean Reversion/u }));
+    await user.click(screen.getByRole("checkbox", { name: /XRPUSDT/u }));
+    await user.click(screen.getByRole("checkbox", { name: "1h" }));
+
+    await waitFor(() => expect(storedStrategyTestForm()).toEqual(expect.objectContaining({
+      selectedPairIds: ["bybit:BTCUSDT", "bybit:ETHUSDT", "bybit:SOLUSDT", "bybit:XRPUSDT"],
+      selectedStrategyCodes: ["trend_pullback_continuation", "mean_reversion"],
+      selectedTimeframes: ["1m", "5m", "15m", "1h"]
+    })));
+  });
+
+  it("restores persisted selected strategies, pairs, and timeframes after remount", async () => {
+    const user = userEvent.setup();
+    const availablePairs = [
+      marketPair("BTCUSDT", "BTC"),
+      marketPair("ETHUSDT", "ETH"),
+      marketPair("SOLUSDT", "SOL"),
+      marketPair("XRPUSDT", "XRP")
+    ];
+    const strategyConfigs = [
+      strategyConfig({ timeframes: ["1m", "5m", "15m", "1h"] }),
+      strategyConfig({
+        id: "strategy_config_2",
+        name: "Mean reversion",
+        strategy_code: "mean_reversion",
+        strategy_name: "Mean Reversion",
+        strategy_version_id: "strategy_version_2",
+        timeframes: ["1m", "5m", "15m", "1h"]
+      })
+    ];
+    const view = renderPanel({ availablePairs, strategyConfigs });
+
+    await user.click(screen.getByRole("checkbox", { name: /Mean Reversion/u }));
+    await user.click(screen.getByRole("checkbox", { name: /XRPUSDT/u }));
+    await user.click(screen.getByRole("checkbox", { name: "1h" }));
+    await waitFor(() => expect(storedStrategyTestForm()).toEqual(expect.objectContaining({
+      selectedPairIds: expect.arrayContaining(["bybit:XRPUSDT"]),
+      selectedStrategyCodes: expect.arrayContaining(["mean_reversion"]),
+      selectedTimeframes: expect.arrayContaining(["1h"])
+    })));
+
+    view.unmount();
+    renderPanel({ availablePairs, strategyConfigs });
+
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /Mean Reversion/u })).toBeChecked());
+    expect(screen.getByRole("checkbox", { name: /XRPUSDT/u })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "1h" })).toBeChecked();
+  });
+
+  it("filters persisted pairs that are no longer available", async () => {
+    window.localStorage.setItem(STRATEGY_TEST_FORM_STORAGE_KEY, JSON.stringify({
+      selectedPairIds: ["bybit:DELISTEDUSDT", "bybit:ETHUSDT"],
+      selectedStrategyCodes: ["trend_pullback_continuation"],
+      selectedTimeframes: ["1m"]
+    }));
+
+    renderPanel({
+      availablePairs: [
+        marketPair("BTCUSDT", "BTC"),
+        marketPair("ETHUSDT", "ETH"),
+        marketPair("SOLUSDT", "SOL")
+      ]
+    });
+
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /BTCUSDT/u })).not.toBeChecked());
+    expect(screen.getByRole("checkbox", { name: /ETHUSDT/u })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /SOLUSDT/u })).not.toBeChecked();
+    expect(screen.queryByRole("checkbox", { name: /DELISTEDUSDT/u })).not.toBeInTheDocument();
+  });
+
+  it("renders and recovers persistence when localStorage contains broken JSON", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(STRATEGY_TEST_FORM_STORAGE_KEY, "{broken json");
+
+    expect(() => renderPanel()).not.toThrow();
+    expect(screen.getByRole("checkbox", { name: /Trend Pullback/u })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: "Forward virtual" }));
+
+    await waitFor(() => expect(storedStrategyTestForm()).toEqual(expect.objectContaining({
+      testType: "forward_virtual"
+    })));
+  });
+
+  it("resets the form to defaults and clears persisted selection", async () => {
+    const user = userEvent.setup();
+    const availablePairs = [
+      marketPair("BTCUSDT", "BTC"),
+      marketPair("ETHUSDT", "ETH"),
+      marketPair("SOLUSDT", "SOL"),
+      marketPair("XRPUSDT", "XRP")
+    ];
+    const strategyConfigs = [
+      strategyConfig({ timeframes: ["1m", "5m", "15m", "1h"] }),
+      strategyConfig({
+        id: "strategy_config_2",
+        name: "Mean reversion",
+        strategy_code: "mean_reversion",
+        strategy_name: "Mean Reversion",
+        strategy_version_id: "strategy_version_2",
+        timeframes: ["1m", "5m", "15m", "1h"]
+      })
+    ];
+
+    renderPanel({ availablePairs, strategyConfigs });
+
+    await user.click(screen.getByRole("checkbox", { name: /Mean Reversion/u }));
+    await user.click(screen.getByRole("checkbox", { name: /XRPUSDT/u }));
+    await user.click(screen.getByRole("checkbox", { name: "1h" }));
+    await waitFor(() => expect(window.localStorage.getItem(STRATEGY_TEST_FORM_STORAGE_KEY)).not.toBeNull());
+
+    await user.click(screen.getByRole("button", { name: /Reset form/u }));
+
+    expect(screen.getByRole("checkbox", { name: /Mean Reversion/u })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /XRPUSDT/u })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "1h" })).not.toBeChecked();
+    expect(window.localStorage.getItem(STRATEGY_TEST_FORM_STORAGE_KEY)).toBeNull();
   });
 
   it("runs a forward virtual strategy test when pending max wait bars is invalid", async () => {
@@ -968,7 +1114,13 @@ function renderPanel({
   availablePairs?: MarketPairOption[];
   strategyConfigs?: StrategyConfig[];
 } = {}) {
-  render(<StrategyTestingPanel availablePairs={availablePairs} strategyConfigs={strategyConfigs} />);
+  return render(<StrategyTestingPanel availablePairs={availablePairs} strategyConfigs={strategyConfigs} />);
+}
+
+function storedStrategyTestForm(): Record<string, unknown> {
+  const raw = window.localStorage.getItem(STRATEGY_TEST_FORM_STORAGE_KEY);
+  if (!raw) throw new Error("Strategy test form storage was not written.");
+  return JSON.parse(raw) as Record<string, unknown>;
 }
 
 function activeRunState(overrides: Record<string, unknown> = {}) {

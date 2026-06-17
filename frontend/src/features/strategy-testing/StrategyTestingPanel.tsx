@@ -1,7 +1,7 @@
 "use client";
 
-import { AlertTriangle, BarChart3, FlaskConical, Play, RadioTower, RefreshCw, XCircle, Zap } from "lucide-react";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { AlertTriangle, BarChart3, FlaskConical, Play, RadioTower, RefreshCw, RotateCcw, XCircle, Zap } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { Badge } from "@/components/Badge";
 import type { MarketPairOption, StrategyConfig } from "@/features/server-state/types";
@@ -17,6 +17,12 @@ import {
 } from "@/hooks/use-radar-queries";
 import { StrategyTestReport } from "./StrategyTestReport";
 import { StrategyTestRunsTable } from "./StrategyTestRunsTable";
+import {
+  clearStrategyTestForm,
+  readStrategyTestForm,
+  saveStrategyTestForm,
+  strategyTestFormStorageKey
+} from "./strategy-test-form-storage";
 import type {
   StrategyTestActiveRunResponse,
   StrategyTestEstimateResponse,
@@ -77,6 +83,8 @@ export function StrategyTestingPanel({
   const strategyOptions = useMemo(() => enabledStrategyOptions(strategyConfigs), [strategyConfigs]);
   const pairOptions = useMemo(() => availablePairs.slice(0, 50), [availablePairs]);
   const timeframeOptions = useMemo(() => availableTimeframes(strategyOptions), [strategyOptions]);
+  const storageUserId = useMemo(() => firstConfiguredUserId(strategyConfigs), [strategyConfigs]);
+  const formStorageKey = useMemo(() => strategyTestFormStorageKey(storageUserId), [storageUserId]);
   const activeRunQuery = useStrategyTestActiveRun(undefined, { refetchInterval: STRATEGY_TEST_RUN_POLL_MS });
   const runsQuery = useStrategyTestRuns({ limit: 25 }, { refetchInterval: STRATEGY_TEST_RUN_POLL_MS });
   const runMutation = useRunStrategyTest();
@@ -101,18 +109,139 @@ export function StrategyTestingPanel({
     confirmed: false,
     key: null
   });
+  const [formStorageHydrated, setFormStorageHydrated] = useState(false);
+  const [storageResetVersion, setStorageResetVersion] = useState(0);
+  const skipNextPersistRef = useRef(false);
   const defaultStrategySelection = useMemo(() => defaultStrategyCodes(strategyOptions), [strategyOptions]);
   const defaultPairSelection = useMemo(() => defaultPairIds(pairOptions), [pairOptions]);
   const defaultTimeframeSelection = useMemo(() => defaultTimeframes(timeframeOptions), [timeframeOptions]);
   const effectiveStrategyCodes = selectedStrategyCodes ?? defaultStrategySelection;
   const effectivePairIds = selectedPairIds ?? defaultPairSelection;
   const effectiveTimeframes = selectedTimeframes ?? defaultTimeframeSelection;
+  const strategyOptionCodes = useMemo(() => strategyOptions.map((strategy) => strategy.strategy_code), [strategyOptions]);
+  const pairOptionIds = useMemo(() => pairOptions.map(pairKey), [pairOptions]);
+  const storableStrategyCodes = useMemo(
+    () => filterKnownValues(effectiveStrategyCodes, strategyOptionCodes),
+    [effectiveStrategyCodes, strategyOptionCodes]
+  );
+  const storablePairIds = useMemo(
+    () => filterKnownValues(effectivePairIds, pairOptionIds),
+    [effectivePairIds, pairOptionIds]
+  );
 
   const selectedPairs = useMemo(
     () => pairOptions.filter((pair) => effectivePairIds.includes(pairKey(pair))),
     [effectivePairIds, pairOptions]
   );
-  const validTimeframes = effectiveTimeframes.filter((timeframe) => timeframeOptions.includes(timeframe));
+  const validTimeframes = useMemo(
+    () => effectiveTimeframes.filter((timeframe) => timeframeOptions.includes(timeframe)),
+    [effectiveTimeframes, timeframeOptions]
+  );
+
+  /* eslint-disable react-hooks/set-state-in-effect -- Browser-only localStorage hydration has to update form state after mount. */
+  useEffect(() => {
+    skipNextPersistRef.current = true;
+    const storedForm = readStrategyTestForm(formStorageKey);
+    if (!storedForm) {
+      setSelectedStrategyCodes(null);
+      setSelectedPairIds(null);
+      setSelectedTimeframes(null);
+      setMode(DEFAULT_MODE);
+      setTestType(DEFAULT_TEST_TYPE);
+      setStartAt(dateDefaults.startAt);
+      setEndAt(dateDefaults.endAt);
+      setInitialCapital("1000");
+      setFeeRate("0.001");
+      setSlippageBps("0");
+      setSameCandlePolicy(DEFAULT_SAME_CANDLE_POLICY);
+      setHistoricalPendingEntriesEnabled(true);
+      setPendingEntryMaxWaitBars(DEFAULT_PENDING_ENTRY_MAX_WAIT_BARS);
+      setFormStorageHydrated(true);
+      return;
+    }
+
+    setSelectedStrategyCodes(sanitizeStoredSelection(
+      storedForm.selectedStrategyCodes,
+      strategyOptionCodes,
+      defaultStrategySelection
+    ));
+    setSelectedPairIds(sanitizeStoredSelection(
+      storedForm.selectedPairIds,
+      pairOptionIds,
+      defaultPairSelection
+    ));
+    setSelectedTimeframes(sanitizeStoredSelection(
+      storedForm.selectedTimeframes,
+      timeframeOptions,
+      defaultTimeframeSelection
+    ));
+    setMode(storedForm.mode ?? DEFAULT_MODE);
+    setTestType(storedForm.testType ?? DEFAULT_TEST_TYPE);
+    setStartAt(storedForm.startAt ?? dateDefaults.startAt);
+    setEndAt(storedForm.endAt ?? dateDefaults.endAt);
+    setInitialCapital(storedForm.initialCapital ?? "1000");
+    setFeeRate(storedForm.feeRate ?? "0.001");
+    setSlippageBps(storedForm.slippageBps ?? "0");
+    setSameCandlePolicy(storedForm.sameCandlePolicy ?? DEFAULT_SAME_CANDLE_POLICY);
+    setHistoricalPendingEntriesEnabled(storedForm.historicalPendingEntriesEnabled ?? true);
+    setPendingEntryMaxWaitBars(storedForm.pendingEntryMaxWaitBars ?? DEFAULT_PENDING_ENTRY_MAX_WAIT_BARS);
+    setFormStorageHydrated(true);
+  }, [
+    dateDefaults.endAt,
+    dateDefaults.startAt,
+    defaultPairSelection,
+    defaultStrategySelection,
+    defaultTimeframeSelection,
+    formStorageKey,
+    pairOptionIds,
+    strategyOptionCodes,
+    timeframeOptions
+  ]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    if (!formStorageHydrated) return;
+    if (skipNextPersistRef.current) {
+      skipNextPersistRef.current = false;
+      return;
+    }
+
+    saveStrategyTestForm(formStorageKey, {
+      endAt,
+      feeRate,
+      historicalPendingEntriesEnabled,
+      initialCapital,
+      mode,
+      pendingEntryMaxWaitBars,
+      sameCandlePolicy,
+      selectedPairIds: storablePairIds,
+      selectedStrategyCodes: storableStrategyCodes,
+      selectedTimeframes: validTimeframes,
+      slippageBps,
+      startAt,
+      testType
+    });
+  }, [
+    endAt,
+    feeRate,
+    formStorageHydrated,
+    formStorageKey,
+    historicalPendingEntriesEnabled,
+    initialCapital,
+    mode,
+    pendingEntryMaxWaitBars,
+    sameCandlePolicy,
+    selectedPairIds,
+    selectedStrategyCodes,
+    selectedTimeframes,
+    slippageBps,
+    startAt,
+    storablePairIds,
+    storableStrategyCodes,
+    storageResetVersion,
+    testType,
+    validTimeframes
+  ]);
   const dateError = validateDateRange(startAt, endAt);
   const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps, pendingEntryMaxWaitBars, testType);
   const localScenarioCount = effectiveStrategyCodes.length * selectedPairs.length * validTimeframes.length;
@@ -279,6 +408,27 @@ export function StrategyTestingPanel({
     setMode("research_virtual");
     setTestType("historical_backtest");
     setHistoricalPendingEntriesEnabled(true);
+  }
+
+  function handleResetForm() {
+    skipNextPersistRef.current = true;
+    clearStrategyTestForm(formStorageKey);
+    setStorageResetVersion((current) => current + 1);
+    setFormError(null);
+    setLargeRunConfirmation({ confirmed: false, key: null });
+    setSelectedStrategyCodes(defaultStrategySelection);
+    setSelectedPairIds(defaultPairSelection);
+    setSelectedTimeframes(defaultTimeframeSelection);
+    setMode(DEFAULT_MODE);
+    setTestType(DEFAULT_TEST_TYPE);
+    setStartAt(dateDefaults.startAt);
+    setEndAt(dateDefaults.endAt);
+    setInitialCapital("1000");
+    setFeeRate("0.001");
+    setSlippageBps("0");
+    setSameCandlePolicy(DEFAULT_SAME_CANDLE_POLICY);
+    setHistoricalPendingEntriesEnabled(true);
+    setPendingEntryMaxWaitBars(DEFAULT_PENDING_ENTRY_MAX_WAIT_BARS);
   }
 
   async function handleCancelRun(runId: string) {
@@ -506,6 +656,10 @@ export function StrategyTestingPanel({
       ) : null}
 
       <div className="strategy-test-actions">
+        <button className="secondary-action" onClick={handleResetForm} type="button">
+          <RotateCcw size={16} />
+          Reset form
+        </button>
         <button className="primary-action" disabled={!canRun} type="submit">
           {runMutation.isPending ? <RefreshCw size={16} /> : <Play size={16} />}
           {runButtonLabel}
@@ -673,6 +827,11 @@ type StrategyTestEstimateWarning = NonNullable<StrategyTestEstimateResponse["war
 type EstimateWarningTone = "red" | "yellow";
 type RunEstimateLevel = "small" | "medium" | "large";
 
+function firstConfiguredUserId(strategyConfigs: StrategyConfig[]): string | null {
+  const config = strategyConfigs.find((strategy) => typeof strategy.user_id === "string" && strategy.user_id.trim());
+  return config?.user_id.trim() ?? null;
+}
+
 function enabledStrategyOptions(strategyConfigs: StrategyConfig[]): StrategyConfig[] {
   const seen = new Set<string>();
   return strategyConfigs.filter((strategy) => {
@@ -701,6 +860,26 @@ function defaultPairIds(pairOptions: MarketPairOption[]): string[] {
 function defaultTimeframes(timeframeOptions: string[]): string[] {
   const defaults = DEFAULT_SELECTED_TIMEFRAMES.filter((timeframe) => timeframeOptions.includes(timeframe));
   return defaults.length ? defaults : timeframeOptions.slice(0, 3);
+}
+
+function sanitizeStoredSelection(
+  storedValues: string[] | undefined,
+  availableValues: string[],
+  fallbackValues: string[]
+): string[] {
+  if (!storedValues) return [...fallbackValues];
+  const sanitized = filterKnownValues(storedValues, availableValues);
+  return sanitized.length ? sanitized : [...fallbackValues];
+}
+
+function filterKnownValues(values: string[], availableValues: string[]): string[] {
+  const available = new Set(availableValues);
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (!available.has(value) || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
 }
 
 function pairKey(pair: Pick<MarketPairOption, "exchange" | "symbol">): string {

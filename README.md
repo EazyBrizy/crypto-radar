@@ -103,7 +103,7 @@ cd backend
 ..\.venv\Scripts\python.exe -m app.workers.strategy_test_worker
 ```
 
-Historical Strategy Testing without the worker stays queued because the API only enqueues `strategy_test_runs`; the worker claims and executes them. `forward_virtual` runs additionally require scanner/market ticks after the worker starts them, so with scanner disabled they can remain in `waiting_for_market_data`.
+Historical backtests require `strategy-test-worker`: without it, the API only enqueues `strategy_test_runs` and they stay queued. `forward_virtual` requires both `strategy-test-worker` and scanner/market data: the worker starts and heartbeats the run, while scanner ticks/signals drive the forward runtime. With scanner disabled, `forward_virtual` can correctly remain in `waiting_for_market_data`.
 
 6. Start frontend:
 
@@ -163,7 +163,7 @@ After backend and frontend dependencies are installed, this command starts infra
 powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1
 ```
 
-Use `-NoScanner` when you want the API to start without scanner autostart. Historical Strategy Testing without the worker stays queued; `scripts\dev.ps1` starts that worker for local dev. `forward_virtual` additionally requires scanner/market ticks, so with `-NoScanner` it can be `waiting_for_market_data` until scanner data is flowing. Use `-NoInfra` only when PostgreSQL, Redis, NATS and ClickHouse are already managed outside the script.
+Use `-NoScanner` when you want the API to start without scanner autostart. Historical backtests require `strategy-test-worker`; `scripts\dev.ps1` starts that worker for local dev. `forward_virtual` requires `strategy-test-worker` plus scanner/market data, so with `-NoScanner` it can be `waiting_for_market_data` until scanner ticks are flowing. Use `-NoInfra` only when PostgreSQL, Redis, NATS and ClickHouse are already managed outside the script.
 
 ## Environment Defaults
 

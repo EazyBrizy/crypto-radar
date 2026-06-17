@@ -146,6 +146,17 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("button", { name: "Forward virtual" })).toBeInTheDocument();
   });
 
+  it("renders scanner/market data hint when forward_virtual is selected", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(screen.queryByText("Forward virtual needs scanner market data; with scanner disabled it will wait for ticks.")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Forward virtual" }));
+
+    expect(screen.getByText("Forward virtual needs scanner market data; with scanner disabled it will wait for ticks.")).toBeInTheDocument();
+  });
+
   it("shows a large run warning before starting a heavy matrix", async () => {
     const user = userEvent.setup();
     const availablePairs = [

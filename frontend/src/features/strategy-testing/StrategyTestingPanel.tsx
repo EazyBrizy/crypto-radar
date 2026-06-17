@@ -465,6 +465,9 @@ export function StrategyTestingPanel({
           </button>
         ))}
       </div>
+      {testType === "forward_virtual" ? (
+        <p className="strategy-test-type-hint">Forward virtual needs scanner market data; with scanner disabled it will wait for ticks.</p>
+      ) : null}
 
       <div className="strategy-test-advanced-controls" aria-label="Historical pending entry policy">
         <label className="strategy-test-toggle" title="Replay wait-for-entry signals as pending entries during historical backtests.">

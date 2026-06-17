@@ -4,6 +4,7 @@ param(
     [string]$BackendHost = "127.0.0.1",
     [string]$FrontendHost = "127.0.0.1",
     [switch]$WithInfra,
+    [switch]$NoInfra,
     [switch]$NoScanner
 )
 
@@ -265,6 +266,29 @@ function Invoke-BackendCommand {
     }
 }
 
+function Invoke-DockerCompose {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+        [switch]$AllowFailure
+    )
+
+    $baseArgs = @("compose", "-f", $ComposeFile)
+    & docker @baseArgs @Arguments
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0 -and -not $AllowFailure) {
+        $commandLine = ($baseArgs + $Arguments) -join " "
+        throw "docker $commandLine failed with exit code $exitCode."
+    }
+
+    return $exitCode -eq 0
+}
+
+function Remove-DockerDevAppContainers {
+    Write-Info "Clearing Docker dev app containers that can occupy local app ports..."
+    Invoke-DockerCompose -Arguments @("--profile", "dev", "rm", "-f", "-s", "backend-dev", "frontend-dev", "strategy-test-worker") -AllowFailure | Out-Null
+}
+
 if (Test-PythonExecutable -Path $BackendVenvPython) {
     $BackendPython = $BackendVenvPython
 }
@@ -298,18 +322,21 @@ if (-not (Test-Path -LiteralPath (Join-Path $FrontendDir "node_modules"))) {
     throw "frontend\node_modules was not found. Install dependencies: cd frontend; corepack pnpm install"
 }
 
+$StartInfra = $WithInfra -or -not $NoInfra
+
+if ($StartInfra) {
+    Assert-Command -Name "docker" -InstallHint "Install Docker Desktop and wait until Docker Engine is running."
+    Remove-DockerDevAppContainers
+    Write-Info "Starting PostgreSQL, Redis, NATS JetStream and ClickHouse..."
+    Invoke-DockerCompose -Arguments @("--profile", "infra", "up", "-d", "postgres", "redis", "nats", "clickhouse") | Out-Null
+}
+
 if (Test-PortBusy -Port $BackendPort) {
     throw "Backend port $BackendPort is already busy. Stop the old process or run: .\scripts\dev.ps1 -BackendPort 8001"
 }
 
 if (Test-PortBusy -Port $FrontendPort) {
     throw "Frontend port $FrontendPort is already busy. Stop the old process or run: .\scripts\dev.ps1 -FrontendPort 3001"
-}
-
-if ($WithInfra) {
-    Assert-Command -Name "docker" -InstallHint "Install Docker Desktop and wait until Docker Engine is running."
-    Write-Info "Starting PostgreSQL, Redis, NATS JetStream and ClickHouse..."
-    & docker compose -f $ComposeFile --profile infra up -d postgres redis nats clickhouse
 }
 
 $backendEnv = @{

@@ -25,6 +25,12 @@ $LogTailLines = [int](Get-EnvOrDefault -Name "SMOKE_LOG_TAIL_LINES" -Default "16
 $CandlesPerTimeframe = [int](Get-EnvOrDefault -Name "SMOKE_CANDLES_PER_TIMEFRAME" -Default "12")
 $WarmupCandles = [int](Get-EnvOrDefault -Name "SMOKE_WARMUP_CANDLES" -Default "3")
 $SmokeStartAt = Get-EnvOrDefault -Name "SMOKE_START_AT" -Default "2026-01-01T00:00:00+00:00"
+$BackendDevHostPort = Get-EnvOrDefault -Name "SMOKE_BACKEND_DEV_HOST_PORT" -Default "18000"
+$FrontendDevHostPort = Get-EnvOrDefault -Name "SMOKE_FRONTEND_DEV_HOST_PORT" -Default "13000"
+$KeepAppContainers = (Get-EnvOrDefault -Name "SMOKE_KEEP_APP_CONTAINERS" -Default "false").ToLowerInvariant() -in @("1", "true", "yes")
+
+$PreviousBackendDevHostPort = [Environment]::GetEnvironmentVariable("BACKEND_DEV_HOST_PORT", "Process")
+$PreviousFrontendDevHostPort = [Environment]::GetEnvironmentVariable("FRONTEND_DEV_HOST_PORT", "Process")
 
 $env:CRYPTO_RADAR_SCANNER_ENABLED = "false"
 $env:EXCHANGE_INSTRUMENT_SYNC_ENABLED = "false"
@@ -34,6 +40,8 @@ $env:REAL_POSITION_SYNC_ENABLED = "false"
 $env:ENABLE_LIVE_TRADING = "false"
 $env:ENABLE_BYBIT_LIVE_ORDER_PLACEMENT = "false"
 $env:ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT = "false"
+$env:BACKEND_DEV_HOST_PORT = $BackendDevHostPort
+$env:FRONTEND_DEV_HOST_PORT = $FrontendDevHostPort
 
 function Write-Info {
     param([string]$Message)
@@ -95,6 +103,21 @@ function Invoke-BackendDevExec {
         return Invoke-Compose -Arguments $args -Capture
     }
     Invoke-Compose -Arguments $args
+}
+
+function Remove-SmokeAppContainers {
+    if ($KeepAppContainers) {
+        Write-Info "Keeping backend-dev and strategy-test-worker containers because SMOKE_KEEP_APP_CONTAINERS is enabled"
+        return
+    }
+
+    Write-Info "Removing smoke app containers"
+    Invoke-Compose -Arguments @("--profile", "dev", "rm", "-f", "-s", "backend-dev", "strategy-test-worker") -AllowFailure
+}
+
+function Restore-SmokePortEnvironment {
+    [Environment]::SetEnvironmentVariable("BACKEND_DEV_HOST_PORT", $PreviousBackendDevHostPort, "Process")
+    [Environment]::SetEnvironmentVariable("FRONTEND_DEV_HOST_PORT", $PreviousFrontendDevHostPort, "Process")
 }
 
 function Convert-JsonOutput {
@@ -336,7 +359,7 @@ try {
     $seed = Convert-JsonOutput -Output $seedOutput
     Write-Info "Seeded $($seed.rows_written) OHLCV rows; deduped candles=$($seed.deduped_candles_total); expected bars=$($seed.expected_bars_total)"
 
-    Write-Info "Starting backend-dev and durable strategy-test-worker"
+    Write-Info "Starting smoke backend-dev on host port $BackendDevHostPort and strategy-test-worker"
     Invoke-Compose -Arguments @("--profile", "dev", "up", "-d", "--build", "--force-recreate", "backend-dev", "strategy-test-worker")
     Wait-BackendHealth
     Clear-PreviousSmokeRun
@@ -470,5 +493,7 @@ try {
     Write-Diagnostics
     throw
 } finally {
+    Remove-SmokeAppContainers
+    Restore-SmokePortEnvironment
     Pop-Location
 }

@@ -148,13 +148,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\smoke_virtual.ps1
 
 ## One-Command Dev
 
-After backend and frontend dependencies are installed, this command starts infra, applies Alembic migrations, starts backend with scanner disabled, and starts frontend:
+After backend and frontend dependencies are installed, this command starts infra, applies Alembic migrations, starts backend, and starts frontend:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1 -WithInfra -NoScanner
+powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1
 ```
 
-Remove `-NoScanner` when you want the scanner to autostart with the bounded local profile.
+Use `-NoScanner` when you want the API to start without scanner autostart. Use `-NoInfra` only when PostgreSQL, Redis, NATS and ClickHouse are already managed outside the script.
 
 ## Environment Defaults
 

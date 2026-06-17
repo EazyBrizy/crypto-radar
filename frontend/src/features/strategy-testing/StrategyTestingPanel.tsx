@@ -114,7 +114,7 @@ export function StrategyTestingPanel({
   );
   const validTimeframes = effectiveTimeframes.filter((timeframe) => timeframeOptions.includes(timeframe));
   const dateError = validateDateRange(startAt, endAt);
-  const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps, pendingEntryMaxWaitBars);
+  const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps, pendingEntryMaxWaitBars, testType);
   const localScenarioCount = effectiveStrategyCodes.length * selectedPairs.length * validTimeframes.length;
   const estimateRequest = useMemo(() => {
     if (localScenarioCount <= 0 || dateError || numberError) return null;
@@ -721,11 +721,19 @@ function validateDateRange(startAt: string, endAt: string): string | null {
   return null;
 }
 
-function validateNumericInputs(initialCapital: string, feeRate: string, slippageBps: string, pendingEntryMaxWaitBars: string): string | null {
+function validateNumericInputs(
+  initialCapital: string,
+  feeRate: string,
+  slippageBps: string,
+  pendingEntryMaxWaitBars: string,
+  testType: StrategyTestType
+): string | null {
   if (toPositiveNumber(initialCapital) == null) return "Initial capital must be greater than zero.";
   if (toNonNegativeNumber(feeRate) == null) return "Fee rate must be zero or greater.";
   if (toNonNegativeNumber(slippageBps) == null) return "Slippage bps must be zero or greater.";
-  if (toPositiveInteger(pendingEntryMaxWaitBars) == null) return "Pending max wait bars must be a positive integer.";
+  if (testType === "historical_backtest" && toPositiveInteger(pendingEntryMaxWaitBars) == null) {
+    return "Pending max wait bars must be a positive integer.";
+  }
   return null;
 }
 

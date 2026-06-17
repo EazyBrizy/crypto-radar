@@ -45,6 +45,15 @@ describe("strategyTestsApi identity contract", () => {
     expect(currentUserId).not.toHaveBeenCalled();
   });
 
+  it("does not append a trailing query marker when listRuns has no params", async () => {
+    const fetchSpy = vi.fn<typeof fetch>(async () => jsonResponse([]));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await strategyTestsApi.listRuns();
+
+    expect(String(fetchSpy.mock.calls[0][0])).toMatch(/\/api\/v1\/strategy-tests\/runs$/u);
+  });
+
   it("keeps explicit user_id query override for dev compatibility", async () => {
     const fetchSpy = vi.fn<typeof fetch>(async () => jsonResponse(activeRunState()));
     vi.stubGlobal("fetch", fetchSpy);

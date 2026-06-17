@@ -116,7 +116,8 @@ function strategyTestRunsPath(params: StrategyTestRunListParams): string {
   if (params.userId) query.set("user_id", params.userId);
   if (params.limit != null) query.set("limit", String(params.limit));
   if (params.status) query.set("status", params.status);
-  return `/api/v1/strategy-tests/runs?${query.toString()}`;
+  const queryString = query.toString();
+  return queryString ? `/api/v1/strategy-tests/runs?${queryString}` : "/api/v1/strategy-tests/runs";
 }
 
 function strategyTestReportsPath(params: StrategyTestReportListParams): string {

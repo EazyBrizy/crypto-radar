@@ -494,6 +494,30 @@ describe("StrategyTestingPanel", () => {
     }));
   });
 
+  it("runs a forward virtual strategy test when pending max wait bars is invalid", async () => {
+    const user = userEvent.setup();
+    mocks.runStrategyTest.mockResolvedValue(strategyTestRun({
+      status: "queued",
+      test_type: "forward_virtual"
+    }));
+
+    renderPanel();
+
+    await user.clear(screen.getByLabelText("Pending max wait bars"));
+    await user.type(screen.getByLabelText("Pending max wait bars"), "0");
+    await user.click(screen.getByRole("button", { name: "Forward virtual" }));
+    const runButton = screen.getByRole("button", { name: /Run strategy test/u });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    await user.click(runButton);
+
+    await waitFor(() => expect(mocks.runStrategyTest).toHaveBeenCalledTimes(1));
+    expect(mocks.runStrategyTest).toHaveBeenCalledWith(expect.objectContaining({
+      params: {},
+      tags: ["forward_virtual"],
+      test_type: "forward_virtual"
+    }));
+  });
+
   it("shows signal funnel summary for a completed run", () => {
     mocks.runs = [
       strategyTestRun({

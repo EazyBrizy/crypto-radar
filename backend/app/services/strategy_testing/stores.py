@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, Protocol, Sequence, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
@@ -919,7 +919,7 @@ class PostgresStrategyTestRunStore:
     ) -> StrategyTestRunDetailResponse | None:
         now = _utc_now()
         with self._session_factory() as session:
-            run = session.scalars(_claim_next_run_statement().limit(1)).first()
+            run = session.scalars(_claim_next_run_statement(now).limit(1)).first()
             if run is None:
                 return None
             run.worker_id = worker_id
@@ -1253,10 +1253,16 @@ class PostgresStrategyTestRunStore:
             return checkpoint
 
 
-def _claim_next_run_statement() -> Any:
+def _claim_next_run_statement(now: datetime) -> Any:
     return (
         select(StrategyTestRun)
         .where(StrategyTestRun.status == "queued")
+        .where(
+            or_(
+                StrategyTestRun.lease_expires_at.is_(None),
+                StrategyTestRun.lease_expires_at <= now,
+            )
+        )
         .order_by(StrategyTestRun.created_at.asc())
         .with_for_update(skip_locked=True)
     )

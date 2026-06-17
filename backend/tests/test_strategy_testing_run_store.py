@@ -181,12 +181,15 @@ class StrategyTestingRunModelTest(unittest.TestCase):
         self.assertIn("op.drop_table(\"strategy_test_scenarios\")", migration)
 
     def test_claim_next_run_statement_uses_postgres_skip_locked(self) -> None:
-        statement = _claim_next_run_statement().limit(1)
+        now = datetime(2026, 6, 17, tzinfo=timezone.utc)
+        statement = _claim_next_run_statement(now).limit(1)
 
         compiled = str(statement.compile(dialect=postgresql.dialect()))
 
         self.assertIn("FOR UPDATE SKIP LOCKED", compiled)
         self.assertIn("strategy_test_runs.status = ", compiled)
+        self.assertIn("strategy_test_runs.lease_expires_at IS NULL", compiled)
+        self.assertIn("strategy_test_runs.lease_expires_at <= ", compiled)
 
 
 class PostgresStrategyTestRunStoreTest(unittest.TestCase):
@@ -303,6 +306,35 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
             self.assertEqual(run.worker_id, "worker-a")
             self.assertEqual(run.worker_attempt, 1)
             self.assertIsNotNone(run.claimed_at)
+            self.assertIsNotNone(run.lease_expires_at)
+
+    def test_claim_next_run_does_not_reclaim_unexpired_queued_lease(self) -> None:
+        created = self.store.create_run(_request())
+
+        first_claim = self.store.claim_next_run(worker_id="worker-a", lease_seconds=30)
+        second_claim = self.store.claim_next_run(worker_id="worker-b", lease_seconds=30)
+
+        self.assertIsNotNone(first_claim)
+        self.assertIsNone(second_claim)
+        with self.SessionFactory() as session:
+            run = session.get(StrategyTestRun, created.run.run_id)
+            self.assertIsNotNone(run)
+            assert run is not None
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            session.commit()
+
+        reclaimed = self.store.claim_next_run(worker_id="worker-b", lease_seconds=30)
+
+        self.assertIsNotNone(reclaimed)
+        assert reclaimed is not None
+        self.assertEqual(reclaimed.run.run_id, created.run.run_id)
+        with self.SessionFactory() as session:
+            run = session.get(StrategyTestRun, created.run.run_id)
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.status, "queued")
+            self.assertEqual(run.worker_id, "worker-b")
+            self.assertEqual(run.worker_attempt, 2)
             self.assertIsNotNone(run.lease_expires_at)
 
     def test_worker_lease_state_exposes_active_forward_worker_from_db(self) -> None:

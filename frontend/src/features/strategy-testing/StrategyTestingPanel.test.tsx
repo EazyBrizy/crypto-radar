@@ -197,10 +197,16 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("button", { name: /Confirm large run/u })).toBeInTheDocument();
   });
 
-  it("shows backend market-data validation warnings from the estimate", () => {
+  it("renders duplicate market data estimate warnings as non-critical warnings without blocking the run", async () => {
+    const user = userEvent.setup();
     const candlesCount = expectedCandles(30, 15);
     const rawRows = candlesCount * 30 + 197;
     const barsTotal = candlesCount - 200;
+    const warningMessage = `bybit:BTCUSDT:15m has ${rawRows} raw candle rows for ${candlesCount} deduped candles.`;
+    mocks.runStrategyTest.mockResolvedValue(strategyTestRun({
+      status: "queued",
+      test_type: "historical_backtest"
+    }));
     mocks.estimate = strategyTestEstimate({
       scenario_count: 1,
       scenarios: [
@@ -225,7 +231,7 @@ describe("StrategyTestingPanel", () => {
           deduped_candles: candlesCount,
           duplicate_ratio: 30.0684,
           exchange: "bybit",
-          message: `bybit:BTCUSDT:15m has ${rawRows} raw candle rows for ${candlesCount} deduped candles.`,
+          message: warningMessage,
           raw_rows: rawRows,
           symbol: "BTCUSDT",
           timeframe: "15m"
@@ -236,10 +242,57 @@ describe("StrategyTestingPanel", () => {
     renderPanel();
 
     const estimate = screen.getByLabelText("Strategy test run estimate");
-    expect(
-      within(estimate).getByText(`bybit:BTCUSDT:15m has ${rawRows} raw candle rows for ${candlesCount} deduped candles.`)
-    ).toBeInTheDocument();
+    const warningRow = within(estimate).getByText(warningMessage).closest("div");
+    if (!warningRow) throw new Error("Duplicate warning row was not rendered.");
+    expect(warningRow).toHaveClass("strategy-test-estimate-warning-yellow");
+    expect(warningRow).not.toHaveClass("strategy-test-large-confirmation");
     expect(within(estimate).getByText("15m")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Run strategy test/u }));
+
+    expect(mocks.runStrategyTest).toHaveBeenCalledTimes(1);
+    expect(screen.queryByLabelText("Large run confirmation")).not.toBeInTheDocument();
+  });
+
+  it("renders missing market data estimate warnings as severe", () => {
+    const warningMessage = "bybit:ETHUSDT:1m is missing market data.";
+    mocks.estimate = strategyTestEstimate({
+      scenario_count: 1,
+      scenarios: [
+        {
+          bars_total: 0,
+          candles_count: 0,
+          duplicate_rows: 0,
+          exchange: "bybit",
+          raw_rows: 0,
+          strategy: "trend_pullback_continuation",
+          symbol: "ETHUSDT",
+          timeframe: "1m",
+          warmup_bars: 200,
+          warning_codes: ["market_data_missing"]
+        }
+      ],
+      size_level: "small",
+      total_bars: 0,
+      warnings: [
+        {
+          code: "market_data_missing",
+          exchange: "bybit",
+          message: warningMessage,
+          symbol: "ETHUSDT",
+          timeframe: "1m"
+        }
+      ]
+    });
+
+    renderPanel({
+      availablePairs: [marketPair("ETHUSDT", "ETH")]
+    });
+
+    const estimate = screen.getByLabelText("Strategy test run estimate");
+    const warningRow = within(estimate).getByText(warningMessage).closest("div");
+    if (!warningRow) throw new Error("Missing-data warning row was not rendered.");
+    expect(warningRow).toHaveClass("strategy-test-estimate-warning-red");
   });
 
   it("builds the smoke preset request with one pair, one timeframe, three days, and production-like mode", async () => {

@@ -579,13 +579,19 @@ function RunEstimatePanel({
       </div>
       {warnings.length ? (
         <div className="strategy-test-estimate-warnings" aria-label="Estimate validation warnings">
-          {warnings.map((warning) => (
-            <div className="strategy-test-large-confirmation" key={`${warning.code}:${warning.exchange}:${warning.symbol}:${warning.timeframe}`}>
-              <AlertTriangle size={16} />
-              <span>{warning.message}</span>
-              {warning.timeframe ? <Badge tone="yellow">{warning.timeframe}</Badge> : null}
-            </div>
-          ))}
+          {warnings.map((warning) => {
+            const warningTone = estimateWarningTone(warning.code);
+            return (
+              <div
+                className={`strategy-test-estimate-warning strategy-test-estimate-warning-${warningTone}`}
+                key={`${warning.code}:${warning.exchange}:${warning.symbol}:${warning.timeframe}`}
+              >
+                <AlertTriangle size={16} />
+                <span>{warning.message}</span>
+                {warning.timeframe ? <Badge tone="yellow">{warning.timeframe}</Badge> : null}
+              </div>
+            );
+          })}
         </div>
       ) : null}
       {level === "large" ? (
@@ -624,6 +630,13 @@ function estimateWarningText(level: RunEstimateLevel, warningsCount: number): st
   return "Fast enough for a quick validation pass.";
 }
 
+function estimateWarningTone(code: StrategyTestEstimateWarning["code"]): EstimateWarningTone {
+  if (code === "market_data_duplicates") return "yellow";
+  if (code === "market_data_missing") return "red";
+  if (code === "market_data_below_warmup") return "yellow";
+  return "red";
+}
+
 function formatBarsPerScenario(value: number | null): string {
   return value == null ? "-" : `${formatInteger(value)} avg`;
 }
@@ -656,6 +669,8 @@ function FunnelSummaryStrip({ run }: { run: StrategyTestRunResponse | null }) {
   );
 }
 
+type StrategyTestEstimateWarning = NonNullable<StrategyTestEstimateResponse["warnings"]>[number];
+type EstimateWarningTone = "red" | "yellow";
 type RunEstimateLevel = "small" | "medium" | "large";
 
 function enabledStrategyOptions(strategyConfigs: StrategyConfig[]): StrategyConfig[] {

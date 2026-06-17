@@ -3345,6 +3345,34 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   margin-top: 1px;
 }
 
+.strategy-test-estimate-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.strategy-test-estimate-warning svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.strategy-test-estimate-warning-red {
+  border-color: #7f1d1d;
+  background: #3b0a0a;
+  color: #fecaca;
+}
+
+.strategy-test-estimate-warning-yellow {
+  border-color: #713f12;
+  background: #3a2506;
+  color: #fde68a;
+}
+
 .strategy-test-runs-table .data-table-scroll {
   max-height: 360px;
 }

@@ -45,7 +45,7 @@ Both commands install `backend/requirements-dev.txt` into the local `.venv` and 
 
 ## Local MVP Virtual Trading Runbook
 
-Use this order for a clean local check of scanner plus virtual trading. Keep the backend and frontend commands in separate PowerShell terminals once they start long-running servers.
+Use this order for a clean local check of scanner plus virtual trading. Keep the backend, strategy-test worker, and frontend commands in separate PowerShell terminals once they start long-running processes.
 
 1. Install dependencies:
 
@@ -96,7 +96,16 @@ $env:ENABLE_BYBIT_MAINNET_ORDER_PLACEMENT="false"
 ..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-5. Start frontend:
+5. Start the durable strategy-test worker in a separate terminal:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m app.workers.strategy_test_worker
+```
+
+Historical Strategy Testing without the worker stays queued because the API only enqueues `strategy_test_runs`; the worker claims and executes them. `forward_virtual` runs additionally require scanner/market ticks after the worker starts them, so with scanner disabled they can remain in `waiting_for_market_data`.
+
+6. Start frontend:
 
 ```powershell
 cd frontend
@@ -109,7 +118,7 @@ corepack pnpm dev
 
 Frontend URL: `http://127.0.0.1:3000`
 
-6. Verify `/health`:
+7. Verify `/health`:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
@@ -117,7 +126,7 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 
 Expected for the local MVP profile: storage is `ok`, `scanner_running` is `false`, optional sync workers are disabled, and `real_position_sync_enabled` is `false`.
 
-7. Verify `/api/v1/radar/status`:
+8. Verify `/api/v1/radar/status`:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/radar/status
@@ -125,7 +134,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/radar/status
 
 Expected before scanner start: `scanner_running=false`, `scanner_pairs_count` is small, and `max_scanner_pairs=20`.
 
-8. Start scanner explicitly:
+9. Start scanner explicitly:
 
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/radar/scanner/start
@@ -134,7 +143,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/radar/status
 
 Expected after start: `scanner_running=true`; `stage` moves through `warming_up`, `listening`, or `degraded` if optional external market data is unavailable.
 
-9. Run virtual trading smoke:
+10. Run virtual trading smoke:
 
 ```powershell
 make smoke-virtual
@@ -148,13 +157,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\smoke_virtual.ps1
 
 ## One-Command Dev
 
-After backend and frontend dependencies are installed, this command starts infra, applies Alembic migrations, starts backend, and starts frontend:
+After backend and frontend dependencies are installed, this command starts infra, applies Alembic migrations, starts backend, starts `strategy-test-worker`, and starts frontend:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1
 ```
 
-Use `-NoScanner` when you want the API to start without scanner autostart. Use `-NoInfra` only when PostgreSQL, Redis, NATS and ClickHouse are already managed outside the script.
+Use `-NoScanner` when you want the API to start without scanner autostart. Historical Strategy Testing without the worker stays queued; `scripts\dev.ps1` starts that worker for local dev. `forward_virtual` additionally requires scanner/market ticks, so with `-NoScanner` it can be `waiting_for_market_data` until scanner data is flowing. Use `-NoInfra` only when PostgreSQL, Redis, NATS and ClickHouse are already managed outside the script.
 
 ## Environment Defaults
 

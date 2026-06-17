@@ -399,6 +399,15 @@ try {
         Write-WarningLine "Backend did not respond within 30 seconds. Check logs below."
     }
 
+    Write-Info "Starting strategy-test-worker"
+    $managed += Start-ManagedProcess `
+        -Name "strategy-test-worker" `
+        -FilePath $BackendPython `
+        -Arguments @("-m", "app.workers.strategy_test_worker") `
+        -WorkingDirectory $BackendDir `
+        -Environment $backendEnv `
+        -Color Cyan
+
     Write-Info "Starting frontend: http://$FrontendHost`:$FrontendPort"
     $frontendCommand = "corepack pnpm run dev --hostname $FrontendHost --port $FrontendPort"
     $managed += Start-ManagedProcess `
@@ -409,7 +418,7 @@ try {
         -Environment $frontendEnv `
         -Color Magenta
 
-    Write-Info "Ready. Frontend: http://$FrontendHost`:$FrontendPort | Backend docs: http://$BackendHost`:$BackendPort/docs"
+    Write-Info "Ready. Frontend: http://$FrontendHost`:$FrontendPort | Backend docs: http://$BackendHost`:$BackendPort/docs | Worker: strategy-test-worker"
     Write-Info "Stop: Ctrl+C"
 
     while ($true) {

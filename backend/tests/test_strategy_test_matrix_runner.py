@@ -985,7 +985,7 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         self.assertIn("cancel", active.allowed_actions)
         self.assertEqual(active.stale_threshold_seconds, settings.strategy_test_lease_seconds)
 
-    def test_enqueue_historical_run_validates_resource_limits_before_creating_run(self) -> None:
+    def test_enqueue_historical_run_does_not_validate_bars_before_creating_run(self) -> None:
         old_max_bars = settings.strategy_test_max_bars_per_run
         settings.strategy_test_max_bars_per_run = 10
         run_store = _EphemeralRunStore()
@@ -996,16 +996,44 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         )
 
         try:
-            with self.assertRaisesRegex(ValueError, "strategy_test_max_bars_per_run"):
-                service.enqueue_run(_matrix_request())
+            response = service.enqueue_run(_matrix_request())
         finally:
             settings.strategy_test_max_bars_per_run = old_max_bars
 
-        self.assertIsNone(run_store.detail)
+        self.assertEqual(response.status, "queued")
+        self.assertIsNotNone(run_store.detail)
+        self.assertEqual(run_store.transitions, ["queued"])
 
-    def test_enqueue_historical_run_validates_scenario_limit_before_creating_run(self) -> None:
-        old_max_scenarios = settings.strategy_test_max_scenarios_per_run
-        settings.strategy_test_max_scenarios_per_run = 1
+    def test_execute_historical_run_validates_bars_limit_and_marks_failed(self) -> None:
+        old_max_bars = settings.strategy_test_max_bars_per_run
+        settings.strategy_test_max_bars_per_run = 10
+        run_store = _EphemeralRunStore()
+        matrix_runner = _RecordingStaticMatrixRunner(
+            StrategyTestMatrixResult(run_id=RUN_ID, scenario_count=1, completed_scenarios=1, failed_scenarios=0)
+        )
+        service = StrategyTestingService(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            historical_candle_provider=_FixedCountHistoricalCandleProvider(candles_count=DEFAULT_WARMUP_CANDLES + 11),
+            matrix_runner=matrix_runner,  # type: ignore[arg-type]
+        )
+        created = run_store.create_run(_matrix_request())
+
+        try:
+            response = service.execute_run(created.run.run_id)
+        finally:
+            settings.strategy_test_max_bars_per_run = old_max_bars
+
+        self.assertEqual(response.status, "failed")
+        self.assertIn("strategy_test_max_bars_per_run exceeded", response.error or "")
+        self.assertEqual(matrix_runner.calls, 0)
+        self.assertEqual(run_store.transitions, ["queued", "failed"])
+        self.assertEqual(run_store.detail.run.runtime_state["phase"], "failed")  # type: ignore[union-attr]
+        self.assertIn("strategy_test_max_bars_per_run exceeded", run_store.detail.run.runtime_state["last_error"])  # type: ignore[union-attr]
+
+    def test_enqueue_historical_run_validates_enqueued_scenario_limit_before_creating_run(self) -> None:
+        old_max_scenarios = settings.strategy_test_max_enqueued_historical_scenarios_per_run
+        settings.strategy_test_max_enqueued_historical_scenarios_per_run = 1
         run_store = _EphemeralRunStore()
         service = StrategyTestingService(
             run_store=run_store,
@@ -1014,10 +1042,10 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         )
 
         try:
-            with self.assertRaisesRegex(ValueError, "strategy_test_max_scenarios_per_run"):
+            with self.assertRaisesRegex(ValueError, "strategy_test_max_enqueued_historical_scenarios_per_run"):
                 service.enqueue_run(_matrix_request(strategies=["s1", "s2"]))
         finally:
-            settings.strategy_test_max_scenarios_per_run = old_max_scenarios
+            settings.strategy_test_max_enqueued_historical_scenarios_per_run = old_max_scenarios
 
         self.assertIsNone(run_store.detail)
 
@@ -1290,6 +1318,23 @@ class _StaticMatrixRunner:
     ) -> StrategyTestMatrixResult:
         _ = request, run_id, user_uuid, kwargs
         return self.result
+
+
+class _RecordingStaticMatrixRunner(_StaticMatrixRunner):
+    def __init__(self, result: StrategyTestMatrixResult) -> None:
+        super().__init__(result)
+        self.calls = 0
+
+    def run_matrix(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        run_id: UUID,
+        user_uuid: UUID,
+        **kwargs: Any,
+    ) -> StrategyTestMatrixResult:
+        self.calls += 1
+        return super().run_matrix(request=request, run_id=run_id, user_uuid=user_uuid, **kwargs)
 
 
 class _CallbackMatrixRunner:
@@ -2215,10 +2260,20 @@ def _assumption_kwargs(mode: str) -> dict[str, Any]:
 def _requested_matrix(request: StrategyTestRunRequest) -> dict[str, Any]:
     return {
         "user_id": request.user_id,
+        "test_type": request.test_type,
         "mode": request.mode,
         "strategies": list(request.strategies),
         "pairs": [pair.model_dump() for pair in request.pairs],
         "timeframes": list(request.timeframes),
+        "start_at": request.start_at,
+        "end_at": request.end_at,
+        "initial_capital": request.initial_capital,
+        "fee_rate": request.fee_rate,
+        "slippage_bps": request.slippage_bps,
+        "same_candle_policy": request.same_candle_policy,
+        "params": request.params,
+        "metric_set": request.metric_set,
+        "tags": request.tags,
         "scenario_count": len(request.strategies) * len(request.pairs) * len(request.timeframes),
     }
 

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from app.api.v1.router import api_router
 from app.api.v1.strategy_tests import get_strategy_testing_service
+from app.core.config import settings
 from app.main import app
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult
 from app.services.strategy_testing.metrics import MetricResult
@@ -306,6 +307,57 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(response.json()["status"], "queued")
         self.assertEqual(service.enqueue_calls, 1)
         self.assertEqual(service.execute_calls, 0)
+
+    def test_post_large_historical_run_enqueues_without_candle_estimate(self) -> None:
+        old_sync_max = settings.strategy_test_max_scenarios_per_run
+        old_enqueued_max = settings.strategy_test_max_enqueued_historical_scenarios_per_run
+        settings.strategy_test_max_scenarios_per_run = 96
+        settings.strategy_test_max_enqueued_historical_scenarios_per_run = 1000
+        store = _EphemeralStrategyTestRunStore()
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            historical_candle_provider=_FailingEstimateCandleProvider(),
+        )
+        client = TestClient(app)
+
+        try:
+            response = client.post("/api/v1/strategy-tests/runs", json=_large_payload(scenario_count=1000))
+        finally:
+            settings.strategy_test_max_scenarios_per_run = old_sync_max
+            settings.strategy_test_max_enqueued_historical_scenarios_per_run = old_enqueued_max
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 202)
+        data = response.json()
+        self.assertEqual(data["status"], "queued")
+        self.assertEqual(data["test_type"], "historical_backtest")
+        self.assertEqual(data["requested_matrix"]["scenario_count"], 1000)
+        self.assertEqual(data["runtime_state"]["phase"], "queued")
+
+    def test_post_too_large_historical_run_returns_clear_validation_error(self) -> None:
+        old_enqueued_max = settings.strategy_test_max_enqueued_historical_scenarios_per_run
+        settings.strategy_test_max_enqueued_historical_scenarios_per_run = 5
+        store = _EphemeralStrategyTestRunStore()
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            historical_candle_provider=_FailingEstimateCandleProvider(),
+        )
+        client = TestClient(app)
+
+        try:
+            response = client.post("/api/v1/strategy-tests/runs", json=_large_payload(scenario_count=6))
+        finally:
+            settings.strategy_test_max_enqueued_historical_scenarios_per_run = old_enqueued_max
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("strategy_test_max_enqueued_historical_scenarios_per_run exceeded", response.json()["detail"])
+        self.assertIn("6 scenarios requested, max is 5", response.json()["detail"])
+        self.assertEqual(store.list_runs(user_id=None, limit=10, status=None), [])
 
     def test_completed_historical_run_does_not_publish_execution_calibration_by_default(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -1100,6 +1152,18 @@ def _payload() -> dict[str, object]:
     }
 
 
+def _large_payload(*, scenario_count: int) -> dict[str, object]:
+    now = _now()
+    return {
+        **_payload(),
+        "strategies": [f"strategy_{index}" for index in range(scenario_count)],
+        "pairs": [{"exchange": "bybit", "symbol": "BTCUSDT"}],
+        "timeframes": ["1h"],
+        "start_at": now.isoformat(),
+        "end_at": (now + timedelta(days=30)).isoformat(),
+    }
+
+
 class _EphemeralStrategyTestRunStore:
     def __init__(self) -> None:
         self._runs: dict[UUID, StrategyTestRunDetailResponse] = {}
@@ -1260,6 +1324,20 @@ class _CountingEstimateCandleProvider:
     ) -> int:
         _ = start_at, end_at
         return self._raw_counts.get((exchange, symbol, timeframe), 0)
+
+
+class _FailingEstimateCandleProvider:
+    async def count_candles(self, **kwargs: Any) -> int:
+        _ = kwargs
+        raise AssertionError("POST /strategy-tests/runs must not count candles")
+
+    async def count_raw_candles(self, **kwargs: Any) -> int:
+        _ = kwargs
+        raise AssertionError("POST /strategy-tests/runs must not count raw candles")
+
+    async def load_candles(self, **kwargs: Any) -> list[Any]:
+        _ = kwargs
+        raise AssertionError("POST /strategy-tests/runs must not load candles")
 
 
 class _NoopStrategyTestMatrixRunner:

@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     scanner_market_data_stale_seconds: float = 30.0
     strategy_test_max_bars_per_run: int = 1_000_000
     strategy_test_max_scenarios_per_run: int = 96
+    strategy_test_max_enqueued_historical_scenarios_per_run: int = 5_000
     strategy_test_worker_heartbeat_seconds: float = 5.0
     strategy_test_lease_seconds: int = 900
     strategy_test_historical_backfill_enabled: bool = True

@@ -453,7 +453,7 @@ describe("StrategyTestingPanel", () => {
     await user.click(screen.getByRole("button", { name: "Select all timeframes" }));
 
     expect(screen.getByText("1,600 scenarios selected")).toBeInTheDocument();
-    expect(screen.getByText("Large matrix: worker will process scenarios gradually. Data will be backfilled and cached.")).toBeInTheDocument();
+    expect(screen.getByText("Large matrix will run in worker. It may take a long time. Cached candles will be reused on later runs.")).toBeInTheDocument();
   });
 
   it("disables Run and shows backend reason while another strategy test is active", () => {

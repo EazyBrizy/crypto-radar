@@ -657,7 +657,7 @@ export function StrategyTestingPanel({
           {`${formatInteger(localScenarioCount)} scenarios selected`}
         </Badge>
         {showLargeMatrixWarning ? (
-          <span>Large matrix: worker will process scenarios gradually. Data will be backfilled and cached.</span>
+          <span>Large matrix will run in worker. It may take a long time. Cached candles will be reused on later runs.</span>
         ) : null}
       </div>
 

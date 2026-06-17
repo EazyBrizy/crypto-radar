@@ -102,12 +102,12 @@ class StrategyTestingService:
         self._historical_candle_provider = historical_candle_provider or ClickHouseHistoricalCandleProvider()
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
-        self._validate_run_request(request)
+        self._validate_synchronous_run_request(request)
         created = self._run_store.create_run(request)
         return self.execute_run(created.run.run_id, request)
 
     def enqueue_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
-        self._validate_run_request(request)
+        self._validate_enqueued_run_request(request)
         created = self._run_store.create_run(request)
         if request.test_type == "historical_backtest":
             return self._run_store.update_runtime_state(
@@ -142,10 +142,17 @@ class StrategyTestingService:
                 ),
             )
             return self._run_store.mark_cancelled(run_id).run
+        resource_warnings = self._validate_worker_resource_limits(run_id, request, last_summary)
+        if isinstance(resource_warnings, StrategyTestRunResponse):
+            return resource_warnings
         self._run_store.mark_running(run_id)
+        initial_runtime_state = _initial_historical_runtime_state(request, phase="running")
+        if resource_warnings:
+            initial_runtime_state["warnings"] = resource_warnings
+            initial_runtime_state["matrix_bars_estimate_status"] = "unavailable"
         self._run_store.update_runtime_state(
             run_id,
-            _initial_historical_runtime_state(request, phase="running"),
+            initial_runtime_state,
         )
         try:
             user_uuid = strategy_test_user_uuid(request.user_id)
@@ -480,8 +487,33 @@ class StrategyTestingService:
     def heartbeat_forward_runs(self) -> Any:
         return self._forward_runtime.heartbeat_active_runs()
 
-    def _validate_run_request(self, request: StrategyTestRunRequest) -> None:
+    def _validate_synchronous_run_request(self, request: StrategyTestRunRequest) -> None:
         _validate_strategy_test_resource_limits(request, self._historical_candle_provider)
+
+    def _validate_enqueued_run_request(self, request: StrategyTestRunRequest) -> None:
+        _validate_enqueued_strategy_test_resource_limits(request)
+
+    def _validate_worker_resource_limits(
+        self,
+        run_id: UUID,
+        request: StrategyTestRunRequest,
+        last_summary: dict[str, Any],
+    ) -> StrategyTestRunResponse | list[str]:
+        try:
+            return _validate_worker_strategy_test_resource_limits(request, self._historical_candle_provider)
+        except ValueError as exc:
+            message = str(exc)
+            summary = _normalize_summary(last_summary)
+            self._run_store.update_runtime_state(
+                run_id,
+                _terminal_runtime_state(
+                    request=request,
+                    phase="failed",
+                    partial_summary=summary,
+                    last_error=message,
+                ),
+            )
+            return self._run_store.mark_failed(run_id, message, summary=summary).run
 
     def publish_calibration(self, run_id: UUID, *, user_id: str | None = None) -> StrategyTestCalibrationResponse:
         detail = self._run_detail(run_id, user_id=user_id)
@@ -893,13 +925,11 @@ def _validate_strategy_test_resource_limits(
     request: StrategyTestRunRequest,
     provider: HistoricalCandleProvider,
 ) -> None:
-    scenario_count = _scenario_total(request)
-    max_scenarios = max(1, int(settings.strategy_test_max_scenarios_per_run))
-    if scenario_count > max_scenarios:
-        raise ValueError(
-            "strategy_test_max_scenarios_per_run exceeded: "
-            f"{scenario_count} scenarios requested, max is {max_scenarios}."
-        )
+    _validate_scenario_count(
+        request,
+        max_scenarios=settings.strategy_test_max_scenarios_per_run,
+        setting_name="strategy_test_max_scenarios_per_run",
+    )
     if request.test_type != "historical_backtest":
         return
     estimate = _estimate_historical_run(request, provider)
@@ -911,6 +941,60 @@ def _validate_strategy_test_resource_limits(
         raise ValueError(
             "strategy_test_max_bars_per_run exceeded: "
             f"{estimate.total_bars} bars requested, max is {max_bars}."
+        )
+
+
+def _validate_enqueued_strategy_test_resource_limits(request: StrategyTestRunRequest) -> None:
+    if request.test_type == "historical_backtest":
+        _validate_scenario_count(
+            request,
+            max_scenarios=settings.strategy_test_max_enqueued_historical_scenarios_per_run,
+            setting_name="strategy_test_max_enqueued_historical_scenarios_per_run",
+        )
+        return
+    _validate_scenario_count(
+        request,
+        max_scenarios=settings.strategy_test_max_scenarios_per_run,
+        setting_name="strategy_test_max_scenarios_per_run",
+    )
+
+
+def _validate_worker_strategy_test_resource_limits(
+    request: StrategyTestRunRequest,
+    provider: HistoricalCandleProvider,
+) -> list[str]:
+    if request.test_type != "historical_backtest":
+        return []
+    _validate_scenario_count(
+        request,
+        max_scenarios=settings.strategy_test_max_enqueued_historical_scenarios_per_run,
+        setting_name="strategy_test_max_enqueued_historical_scenarios_per_run",
+    )
+    estimate = _estimate_historical_run(request, provider)
+    failed_warnings = [warning for warning in estimate.warnings if warning.code == "estimating_failed"]
+    if failed_warnings:
+        return [warning.message for warning in failed_warnings]
+    max_bars = max(1, int(settings.strategy_test_max_bars_per_run))
+    if estimate.total_bars > max_bars:
+        raise ValueError(
+            "strategy_test_max_bars_per_run exceeded: "
+            f"{estimate.total_bars} bars requested, max is {max_bars}."
+        )
+    return []
+
+
+def _validate_scenario_count(
+    request: StrategyTestRunRequest,
+    *,
+    max_scenarios: int,
+    setting_name: str,
+) -> None:
+    scenario_count = _scenario_total(request)
+    limit = max(1, int(max_scenarios))
+    if scenario_count > limit:
+        raise ValueError(
+            f"{setting_name} exceeded: "
+            f"{scenario_count} scenarios requested, max is {limit}."
         )
 
 

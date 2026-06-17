@@ -1831,30 +1831,6 @@ export interface components {
             /** Is Enabled */
             is_enabled?: boolean | null;
         };
-        /** BacktestNotReadyResponse */
-        BacktestNotReadyResponse: {
-            /**
-             * Status
-             * @default not_implemented
-             * @constant
-             */
-            status: "not_implemented";
-            /** Message */
-            message: string;
-            /**
-             * Worker Required
-             * @default true
-             */
-            worker_required: boolean;
-            /** Analytics Targets */
-            analytics_targets?: string[];
-            /** Data Sources */
-            data_sources?: string[];
-            /** Details */
-            details?: {
-                [key: string]: unknown;
-            };
-        };
         /** BacktestResultResponse */
         BacktestResultResponse: {
             /**
@@ -1972,6 +1948,20 @@ export interface components {
              */
             status: "completed" | "queued";
             result?: components["schemas"]["BacktestResultResponse"] | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Test Type */
+            test_type?: "historical_backtest" | null;
+            /** Canonical Endpoint */
+            canonical_endpoint?: string | null;
+            /** Report Endpoint */
+            report_endpoint?: string | null;
+            /** Requested Matrix */
+            requested_matrix?: {
+                [key: string]: unknown;
+            };
+            /** Message */
+            message?: string | null;
         };
         /** BillingCheckoutRequest */
         BillingCheckoutRequest: {
@@ -8689,7 +8679,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8713,15 +8703,6 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BacktestNotReadyResponse"];
-                };
-            };
         };
     };
     list_backtest_results_api_v1_backtests_results_get: {
@@ -8742,7 +8723,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BacktestResultResponse"][];
+                    "application/json": components["schemas"]["StrategyTestReport"][];
                 };
             };
             /** @description Validation Error */

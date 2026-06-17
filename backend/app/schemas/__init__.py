@@ -5,7 +5,6 @@ from app.schemas.ai import (
     SignalAIExplanationResponse,
 )
 from app.schemas.backtest import (
-    BacktestNotReadyResponse,
     BacktestResultResponse,
     BacktestRunRequest,
     BacktestRunResult,
@@ -191,7 +190,6 @@ __all__ = [
     "AccountRiskSnapshot",
     "AiReviewEvent",
     "AlphaMarketContext",
-    "BacktestNotReadyResponse",
     "BacktestResultResponse",
     "BacktestRunRequest",
     "BacktestRunResult",

@@ -1,32 +1,17 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from uuid import UUID
+from uuid import uuid4
 import unittest
 
 from app.schemas.ai import AIExplanationNotReadyResponse
 from app.schemas.backtest import BacktestRunRequest
 from app.schemas.billing import BillingProviderNotReadyResponse
-from app.services.backtest_service import (
-    BACKTEST_RESULTS_DDL,
-    BacktestNotReadyError,
-    BacktestService,
-    ClickHouseBacktestResultStore,
+from app.services.backtest_service import BacktestService
+from app.services.strategy_testing.schemas import (
+    StrategyTestReport,
+    StrategyTestRunRequest,
+    StrategyTestRunResponse,
 )
-
-
-USER_ID = UUID("ba520631-d035-4f95-a4c0-3b40553dd524")
-
-
-class FakeClickHouseClient:
-    def __init__(self) -> None:
-        self.commands: list[str] = []
-        self.inserts: list[tuple[str, list[list[object]], list[str]]] = []
-
-    def command(self, command: str) -> None:
-        self.commands.append(command)
-
-    def insert(self, table: str, data: list[list[object]], column_names: list[str]) -> None:
-        self.inserts.append((table, data, column_names))
 
 
 class AIBacktestBillingContractTest(unittest.TestCase):
@@ -41,9 +26,10 @@ class AIBacktestBillingContractTest(unittest.TestCase):
         self.assertEqual(response.storage_target, "signal_ai_explanations")
         self.assertTrue(response.orchestrator_required)
 
-    def test_backtest_without_runner_returns_clickhouse_target_contract(self) -> None:
+    def test_backtest_compatibility_uses_strategy_testing_contract(self) -> None:
         now = datetime.now(timezone.utc)
-        service = BacktestService(result_store=ClickHouseBacktestResultStore(lambda: FakeClickHouseClient()))
+        strategy_service = FakeStrategyTestingService()
+        service = BacktestService(strategy_testing_service=strategy_service)
 
         request = BacktestRunRequest(
             strategy_code="breakout",
@@ -55,25 +41,14 @@ class AIBacktestBillingContractTest(unittest.TestCase):
             initial_capital=Decimal("1000"),
         )
 
-        with self.assertRaises(BacktestNotReadyError) as ctx:
-            service.run_backtest(request)
+        result = service.run_backtest(request)
+        reports = service.list_results(user_id="demo_user", limit=1)
 
-        response = ctx.exception.response
-        self.assertEqual(response.status, "not_implemented")
-        self.assertTrue(response.worker_required)
-        self.assertIn("analytics.backtest_results", response.analytics_targets)
-        self.assertIn("market.ohlcv_1h", response.data_sources)
-        self.assertEqual(response.details["strategy_code"], "breakout")
-
-    def test_backtest_result_store_can_ensure_clickhouse_schema(self) -> None:
-        client = FakeClickHouseClient()
-        store = ClickHouseBacktestResultStore(lambda: client)
-
-        store.ensure_schema()
-
-        self.assertEqual(client.commands, [BACKTEST_RESULTS_DDL])
-        self.assertIn("analytics.backtest_results", client.commands[0])
-        self.assertIn("MergeTree", client.commands[0])
+        self.assertEqual(result.status, "queued")
+        self.assertEqual(result.run_id, strategy_service.run_id)
+        self.assertEqual(result.report_endpoint, f"/api/v1/strategy-tests/reports/{strategy_service.run_id}")
+        self.assertEqual(strategy_service.enqueued[0].test_type, "historical_backtest")
+        self.assertEqual(reports, strategy_service.reports)
 
     def test_billing_not_ready_response_points_to_postgres_tables(self) -> None:
         response = BillingProviderNotReadyResponse(
@@ -85,6 +60,34 @@ class AIBacktestBillingContractTest(unittest.TestCase):
         self.assertIn("subscription_plans", response.storage_targets)
         self.assertIn("user_subscriptions", response.storage_targets)
         self.assertTrue(response.provider_integration_required)
+
+
+class FakeStrategyTestingService:
+    def __init__(self) -> None:
+        self.run_id = uuid4()
+        self.enqueued: list[StrategyTestRunRequest] = []
+        self.reports = [
+            StrategyTestReport(
+                run_id=self.run_id,
+                status="queued",
+                mode="research_virtual",
+                requested_matrix={"test_type": "historical_backtest"},
+                generated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            )
+        ]
+
+    def enqueue_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        self.enqueued.append(request)
+        return StrategyTestRunResponse(
+            run_id=self.run_id,
+            status="queued",
+            test_type=request.test_type,
+            requested_matrix={"test_type": request.test_type},
+        )
+
+    def list_reports(self, user_id: str, limit: int) -> list[StrategyTestReport]:
+        _ = user_id, limit
+        return self.reports
 
 
 if __name__ == "__main__":

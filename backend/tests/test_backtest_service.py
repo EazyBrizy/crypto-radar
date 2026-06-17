@@ -3,124 +3,118 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-from app.schemas.backtest import BacktestResultResponse, BacktestRunRequest, BacktestRunResult
-from app.services.backtest_service import BacktestNotReadyError, BacktestService
-
-
-USER_ID = UUID("ba520631-d035-4f95-a4c0-3b40553dd524")
-
-
-class FakeResultStore:
-    def __init__(self) -> None:
-        self.results: list[BacktestResultResponse] = []
-
-    def ensure_schema(self) -> None:
-        return None
-
-    def write_result(self, result: BacktestResultResponse) -> None:
-        self.results.append(result)
-
-    def list_results(self, *, user_id: UUID | None = None, limit: int = 50) -> list[BacktestResultResponse]:
-        values = self.results
-        if user_id is not None:
-            values = [result for result in values if result.user_id == user_id]
-        return values[:limit]
+from app.schemas.backtest import BacktestRunRequest
+from app.services.backtest_service import BacktestService
+from app.services.strategy_testing.schemas import (
+    StrategyTestPair,
+    StrategyTestReport,
+    StrategyTestRunRequest,
+    StrategyTestRunResponse,
+)
 
 
-class FakeRunner:
-    def __init__(self, result: BacktestRunResult | None = None) -> None:
-        self.result = result
-        self.requests: list[BacktestRunRequest] = []
-
-    def run(self, request: BacktestRunRequest) -> BacktestRunResult:
-        self.requests.append(request)
-        return self.result or BacktestRunResult(status="completed", result=_result(request))
-
-
-class FailingRunner:
-    def run(self, request: BacktestRunRequest) -> BacktestRunResult:
-        raise ValueError("no_historical_data: no closed candles were found")
+USER_ID = "usr_backtest_owner"
 
 
 class BacktestServiceTest(unittest.TestCase):
-    def test_configured_runner_runs_and_persists_completed_result(self) -> None:
-        store = FakeResultStore()
-        runner = FakeRunner()
-        service = BacktestService(result_store=store, runner=runner)  # type: ignore[arg-type]
+    def test_run_backtest_enqueues_single_strategy_test_run(self) -> None:
+        strategy_service = FakeStrategyTestingService()
+        service = BacktestService(strategy_testing_service=strategy_service)
         request = _request()
 
         result = service.run_backtest(request)
 
-        self.assertEqual(result.status, "completed")
-        self.assertEqual(len(runner.requests), 1)
-        self.assertEqual(len(store.results), 1)
-        self.assertEqual(store.results[0].strategy_code, "breakout")
+        self.assertEqual(result.status, "queued")
+        self.assertEqual(result.run_id, strategy_service.run_id)
+        self.assertIsNone(result.result)
+        self.assertEqual(result.test_type, "historical_backtest")
+        self.assertEqual(result.canonical_endpoint, f"/api/v1/strategy-tests/runs/{strategy_service.run_id}")
+        self.assertEqual(result.report_endpoint, f"/api/v1/strategy-tests/reports/{strategy_service.run_id}")
+        self.assertEqual(len(strategy_service.enqueued), 1)
+        enqueued = strategy_service.enqueued[0]
+        self.assertEqual(enqueued.user_id, USER_ID)
+        self.assertEqual(enqueued.test_type, "historical_backtest")
+        self.assertEqual(enqueued.strategies, ["breakout"])
+        self.assertEqual(enqueued.pairs, [StrategyTestPair(exchange="bybit", symbol="BTCUSDT")])
+        self.assertEqual(enqueued.timeframes, ["1h"])
+        self.assertEqual(enqueued.start_at, request.start_at)
+        self.assertEqual(enqueued.end_at, request.end_at)
+        self.assertEqual(enqueued.initial_capital, request.initial_capital)
+        self.assertEqual(enqueued.fee_rate, request.fee_rate)
+        self.assertEqual(enqueued.slippage_bps, request.slippage_bps)
+        self.assertEqual(enqueued.mode, "research_virtual")
+        self.assertEqual(enqueued.params["strategy_version"], "v2")
+        self.assertEqual(enqueued.params["risk"], "standard")
+        self.assertIn("legacy_backtests", enqueued.tags)
 
-    def test_without_runner_keeps_not_ready_contract(self) -> None:
-        service = BacktestService(result_store=FakeResultStore())  # type: ignore[arg-type]
+    def test_list_results_reads_strategy_testing_reports(self) -> None:
+        strategy_service = FakeStrategyTestingService()
+        service = BacktestService(strategy_testing_service=strategy_service)
 
-        with self.assertRaises(BacktestNotReadyError):
-            service.run_backtest(_request())
+        reports = service.list_results(user_id=USER_ID, limit=10)
 
-    def test_runner_data_errors_are_explicit_value_errors(self) -> None:
-        service = BacktestService(
-            result_store=FakeResultStore(),  # type: ignore[arg-type]
-            runner=FailingRunner(),  # type: ignore[arg-type]
-        )
-
-        with self.assertRaisesRegex(ValueError, "no_historical_data"):
-            service.run_backtest(_request())
+        self.assertEqual(reports, strategy_service.reports)
+        self.assertEqual(strategy_service.list_report_calls, [{"user_id": USER_ID, "limit": 10}])
 
     def test_invalid_period_is_rejected_before_runner(self) -> None:
         request = _request()
-        service = BacktestService(
-            result_store=FakeResultStore(),  # type: ignore[arg-type]
-            runner=FakeRunner(),  # type: ignore[arg-type]
-        )
+        strategy_service = FakeStrategyTestingService()
+        service = BacktestService(strategy_testing_service=strategy_service)
 
         with self.assertRaisesRegex(ValueError, "end_at must be later"):
             service.run_backtest(request.model_copy(update={"end_at": request.start_at}))
+        self.assertEqual(strategy_service.enqueued, [])
 
 
 def _request() -> BacktestRunRequest:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return BacktestRunRequest(
-        user_id=str(USER_ID),
+        user_id=USER_ID,
         strategy_code="breakout",
+        strategy_version="v2",
         exchange="bybit",
         symbol="BTCUSDT",
         timeframe="1h",
         start_at=now,
         end_at=now + timedelta(days=7),
         initial_capital=Decimal("1000"),
+        params={"risk": "standard"},
     )
 
 
-def _result(request: BacktestRunRequest) -> BacktestResultResponse:
-    return BacktestResultResponse(
-        run_id=uuid4(),
-        user_id=UUID(request.user_id),
-        strategy_code=request.strategy_code,
-        strategy_version=request.strategy_version or "test",
-        exchange=request.exchange,
-        symbol=request.symbol,
-        timeframe=request.timeframe,
-        start_at=request.start_at,
-        end_at=request.end_at,
-        initial_capital=request.initial_capital,
-        final_equity=request.initial_capital,
-        pnl=Decimal("0"),
-        pnl_pct=0.0,
-        max_drawdown_pct=0.0,
-        trades_count=0,
-        wins_count=0,
-        losses_count=0,
-        metrics={"trades_count": 0},
-        equity_curve=[],
-        created_at=datetime.now(timezone.utc),
-    )
+class FakeStrategyTestingService:
+    def __init__(self) -> None:
+        self.run_id = uuid4()
+        self.enqueued: list[StrategyTestRunRequest] = []
+        self.reports = [
+            StrategyTestReport(
+                run_id=self.run_id,
+                status="queued",
+                mode="research_virtual",
+                requested_matrix={"test_type": "historical_backtest"},
+                generated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            )
+        ]
+        self.list_report_calls: list[dict[str, object]] = []
+
+    def enqueue_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
+        self.enqueued.append(request)
+        return StrategyTestRunResponse(
+            run_id=self.run_id,
+            status="queued",
+            test_type=request.test_type,
+            requested_matrix={
+                **request.model_dump(mode="json"),
+                "scenario_count": len(request.strategies) * len(request.pairs) * len(request.timeframes),
+            },
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+
+    def list_reports(self, user_id: str, limit: int) -> list[StrategyTestReport]:
+        self.list_report_calls.append({"user_id": user_id, "limit": limit})
+        return self.reports
 
 
 if __name__ == "__main__":

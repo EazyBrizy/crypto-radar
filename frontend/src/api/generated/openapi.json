@@ -253,7 +253,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -275,16 +275,6 @@
                 }
               }
             }
-          },
-          "501": {
-            "description": "Not Implemented",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BacktestNotReadyResponse"
-                }
-              }
-            }
           }
         }
       }
@@ -303,6 +293,9 @@
             "required": false,
             "schema": {
               "anyOf": [
+                {
+                  "type": "string"
+                },
                 {
                   "type": "string",
                   "format": "uuid"
@@ -335,7 +328,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/BacktestResultResponse"
+                    "$ref": "#/components/schemas/StrategyTestReport"
                   },
                   "title": "Response List Backtest Results Api V1 Backtests Results Get"
                 }
@@ -6397,49 +6390,6 @@
         "type": "object",
         "title": "AlertRuleUpdateRequest"
       },
-      "BacktestNotReadyResponse": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "const": "not_implemented",
-            "title": "Status",
-            "default": "not_implemented"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          },
-          "worker_required": {
-            "type": "boolean",
-            "title": "Worker Required",
-            "default": true
-          },
-          "analytics_targets": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Analytics Targets"
-          },
-          "data_sources": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Data Sources"
-          },
-          "details": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Details"
-          }
-        },
-        "type": "object",
-        "required": [
-          "message"
-        ],
-        "title": "BacktestNotReadyResponse"
-      },
       "BacktestResultResponse": {
         "properties": {
           "run_id": {
@@ -6685,6 +6635,68 @@
                 "type": "null"
               }
             ]
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "test_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "historical_backtest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Type"
+          },
+          "canonical_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Endpoint"
+          },
+          "report_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Endpoint"
+          },
+          "requested_matrix": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Requested Matrix"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
           }
         },
         "type": "object",

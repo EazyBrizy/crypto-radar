@@ -95,7 +95,7 @@ ClickHouse stores high-volume market and analytics data. Init SQL lives in `infr
 - `market.ohlcv_1m`, `market.ohlcv_5m`, `market.ohlcv_15m`, `market.ohlcv_1h`, `market.ohlcv_4h`, `market.ohlcv_1d`: OHLCV series.
 - `market.indicator_values`: feature/indicator values.
 - `analytics.signal_events`, `analytics.strategy_performance_daily`, `analytics.virtual_trade_events`, `analytics.external_trade_events`: analytics events.
-- `analytics.backtest_results`, `analytics.strategy_test_trades`, `analytics.strategy_test_metrics`: testing and reporting analytics.
+- `analytics.strategy_test_trades`, `analytics.strategy_test_signals`, `analytics.strategy_test_metrics`: strategy-testing execution, funnel, and reporting analytics. Legacy `/backtests` compatibility routes read these reports through Strategy Testing instead of a separate backtest result table.
 
 Do not use ClickHouse as the source of truth for user actions, positions, orders, or safety decisions.
 

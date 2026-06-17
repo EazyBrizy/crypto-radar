@@ -16,7 +16,7 @@ describe("strategyTestsApi identity contract", () => {
   });
 
   it("sends run intent without frontend user_id", async () => {
-    const fetchSpy = vi.fn(async () => jsonResponse(strategyTestRun()));
+    const fetchSpy = vi.fn<typeof fetch>(async () => jsonResponse(strategyTestRun()));
     vi.stubGlobal("fetch", fetchSpy);
 
     await strategyTestsApi.run(strategyTestRunRequest());
@@ -32,7 +32,7 @@ describe("strategyTestsApi identity contract", () => {
   });
 
   it("uses backend request identity for active/list/report routes by default", async () => {
-    const fetchSpy = vi.fn(async () => jsonResponse([]));
+    const fetchSpy = vi.fn<typeof fetch>(async () => jsonResponse([]));
     vi.stubGlobal("fetch", fetchSpy);
 
     await strategyTestsApi.listRuns();
@@ -46,7 +46,7 @@ describe("strategyTestsApi identity contract", () => {
   });
 
   it("keeps explicit user_id query override for dev compatibility", async () => {
-    const fetchSpy = vi.fn(async () => jsonResponse(activeRunState()));
+    const fetchSpy = vi.fn<typeof fetch>(async () => jsonResponse(activeRunState()));
     vi.stubGlobal("fetch", fetchSpy);
 
     await strategyTestsApi.activeRun("usr_debug");

@@ -845,6 +845,12 @@ function ActiveRunNotice({
   const runtimeStatus = runtimeText(run, "status");
   const displayedRuntimeStatus = runtimeStatus && runtimeStatus !== run.status ? runtimeStatus : null;
   const marketDataWaiting = isWaitingForMarketData(run);
+  const historicalRunHasHeartbeat =
+    run.test_type === "historical_backtest" &&
+    run.status === "running" &&
+    Boolean(run.last_heartbeat_at) &&
+    !activeRunState?.is_stale;
+  const queuedRunNeedsWorkerStartHint = run.status === "queued" && run.worker_attempt === 0 && !run.claimed_at;
   return (
     <section aria-label="Active strategy test run" className="strategy-test-active-run">
       <div className="strategy-test-active-run-header">
@@ -855,8 +861,14 @@ function ActiveRunNotice({
       {activeRunState?.disabled_reason ? (
         <p className="strategy-test-active-run-reason">{activeRunState.disabled_reason}</p>
       ) : null}
-      {run.test_type === "historical_backtest" && !activeRunState?.is_stale ? (
+      {historicalRunHasHeartbeat ? (
         <p className="strategy-test-active-run-reason">Run is receiving heartbeats. Large historical scenarios can stay on the same scenario for a while.</p>
+      ) : null}
+      {run.status === "queued" ? (
+        <p className="strategy-test-active-run-reason">Queued; waiting for strategy-test worker to claim this run.</p>
+      ) : null}
+      {queuedRunNeedsWorkerStartHint ? (
+        <p className="strategy-test-active-run-reason">If this does not change, start strategy-test-worker.</p>
       ) : null}
       {marketDataWaiting ? (
         <p className="strategy-test-active-run-reason">Waiting for market data</p>

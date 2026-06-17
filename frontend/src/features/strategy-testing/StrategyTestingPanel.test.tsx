@@ -556,6 +556,7 @@ describe("StrategyTestingPanel", () => {
   it("explains that an active historical scenario can take a while", () => {
     mocks.activeRun = activeRunState({
       active_run: strategyTestRun({
+        last_heartbeat_at: "2026-06-02T00:01:00.000Z",
         run_id: "67676767-6767-4767-8767-676767676767",
         status: "running",
         test_type: "historical_backtest"
@@ -629,13 +630,16 @@ describe("StrategyTestingPanel", () => {
   it("renders queued active run as waiting for worker lease", () => {
     mocks.activeRun = activeRunState({
       active_run: strategyTestRun({
+        claimed_at: null,
         last_heartbeat_at: null,
+        lease_expires_at: null,
         run_id: "69696969-6969-4969-8969-696969696969",
         runtime_state: {
           phase: "queued",
           status: "queued"
         },
         status: "queued",
+        test_type: "historical_backtest",
         worker_attempt: 0,
         worker_id: null
       }),
@@ -648,8 +652,12 @@ describe("StrategyTestingPanel", () => {
 
     const notice = screen.getByLabelText("Active strategy test run");
     expect(within(notice).getByText("queued")).toBeInTheDocument();
+    expect(within(notice).queryByText("Run is receiving heartbeats. Large historical scenarios can stay on the same scenario for a while.")).not.toBeInTheDocument();
+    expect(within(notice).getByText("Queued; waiting for strategy-test worker to claim this run.")).toBeInTheDocument();
+    expect(within(notice).getByText("If this does not change, start strategy-test-worker.")).toBeInTheDocument();
     expect(within(notice).getByText("Waiting for worker")).toBeInTheDocument();
     expect(within(notice).getByText("Worker lease")).toBeInTheDocument();
+    expect(within(notice).getByRole("button", { name: /Cancel run/u })).toBeInTheDocument();
   });
 
   it("renders forward waiting_for_market_data state from backend runtime", () => {

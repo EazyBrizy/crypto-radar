@@ -74,6 +74,8 @@ const POLICY_LABELS: Record<StrategyTestSameCandlePolicy, string> = {
 };
 const ACTIVE_RUN_STATUSES = new Set<StrategyTestRunStatus>(["queued", "running", "stopping"]);
 const STRATEGY_TEST_RUN_POLL_MS = 2_500;
+const LARGE_MATRIX_WARNING_SCENARIO_COUNT = 100;
+const MATRIX_SELECTION_ERROR = "Select at least one strategy, pair, and timeframe.";
 
 export function StrategyTestingPanel({
   availablePairs,
@@ -81,7 +83,7 @@ export function StrategyTestingPanel({
 }: StrategyTestingPanelProps) {
   const dateDefaults = useMemo(() => defaultDateRange(), []);
   const strategyOptions = useMemo(() => enabledStrategyOptions(strategyConfigs), [strategyConfigs]);
-  const pairOptions = useMemo(() => availablePairs.slice(0, 50), [availablePairs]);
+  const pairOptions = useMemo(() => availablePairs, [availablePairs]);
   const timeframeOptions = useMemo(() => availableTimeframes(strategyOptions), [strategyOptions]);
   const storageUserId = useMemo(() => firstConfiguredUserId(strategyConfigs), [strategyConfigs]);
   const formStorageKey = useMemo(() => strategyTestFormStorageKey(storageUserId), [storageUserId]);
@@ -104,6 +106,7 @@ export function StrategyTestingPanel({
   const [historicalPendingEntriesEnabled, setHistoricalPendingEntriesEnabled] = useState(true);
   const [pendingEntryMaxWaitBars, setPendingEntryMaxWaitBars] = useState(DEFAULT_PENDING_ENTRY_MAX_WAIT_BARS);
   const [formError, setFormError] = useState<string | null>(null);
+  const [pairFilter, setPairFilter] = useState("");
   const [selectedReportRunId, setSelectedReportRunId] = useState<string | null>(null);
   const [largeRunConfirmation, setLargeRunConfirmation] = useState<{ confirmed: boolean; key: string | null }>({
     confirmed: false,
@@ -128,6 +131,8 @@ export function StrategyTestingPanel({
     () => filterKnownValues(effectivePairIds, pairOptionIds),
     [effectivePairIds, pairOptionIds]
   );
+  const visiblePairOptions = useMemo(() => filterPairOptions(pairOptions, pairFilter), [pairFilter, pairOptions]);
+  const visiblePairIds = useMemo(() => visiblePairOptions.map(pairKey), [visiblePairOptions]);
 
   const selectedPairs = useMemo(
     () => pairOptions.filter((pair) => effectivePairIds.includes(pairKey(pair))),
@@ -137,6 +142,13 @@ export function StrategyTestingPanel({
     () => effectiveTimeframes.filter((timeframe) => timeframeOptions.includes(timeframe)),
     [effectiveTimeframes, timeframeOptions]
   );
+  const selectedStrategyCount = storableStrategyCodes.length;
+  const selectedPairCount = selectedPairs.length;
+  const selectedTimeframeCount = validTimeframes.length;
+  const localScenarioCount = selectedStrategyCount * selectedPairCount * selectedTimeframeCount;
+  const matrixSelectionError = localScenarioCount <= 0 ? MATRIX_SELECTION_ERROR : null;
+  const pairFilterIsActive = pairFilter.trim().length > 0;
+  const showLargeMatrixWarning = localScenarioCount >= LARGE_MATRIX_WARNING_SCENARIO_COUNT;
 
   /* eslint-disable react-hooks/set-state-in-effect -- Browser-only localStorage hydration has to update form state after mount. */
   useEffect(() => {
@@ -244,7 +256,6 @@ export function StrategyTestingPanel({
   ]);
   const dateError = validateDateRange(startAt, endAt);
   const numberError = validateNumericInputs(initialCapital, feeRate, slippageBps, pendingEntryMaxWaitBars, testType);
-  const localScenarioCount = effectiveStrategyCodes.length * selectedPairs.length * validTimeframes.length;
   const estimateRequest = useMemo(() => {
     if (localScenarioCount <= 0 || dateError || numberError) return null;
     return buildRunRequest({
@@ -349,7 +360,7 @@ export function StrategyTestingPanel({
         dateError ??
         numberError ??
         activeRunState?.disabled_reason ??
-        (activeRunBlocksRun ? "A strategy test run is already in progress." : "Select at least one strategy, pair, and timeframe.")
+        (activeRunBlocksRun ? "A strategy test run is already in progress." : MATRIX_SELECTION_ERROR)
       );
       return;
     }
@@ -450,6 +461,21 @@ export function StrategyTestingPanel({
     }
   }
 
+  function updateStrategySelection(values: string[]) {
+    setFormError(null);
+    setSelectedStrategyCodes(values);
+  }
+
+  function updatePairSelection(values: string[]) {
+    setFormError(null);
+    setSelectedPairIds(values);
+  }
+
+  function updateTimeframeSelection(values: string[]) {
+    setFormError(null);
+    setSelectedTimeframes(values);
+  }
+
   return (
     <form className="strategy-testing-panel" onSubmit={handleRun}>
       <div className="strategy-test-status-strip">
@@ -499,14 +525,30 @@ export function StrategyTestingPanel({
       ) : null}
 
       <div className="strategy-test-grid">
-        <SelectionGroup title="Strategies">
+        <SelectionGroup
+          actions={(
+            <>
+              <button onClick={() => updateStrategySelection(strategyOptionCodes)} type="button">
+                Select all strategies
+              </button>
+              <button onClick={() => updateStrategySelection([])} type="button">
+                Clear strategies
+              </button>
+            </>
+          )}
+          meta={`${selectedStrategyCount} / ${strategyOptions.length} selected`}
+          title="Strategies"
+        >
           {strategyOptions.length ? strategyOptions.map((strategy) => (
             <label className="strategy-test-check-option" key={strategy.strategy_code}>
               <input
                 checked={effectiveStrategyCodes.includes(strategy.strategy_code)}
-                onChange={() => setSelectedStrategyCodes((current) =>
-                  toggleValue(current ?? defaultStrategySelection, strategy.strategy_code)
-                )}
+                onChange={() => {
+                  setFormError(null);
+                  setSelectedStrategyCodes((current) =>
+                    toggleValue(current ?? defaultStrategySelection, strategy.strategy_code)
+                  );
+                }}
                 type="checkbox"
               />
               <span>
@@ -517,14 +559,54 @@ export function StrategyTestingPanel({
           )) : <div className="empty-state compact-empty">No enabled strategies</div>}
         </SelectionGroup>
 
-        <SelectionGroup title="Pairs">
-          {pairOptions.length ? pairOptions.map((pair) => (
+        <SelectionGroup
+          actions={(
+            <>
+              <button onClick={() => updatePairSelection(pairOptionIds)} type="button">
+                Select all pairs
+              </button>
+              <button onClick={() => updatePairSelection([])} type="button">
+                Clear pairs
+              </button>
+              {pairFilterIsActive ? (
+                <button
+                  disabled={!visiblePairIds.length}
+                  onClick={() => updatePairSelection(visiblePairIds)}
+                  type="button"
+                >
+                  Select visible pairs
+                </button>
+              ) : null}
+            </>
+          )}
+          filter={(
+            <label className="strategy-test-pair-filter">
+              <span>Filter pairs</span>
+              <input
+                aria-label="Filter pairs"
+                onChange={(event) => setPairFilter(event.target.value)}
+                placeholder="Symbol, base, quote, exchange"
+                type="search"
+                value={pairFilter}
+              />
+            </label>
+          )}
+          meta={`${selectedPairCount} / ${pairOptions.length} selected`}
+          title="Pairs"
+        >
+          {pairOptions.length && !visiblePairOptions.length ? (
+            <div className="empty-state compact-empty">No pairs match the filter</div>
+          ) : null}
+          {visiblePairOptions.length ? visiblePairOptions.map((pair) => (
             <label className="strategy-test-check-option compact" key={pairKey(pair)}>
               <input
                 checked={effectivePairIds.includes(pairKey(pair))}
-                onChange={() => setSelectedPairIds((current) =>
-                  toggleValue(current ?? defaultPairSelection, pairKey(pair))
-                )}
+                onChange={() => {
+                  setFormError(null);
+                  setSelectedPairIds((current) =>
+                    toggleValue(current ?? defaultPairSelection, pairKey(pair))
+                  );
+                }}
                 type="checkbox"
               />
               <span>
@@ -532,18 +614,35 @@ export function StrategyTestingPanel({
                 <small>{pair.base_asset}/{pair.quote_asset}</small>
               </span>
             </label>
-          )) : <div className="empty-state compact-empty">No pairs</div>}
+          )) : null}
+          {!pairOptions.length ? <div className="empty-state compact-empty">No pairs</div> : null}
         </SelectionGroup>
 
-        <SelectionGroup title="Timeframes">
+        <SelectionGroup
+          actions={(
+            <>
+              <button onClick={() => updateTimeframeSelection(timeframeOptions)} type="button">
+                Select all timeframes
+              </button>
+              <button onClick={() => updateTimeframeSelection([])} type="button">
+                Clear timeframes
+              </button>
+            </>
+          )}
+          meta={`${selectedTimeframeCount} / ${timeframeOptions.length} selected`}
+          title="Timeframes"
+        >
           <div className="strategy-test-timeframe-grid">
             {timeframeOptions.map((timeframe) => (
               <label className="strategy-test-check-option compact" key={timeframe}>
                 <input
                   checked={effectiveTimeframes.includes(timeframe)}
-                  onChange={() => setSelectedTimeframes((current) =>
-                    toggleValue(current ?? defaultTimeframeSelection, timeframe)
-                  )}
+                  onChange={() => {
+                    setFormError(null);
+                    setSelectedTimeframes((current) =>
+                      toggleValue(current ?? defaultTimeframeSelection, timeframe)
+                    );
+                  }}
                   type="checkbox"
                 />
                 <span><strong>{timeframe}</strong></span>
@@ -551,6 +650,15 @@ export function StrategyTestingPanel({
             ))}
           </div>
         </SelectionGroup>
+      </div>
+
+      <div className="strategy-test-matrix-summary">
+        <Badge tone={showLargeMatrixWarning ? "yellow" : "blue"}>
+          {`${formatInteger(localScenarioCount)} scenarios selected`}
+        </Badge>
+        {showLargeMatrixWarning ? (
+          <span>Large matrix: worker will process scenarios gradually. Data will be backfilled and cached.</span>
+        ) : null}
       </div>
 
       <div className="strategy-test-controls">
@@ -651,8 +759,8 @@ export function StrategyTestingPanel({
         scenarioCount={scenarioEstimate}
       />
 
-      {dateError || numberError || formError || apiError ? (
-        <p className="form-error">{formError ?? dateError ?? numberError ?? apiError}</p>
+      {dateError || numberError || matrixSelectionError || formError || apiError ? (
+        <p className="form-error">{formError ?? dateError ?? numberError ?? matrixSelectionError ?? apiError}</p>
       ) : null}
 
       <div className="strategy-test-actions">
@@ -689,10 +797,29 @@ export function StrategyTestingPanel({
   );
 }
 
-function SelectionGroup({ children, title }: { children: ReactNode; title: string }) {
+function SelectionGroup({
+  actions,
+  children,
+  filter,
+  meta,
+  title
+}: {
+  actions?: ReactNode;
+  children: ReactNode;
+  filter?: ReactNode;
+  meta?: ReactNode;
+  title: string;
+}) {
   return (
-    <section className="strategy-test-selection-group">
-      <h4>{title}</h4>
+    <section aria-label={title} className="strategy-test-selection-group" role="region">
+      <div className="strategy-test-selection-head">
+        <div>
+          <h4>{title}</h4>
+          {meta ? <span>{meta}</span> : null}
+        </div>
+        {actions ? <div className="strategy-test-selection-actions">{actions}</div> : null}
+      </div>
+      {filter ? <div className="strategy-test-selection-filter">{filter}</div> : null}
       <div className="strategy-test-selection-list">{children}</div>
     </section>
   );
@@ -880,6 +1007,17 @@ function filterKnownValues(values: string[], availableValues: string[]): string[
     seen.add(value);
     return true;
   });
+}
+
+function filterPairOptions(pairOptions: MarketPairOption[], filterText: string): MarketPairOption[] {
+  const query = filterText.trim().toLowerCase();
+  if (!query) return pairOptions;
+  return pairOptions.filter((pair) => [
+    pair.symbol,
+    pair.base_asset,
+    pair.quote_asset,
+    pair.exchange
+  ].some((value) => value.toLowerCase().includes(query)));
 }
 
 function pairKey(pair: Pick<MarketPairOption, "exchange" | "symbol">): string {

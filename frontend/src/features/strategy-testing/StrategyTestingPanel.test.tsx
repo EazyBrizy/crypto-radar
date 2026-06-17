@@ -357,6 +357,105 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
   });
 
+  it("shows all available pairs instead of only the first fifty", () => {
+    renderPanel({ availablePairs: marketPairs(60) });
+
+    expect(screen.getByRole("checkbox", { name: /TOKEN001USDT/u })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /TOKEN060USDT/u })).toBeInTheDocument();
+  });
+
+  it("selects all available pairs", async () => {
+    const user = userEvent.setup();
+    const availablePairs = marketPairs(200);
+
+    renderPanel({ availablePairs });
+
+    await user.click(screen.getByRole("button", { name: "Select all pairs" }));
+
+    const pairGroup = screen.getByRole("region", { name: "Pairs" });
+    const checkedPairs = within(pairGroup)
+      .getAllByRole("checkbox")
+      .filter((checkbox) => (checkbox as HTMLInputElement).checked);
+    expect(checkedPairs).toHaveLength(200);
+    expect(within(pairGroup).getByText("200 / 200 selected")).toBeInTheDocument();
+  });
+
+  it("filters pairs and selects only visible filtered pairs", async () => {
+    const user = userEvent.setup();
+    const availablePairs = [
+      marketPair("BTCUSDT", "BTC"),
+      marketPair("ETHUSDT", "ETH"),
+      marketPair("SOLUSDT", "SOL"),
+      marketPair("SOLUSDC", "SOL", { quote_asset: "USDC" }),
+      marketPair("AVAXUSDT", "AVAX", { exchange: "okx" })
+    ];
+
+    renderPanel({ availablePairs });
+
+    await user.click(screen.getByRole("button", { name: "Clear pairs" }));
+    await user.type(screen.getByLabelText("Filter pairs"), "sol");
+
+    expect(screen.getByRole("checkbox", { name: /SOLUSDT/u })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /SOLUSDC/u })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /BTCUSDT/u })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Select visible pairs" }));
+    await user.clear(screen.getByLabelText("Filter pairs"));
+
+    expect(screen.getByRole("checkbox", { name: /BTCUSDT/u })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /ETHUSDT/u })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /SOLUSDT/u })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /SOLUSDC/u })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /AVAXUSDT/u })).not.toBeChecked();
+  });
+
+  it("disables Run with a clear message when any matrix dimension is cleared", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      availablePairs: [marketPair("BTCUSDT", "BTC"), marketPair("ETHUSDT", "ETH")],
+      strategyConfigs: [strategyConfig({ timeframes: ["1m", "5m"] })]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Clear strategies" }));
+    expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
+    expect(screen.getByText("Select at least one strategy, pair, and timeframe.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Select all strategies" }));
+    await user.click(screen.getByRole("button", { name: "Clear pairs" }));
+    expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
+    expect(screen.getByText("Select at least one strategy, pair, and timeframe.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Select all pairs" }));
+    await user.click(screen.getByRole("button", { name: "Clear timeframes" }));
+    expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
+    expect(screen.getByText("Select at least one strategy, pair, and timeframe.")).toBeInTheDocument();
+  });
+
+  it("shows a local scenario count and large matrix warning", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      availablePairs: marketPairs(200),
+      strategyConfigs: [
+        strategyConfig({ timeframes: ["1m", "5m", "15m", "1h"] }),
+        strategyConfig({
+          id: "strategy_config_2",
+          name: "Mean reversion",
+          strategy_code: "mean_reversion",
+          strategy_name: "Mean Reversion",
+          strategy_version_id: "strategy_version_2",
+          timeframes: ["1m", "5m", "15m", "1h"]
+        })
+      ]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Select all strategies" }));
+    await user.click(screen.getByRole("button", { name: "Select all pairs" }));
+    await user.click(screen.getByRole("button", { name: "Select all timeframes" }));
+
+    expect(screen.getByText("1,600 scenarios selected")).toBeInTheDocument();
+    expect(screen.getByText("Large matrix: worker will process scenarios gradually. Data will be backfilled and cached.")).toBeInTheDocument();
+  });
+
   it("disables Run and shows backend reason while another strategy test is active", () => {
     mocks.activeRun = activeRunState({
       active_run: strategyTestRun({
@@ -1182,14 +1281,27 @@ function strategyTestRun(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function marketPair(symbol = "BTCUSDT", baseAsset = "BTC"): MarketPairOption {
+function marketPairs(count: number): MarketPairOption[] {
+  return Array.from({ length: count }, (_value, index) => {
+    const tokenNumber = String(index + 1).padStart(3, "0");
+    return marketPair(`TOKEN${tokenNumber}USDT`, `TOKEN${tokenNumber}`);
+  });
+}
+
+function marketPair(
+  symbol = "BTCUSDT",
+  baseAsset = "BTC",
+  overrides: Partial<MarketPairOption> = {}
+): MarketPairOption {
+  const exchange = overrides.exchange ?? "bybit";
   return {
     base_asset: baseAsset,
-    exchange: "bybit",
-    id: `pair_${symbol.toLowerCase()}`,
+    exchange,
+    id: `pair_${exchange}_${symbol.toLowerCase()}`,
     quote_asset: "USDT",
     status: "active",
-    symbol
+    symbol,
+    ...overrides
   };
 }
 

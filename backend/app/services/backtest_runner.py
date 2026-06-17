@@ -478,6 +478,25 @@ class ProductionBacktestRunner:
             )
         )
 
+    def prepare_market_data(
+        self,
+        request: BacktestRunRequest,
+        *,
+        mode: str = "production_like",
+        options: dict[str, Any] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        return _run_awaitable_sync(
+            self._prepare_market_data_async(
+                request,
+                mode=mode,
+                options=options,
+                is_cancelled=is_cancelled,
+                on_progress=on_progress,
+            )
+        )
+
     async def _run_async(self, request: BacktestRunRequest) -> BacktestRunResult:
         return (
             await self._run_detailed_async(
@@ -506,6 +525,67 @@ class ProductionBacktestRunner:
             end_at=request.end_at,
         )
         return max(0, candles_count - warmup)
+
+    async def _prepare_market_data_async(
+        self,
+        request: BacktestRunRequest,
+        *,
+        mode: str,
+        options: dict[str, Any] | None,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        started_at = time.perf_counter()
+        normalized_mode = _normalize_backtest_mode(mode)
+        assumptions = _assumptions_for_backtest(request, normalized_mode, options)
+        request = _request_with_mode_options(request, normalized_mode, assumptions)
+        warmup = max(1, _int_param(request.params, "warmup_candles", self._warmup_candles))
+        _raise_if_cancelled(is_cancelled)
+        _emit_backtest_progress(
+            on_progress,
+            phase="loading_candles",
+            bars_processed=0,
+            bars_total=0,
+            signals_seen=0,
+            trades_count=0,
+            risk_rejections=0,
+            execution_rejections=0,
+            started_at=started_at,
+        )
+        ensure_candles = getattr(self._historical_candle_provider, "ensure_candles", None)
+        if callable(ensure_candles):
+            await ensure_candles(
+                exchange=request.exchange,
+                symbol=request.symbol,
+                timeframe=request.timeframe,
+                start_at=request.start_at,
+                end_at=request.end_at,
+            )
+        _raise_if_cancelled(is_cancelled)
+        candles_count = await self._historical_candle_provider.count_candles(
+            exchange=request.exchange,
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            start_at=request.start_at,
+            end_at=request.end_at,
+        )
+        bars_total = max(0, candles_count - warmup)
+        _emit_backtest_progress(
+            on_progress,
+            phase="loading_candles",
+            bars_processed=0,
+            bars_total=bars_total,
+            signals_seen=0,
+            trades_count=0,
+            risk_rejections=0,
+            execution_rejections=0,
+            started_at=started_at,
+        )
+        return {
+            "candles_count": candles_count,
+            "bars_total": bars_total,
+            "warmup_candles": warmup,
+        }
 
     async def _run_detailed_async(
         self,

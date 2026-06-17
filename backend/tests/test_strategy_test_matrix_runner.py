@@ -100,11 +100,151 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         self.assertEqual(len(scenario_runner.calls), 90)
         expected_calls = [
             (strategy, pair.exchange, pair.symbol, timeframe)
-            for strategy in request.strategies
             for pair in request.pairs
             for timeframe in request.timeframes
+            for strategy in request.strategies
         ]
         self.assertEqual(scenario_runner.calls, expected_calls)
+
+    def test_matrix_prepares_market_data_once_per_pair_timeframe(self) -> None:
+        request = _matrix_request(
+            strategies=["s1", "s2", "s3"],
+            pairs=[
+                StrategyTestPair(exchange="bybit", symbol="BTCUSDT"),
+                StrategyTestPair(exchange="bybit", symbol="ETHUSDT"),
+            ],
+            timeframes=["15m", "1h"],
+        )
+        scenario_runner = _RecordingScenarioRunner()
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+
+        result = matrix_runner.run_matrix(request=request, run_id=RUN_ID, user_uuid=USER_ID)
+
+        self.assertEqual(result.completed_scenarios, 12)
+        self.assertEqual(
+            scenario_runner.prepare_calls,
+            [
+                ("bybit", "BTCUSDT", "15m"),
+                ("bybit", "BTCUSDT", "1h"),
+                ("bybit", "ETHUSDT", "15m"),
+                ("bybit", "ETHUSDT", "1h"),
+            ],
+        )
+        self.assertEqual(
+            scenario_runner.calls,
+            [
+                (strategy, pair.exchange, pair.symbol, timeframe)
+                for pair in request.pairs
+                for timeframe in request.timeframes
+                for strategy in request.strategies
+            ],
+        )
+
+    def test_matrix_marks_all_strategies_failed_when_market_data_prepare_fails(self) -> None:
+        request = _matrix_request(
+            strategies=["s1", "s2"],
+            pairs=[
+                StrategyTestPair(exchange="bybit", symbol="ETHUSDT"),
+                StrategyTestPair(exchange="bybit", symbol="BTCUSDT"),
+            ],
+            timeframes=["15m"],
+        )
+        scenario_runner = _RecordingScenarioRunner(prepare_fail_on={("bybit", "ETHUSDT", "15m")})
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+
+        result = matrix_runner.run_matrix(request=request, run_id=RUN_ID, user_uuid=USER_ID)
+
+        self.assertEqual(result.completed_scenarios, 2)
+        self.assertEqual(result.failed_scenarios, 2)
+        self.assertEqual(
+            scenario_runner.calls,
+            [
+                ("s1", "bybit", "BTCUSDT", "15m"),
+                ("s2", "bybit", "BTCUSDT", "15m"),
+            ],
+        )
+        self.assertEqual([error["symbol"] for error in result.errors], ["ETHUSDT", "ETHUSDT"])
+        self.assertEqual({error["strategy"] for error in result.errors}, {"s1", "s2"})
+        self.assertTrue(all("market data prepare failed" in error["error"] for error in result.errors))
+
+    def test_matrix_reports_market_data_prefetch_progress(self) -> None:
+        request = _matrix_request(
+            strategies=["s1"],
+            pairs=[
+                StrategyTestPair(exchange="bybit", symbol="BTCUSDT"),
+                StrategyTestPair(exchange="bybit", symbol="ETHUSDT"),
+            ],
+            timeframes=["15m"],
+        )
+        scenario_runner = _RecordingScenarioRunner()
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+        progress_updates: list[dict[str, Any]] = []
+
+        matrix_runner.run_matrix(
+            request=request,
+            run_id=RUN_ID,
+            user_uuid=USER_ID,
+            on_scenario_progress=lambda _context, progress, _partial_summary: progress_updates.append(dict(progress)),
+        )
+
+        prefetch_updates = [
+            update for update in progress_updates if update.get("phase") == "prefetching_market_data"
+        ]
+        self.assertGreaterEqual(len(prefetch_updates), 2)
+        self.assertEqual(prefetch_updates[-1]["market_data_prefetch_total"], 2)
+        self.assertEqual(prefetch_updates[-1]["market_data_prefetch_completed"], 2)
+        self.assertEqual(prefetch_updates[-1]["market_data_prefetch_failed"], 0)
+        self.assertIn(prefetch_updates[-1]["current_pair"], {"BTCUSDT", "ETHUSDT"})
+
+    def test_matrix_cancellation_stops_after_market_data_prepare(self) -> None:
+        cancelled = False
+
+        def cancel_after_prepare() -> None:
+            nonlocal cancelled
+            cancelled = True
+
+        request = _matrix_request(
+            strategies=["s1", "s2"],
+            pairs=[StrategyTestPair(exchange="bybit", symbol="BTCUSDT")],
+            timeframes=["15m"],
+        )
+        scenario_runner = _RecordingScenarioRunner(on_prepare=cancel_after_prepare)
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+
+        result = matrix_runner.run_matrix(
+            request=request,
+            run_id=RUN_ID,
+            user_uuid=USER_ID,
+            is_cancelled=lambda: cancelled,
+        )
+
+        self.assertTrue(result.cancelled)
+        self.assertEqual(scenario_runner.prepare_calls, [("bybit", "BTCUSDT", "15m")])
+        self.assertEqual(scenario_runner.calls, [])
+
+    def test_matrix_skips_prepare_and_execution_for_completed_pair_timeframe_checkpoint(self) -> None:
+        request = _matrix_request(
+            strategies=["s1", "s2"],
+            pairs=[StrategyTestPair(exchange="bybit", symbol="BTCUSDT")],
+            timeframes=["15m"],
+        )
+        scenario_runner = _RecordingScenarioRunner()
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+
+        result = matrix_runner.run_matrix(
+            request=request,
+            run_id=RUN_ID,
+            user_uuid=USER_ID,
+            completed_scenario_summaries={
+                "s1::bybit::BTCUSDT::15m": {"signals_seen": 3, "trades_count": 1},
+                "s2::bybit::BTCUSDT::15m": {"signals_seen": 4, "trades_count": 0},
+            },
+        )
+
+        self.assertEqual(result.completed_scenarios, 2)
+        self.assertEqual(scenario_runner.prepare_calls, [])
+        self.assertEqual(scenario_runner.calls, [])
+        self.assertEqual(result.summary()["signals_seen"], 7)
 
     def test_matrix_collects_partial_failures(self) -> None:
         request = _matrix_request(strategies=["s1", "s2"], pairs=[StrategyTestPair(exchange="bybit", symbol="BTCUSDT")])
@@ -302,6 +442,22 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
 
         self.assertLessEqual(feature_engine.calls, 1)
 
+    def test_backtest_runner_prepare_market_data_ensures_without_loading_candles(self) -> None:
+        provider = _CountingHistoricalCandleProvider(_historical_candles())
+        backtest_runner = ProductionBacktestRunner(historical_candle_provider=provider)
+
+        result = backtest_runner.prepare_market_data(
+            _backtest_request(),
+            mode="research_virtual",
+            options={"warmup_candles": 3},
+        )
+
+        self.assertEqual(provider.ensure_calls, 1)
+        self.assertEqual(provider.count_calls, 1)
+        self.assertEqual(provider.load_calls, 0)
+        self.assertEqual(result["candles_count"], 6)
+        self.assertEqual(result["bars_total"], 3)
+
     def test_matrix_stops_before_next_scenario_when_cancelled(self) -> None:
         request = _matrix_request(strategies=["s1", "s2", "s3"])
         scenario_runner = _RecordingScenarioRunner()
@@ -388,6 +544,27 @@ class StrategyTestScenarioRunnerTest(unittest.TestCase):
         self.assertEqual(call.request.exchange, "bybit")
         self.assertEqual(call.request.symbol, "BTCUSDT")
         self.assertEqual(call.request.timeframe, "1h")
+        self.assertEqual(call.mode, "production_like")
+        self.assertTrue(call.options["risk_gate_enabled"])
+
+    def test_scenario_runner_prepare_market_data_uses_backtest_request_and_assumptions(self) -> None:
+        backtest_runner = _FakeBacktestRunner()
+        scenario_runner = StrategyTestScenarioRunner(backtest_runner)  # type: ignore[arg-type]
+        request = _matrix_request(mode="production_like", params={"warmup_candles": 5})
+        pair = StrategyTestPair(exchange="bybit", symbol="ETHUSDT")
+
+        result = scenario_runner.prepare_market_data(
+            request=request,
+            pair=pair,
+            timeframe="15m",
+        )
+
+        call = backtest_runner.prepare_calls[0]
+        self.assertEqual(result["prepared"], True)
+        self.assertEqual(call.request.strategy_code, "trend_pullback_continuation")
+        self.assertEqual(call.request.exchange, "bybit")
+        self.assertEqual(call.request.symbol, "ETHUSDT")
+        self.assertEqual(call.request.timeframe, "15m")
         self.assertEqual(call.mode, "production_like")
         self.assertTrue(call.options["risk_gate_enabled"])
 
@@ -734,6 +911,7 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
 
         self.assertEqual(response.status, "completed")
         self.assertEqual(scenario_runner.calls, [])
+        self.assertEqual(scenario_runner.prepare_calls, [])
         self.assertEqual(response.summary["completed_scenarios"], 1)
         self.assertEqual(response.summary["signals_seen"], 12)
 
@@ -872,6 +1050,19 @@ class _BacktestCall:
 class _FakeBacktestRunner:
     def __init__(self) -> None:
         self.calls: list[_BacktestCall] = []
+        self.prepare_calls: list[_BacktestCall] = []
+
+    def prepare_market_data(
+        self,
+        request: Any,
+        *,
+        mode: str = "production_like",
+        options: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        _ = kwargs
+        self.prepare_calls.append(_BacktestCall(request=request, mode=mode, options=options or {}))
+        return {"prepared": True}
 
     def run_detailed(
         self,
@@ -897,13 +1088,36 @@ class _RecordingScenarioRunner:
     def __init__(
         self,
         fail_on: set[int] | None = None,
+        prepare_fail_on: set[tuple[str, str, str]] | None = None,
+        on_prepare: Any = None,
         signal_events: list[StrategyTestSignalEvent] | None = None,
         summary_overrides: list[dict[str, Any]] | None = None,
     ) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
+        self.prepare_calls: list[tuple[str, str, str]] = []
         self._fail_on = fail_on or set()
+        self._prepare_fail_on = prepare_fail_on or set()
+        self._on_prepare = on_prepare
         self._signal_events = signal_events or []
         self._summary_overrides = summary_overrides or []
+
+    def prepare_market_data(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        pair: StrategyTestPair,
+        timeframe: str,
+        is_cancelled: Any = None,
+        on_progress: Any = None,
+    ) -> dict[str, Any]:
+        _ = request, is_cancelled, on_progress
+        key = (pair.exchange, pair.symbol, timeframe)
+        self.prepare_calls.append(key)
+        if self._on_prepare is not None:
+            self._on_prepare()
+        if key in self._prepare_fail_on:
+            raise ValueError(f"market data prepare failed for {pair.symbol} {timeframe}")
+        return {"candles_count": 42}
 
     def run_scenario(
         self,
@@ -1820,8 +2034,21 @@ def _matrix_request(
 class _CountingHistoricalCandleProvider:
     def __init__(self, candles: list[OHLCVCandle]) -> None:
         self._candles = candles
+        self.ensure_calls = 0
         self.load_calls = 0
         self.count_calls = 0
+
+    async def ensure_candles(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        timeframe: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> None:
+        _ = exchange, symbol, timeframe, start_at, end_at
+        self.ensure_calls += 1
 
     async def load_candles(
         self,

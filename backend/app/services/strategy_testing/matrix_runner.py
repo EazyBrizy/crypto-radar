@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol, Sequence
 from uuid import UUID
 
+from app.core.config import settings
 from app.services.strategy_testing.metrics import MetricResult
 from app.services.strategy_testing.report_builder import (
     build_matrix_metric_results,
@@ -24,6 +26,17 @@ from app.services.strategy_testing.schemas import (
 
 
 class ScenarioRunner(Protocol):
+    def prepare_market_data(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        pair: StrategyTestPair,
+        timeframe: str,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_progress: StrategyTestScenarioProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        ...
+
     def count_scenario_bars(
         self,
         *,
@@ -223,109 +236,291 @@ class StrategyTestMatrixRunner:
         metrics: list[MetricResult] = []
         completed_summary_by_key = dict(completed_scenario_summaries or {})
         scenario_index = 0
-        candle_cache: dict[str, Any] = {}
-        feature_cache: dict[str, Any] = {}
         bars_by_pair_timeframe, matrix_bars_total, matrix_bars_warning = self._estimate_matrix_bars(request)
         bars_completed_before = 0
+        pair_timeframe_items = _ordered_pair_timeframe_items(request)
+        prepare_market_data = getattr(self._scenario_runner, "prepare_market_data", None)
+        prefetch_total = (
+            sum(
+                1
+                for _key, pair, timeframe in pair_timeframe_items
+                if not _all_scenarios_completed_for_pair_timeframe(
+                    request,
+                    pair=pair,
+                    timeframe=timeframe,
+                    completed_summary_by_key=completed_summary_by_key,
+                )
+            )
+            if callable(prepare_market_data)
+            else 0
+        )
+        prefetch_completed = 0
+        prefetch_failed = 0
+        prefetch_cursor = 0
+        prefetch_futures: dict[tuple[str, str, str], Future[dict[str, Any]]] = {}
+        prefetch_errors: dict[tuple[str, str, str], Exception] = {}
+        executor: ThreadPoolExecutor | None = (
+            ThreadPoolExecutor(max_workers=_prefetch_concurrency())
+            if callable(prepare_market_data) and prefetch_total > 0
+            else None
+        )
 
-        for strategy in request.strategies:
+        def is_run_cancelled() -> bool:
+            return bool(is_cancelled is not None and is_cancelled())
+
+        def cancelled_result() -> StrategyTestMatrixResult:
+            return _matrix_result(
+                run_id=run_id,
+                scenario_count=scenario_count,
+                completed=completed,
+                failed=failed,
+                scenario_summaries=scenario_summaries,
+                errors=errors,
+                trades=trades,
+                signal_events=signal_events,
+                metrics=metrics,
+                cancelled=True,
+                metric_set=request.metric_set,
+            )
+
+        def build_partial_summary() -> dict[str, Any]:
+            return _partial_summary(
+                run_id=run_id,
+                scenario_count=scenario_count,
+                completed=completed,
+                failed=failed,
+                scenario_summaries=scenario_summaries,
+                errors=errors,
+                trades=trades,
+                signal_events=signal_events,
+                metrics=metrics,
+                metric_set=request.metric_set,
+            )
+
+        def progress_partial_summary() -> dict[str, Any]:
+            return _progress_partial_summary(
+                scenario_count=scenario_count,
+                completed=completed,
+                failed=failed,
+                scenario_summaries=scenario_summaries,
+                errors=errors,
+            )
+
+        def emit_prefetch_progress(pair: StrategyTestPair, timeframe: str) -> None:
+            if on_scenario_progress is None:
+                return
+            context = _prefetch_context(
+                request,
+                pair=pair,
+                timeframe=timeframe,
+                scenario_count=scenario_count,
+            )
+            progress = {
+                "phase": "prefetching_market_data",
+                "current_pair": pair.symbol,
+                "current_exchange": pair.exchange,
+                "current_symbol": pair.symbol,
+                "current_timeframe": timeframe,
+                "current_scenario": _scenario_key(context),
+                "scenario_count": scenario_count,
+                "completed_scenarios": completed,
+                "failed_scenarios": failed,
+                "market_data_prefetch_total": prefetch_total,
+                "market_data_prefetch_completed": prefetch_completed,
+                "market_data_prefetch_failed": prefetch_failed,
+                "matrix_bars_processed": bars_completed_before,
+                "matrix_bars_total": matrix_bars_total,
+                "bars_processed": bars_completed_before,
+                "bars_total": matrix_bars_total,
+            }
+            on_scenario_progress(context, progress, progress_partial_summary())
+
+        def prepare_pair_timeframe(pair: StrategyTestPair, timeframe: str) -> dict[str, Any]:
+            if not callable(prepare_market_data):
+                return {}
+            return dict(
+                prepare_market_data(
+                    request=request,
+                    pair=pair,
+                    timeframe=timeframe,
+                    is_cancelled=is_cancelled,
+                    on_progress=None,
+                )
+                or {}
+            )
+
+        def schedule_prefetch() -> None:
+            nonlocal prefetch_cursor
+            if executor is None:
+                return
+            while len(prefetch_futures) < _prefetch_concurrency() and prefetch_cursor < len(pair_timeframe_items):
+                key, pair, timeframe = pair_timeframe_items[prefetch_cursor]
+                prefetch_cursor += 1
+                if _all_scenarios_completed_for_pair_timeframe(
+                    request,
+                    pair=pair,
+                    timeframe=timeframe,
+                    completed_summary_by_key=completed_summary_by_key,
+                ):
+                    continue
+                if is_run_cancelled():
+                    raise StrategyTestRunCancelled("strategy_test_run_cancelled")
+                emit_prefetch_progress(pair, timeframe)
+                prefetch_futures[key] = executor.submit(prepare_pair_timeframe, pair, timeframe)
+
+        def wait_for_prefetch(pair: StrategyTestPair, timeframe: str) -> Exception | None:
+            nonlocal prefetch_completed, prefetch_failed
+            key = _bar_count_key(pair, timeframe)
+            if key in prefetch_errors:
+                return prefetch_errors[key]
+            future = prefetch_futures.pop(key, None)
+            if future is None:
+                return None
+            while True:
+                if is_run_cancelled():
+                    future.cancel()
+                    raise StrategyTestRunCancelled("strategy_test_run_cancelled")
+                try:
+                    prepare_summary = future.result(timeout=0.1)
+                except FutureTimeoutError:
+                    emit_prefetch_progress(pair, timeframe)
+                    continue
+                except StrategyTestRunCancelled:
+                    raise
+                except Exception as exc:
+                    prefetch_failed += 1
+                    prefetch_errors[key] = exc
+                    emit_prefetch_progress(pair, timeframe)
+                    return exc
+                update_prepared_bar_count(key, prepare_summary)
+                prefetch_completed += 1
+                emit_prefetch_progress(pair, timeframe)
+                return None
+
+        def update_prepared_bar_count(key: tuple[str, str, str], prepare_summary: Mapping[str, Any]) -> None:
+            nonlocal matrix_bars_total
+            if "bars_total" not in prepare_summary:
+                return
+            bars_by_pair_timeframe[key] = max(0, _int_from_summary(dict(prepare_summary), "bars_total"))
+            matrix_bars_total = _matrix_bars_total_from_counts(request, bars_by_pair_timeframe)
+
+        def record_scenario_failure(context: StrategyTestScenarioContext, exc: Exception) -> None:
+            nonlocal failed
+            failed += 1
+            errors.append(
+                {
+                    "strategy": context.strategy,
+                    "exchange": context.exchange,
+                    "symbol": context.symbol,
+                    "timeframe": context.timeframe,
+                    "error": str(exc),
+                }
+            )
+            summary = build_partial_summary()
+            if on_scenario_failed is not None:
+                on_scenario_failed(context, exc, summary)
+
+        try:
+            schedule_prefetch()
             for pair in request.pairs:
                 for timeframe in request.timeframes:
-                    scenario_index += 1
-                    scenario_bars_total = bars_by_pair_timeframe.get(_bar_count_key(pair, timeframe))
-                    context = StrategyTestScenarioContext(
-                        index=scenario_index,
-                        total=scenario_count,
-                        strategy=strategy,
+                    if is_run_cancelled():
+                        return cancelled_result()
+                    prepare_error: Exception | None = None
+                    if not _all_scenarios_completed_for_pair_timeframe(
+                        request,
                         pair=pair,
                         timeframe=timeframe,
-                    )
-                    if is_cancelled is not None and is_cancelled():
-                        return _matrix_result(
-                            run_id=run_id,
-                            scenario_count=scenario_count,
-                            completed=completed,
-                            failed=failed,
-                            scenario_summaries=scenario_summaries,
-                            errors=errors,
-                            trades=trades,
-                            signal_events=signal_events,
-                            metrics=metrics,
-                            cancelled=True,
-                            metric_set=request.metric_set,
-                        )
-                    scenario_key = _scenario_key(context)
-                    if scenario_key in completed_summary_by_key:
-                        summary = _checkpoint_summary_for_context(
-                            completed_summary_by_key[scenario_key],
-                            context=context,
-                        )
-                        completed += 1
-                        scenario_summaries.append(summary)
-                        bars_completed_before += _scenario_bars_completed(
-                            summary,
-                            scenario_bars_total=scenario_bars_total,
-                        )
-                        continue
-                    if on_scenario_started is not None:
-                        on_scenario_started(context)
-
-                    def handle_progress(progress: dict[str, Any]) -> None:
-                        if on_scenario_progress is None:
-                            return
-                        progress = _matrix_progress(
-                            progress,
-                            bars_completed_before=bars_completed_before,
-                            scenario_bars_total=scenario_bars_total,
-                            matrix_bars_total=matrix_bars_total,
-                            matrix_bars_warning=matrix_bars_warning,
-                        )
-                        partial_summary = _progress_partial_summary(
-                            scenario_count=scenario_count,
-                            completed=completed,
-                            failed=failed,
-                            scenario_summaries=scenario_summaries,
-                            errors=errors,
-                        )
-                        on_scenario_progress(context, progress, partial_summary)
-
-                    try:
-                        result = self._scenario_runner.run_scenario(
-                            run_id=run_id,
-                            user_id=user_uuid,
-                            request=request,
+                        completed_summary_by_key=completed_summary_by_key,
+                    ):
+                        prepare_error = wait_for_prefetch(pair, timeframe)
+                        schedule_prefetch()
+                    if is_run_cancelled():
+                        return cancelled_result()
+                    candle_cache: dict[str, Any] = {}
+                    feature_cache: dict[str, Any] = {}
+                    for strategy in request.strategies:
+                        scenario_index += 1
+                        scenario_bars_total = bars_by_pair_timeframe.get(_bar_count_key(pair, timeframe))
+                        context = StrategyTestScenarioContext(
+                            index=scenario_index,
+                            total=scenario_count,
                             strategy=strategy,
                             pair=pair,
                             timeframe=timeframe,
-                            is_cancelled=is_cancelled,
-                            on_progress=handle_progress,
-                            candle_cache=candle_cache,
-                            feature_cache=feature_cache,
                         )
-                    except StrategyTestRunCancelled:
-                        return _matrix_result(
-                            run_id=run_id,
-                            scenario_count=scenario_count,
-                            completed=completed,
-                            failed=failed,
-                            scenario_summaries=scenario_summaries,
-                            errors=errors,
-                            trades=trades,
-                            signal_events=signal_events,
-                            metrics=metrics,
-                            cancelled=True,
-                            metric_set=request.metric_set,
+                        if is_run_cancelled():
+                            return cancelled_result()
+                        scenario_key = _scenario_key(context)
+                        if scenario_key in completed_summary_by_key:
+                            summary = _checkpoint_summary_for_context(
+                                completed_summary_by_key[scenario_key],
+                                context=context,
+                            )
+                            completed += 1
+                            scenario_summaries.append(summary)
+                            bars_completed_before += _scenario_bars_completed(
+                                summary,
+                                scenario_bars_total=scenario_bars_total,
+                            )
+                            continue
+                        if prepare_error is not None:
+                            record_scenario_failure(context, prepare_error)
+                            continue
+                        if on_scenario_started is not None:
+                            on_scenario_started(context)
+
+                        def handle_progress(progress: dict[str, Any]) -> None:
+                            if on_scenario_progress is None:
+                                return
+                            progress = _matrix_progress(
+                                progress,
+                                bars_completed_before=bars_completed_before,
+                                scenario_bars_total=scenario_bars_total,
+                                matrix_bars_total=matrix_bars_total,
+                                matrix_bars_warning=matrix_bars_warning,
+                            )
+                            partial_summary = _progress_partial_summary(
+                                scenario_count=scenario_count,
+                                completed=completed,
+                                failed=failed,
+                                scenario_summaries=scenario_summaries,
+                                errors=errors,
+                            )
+                            on_scenario_progress(context, progress, partial_summary)
+
+                        try:
+                            result = self._scenario_runner.run_scenario(
+                                run_id=run_id,
+                                user_id=user_uuid,
+                                request=request,
+                                strategy=strategy,
+                                pair=pair,
+                                timeframe=timeframe,
+                                is_cancelled=is_cancelled,
+                                on_progress=handle_progress,
+                                candle_cache=candle_cache,
+                                feature_cache=feature_cache,
+                            )
+                        except StrategyTestRunCancelled:
+                            return cancelled_result()
+                        except Exception as exc:
+                            record_scenario_failure(context, exc)
+                            continue
+
+                        completed += 1
+                        scenario_summary = _scenario_result_summary(result, context=context)
+                        scenario_summaries.append(scenario_summary)
+                        metrics.extend(
+                            build_matrix_metric_results(
+                                result.trades,
+                                signal_events=result.signal_events,
+                                metric_set=request.metric_set,
+                            )
                         )
-                    except Exception as exc:
-                        failed += 1
-                        errors.append(
-                            {
-                                "strategy": strategy,
-                                "exchange": pair.exchange,
-                                "symbol": pair.symbol,
-                                "timeframe": timeframe,
-                                "error": str(exc),
-                            }
+                        bars_completed_before += _scenario_bars_completed(
+                            scenario_summary,
+                            scenario_bars_total=scenario_bars_total,
                         )
                         partial_summary = _partial_summary(
                             run_id=run_id,
@@ -339,40 +534,15 @@ class StrategyTestMatrixRunner:
                             metrics=metrics,
                             metric_set=request.metric_set,
                         )
-                        if on_scenario_failed is not None:
-                            on_scenario_failed(context, exc, partial_summary)
-                        continue
-
-                    completed += 1
-                    scenario_summary = _scenario_result_summary(result, context=context)
-                    scenario_summaries.append(scenario_summary)
-                    metrics.extend(
-                        build_matrix_metric_results(
-                            result.trades,
-                            signal_events=result.signal_events,
-                            metric_set=request.metric_set,
-                        )
-                    )
-                    bars_completed_before += _scenario_bars_completed(
-                        scenario_summary,
-                        scenario_bars_total=scenario_bars_total,
-                    )
-                    partial_summary = _partial_summary(
-                        run_id=run_id,
-                        scenario_count=scenario_count,
-                        completed=completed,
-                        failed=failed,
-                        scenario_summaries=scenario_summaries,
-                        errors=errors,
-                        trades=trades,
-                        signal_events=signal_events,
-                        metrics=metrics,
-                        metric_set=request.metric_set,
-                    )
-                    if scenario_result_sink is not None:
-                        scenario_result_sink.write_result(context, result, partial_summary)
-                    if on_scenario_completed is not None:
-                        on_scenario_completed(context, result, partial_summary)
+                        if scenario_result_sink is not None:
+                            scenario_result_sink.write_result(context, result, partial_summary)
+                        if on_scenario_completed is not None:
+                            on_scenario_completed(context, result, partial_summary)
+        except StrategyTestRunCancelled:
+            return cancelled_result()
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
 
         return _matrix_result(
             run_id=run_id,
@@ -427,12 +597,7 @@ class StrategyTestMatrixRunner:
                         "timeframe": timeframe,
                     }
 
-        total_bars = 0
-        for _strategy in request.strategies:
-            for pair in request.pairs:
-                for timeframe in request.timeframes:
-                    total_bars += bars_by_pair_timeframe.get(_bar_count_key(pair, timeframe), 0)
-        return bars_by_pair_timeframe, total_bars, None
+        return bars_by_pair_timeframe, _matrix_bars_total_from_counts(request, bars_by_pair_timeframe), None
 
 
 def _partial_summary(
@@ -497,12 +662,111 @@ def _progress_partial_summary(
     }
 
 
+def _ordered_pair_timeframe_items(
+    request: StrategyTestRunRequest,
+) -> list[tuple[tuple[str, str, str], StrategyTestPair, str]]:
+    seen: set[tuple[str, str, str]] = set()
+    items: list[tuple[tuple[str, str, str], StrategyTestPair, str]] = []
+    for pair in request.pairs:
+        for timeframe in request.timeframes:
+            key = _bar_count_key(pair, timeframe)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append((key, pair, timeframe))
+    return items
+
+
+def _matrix_bars_total_from_counts(
+    request: StrategyTestRunRequest,
+    bars_by_pair_timeframe: Mapping[tuple[str, str, str], int],
+) -> int:
+    total_bars = 0
+    for _strategy in request.strategies:
+        for pair in request.pairs:
+            for timeframe in request.timeframes:
+                total_bars += bars_by_pair_timeframe.get(_bar_count_key(pair, timeframe), 0)
+    return total_bars
+
+
+def _all_scenarios_completed_for_pair_timeframe(
+    request: StrategyTestRunRequest,
+    *,
+    pair: StrategyTestPair,
+    timeframe: str,
+    completed_summary_by_key: Mapping[str, dict[str, Any]],
+) -> bool:
+    if not request.strategies:
+        return True
+    return all(
+        _scenario_key_from_values(strategy, pair.exchange, pair.symbol, timeframe) in completed_summary_by_key
+        for strategy in request.strategies
+    )
+
+
+def _prefetch_context(
+    request: StrategyTestRunRequest,
+    *,
+    pair: StrategyTestPair,
+    timeframe: str,
+    scenario_count: int,
+) -> StrategyTestScenarioContext:
+    strategy = request.strategies[0] if request.strategies else "unknown"
+    return StrategyTestScenarioContext(
+        index=_scenario_index_for_values(request, pair=pair, timeframe=timeframe, strategy=strategy),
+        total=scenario_count,
+        strategy=strategy,
+        pair=pair,
+        timeframe=timeframe,
+    )
+
+
+def _scenario_index_for_values(
+    request: StrategyTestRunRequest,
+    *,
+    pair: StrategyTestPair,
+    timeframe: str,
+    strategy: str,
+) -> int:
+    index = 0
+    target = (pair.exchange, pair.symbol, timeframe, strategy)
+    for candidate_pair in request.pairs:
+        for candidate_timeframe in request.timeframes:
+            for candidate_strategy in request.strategies:
+                index += 1
+                candidate = (
+                    candidate_pair.exchange,
+                    candidate_pair.symbol,
+                    candidate_timeframe,
+                    candidate_strategy,
+                )
+                if candidate == target:
+                    return index
+    return 0
+
+
+def _prefetch_concurrency() -> int:
+    try:
+        return max(1, int(settings.strategy_test_historical_backfill_concurrency))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _bar_count_key(pair: StrategyTestPair, timeframe: str) -> tuple[str, str, str]:
     return (pair.exchange, pair.symbol, timeframe)
 
 
 def _scenario_key(context: StrategyTestScenarioContext) -> str:
-    return "::".join(_key_text(value) for value in (context.strategy, context.exchange, context.symbol, context.timeframe))
+    return _scenario_key_from_values(context.strategy, context.exchange, context.symbol, context.timeframe)
+
+
+def _scenario_key_from_values(
+    strategy: object,
+    exchange: object,
+    symbol: object,
+    timeframe: object,
+) -> str:
+    return "::".join(_key_text(value) for value in (strategy, exchange, symbol, timeframe))
 
 
 def _checkpoint_summary_for_context(

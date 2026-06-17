@@ -72,6 +72,44 @@ class StrategyTestScenarioRunner:
             options=assumptions.model_dump(mode="json"),
         )
 
+    def prepare_market_data(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        pair: StrategyTestPair,
+        timeframe: str,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_progress: StrategyTestScenarioProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        if _is_cancelled(is_cancelled):
+            raise StrategyTestRunCancelled("strategy_test_run_cancelled")
+        assumptions = build_strategy_test_assumptions(
+            mode=request.mode,
+            fee_rate=request.fee_rate,
+            slippage_bps=request.slippage_bps,
+            same_candle_policy=request.same_candle_policy,
+            initial_capital=request.initial_capital,
+            params=request.params,
+        )
+        try:
+            result = self._backtest_runner.prepare_market_data(
+                _backtest_request_from_scenario(
+                    request=request,
+                    strategy=request.strategies[0] if request.strategies else "unknown",
+                    pair=pair,
+                    timeframe=timeframe,
+                ),
+                mode=request.mode,
+                options=assumptions.model_dump(mode="json"),
+                is_cancelled=is_cancelled,
+                on_progress=on_progress,
+            )
+        except BacktestRunCancelled as exc:
+            raise StrategyTestRunCancelled(str(exc) or "strategy_test_run_cancelled") from exc
+        if _is_cancelled(is_cancelled):
+            raise StrategyTestRunCancelled("strategy_test_run_cancelled")
+        return dict(result or {})
+
     def run_scenario(
         self,
         *,

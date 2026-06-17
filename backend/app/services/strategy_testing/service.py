@@ -590,6 +590,7 @@ _HISTORICAL_RUNTIME_PHASES = {
     "queued",
     "running",
     "estimating_failed",
+    "prefetching_market_data",
     "loading_candles",
     "building_features",
     "running_scenario",
@@ -678,6 +679,18 @@ def _scenario_runtime_state(
         warnings = progress.get("warnings")
         if isinstance(warnings, list):
             state["warnings"] = list(warnings)
+        for key in (
+            "current_pair",
+            "market_data_prefetch_total",
+            "market_data_prefetch_completed",
+            "market_data_prefetch_failed",
+            "current_scenario",
+            "scenario_count",
+            "completed_scenarios",
+            "failed_scenarios",
+        ):
+            if key in progress:
+                state[key] = progress[key]
     return _validated_runtime_state(state)
 
 

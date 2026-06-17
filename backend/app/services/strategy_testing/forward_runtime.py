@@ -208,9 +208,7 @@ class ForwardStrategyTestRuntime:
                 run.run_id,
                 {
                     "status": "waiting_for_market_data" if waiting_for_first_tick else "listening",
-                    "last_heartbeat_reason": (
-                        "waiting_for_market_data" if waiting_for_first_tick else "forward_runtime_worker"
-                    ),
+                    "last_heartbeat_reason": _forward_heartbeat_reason(run.runtime_state, waiting_for_first_tick),
                     "processed_ticks": processed_ticks,
                     "last_processed_at": _now_iso(),
                 },
@@ -2479,6 +2477,15 @@ def _first_gate_reason_code(gate: SignalExecutionGateSnapshot) -> str | None:
         if reason.code:
             return reason.code
     return None
+
+
+def _forward_heartbeat_reason(runtime_state: dict[str, Any], waiting_for_first_tick: bool) -> str:
+    if waiting_for_first_tick:
+        return "waiting_for_market_data"
+    current_reason = str(runtime_state.get("last_heartbeat_reason") or "").strip()
+    if current_reason and current_reason not in {"waiting_for_market_data", "no_matching_market_data"}:
+        return current_reason
+    return "forward_runtime_worker"
 
 
 def _gate_has_reason_source(gate: SignalExecutionGateSnapshot, sources: set[str]) -> bool:

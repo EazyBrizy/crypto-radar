@@ -327,6 +327,25 @@ class ForwardStrategyTestRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["last_heartbeat_reason"], "waiting_for_market_data")
         self.assertEqual(state["processed_ticks"], 0)
 
+    async def test_heartbeat_preserves_market_data_received_reason_after_first_tick(self) -> None:
+        run_store = _ForwardRunStore([_run()])
+        runtime = ForwardStrategyTestRuntime(
+            run_store=run_store,
+            trade_store=_RecordingTradeStore(),
+            virtual_trading=_VirtualTrading(),
+        )
+
+        await runtime.process_market_tick(
+            MarketData(exchange="bybit", symbol="BTCUSDT", price=105.0, volume=1.0, timestamp=1_780_000_000)
+        )
+        result = runtime.heartbeat_active_runs()
+
+        self.assertEqual(result.runtime_state_updates, 1)
+        state = run_store.get_run(RUN_ID).run.runtime_state  # type: ignore[union-attr]
+        self.assertEqual(state["status"], "listening")
+        self.assertEqual(state["last_heartbeat_reason"], "market_data_received")
+        self.assertEqual(state["processed_ticks"], 1)
+
     async def test_forward_pending_entry_retention_keeps_active_and_caps_terminal_history(self) -> None:
         terminal_entries = [_terminal_pending_entry(index) for index in range(205)]
         run_store = _ForwardRunStore([_run(runtime_state={"pending_entries": terminal_entries})])

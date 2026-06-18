@@ -64,7 +64,7 @@ async def list_trade_journal(
 ) -> TradeJournalResponse:
     account = (
         virtual_trading_service.get_virtual_account()
-        if source in {None, "virtual"}
+        if _include_virtual_account(source=source, tag=tag, run_id=run_id)
         else None
     )
     return TradeJournalResponse(
@@ -390,6 +390,17 @@ def _close_market_message(reason: str) -> str:
     if reason == "invalidation":
         return "Virtual position closed at market because the strategy idea was invalidated."
     return "Virtual position closed at market with exit fees applied."
+
+
+def _include_virtual_account(
+    *,
+    source: Optional[str],
+    tag: Optional[str],
+    run_id: UUID | None,
+) -> bool:
+    if tag is not None or run_id is not None:
+        return False
+    return source in {None, "virtual"}
 
 
 def _trade_invalidation_action_message(action: str) -> str:

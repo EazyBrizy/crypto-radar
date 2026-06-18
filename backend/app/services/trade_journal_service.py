@@ -68,7 +68,13 @@ class TradeJournalService:
                     signal_id=signal_id,
                 )
             )
-        if self._include_backtest_source(source, mode=mode, signal_id=signal_id):
+        if self._include_backtest_source(
+            source,
+            mode=mode,
+            signal_id=signal_id,
+            tag=tag,
+            run_id=run_id,
+        ):
             trades.extend(
                 self._strategy_test_journal.list_journal(
                     run_id=run_id,
@@ -108,12 +114,18 @@ class TradeJournalService:
         *,
         mode: Optional[str],
         signal_id: Optional[str],
+        tag: Optional[str],
+        run_id: UUID | None,
     ) -> bool:
         if signal_id is not None:
             return False
         if mode == "real":
             return False
-        return source in {None, "backtest"}
+        if source == "backtest":
+            return True
+        if source in {"virtual", "real"}:
+            return False
+        return tag is not None or run_id is not None
 
     @staticmethod
     def _execution_mode_filter(source: Optional[str], mode: Optional[str]) -> Optional[str]:

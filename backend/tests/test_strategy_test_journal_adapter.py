@@ -61,6 +61,63 @@ class StrategyTestJournalAdapterTest(unittest.TestCase):
 
 
 class TradeJournalApiBacktestTest(unittest.TestCase):
+    def test_default_journal_excludes_backtest_projection(self) -> None:
+        fake_virtual = _FakeVirtualTradingService(entries=[_virtual_journal_entry()])
+        fake_adapter = _FakeBacktestJournalAdapter([_journal_entry()])
+        original_journal_service = trades_api.trade_journal_service
+        original_virtual_service = trades_api.virtual_trading_service
+        trades_api.trade_journal_service = TradeJournalService(
+            execution_journal=fake_virtual,
+            strategy_test_journal=fake_adapter,
+        )
+        trades_api.virtual_trading_service = fake_virtual
+        client = TestClient(app)
+
+        try:
+            response = client.get("/api/v1/trades")
+        finally:
+            trades_api.trade_journal_service = original_journal_service
+            trades_api.virtual_trading_service = original_virtual_service
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([trade["id"] for trade in payload["trades"]], ["live-virtual-trade-1"])
+        self.assertEqual(payload["trades"][0]["source"], "virtual")
+        self.assertIsNone(payload["trades"][0]["run_id"])
+        self.assertIsNotNone(payload["account"])
+        self.assertEqual(fake_adapter.calls, [])
+        self.assertTrue(fake_virtual.account_called)
+        self.assertTrue(fake_virtual.list_called)
+
+    def test_default_active_journal_excludes_backtest_projection(self) -> None:
+        fake_virtual = _FakeVirtualTradingService(entries=[_virtual_journal_entry()])
+        fake_adapter = _FakeBacktestJournalAdapter([_journal_entry()])
+        original_journal_service = trades_api.trade_journal_service
+        original_virtual_service = trades_api.virtual_trading_service
+        trades_api.trade_journal_service = TradeJournalService(
+            execution_journal=fake_virtual,
+            strategy_test_journal=fake_adapter,
+        )
+        trades_api.virtual_trading_service = fake_virtual
+        client = TestClient(app)
+
+        try:
+            response = client.get("/api/v1/trades?status=open")
+        finally:
+            trades_api.trade_journal_service = original_journal_service
+            trades_api.virtual_trading_service = original_virtual_service
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([trade["id"] for trade in payload["trades"]], ["live-virtual-trade-1"])
+        self.assertEqual(payload["trades"][0]["source"], "virtual")
+        self.assertIsNone(payload["trades"][0]["run_id"])
+        self.assertIsNotNone(payload["account"])
+        self.assertEqual(fake_adapter.calls, [])
+        self.assertTrue(fake_virtual.account_called)
+        self.assertTrue(fake_virtual.list_called)
+        self.assertEqual(fake_virtual.last_status, "open")
+
     def test_source_backtest_calls_adapter_without_virtual_account(self) -> None:
         fake_virtual = _FakeVirtualTradingService()
         fake_adapter = _FakeBacktestJournalAdapter([_journal_entry()])
@@ -88,6 +145,89 @@ class TradeJournalApiBacktestTest(unittest.TestCase):
         self.assertEqual(fake_adapter.calls, [{"run_id": RUN_ID, "tag": "backtest", "status": None, "limit": 500}])
         self.assertFalse(fake_virtual.account_called)
         self.assertFalse(fake_virtual.list_called)
+
+    def test_run_id_includes_backtest_projection_without_virtual_account(self) -> None:
+        fake_virtual = _FakeVirtualTradingService()
+        fake_adapter = _FakeBacktestJournalAdapter([_journal_entry()])
+        original_journal_service = trades_api.trade_journal_service
+        original_virtual_service = trades_api.virtual_trading_service
+        trades_api.trade_journal_service = TradeJournalService(
+            execution_journal=fake_virtual,
+            strategy_test_journal=fake_adapter,
+        )
+        trades_api.virtual_trading_service = fake_virtual
+        client = TestClient(app)
+
+        try:
+            response = client.get(f"/api/v1/trades?run_id={RUN_ID}")
+        finally:
+            trades_api.trade_journal_service = original_journal_service
+            trades_api.virtual_trading_service = original_virtual_service
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload["account"])
+        self.assertEqual([trade["source"] for trade in payload["trades"]], ["backtest"])
+        self.assertEqual(payload["trades"][0]["run_id"], str(RUN_ID))
+        self.assertEqual(fake_adapter.calls, [{"run_id": RUN_ID, "tag": None, "status": None, "limit": 500}])
+        self.assertFalse(fake_virtual.account_called)
+        self.assertFalse(fake_virtual.list_called)
+
+    def test_tag_includes_backtest_projection_without_virtual_account(self) -> None:
+        fake_virtual = _FakeVirtualTradingService()
+        fake_adapter = _FakeBacktestJournalAdapter([_journal_entry()])
+        original_journal_service = trades_api.trade_journal_service
+        original_virtual_service = trades_api.virtual_trading_service
+        trades_api.trade_journal_service = TradeJournalService(
+            execution_journal=fake_virtual,
+            strategy_test_journal=fake_adapter,
+        )
+        trades_api.virtual_trading_service = fake_virtual
+        client = TestClient(app)
+
+        try:
+            response = client.get("/api/v1/trades?tag=backtest")
+        finally:
+            trades_api.trade_journal_service = original_journal_service
+            trades_api.virtual_trading_service = original_virtual_service
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload["account"])
+        self.assertEqual([trade["source"] for trade in payload["trades"]], ["backtest"])
+        self.assertEqual(payload["trades"][0]["tags"], ["backtest"])
+        self.assertEqual(fake_adapter.calls, [{"run_id": None, "tag": "backtest", "status": None, "limit": 500}])
+        self.assertFalse(fake_virtual.account_called)
+        self.assertFalse(fake_virtual.list_called)
+
+    def test_source_virtual_excludes_backtest_projection(self) -> None:
+        fake_virtual = _FakeVirtualTradingService(entries=[_virtual_journal_entry()])
+        fake_adapter = _FakeBacktestJournalAdapter([_journal_entry()])
+        original_journal_service = trades_api.trade_journal_service
+        original_virtual_service = trades_api.virtual_trading_service
+        trades_api.trade_journal_service = TradeJournalService(
+            execution_journal=fake_virtual,
+            strategy_test_journal=fake_adapter,
+        )
+        trades_api.virtual_trading_service = fake_virtual
+        client = TestClient(app)
+
+        try:
+            response = client.get("/api/v1/trades?source=virtual")
+        finally:
+            trades_api.trade_journal_service = original_journal_service
+            trades_api.virtual_trading_service = original_virtual_service
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([trade["id"] for trade in payload["trades"]], ["live-virtual-trade-1"])
+        self.assertEqual(payload["trades"][0]["source"], "virtual")
+        self.assertIsNone(payload["trades"][0]["run_id"])
+        self.assertIsNotNone(payload["account"])
+        self.assertEqual(fake_adapter.calls, [])
+        self.assertTrue(fake_virtual.account_called)
+        self.assertTrue(fake_virtual.list_called)
+        self.assertEqual(fake_virtual.last_mode, "virtual")
 
     def test_mode_real_does_not_include_backtest_projection(self) -> None:
         fake_virtual = _FakeVirtualTradingService()
@@ -144,10 +284,13 @@ class _FakeBacktestJournalAdapter:
 
 
 class _FakeVirtualTradingService:
-    def __init__(self) -> None:
+    def __init__(self, entries: list[TradeJournalEntry] | None = None) -> None:
+        self._entries = entries or []
         self.account_called = False
         self.list_called = False
         self.last_mode: str | None = None
+        self.last_status: str | None = None
+        self.last_signal_id: str | None = None
 
     def list_trade_journal(
         self,
@@ -155,10 +298,11 @@ class _FakeVirtualTradingService:
         status: str | None = None,
         signal_id: str | None = None,
     ) -> list[TradeJournalEntry]:
-        _ = (mode, status, signal_id)
         self.list_called = True
         self.last_mode = mode
-        return []
+        self.last_status = status
+        self.last_signal_id = signal_id
+        return list(self._entries)
 
     def get_virtual_trade(self, trade_id: str) -> None:
         _ = trade_id
@@ -171,7 +315,7 @@ class _FakeVirtualTradingService:
     def get_virtual_account(self, user_id: str = "demo_user") -> VirtualAccount:
         _ = user_id
         self.account_called = True
-        raise AssertionError("backtest source must not request virtual account state")
+        return VirtualAccount(updated_at=CREATED_AT)
 
 
 def _strategy_test_trade() -> StrategyTestTrade:
@@ -248,6 +392,23 @@ def _journal_entry() -> TradeJournalEntry:
         opened_at=ENTRY_AT,
         updated_at=EXIT_AT,
         closed_at=EXIT_AT,
+    )
+
+
+def _virtual_journal_entry() -> TradeJournalEntry:
+    return _journal_entry().model_copy(
+        update={
+            "id": "live-virtual-trade-1",
+            "source": "virtual",
+            "tags": [],
+            "run_id": None,
+            "status": "open",
+            "result": None,
+            "close_reason": None,
+            "pnl": None,
+            "pnl_percent": None,
+            "closed_at": None,
+        }
     )
 
 

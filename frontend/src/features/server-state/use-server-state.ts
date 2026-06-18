@@ -59,6 +59,18 @@ type PlannedQueryOptions = {
   refetchInterval?: number | false;
 };
 
+function keepPreviousCatalogData<TData>(previousData: TData | undefined): TData | undefined {
+  return previousData;
+}
+
+function catalogRetryDelay(attemptIndex: number): number {
+  return Math.min(1_000 * 2 ** attemptIndex, serverStatePolicy.backgroundRefreshMs);
+}
+
+function refetchCatalogOnError(query: { state: { status: string } }): number | false {
+  return query.state.status === "error" ? serverStatePolicy.backgroundRefreshMs : false;
+}
+
 export function useHealthQuery() {
   return useQuery({
     queryKey: serverStateKeys.health(),
@@ -278,7 +290,7 @@ export function useStrategyTestActiveRun(userId?: string | null, options: Planne
 export function useStrategyTestEstimate(request: StrategyTestRunRequest | null, options: PlannedQueryOptions = {}) {
   return useQuery<StrategyTestEstimateResponse>({
     queryKey: serverStateKeys.strategyTests.estimate(request),
-    queryFn: () => api.strategyTests.estimate(request as StrategyTestRunRequest),
+    queryFn: ({ signal }) => api.strategyTests.estimate(request as StrategyTestRunRequest, { signal }),
     enabled: options.enabled ?? Boolean(request),
     staleTime: serverStatePolicy.defaultStaleTimeMs
   });
@@ -462,6 +474,11 @@ export function useMarketPairsQuery() {
   return useQuery({
     queryKey: serverStateKeys.watchlist.pairs(),
     queryFn: () => api.marketPairs(),
+    placeholderData: keepPreviousCatalogData,
+    refetchInterval: refetchCatalogOnError,
+    refetchOnReconnect: true,
+    retry: 3,
+    retryDelay: catalogRetryDelay,
     staleTime: serverStatePolicy.staticStaleTimeMs
   });
 }
@@ -492,6 +509,11 @@ export function useStrategyConfigsQuery() {
   return useQuery({
     queryKey: serverStateKeys.settings.strategyConfigs(),
     queryFn: api.strategyConfigs,
+    placeholderData: keepPreviousCatalogData,
+    refetchInterval: refetchCatalogOnError,
+    refetchOnReconnect: true,
+    retry: 3,
+    retryDelay: catalogRetryDelay,
     staleTime: serverStatePolicy.defaultStaleTimeMs
   });
 }

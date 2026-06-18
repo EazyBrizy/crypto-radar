@@ -20529,18 +20529,39 @@
             "title": "Timeframe"
           },
           "candles_count": {
-            "type": "integer",
-            "minimum": 0,
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Candles Count"
           },
           "raw_rows": {
-            "type": "integer",
-            "minimum": 0,
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Raw Rows"
           },
           "duplicate_rows": {
-            "type": "integer",
-            "minimum": 0,
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Duplicate Rows"
           },
           "warmup_bars": {
@@ -20573,9 +20594,6 @@
           "exchange",
           "symbol",
           "timeframe",
-          "candles_count",
-          "raw_rows",
-          "duplicate_rows",
           "warmup_bars",
           "bars_total"
         ],

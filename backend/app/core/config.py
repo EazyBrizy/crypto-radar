@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     prometheus_metrics_enabled: bool = True
     fastapi_slow_request_ms: int = 1000
+    event_loop_lag_monitor_enabled: bool = True
+    event_loop_lag_interval_seconds: float = 1.0
+    event_loop_lag_warning_seconds: float = 0.25
     realtime_publish_timeout_seconds: float = 0.75
 
     crypto_radar_scanner_enabled: bool = False

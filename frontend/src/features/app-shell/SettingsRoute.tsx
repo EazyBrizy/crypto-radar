@@ -57,12 +57,20 @@ export function SettingsRoute() {
   const refreshExchangeConnectionBalanceMutation = useRefreshExchangeConnectionBalanceMutation();
   const updateUserSettingsMutation = useUpdateUserSettingsMutation();
   const updateStrategyConfigMutation = useUpdateStrategyConfigMutation();
+  const marketPairsLoadedSuccessfully = marketPairsQuery.isSuccess || marketPairsQuery.data !== undefined;
+  const strategyConfigsLoadedSuccessfully = strategyConfigsQuery.isSuccess || strategyConfigsQuery.data !== undefined;
 
   return (
     <SettingsPage
       config={configQuery.data ?? null}
       availablePairs={marketPairsQuery.data ?? []}
+      availablePairsError={marketPairsQuery.error ?? null}
+      availablePairsLoadedSuccessfully={marketPairsLoadedSuccessfully}
+      availablePairsLoading={marketPairsQuery.isLoading || (marketPairsQuery.isFetching && !marketPairsLoadedSuccessfully)}
       strategyConfigs={strategyConfigsQuery.data ?? []}
+      strategyConfigsError={strategyConfigsQuery.error ?? null}
+      strategyConfigsLoadedSuccessfully={strategyConfigsLoadedSuccessfully}
+      strategyConfigsLoading={strategyConfigsQuery.isLoading || (strategyConfigsQuery.isFetching && !strategyConfigsLoadedSuccessfully)}
       alertRules={alertRulesQuery.data ?? []}
       exchangeConnections={exchangeConnectionsQuery.data ?? []}
       exchangeAccountSnapshots={exchangeAccountSnapshotsQuery.dataByConnectionId}
@@ -122,6 +130,12 @@ export function SettingsRoute() {
       onUpdateStrategyConfig={(configId: string, patch: StrategyConfigPatch) =>
         updateStrategyConfigMutation.mutateAsync({ configId, patch })
       }
+      onRetryAvailablePairs={() => {
+        void marketPairsQuery.refetch();
+      }}
+      onRetryStrategyConfigs={() => {
+        void strategyConfigsQuery.refetch();
+      }}
     />
   );
 }

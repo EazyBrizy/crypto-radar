@@ -40,6 +40,33 @@ class HistoricalCandleBackfillTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fetcher.calls), 1)
         self.assertEqual(len(persistence.batches), 1)
 
+    async def test_backfill_logs_cache_miss_and_persisted_rows(self) -> None:
+        provider = InMemoryHistoricalCandleProvider([])
+        fetcher = _RecordingFetcher([
+            _candle(open_time=1780315200000, close=101.0),
+            _candle(open_time=1780316100000, close=102.0),
+        ])
+        backfilling = BackfillingHistoricalCandleProvider(
+            provider,
+            range_fetcher=fetcher,
+            persistence_service=_InMemoryPersistence(provider),
+        )
+
+        with self.assertLogs("app.services.historical_candle_provider", level="INFO") as logs:
+            candles = await backfilling.load_candles(
+                exchange="bybit",
+                symbol="BTCUSDT",
+                timeframe="15m",
+                start_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+                end_at=datetime(2026, 6, 1, 12, 30, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(len(candles), 2)
+        log_output = "\n".join(logs.output)
+        self.assertIn("Historical candle cache miss exchange=bybit symbol=BTCUSDT timeframe=15m", log_output)
+        self.assertIn("Historical candle backfill persisted exchange=bybit symbol=BTCUSDT timeframe=15m", log_output)
+        self.assertIn("rows_written=2", log_output)
+
     async def test_backfill_does_not_fetch_unsupported_exchange(self) -> None:
         fetcher = _RecordingFetcher([_candle(open_time=1780315200000, close=101.0)])
         backfilling = BackfillingHistoricalCandleProvider(

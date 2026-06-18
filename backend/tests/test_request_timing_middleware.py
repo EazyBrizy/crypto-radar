@@ -1,6 +1,6 @@
 import unittest
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -17,6 +17,14 @@ class RequestTimingMiddlewareTest(unittest.TestCase):
         self.assertEqual(response.json(), {"ok": True})
         self.assertEqual(response.headers["X-Request-Id"], "req-test")
         self.assertGreaterEqual(float(response.headers["X-Response-Time-Ms"]), 0)
+
+    def test_middleware_exposes_request_id_on_request_state(self) -> None:
+        client = TestClient(_app())
+
+        response = client.get("/state-request-id", headers={"X-Request-Id": "req-state"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"request_id": "req-state"})
 
     def test_slow_endpoint_emits_timing_without_breaking_response(self) -> None:
         client = TestClient(_app())
@@ -49,6 +57,10 @@ def _app() -> FastAPI:
     @app.get("/slow")
     async def slow() -> dict[str, bool]:
         return {"slow": True}
+
+    @app.get("/state-request-id")
+    async def state_request_id(request: Request) -> dict[str, str]:
+        return {"request_id": request.state.request_id}
 
     return app
 

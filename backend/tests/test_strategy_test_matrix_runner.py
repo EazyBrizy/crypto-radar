@@ -216,6 +216,39 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         self.assertEqual(prefetch_updates[-1]["market_data_prefetch_failed"], 0)
         self.assertIn(prefetch_updates[-1]["current_pair"], {"BTCUSDT", "ETHUSDT"})
 
+    def test_matrix_does_not_count_all_pair_timeframes_before_processing(self) -> None:
+        request = _matrix_request(
+            strategies=["s1"],
+            pairs=[
+                StrategyTestPair(exchange="bybit", symbol="BTCUSDT"),
+                StrategyTestPair(exchange="bybit", symbol="ETHUSDT"),
+            ],
+            timeframes=["15m", "1h"],
+        )
+        scenario_runner = _PreparingBarScenarioRunner(
+            bars_per_pair_timeframe={
+                ("bybit", "BTCUSDT", "15m"): 3,
+                ("bybit", "BTCUSDT", "1h"): 4,
+                ("bybit", "ETHUSDT", "15m"): 5,
+                ("bybit", "ETHUSDT", "1h"): 6,
+            }
+        )
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+
+        result = matrix_runner.run_matrix(request=request, run_id=RUN_ID, user_uuid=USER_ID)
+
+        self.assertEqual(result.completed_scenarios, 4)
+        self.assertEqual(scenario_runner.count_calls, [])
+        self.assertEqual(
+            scenario_runner.prepare_calls,
+            [
+                ("bybit", "BTCUSDT", "15m"),
+                ("bybit", "BTCUSDT", "1h"),
+                ("bybit", "ETHUSDT", "15m"),
+                ("bybit", "ETHUSDT", "1h"),
+            ],
+        )
+
     def test_matrix_cancellation_stops_after_market_data_prepare(self) -> None:
         cancelled = False
 
@@ -373,9 +406,26 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
             ],
         )
 
+    def test_matrix_logs_start_scenario_completion_and_finish(self) -> None:
+        request = _matrix_request(strategies=["s1", "s2"])
+        matrix_runner = StrategyTestMatrixRunner(_RecordingScenarioRunner())
+
+        with self.assertLogs("app.services.strategy_testing.matrix_runner", level="INFO") as logs:
+            result = matrix_runner.run_matrix(request=request, run_id=RUN_ID, user_uuid=USER_ID)
+
+        self.assertEqual(result.completed_scenarios, 2)
+        log_output = "\n".join(logs.output)
+        self.assertIn("Strategy test matrix started", log_output)
+        self.assertIn(f"run_id={RUN_ID}", log_output)
+        self.assertIn("scenario_count=2", log_output)
+        self.assertIn("Strategy test matrix scenario completed", log_output)
+        self.assertIn("scenario=1/2", log_output)
+        self.assertIn("Strategy test matrix finished", log_output)
+        self.assertIn("completed=2 failed=0", log_output)
+
     def test_matrix_progress_uses_matrix_wide_deduped_bar_total(self) -> None:
         request = _matrix_request(strategies=["s1", "s2"], timeframes=["15m"])
-        scenario_runner = _ProgressCountingScenarioRunner(bars_per_pair_timeframe={("bybit", "BTCUSDT", "15m"): 3})
+        scenario_runner = _PreparingBarScenarioRunner(bars_per_pair_timeframe={("bybit", "BTCUSDT", "15m"): 3})
         matrix_runner = StrategyTestMatrixRunner(scenario_runner)
         progress_updates: list[tuple[int, int, int, int, int, int, int, int, int]] = []
 
@@ -383,18 +433,22 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
             request=request,
             run_id=RUN_ID,
             user_uuid=USER_ID,
-            on_scenario_progress=lambda context, progress, _partial_summary: progress_updates.append(
-                (
-                    context.index,
-                    progress["bars_processed"],
-                    progress["bars_total"],
-                    progress["scenario_bars_processed"],
-                    progress["scenario_bars_total"],
-                    progress["matrix_bars_processed"],
-                    progress["matrix_bars_total"],
-                    progress["current_scenario_bars_processed"],
-                    progress["current_scenario_bars_total"],
+            on_scenario_progress=lambda context, progress, _partial_summary: (
+                progress_updates.append(
+                    (
+                        context.index,
+                        progress["bars_processed"],
+                        progress["bars_total"],
+                        progress["scenario_bars_processed"],
+                        progress["scenario_bars_total"],
+                        progress["matrix_bars_processed"],
+                        progress["matrix_bars_total"],
+                        progress["current_scenario_bars_processed"],
+                        progress["current_scenario_bars_total"],
+                    )
                 )
+                if "scenario_bars_processed" in progress
+                else None
             ),
         )
 
@@ -405,7 +459,8 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
                 (2, 4, 6, 1, 3, 4, 6, 1, 3),
             ],
         )
-        self.assertEqual(scenario_runner.count_calls, [("bybit", "BTCUSDT", "15m")])
+        self.assertEqual(scenario_runner.count_calls, [])
+        self.assertEqual(scenario_runner.prepare_calls, [("bybit", "BTCUSDT", "15m")])
 
     def test_runtime_progress_sanitizes_eta_and_rates(self) -> None:
         context = StrategyTestScenarioContext(
@@ -1048,10 +1103,10 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
         service = StrategyTestingService(
             run_store=run_store,
             trade_store=_RecordingTradeStore(),
-            historical_candle_provider=_FixedCountHistoricalCandleProvider(candles_count=DEFAULT_WARMUP_CANDLES + 11),
+            historical_candle_provider=_FixedCountHistoricalCandleProvider(candles_count=0),
             matrix_runner=matrix_runner,  # type: ignore[arg-type]
         )
-        created = run_store.create_run(_matrix_request())
+        created = run_store.create_run(_matrix_request(params={"warmup_candles": 1}))
 
         try:
             response = service.execute_run(created.run.run_id)
@@ -1060,6 +1115,7 @@ class StrategyTestingServiceMatrixTest(unittest.TestCase):
 
         self.assertEqual(response.status, "failed")
         self.assertIn("strategy_test_max_bars_per_run exceeded", response.error or "")
+        self.assertEqual(matrix_runner.calls, 0)
         self.assertEqual(matrix_runner.calls, 0)
         self.assertEqual(run_store.transitions, ["queued", "failed"])
         self.assertEqual(run_store.detail.run.runtime_state["phase"], "failed")  # type: ignore[union-attr]
@@ -1336,6 +1392,26 @@ class _ProgressCountingScenarioRunner:
             trades=[],
             signal_events=[],
         )
+
+
+class _PreparingBarScenarioRunner(_ProgressCountingScenarioRunner):
+    def __init__(self, *, bars_per_pair_timeframe: dict[tuple[str, str, str], int]) -> None:
+        super().__init__(bars_per_pair_timeframe=bars_per_pair_timeframe)
+        self.prepare_calls: list[tuple[str, str, str]] = []
+
+    def prepare_market_data(
+        self,
+        *,
+        request: StrategyTestRunRequest,
+        pair: StrategyTestPair,
+        timeframe: str,
+        is_cancelled: Any = None,
+        on_progress: Any = None,
+    ) -> dict[str, Any]:
+        _ = request, is_cancelled, on_progress
+        key = (pair.exchange, pair.symbol, timeframe)
+        self.prepare_calls.append(key)
+        return {"bars_total": self._bars_per_pair_timeframe[key]}
 
 
 class _StaticMatrixRunner:

@@ -10,8 +10,8 @@ from app.core.config import settings
 from app.services.backtest_runner import (
     DEFAULT_WARMUP_CANDLES,
     ProductionBacktestRunner,
-    _run_awaitable_sync,
 )
+from app.services.candle_service import TIMEFRAME_MS
 from app.services.historical_candle_provider import BackfillingHistoricalCandleProvider, HistoricalCandleProvider
 from app.services.strategy_testing.eligibility_profiles import StrategyExecutionEligibilityProfileUpdater
 from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
@@ -437,7 +437,7 @@ class StrategyTestingService:
         )
 
     def estimate_run(self, request: StrategyTestRunRequest) -> StrategyTestEstimateResponse:
-        return _estimate_historical_run(request, self._historical_candle_provider)
+        return _estimate_historical_run(request)
 
     def get_run(self, run_id: UUID) -> StrategyTestRunDetailResponse | None:
         return self._run_store.get_run(run_id)
@@ -504,7 +504,7 @@ class StrategyTestingService:
         return self._forward_runtime.heartbeat_active_runs()
 
     def _validate_synchronous_run_request(self, request: StrategyTestRunRequest) -> None:
-        _validate_strategy_test_resource_limits(request, self._historical_candle_provider)
+        _validate_strategy_test_resource_limits(request)
 
     def _validate_enqueued_run_request(self, request: StrategyTestRunRequest) -> None:
         _validate_enqueued_strategy_test_resource_limits(request)
@@ -516,7 +516,7 @@ class StrategyTestingService:
         last_summary: dict[str, Any],
     ) -> StrategyTestRunResponse | list[str]:
         try:
-            return _validate_worker_strategy_test_resource_limits(request, self._historical_candle_provider)
+            return _validate_worker_strategy_test_resource_limits(request)
         except ValueError as exc:
             message = str(exc)
             summary = _normalize_summary(last_summary)
@@ -937,10 +937,7 @@ def _scenario_total(request: StrategyTestRunRequest) -> int:
     return len(request.strategies) * len(request.pairs) * len(request.timeframes)
 
 
-def _validate_strategy_test_resource_limits(
-    request: StrategyTestRunRequest,
-    provider: HistoricalCandleProvider,
-) -> None:
+def _validate_strategy_test_resource_limits(request: StrategyTestRunRequest) -> None:
     _validate_scenario_count(
         request,
         max_scenarios=settings.strategy_test_max_scenarios_per_run,
@@ -948,7 +945,7 @@ def _validate_strategy_test_resource_limits(
     )
     if request.test_type != "historical_backtest":
         return
-    estimate = _estimate_historical_run(request, provider)
+    estimate = _estimate_historical_run(request)
     failed_warnings = [warning for warning in estimate.warnings if warning.code == "estimating_failed"]
     if failed_warnings:
         return
@@ -975,10 +972,7 @@ def _validate_enqueued_strategy_test_resource_limits(request: StrategyTestRunReq
     )
 
 
-def _validate_worker_strategy_test_resource_limits(
-    request: StrategyTestRunRequest,
-    provider: HistoricalCandleProvider,
-) -> list[str]:
+def _validate_worker_strategy_test_resource_limits(request: StrategyTestRunRequest) -> list[str]:
     if request.test_type != "historical_backtest":
         return []
     _validate_scenario_count(
@@ -986,7 +980,7 @@ def _validate_worker_strategy_test_resource_limits(
         max_scenarios=settings.strategy_test_max_enqueued_historical_scenarios_per_run,
         setting_name="strategy_test_max_enqueued_historical_scenarios_per_run",
     )
-    estimate = _estimate_historical_run(request, provider)
+    estimate = _estimate_historical_run(request)
     failed_warnings = [warning for warning in estimate.warnings if warning.code == "estimating_failed"]
     if failed_warnings:
         return [warning.message for warning in failed_warnings]
@@ -1014,10 +1008,7 @@ def _validate_scenario_count(
         )
 
 
-def _estimate_historical_run(
-    request: StrategyTestRunRequest,
-    provider: HistoricalCandleProvider,
-) -> StrategyTestEstimateResponse:
+def _estimate_historical_run(request: StrategyTestRunRequest) -> StrategyTestEstimateResponse:
     scenario_count = _scenario_total(request)
     if request.test_type != "historical_backtest":
         return StrategyTestEstimateResponse(
@@ -1038,14 +1029,10 @@ def _estimate_historical_run(
             if key in counts_by_key:
                 continue
             try:
-                deduped_candles = _run_awaitable_sync(
-                    provider.count_candles(
-                        exchange=pair.exchange,
-                        symbol=pair.symbol,
-                        timeframe=timeframe,
-                        start_at=request.start_at,
-                        end_at=request.end_at,
-                    )
+                theoretical_candles = _theoretical_closed_candle_count(
+                    start_at=request.start_at,
+                    end_at=request.end_at,
+                    timeframe=timeframe,
                 )
             except Exception as exc:
                 warnings.append(
@@ -1055,38 +1042,26 @@ def _estimate_historical_run(
                         symbol=pair.symbol,
                         timeframe=timeframe,
                         message=(
-                            "Unable to count deduped historical candles for "
+                            "Unable to estimate theoretical closed candles for "
                             f"{pair.exchange}:{pair.symbol}:{timeframe}: {exc}"
                         ),
                     )
                 )
                 counts_by_key[key] = {
-                    "deduped_candles": 0,
-                    "raw_rows": 0,
+                    "theoretical_candles": 0,
                     "warning_codes": ["estimating_failed"],
                 }
                 continue
-            raw_rows = _raw_candle_count(
-                provider,
+            warning_codes, key_warnings = _theoretical_estimate_warnings(
                 exchange=pair.exchange,
                 symbol=pair.symbol,
                 timeframe=timeframe,
-                start_at=request.start_at,
-                end_at=request.end_at,
-                fallback=deduped_candles,
-            )
-            warning_codes, key_warnings = _estimate_count_warnings(
-                exchange=pair.exchange,
-                symbol=pair.symbol,
-                timeframe=timeframe,
-                deduped_candles=deduped_candles,
-                raw_rows=raw_rows,
+                theoretical_candles=theoretical_candles,
                 warmup_bars=warmup_bars,
             )
             warnings.extend(key_warnings)
             counts_by_key[key] = {
-                "deduped_candles": deduped_candles,
-                "raw_rows": raw_rows,
+                "theoretical_candles": theoretical_candles,
                 "warning_codes": warning_codes,
             }
 
@@ -1095,19 +1070,18 @@ def _estimate_historical_run(
         for pair in request.pairs:
             for timeframe in request.timeframes:
                 counts = counts_by_key[(pair.exchange, pair.symbol, timeframe)]
-                deduped_candles = int(counts["deduped_candles"])
-                raw_rows = int(counts["raw_rows"])
+                theoretical_candles = int(counts["theoretical_candles"])
                 scenarios.append(
                     StrategyTestScenarioEstimate(
                         strategy=strategy,
                         exchange=pair.exchange,
                         symbol=pair.symbol,
                         timeframe=timeframe,
-                        candles_count=deduped_candles,
-                        raw_rows=raw_rows,
-                        duplicate_rows=max(0, raw_rows - deduped_candles),
+                        candles_count=theoretical_candles,
+                        raw_rows=None,
+                        duplicate_rows=None,
                         warmup_bars=warmup_bars,
-                        bars_total=max(0, deduped_candles - warmup_bars),
+                        bars_total=max(0, theoretical_candles - warmup_bars),
                         warning_codes=list(counts["warning_codes"]),
                     )
                 )
@@ -1124,59 +1098,36 @@ def _estimate_historical_run(
     )
 
 
-def _raw_candle_count(
-    provider: HistoricalCandleProvider,
+def _theoretical_closed_candle_count(
     *,
-    exchange: str,
-    symbol: str,
     timeframe: str,
     start_at: datetime,
     end_at: datetime,
-    fallback: int,
 ) -> int:
-    count_raw = getattr(provider, "count_raw_candles", None)
-    if not callable(count_raw):
-        return fallback
-    return int(
-        _run_awaitable_sync(
-            count_raw(
-                exchange=exchange,
-                symbol=symbol,
-                timeframe=timeframe,
-                start_at=start_at,
-                end_at=end_at,
-            )
-        )
-    )
+    timeframe_ms = TIMEFRAME_MS.get(timeframe)
+    if timeframe_ms is None:
+        raise ValueError(f"unsupported_timeframe: {timeframe}")
+    start_ms = _datetime_to_ms(start_at)
+    end_ms = _datetime_to_ms(end_at)
+    first_open_ms = _ceil_to_timeframe_ms(start_ms, timeframe_ms)
+    last_open_ms = ((end_ms - timeframe_ms + 1) // timeframe_ms) * timeframe_ms
+    if last_open_ms < first_open_ms:
+        return 0
+    return ((last_open_ms - first_open_ms) // timeframe_ms) + 1
 
 
-def _estimate_count_warnings(
+def _theoretical_estimate_warnings(
     *,
     exchange: str,
     symbol: str,
     timeframe: str,
-    deduped_candles: int,
-    raw_rows: int,
+    theoretical_candles: int,
     warmup_bars: int,
 ) -> tuple[list[StrategyTestEstimateWarningCode], list[StrategyTestEstimateWarning]]:
     codes: list[StrategyTestEstimateWarningCode] = []
     warnings: list[StrategyTestEstimateWarning] = []
-    if deduped_candles == 0:
-        codes.append("market_data_missing")
-        warnings.append(
-            StrategyTestEstimateWarning(
-                code="market_data_missing",
-                exchange=exchange,
-                symbol=symbol,
-                timeframe=timeframe,
-                message=f"No closed candles found for {exchange}:{symbol}:{timeframe}.",
-                raw_rows=raw_rows,
-                deduped_candles=deduped_candles,
-            )
-        )
-        return codes, warnings
 
-    if deduped_candles <= warmup_bars:
+    if theoretical_candles <= warmup_bars:
         codes.append("market_data_below_warmup")
         warnings.append(
             StrategyTestEstimateWarning(
@@ -1185,33 +1136,28 @@ def _estimate_count_warnings(
                 symbol=symbol,
                 timeframe=timeframe,
                 message=(
-                    f"{exchange}:{symbol}:{timeframe} has {deduped_candles} deduped candles, "
+                    f"{exchange}:{symbol}:{timeframe} has {theoretical_candles} theoretical closed candles, "
                     f"which does not exceed the {warmup_bars} warmup bars."
                 ),
-                raw_rows=raw_rows,
-                deduped_candles=deduped_candles,
-            )
-        )
-
-    duplicate_ratio = raw_rows / deduped_candles if deduped_candles else 0.0
-    if raw_rows > deduped_candles and duplicate_ratio >= STRATEGY_TEST_DUPLICATE_WARNING_RATIO:
-        codes.append("market_data_duplicates")
-        warnings.append(
-            StrategyTestEstimateWarning(
-                code="market_data_duplicates",
-                exchange=exchange,
-                symbol=symbol,
-                timeframe=timeframe,
-                message=(
-                    f"{exchange}:{symbol}:{timeframe} has {raw_rows} raw candle rows for "
-                    f"{deduped_candles} deduped candles."
-                ),
-                raw_rows=raw_rows,
-                deduped_candles=deduped_candles,
-                duplicate_ratio=round(duplicate_ratio, 4),
+                raw_rows=None,
+                deduped_candles=theoretical_candles,
             )
         )
     return codes, warnings
+
+
+def _ceil_to_timeframe_ms(value_ms: int, timeframe_ms: int) -> int:
+    return ((value_ms + timeframe_ms - 1) // timeframe_ms) * timeframe_ms
+
+
+def _datetime_to_ms(value: datetime) -> int:
+    return int(_as_utc(value).timestamp() * 1000)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _estimate_warmup_bars(request: StrategyTestRunRequest) -> int:

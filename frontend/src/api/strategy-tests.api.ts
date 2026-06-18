@@ -58,7 +58,7 @@ export const strategyTestsApi = {
       queryString ? `/api/v1/strategy-tests/runs/active?${queryString}` : "/api/v1/strategy-tests/runs/active"
     );
   },
-  async estimate(request: StrategyTestRunRequest): Promise<StrategyTestEstimateResponse> {
+  async estimate(request: StrategyTestRunRequest, init: Pick<RequestInit, "signal"> = {}): Promise<StrategyTestEstimateResponse> {
     return rawJson<StrategyTestEstimateResponse>("/api/v1/strategy-tests/runs/estimate", {
       body: JSON.stringify({
         test_type: request.test_type ?? "historical_backtest",
@@ -77,7 +77,8 @@ export const strategyTestsApi = {
         tags: request.tags ?? ["backtest"]
       }),
       headers: { "content-type": "application/json" },
-      method: "POST"
+      method: "POST",
+      signal: init.signal
     });
   },
   async cancelRun(runId: string): Promise<StrategyTestRunResponse> {

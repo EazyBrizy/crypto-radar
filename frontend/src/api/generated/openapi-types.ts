@@ -6896,11 +6896,11 @@ export interface components {
             /** Timeframe */
             timeframe: string;
             /** Candles Count */
-            candles_count: number;
+            candles_count?: number | null;
             /** Raw Rows */
-            raw_rows: number;
+            raw_rows?: number | null;
             /** Duplicate Rows */
-            duplicate_rows: number;
+            duplicate_rows?: number | null;
             /** Warmup Bars */
             warmup_bars: number;
             /** Bars Total */

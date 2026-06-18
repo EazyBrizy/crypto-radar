@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol, Sequence
@@ -24,6 +26,8 @@ from app.services.strategy_testing.schemas import (
     StrategyTestTrade,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class ScenarioRunner(Protocol):
     def prepare_market_data(
@@ -35,15 +39,6 @@ class ScenarioRunner(Protocol):
         is_cancelled: Callable[[], bool] | None = None,
         on_progress: StrategyTestScenarioProgressCallback | None = None,
     ) -> dict[str, Any]:
-        ...
-
-    def count_scenario_bars(
-        self,
-        *,
-        request: StrategyTestRunRequest,
-        pair: StrategyTestPair,
-        timeframe: str,
-    ) -> int:
         ...
 
     def run_scenario(
@@ -237,7 +232,9 @@ class StrategyTestMatrixRunner:
         metrics: list[MetricResult] = []
         completed_summary_by_key = dict(completed_scenario_summaries or {})
         scenario_index = 0
-        bars_by_pair_timeframe, matrix_bars_total, matrix_bars_warning = self._estimate_matrix_bars(request)
+        bars_by_pair_timeframe: dict[tuple[str, str, str], int] = {}
+        matrix_bars_total: int | None = None
+        matrix_bars_warning: dict[str, Any] | None = None
         bars_completed_before = 0
         pair_timeframe_items = _ordered_pair_timeframe_items(request)
         prepare_market_data = getattr(self._scenario_runner, "prepare_market_data", None)
@@ -265,12 +262,26 @@ class StrategyTestMatrixRunner:
             if callable(prepare_market_data) and prefetch_total > 0
             else None
         )
+        started_at = time.perf_counter()
+        logger.info(
+            "Strategy test matrix started run_id=%s scenario_count=%s pair_timeframes=%s prefetch_total=%s",
+            run_id,
+            scenario_count,
+            len(pair_timeframe_items),
+            prefetch_total,
+            extra={
+                "run_id": str(run_id),
+                "scenario_count": scenario_count,
+                "pair_timeframes": len(pair_timeframe_items),
+                "prefetch_total": prefetch_total,
+            },
+        )
 
         def is_run_cancelled() -> bool:
             return bool(is_cancelled is not None and is_cancelled())
 
         def cancelled_result() -> StrategyTestMatrixResult:
-            return _matrix_result(
+            result = _matrix_result(
                 run_id=run_id,
                 scenario_count=scenario_count,
                 completed=completed,
@@ -283,6 +294,8 @@ class StrategyTestMatrixRunner:
                 cancelled=True,
                 metric_set=request.metric_set,
             )
+            _log_matrix_finished(run_id=run_id, result=result, started_at=started_at)
+            return result
 
         def build_partial_summary() -> dict[str, Any]:
             return _partial_summary(
@@ -412,6 +425,31 @@ class StrategyTestMatrixRunner:
             scenario_summaries.append(failed_summary)
             errors.append({key: failed_summary[key] for key in ("strategy", "exchange", "symbol", "timeframe", "error")})
             summary = build_partial_summary()
+            logger.warning(
+                "Strategy test matrix scenario failed run_id=%s scenario=%s/%s strategy=%s exchange=%s symbol=%s timeframe=%s completed=%s failed=%s error=%s",
+                run_id,
+                context.index,
+                context.total,
+                context.strategy,
+                context.exchange,
+                context.symbol,
+                context.timeframe,
+                completed,
+                failed,
+                exc,
+                extra={
+                    "run_id": str(run_id),
+                    "scenario_index": context.index,
+                    "scenario_count": context.total,
+                    "strategy": context.strategy,
+                    "exchange": context.exchange,
+                    "symbol": context.symbol,
+                    "timeframe": context.timeframe,
+                    "completed_scenarios": completed,
+                    "failed_scenarios": failed,
+                    "error": str(exc),
+                },
+            )
             if on_scenario_failed is not None:
                 on_scenario_failed(context, exc, summary)
 
@@ -533,13 +571,36 @@ class StrategyTestMatrixRunner:
                             scenario_result_sink.write_result(context, result, partial_summary)
                         if on_scenario_completed is not None:
                             on_scenario_completed(context, result, partial_summary)
+                        logger.info(
+                            "Strategy test matrix scenario completed run_id=%s scenario=%s/%s strategy=%s exchange=%s symbol=%s timeframe=%s completed=%s failed=%s",
+                            run_id,
+                            context.index,
+                            context.total,
+                            context.strategy,
+                            context.exchange,
+                            context.symbol,
+                            context.timeframe,
+                            completed,
+                            failed,
+                            extra={
+                                "run_id": str(run_id),
+                                "scenario_index": context.index,
+                                "scenario_count": context.total,
+                                "strategy": context.strategy,
+                                "exchange": context.exchange,
+                                "symbol": context.symbol,
+                                "timeframe": context.timeframe,
+                                "completed_scenarios": completed,
+                                "failed_scenarios": failed,
+                            },
+                        )
         except StrategyTestRunCancelled:
             return cancelled_result()
         finally:
             if executor is not None:
                 executor.shutdown(wait=False, cancel_futures=True)
 
-        return _matrix_result(
+        result = _matrix_result(
             run_id=run_id,
             scenario_count=scenario_count,
             completed=completed,
@@ -551,48 +612,29 @@ class StrategyTestMatrixRunner:
             metrics=metrics,
             metric_set=request.metric_set,
         )
+        _log_matrix_finished(run_id=run_id, result=result, started_at=started_at)
+        return result
 
-    def _estimate_matrix_bars(
-        self,
-        request: StrategyTestRunRequest,
-    ) -> tuple[dict[tuple[str, str, str], int], int | None, dict[str, Any] | None]:
-        count_bars = getattr(self._scenario_runner, "count_scenario_bars", None)
-        if not callable(count_bars):
-            return {}, None, {
-                "code": "estimating_failed",
-                "message": "Scenario runner cannot count historical bars before execution.",
-            }
 
-        bars_by_pair_timeframe: dict[tuple[str, str, str], int] = {}
-        for pair in request.pairs:
-            for timeframe in request.timeframes:
-                key = _bar_count_key(pair, timeframe)
-                if key in bars_by_pair_timeframe:
-                    continue
-                try:
-                    bars_by_pair_timeframe[key] = max(
-                        0,
-                        int(
-                            count_bars(
-                                request=request,
-                                pair=pair,
-                                timeframe=timeframe,
-                            )
-                        ),
-                    )
-                except Exception as exc:
-                    return {}, None, {
-                        "code": "estimating_failed",
-                        "message": (
-                            "Unable to count deduped historical bars before execution for "
-                            f"{pair.exchange}:{pair.symbol}:{timeframe}: {exc}"
-                        ),
-                        "exchange": pair.exchange,
-                        "symbol": pair.symbol,
-                        "timeframe": timeframe,
-                    }
-
-        return bars_by_pair_timeframe, _matrix_bars_total_from_counts(request, bars_by_pair_timeframe), None
+def _log_matrix_finished(*, run_id: UUID, result: StrategyTestMatrixResult, started_at: float) -> None:
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    logger.info(
+        "Strategy test matrix finished run_id=%s scenario_count=%s completed=%s failed=%s cancelled=%s duration_ms=%.2f",
+        run_id,
+        result.scenario_count,
+        result.completed_scenarios,
+        result.failed_scenarios,
+        result.cancelled,
+        duration_ms,
+        extra={
+            "run_id": str(run_id),
+            "scenario_count": result.scenario_count,
+            "completed_scenarios": result.completed_scenarios,
+            "failed_scenarios": result.failed_scenarios,
+            "cancelled": result.cancelled,
+            "duration_ms": duration_ms,
+        },
+    )
 
 
 def _partial_summary(

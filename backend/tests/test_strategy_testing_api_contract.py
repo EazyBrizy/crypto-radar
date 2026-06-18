@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.api.v1.router import api_router
-from app.api.v1.strategy_tests import get_strategy_testing_service
+from app.api.v1.strategy_tests import estimate_strategy_test_run, get_strategy_testing_service
 from app.core.config import settings
 from app.main import app
 from app.services.strategy_testing.matrix_runner import StrategyTestMatrixResult
@@ -252,6 +253,32 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(list_response.json()[0]["status"], "queued")
         self.assertEqual(list_response.json()[0]["test_type"], "historical_backtest")
         self.assertEqual(list_response.json()[0]["runtime_state"]["phase"], "queued")
+
+    def test_post_runs_logs_request_id_and_enqueued_run_id(self) -> None:
+        store = _EphemeralStrategyTestRunStore()
+        app.dependency_overrides[get_strategy_testing_service] = lambda: StrategyTestingService(
+            run_store=store,
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+        )
+        client = TestClient(app)
+
+        try:
+            with self.assertLogs("app.api.v1.strategy_tests", level="INFO") as logs:
+                response = client.post(
+                    "/api/v1/strategy-tests/runs",
+                    json=_payload(),
+                    headers={"X-Request-Id": "strategy-run-req"},
+                )
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 202)
+        log_output = "\n".join(logs.output)
+        self.assertIn("Strategy test run enqueue started request_id=strategy-run-req", log_output)
+        self.assertIn("Strategy test run enqueued request_id=strategy-run-req", log_output)
+        self.assertIn(f"run_id={response.json()['run_id']}", log_output)
+        self.assertIn("scenario_count=12", log_output)
 
     def test_post_runs_normalizes_payload_user_id_from_request_identity(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -829,24 +856,14 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(data["disabled_reason_code"], "active_strategy_test_run")
         self.assertEqual(data["active_run"]["run_id"], str(active.run_id))
 
-    def test_estimate_endpoint_returns_deduped_bars_for_30_day_5m_15m_run(self) -> None:
+    def test_estimate_endpoint_returns_theoretical_bars_without_provider_counts(self) -> None:
         five_minute_candles = _expected_candles(days=30, timeframe_minutes=5)
         fifteen_minute_candles = _expected_candles(days=30, timeframe_minutes=15)
-        duplicate_raw_rows = fifteen_minute_candles * 30 + 197
         service = StrategyTestingService(
             run_store=_EphemeralStrategyTestRunStore(),
             trade_store=_EphemeralStrategyTestTradeStore(),
             matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
-            historical_candle_provider=_CountingEstimateCandleProvider(
-                counts={
-                    ("bybit", "BTCUSDT", "5m"): five_minute_candles,
-                    ("bybit", "BTCUSDT", "15m"): fifteen_minute_candles,
-                },
-                raw_counts={
-                    ("bybit", "BTCUSDT", "5m"): five_minute_candles,
-                    ("bybit", "BTCUSDT", "15m"): duplicate_raw_rows,
-                },
-            ),
+            historical_candle_provider=_FailingEstimateCandleProvider(),
         )
         app.dependency_overrides[get_strategy_testing_service] = lambda: service
         client = TestClient(app)
@@ -865,28 +882,83 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["scenario_count"], 2)
-        self.assertGreater(data["total_bars"], 10_000)
-        self.assertLess(data["total_bars"], 20_000)
-        self.assertNotEqual(data["total_bars"], duplicate_raw_rows)
+        self.assertEqual(data["total_bars"], (five_minute_candles - 200) + (fifteen_minute_candles - 200))
         self.assertEqual(
-            [(item["timeframe"], item["bars_total"]) for item in data["scenarios"]],
             [
-                ("5m", five_minute_candles - 200),
-                ("15m", fifteen_minute_candles - 200),
+                (item["timeframe"], item["candles_count"], item["bars_total"], item["raw_rows"], item["duplicate_rows"])
+                for item in data["scenarios"]
+            ],
+            [
+                ("5m", five_minute_candles, five_minute_candles - 200, None, None),
+                ("15m", fifteen_minute_candles, fifteen_minute_candles - 200, None, None),
             ],
         )
-        self.assertEqual(data["warnings"][0]["code"], "market_data_duplicates")
-        self.assertEqual(data["warnings"][0]["timeframe"], "15m")
+        self.assertEqual(data["warnings"], [])
 
-    def test_estimate_service_warns_when_market_data_is_missing(self) -> None:
+    def test_estimate_endpoint_for_500_pairs_does_not_call_provider_counts(self) -> None:
+        provider = _RecordingEstimateCandleProvider()
         service = StrategyTestingService(
             run_store=_EphemeralStrategyTestRunStore(),
             trade_store=_EphemeralStrategyTestTradeStore(),
             matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
-            historical_candle_provider=_CountingEstimateCandleProvider(
-                counts={("bybit", "BTCUSDT", "15m"): 0},
-                raw_counts={("bybit", "BTCUSDT", "15m"): 0},
-            ),
+            historical_candle_provider=provider,
+        )
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+        payload = {
+            **_payload(),
+            "strategies": ["trend_pullback_continuation"],
+            "pairs": [{"exchange": "bybit", "symbol": f"COIN{index}USDT"} for index in range(500)],
+            "timeframes": ["1m"],
+        }
+
+        try:
+            response = client.post("/api/v1/strategy-tests/runs/estimate", json=payload)
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["scenario_count"], 500)
+        self.assertEqual(provider.count_calls, 0)
+        self.assertEqual(provider.raw_count_calls, 0)
+        self.assertEqual(provider.load_calls, 0)
+
+    def test_estimate_endpoint_is_sync_to_keep_fastapi_event_loop_free(self) -> None:
+        self.assertFalse(inspect.iscoroutinefunction(estimate_strategy_test_run))
+
+    def test_estimate_endpoint_logs_request_id_and_summary(self) -> None:
+        service = StrategyTestingService(
+            run_store=_EphemeralStrategyTestRunStore(),
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            historical_candle_provider=_FailingEstimateCandleProvider(),
+        )
+        app.dependency_overrides[get_strategy_testing_service] = lambda: service
+        client = TestClient(app)
+
+        try:
+            with self.assertLogs("app.api.v1.strategy_tests", level="INFO") as logs:
+                response = client.post(
+                    "/api/v1/strategy-tests/runs/estimate",
+                    json=_payload(),
+                    headers={"X-Request-Id": "strategy-estimate-req"},
+                )
+        finally:
+            app.dependency_overrides.pop(get_strategy_testing_service, None)
+
+        self.assertEqual(response.status_code, 200)
+        log_output = "\n".join(logs.output)
+        self.assertIn("Strategy test run estimate completed request_id=strategy-estimate-req", log_output)
+        self.assertIn("scenario_count=12", log_output)
+        self.assertIn("total_bars=", log_output)
+        self.assertIn("duration_ms=", log_output)
+
+    def test_estimate_service_uses_theoretical_counts_without_market_data_warning(self) -> None:
+        service = StrategyTestingService(
+            run_store=_EphemeralStrategyTestRunStore(),
+            trade_store=_EphemeralStrategyTestTradeStore(),
+            matrix_runner=_NoopStrategyTestMatrixRunner(),  # type: ignore[arg-type]
+            historical_candle_provider=_FailingEstimateCandleProvider(),
         )
 
         estimate = service.estimate_run(
@@ -899,8 +971,8 @@ class StrategyTestingApiContractTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(estimate.total_bars, 0)
-        self.assertEqual(estimate.warnings[0].code, "market_data_missing")
+        self.assertEqual(estimate.total_bars, _expected_candles(days=30, timeframe_minutes=15) - 200)
+        self.assertEqual(estimate.warnings, [])
 
     def test_cancel_run_endpoint_marks_running_run_stopping(self) -> None:
         store = _EphemeralStrategyTestRunStore()
@@ -1350,6 +1422,28 @@ class _FailingEstimateCandleProvider:
     async def load_candles(self, **kwargs: Any) -> list[Any]:
         _ = kwargs
         raise AssertionError("POST /strategy-tests/runs must not load candles")
+
+
+class _RecordingEstimateCandleProvider:
+    def __init__(self) -> None:
+        self.count_calls = 0
+        self.raw_count_calls = 0
+        self.load_calls = 0
+
+    async def count_candles(self, **kwargs: Any) -> int:
+        _ = kwargs
+        self.count_calls += 1
+        return 1
+
+    async def count_raw_candles(self, **kwargs: Any) -> int:
+        _ = kwargs
+        self.raw_count_calls += 1
+        return 1
+
+    async def load_candles(self, **kwargs: Any) -> list[Any]:
+        _ = kwargs
+        self.load_calls += 1
+        return []
 
 
 class _NoopStrategyTestMatrixRunner:

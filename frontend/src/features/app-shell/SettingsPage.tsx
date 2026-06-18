@@ -50,7 +50,13 @@ import type { RadarConfig, RiskProtectionMode, RiskStateResponse } from "@/types
 interface SettingsPageProps {
   config: RadarConfig | null;
   availablePairs: MarketPairOption[];
+  availablePairsError?: unknown;
+  availablePairsLoadedSuccessfully?: boolean;
+  availablePairsLoading?: boolean;
   strategyConfigs: StrategyConfig[];
+  strategyConfigsError?: unknown;
+  strategyConfigsLoadedSuccessfully?: boolean;
+  strategyConfigsLoading?: boolean;
   alertRules: AlertRule[];
   exchangeConnections: ExchangeConnection[];
   exchangeAccountSnapshots: Record<string, AccountRiskSnapshot | null>;
@@ -73,6 +79,8 @@ interface SettingsPageProps {
   onSelectSimulationLevel: (simulationLevel: VirtualSimulationLevel) => Promise<unknown>;
   onUpdateStrategyConfig: (configId: string, patch: StrategyConfigPatch) => Promise<unknown>;
   onUpdateRiskManagement: (patch: UserSettingsPatch) => Promise<unknown>;
+  onRetryAvailablePairs?: () => void;
+  onRetryStrategyConfigs?: () => void;
 }
 
 type TKey = (key: I18nKey, params?: Record<string, string | number | boolean | null | undefined>) => string;
@@ -710,7 +718,13 @@ const RISK_GUIDE_SECTIONS: RiskGuideSection[] = [
 export function SettingsPage({
   config,
   availablePairs,
+  availablePairsError = null,
+  availablePairsLoadedSuccessfully = true,
+  availablePairsLoading = false,
   strategyConfigs,
+  strategyConfigsError = null,
+  strategyConfigsLoadedSuccessfully = true,
+  strategyConfigsLoading = false,
   alertRules,
   exchangeConnections,
   exchangeAccountSnapshots,
@@ -732,7 +746,9 @@ export function SettingsPage({
   onSyncExchangeConnection,
   onSelectSimulationLevel,
   onUpdateStrategyConfig,
-  onUpdateRiskManagement
+  onUpdateRiskManagement,
+  onRetryAvailablePairs,
+  onRetryStrategyConfigs
 }: SettingsPageProps) {
   const { t, tKey, tReason } = useI18n();
   const [openSettingsSections, setOpenSettingsSections] = useState<Set<SettingsSectionId>>(() => new Set());
@@ -2534,7 +2550,18 @@ export function SettingsPage({
           summary={tKey("settings.backtestLab")}
           title={tKey("settings.strategyTesting")}
         >
-          <StrategyTestingPanel availablePairs={availablePairs} strategyConfigs={strategyConfigs} />
+          <StrategyTestingPanel
+            availablePairs={availablePairs}
+            pairsError={availablePairsError}
+            pairsLoadedSuccessfully={availablePairsLoadedSuccessfully}
+            pairsLoading={availablePairsLoading}
+            strategyConfigs={strategyConfigs}
+            strategiesError={strategyConfigsError}
+            strategiesLoadedSuccessfully={strategyConfigsLoadedSuccessfully}
+            strategiesLoading={strategyConfigsLoading}
+            onRetryPairs={onRetryAvailablePairs}
+            onRetryStrategies={onRetryStrategyConfigs}
+          />
         </SettingsAccordionSection>
 
         <SettingsAccordionSection

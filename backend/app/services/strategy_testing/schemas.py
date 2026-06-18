@@ -293,9 +293,9 @@ class StrategyTestScenarioEstimate(BaseModel):
     exchange: str
     symbol: str
     timeframe: str
-    candles_count: int = Field(ge=0)
-    raw_rows: int = Field(ge=0)
-    duplicate_rows: int = Field(ge=0)
+    candles_count: int | None = Field(default=None, ge=0)
+    raw_rows: int | None = Field(default=None, ge=0)
+    duplicate_rows: int | None = Field(default=None, ge=0)
     warmup_bars: int = Field(ge=0)
     bars_total: int = Field(ge=0)
     warning_codes: list[StrategyTestEstimateWarningCode] = Field(default_factory=list)

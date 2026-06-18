@@ -18,6 +18,7 @@ def add_request_timing_middleware(app: FastAPI) -> None:
     @app.middleware("http")
     async def request_timing_middleware(request: Request, call_next):
         request_id = _request_id(request)
+        request.state.request_id = request_id
         start_time = time.perf_counter()
         status_code = 500
 

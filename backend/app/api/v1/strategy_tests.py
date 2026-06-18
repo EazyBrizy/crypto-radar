@@ -1,4 +1,5 @@
 import logging
+import time
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status as http_status
@@ -40,6 +41,26 @@ async def create_strategy_test_run(
     service: StrategyTestingService = Depends(get_strategy_testing_service),
 ) -> StrategyTestRunResponse:
     request = _run_request_for_current_user(fastapi_request, request)
+    started_at = time.perf_counter()
+    request_id = _request_id(fastapi_request)
+    scenario_count = _scenario_count(request)
+    logger.info(
+        "Strategy test run enqueue started request_id=%s test_type=%s scenario_count=%s pairs=%s timeframes=%s strategies=%s",
+        request_id,
+        request.test_type,
+        scenario_count,
+        len(request.pairs),
+        len(request.timeframes),
+        len(request.strategies),
+        extra={
+            "request_id": request_id,
+            "test_type": request.test_type,
+            "scenario_count": scenario_count,
+            "pairs_count": len(request.pairs),
+            "timeframes_count": len(request.timeframes),
+            "strategies_count": len(request.strategies),
+        },
+    )
     try:
         run = service.enqueue_run(request)
     except PermissionError as exc:
@@ -48,6 +69,24 @@ async def create_strategy_test_run(
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    duration_ms = _duration_ms(started_at)
+    logger.info(
+        "Strategy test run enqueued request_id=%s run_id=%s status=%s test_type=%s scenario_count=%s duration_ms=%.2f",
+        request_id,
+        run.run_id,
+        run.status,
+        run.test_type,
+        scenario_count,
+        duration_ms,
+        extra={
+            "request_id": request_id,
+            "run_id": str(run.run_id),
+            "status": run.status,
+            "test_type": run.test_type,
+            "scenario_count": scenario_count,
+            "duration_ms": duration_ms,
+        },
+    )
     return run
 
 
@@ -66,18 +105,39 @@ async def get_active_strategy_test_run(
 
 
 @router.post("/runs/estimate", response_model=StrategyTestEstimateResponse)
-async def estimate_strategy_test_run(
+def estimate_strategy_test_run(
     request: StrategyTestRunRequest,
     fastapi_request: Request,
     service: StrategyTestingService = Depends(get_strategy_testing_service),
 ) -> StrategyTestEstimateResponse:
     request = _run_request_for_current_user(fastapi_request, request)
+    started_at = time.perf_counter()
+    request_id = _request_id(fastapi_request)
     try:
-        return service.estimate_run(request)
+        estimate = service.estimate_run(request)
     except PermissionError as exc:
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    duration_ms = _duration_ms(started_at)
+    logger.info(
+        "Strategy test run estimate completed request_id=%s test_type=%s scenario_count=%s total_bars=%s size=%s duration_ms=%.2f",
+        request_id,
+        request.test_type,
+        estimate.scenario_count,
+        estimate.total_bars,
+        estimate.size_level,
+        duration_ms,
+        extra={
+            "request_id": request_id,
+            "test_type": request.test_type,
+            "scenario_count": estimate.scenario_count,
+            "total_bars": estimate.total_bars,
+            "size_level": estimate.size_level,
+            "duration_ms": duration_ms,
+        },
+    )
+    return estimate
 
 
 @router.get("/runs", response_model=list[StrategyTestRunResponse])
@@ -249,3 +309,18 @@ def _current_user(request: Request) -> CurrentUserIdentity:
 
 def _is_production_environment() -> bool:
     return settings.app_env.strip().lower() in {"prod", "production"}
+
+
+def _request_id(request: Request) -> str:
+    state_request_id = getattr(request.state, "request_id", None)
+    if isinstance(state_request_id, str) and state_request_id:
+        return state_request_id
+    return request.headers.get("X-Request-Id", "").strip() or "unknown"
+
+
+def _scenario_count(request: StrategyTestRunRequest) -> int:
+    return len(request.strategies) * len(request.pairs) * len(request.timeframes)
+
+
+def _duration_ms(started_at: float) -> float:
+    return (time.perf_counter() - started_at) * 1000

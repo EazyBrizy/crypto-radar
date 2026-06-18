@@ -192,7 +192,8 @@ describe("StrategyTestingPanel", () => {
 
     const estimate = screen.getByLabelText("Strategy test run estimate");
     expect(within(estimate).getByText("16")).toBeInTheDocument();
-    expect(within(estimate).getByText("414,720 bars total")).toBeInTheDocument();
+    expect(within(estimate).getByText(/4\d{2},\d{3} bars total/u)).toBeInTheDocument();
+    expect(within(estimate).queryByText("414,720 bars total")).not.toBeInTheDocument();
     expect(within(estimate).getByText(/Large run/u)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Run strategy test/u }));
@@ -200,6 +201,40 @@ describe("StrategyTestingPanel", () => {
     expect(mocks.runStrategyTest).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Large run confirmation")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Confirm large run/u })).toBeInTheDocument();
+  });
+
+  it("does not enable remote estimate while checkbox selections change", async () => {
+    const user = userEvent.setup();
+    renderPanel({ availablePairs: marketPairs(25) });
+
+    for (const pair of marketPairs(20)) {
+      await user.click(screen.getByRole("checkbox", { name: new RegExp(pair.symbol, "u") }));
+    }
+
+    expect(mocks.estimateQueries.length).toBeGreaterThan(0);
+    expect(mocks.estimateQueries.every((query) => query.options?.enabled === false)).toBe(true);
+  });
+
+  it("runs the remote estimate only after Check data is clicked", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(mocks.estimateQueries[mocks.estimateQueries.length - 1]?.options?.enabled).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Check data" }));
+
+    await waitFor(() => expect(mocks.estimateQueries[mocks.estimateQueries.length - 1]?.options?.enabled).toBe(true));
+  });
+
+  it("keeps scenario count local when a remote estimate is stale", () => {
+    mocks.estimate = strategyTestEstimate({ scenario_count: 999 });
+
+    renderPanel();
+
+    expect(screen.getByText("3 scenarios")).toBeInTheDocument();
+    const estimate = screen.getByLabelText("Strategy test run estimate");
+    expect(within(estimate).getByText("3")).toBeInTheDocument();
+    expect(within(estimate).queryByText("999")).not.toBeInTheDocument();
   });
 
   it("renders duplicate market data estimate warnings as non-critical warnings without blocking the run", async () => {
@@ -246,8 +281,11 @@ describe("StrategyTestingPanel", () => {
 
     renderPanel();
 
+    await user.click(screen.getByRole("button", { name: "Check data" }));
+
     const estimate = screen.getByLabelText("Strategy test run estimate");
-    const warningRow = within(estimate).getByText(warningMessage).closest("div");
+    const warningText = await within(estimate).findByText(warningMessage);
+    const warningRow = warningText.closest("div");
     if (!warningRow) throw new Error("Duplicate warning row was not rendered.");
     expect(warningRow).toHaveClass("strategy-test-estimate-warning-yellow");
     expect(warningRow).not.toHaveClass("strategy-test-large-confirmation");
@@ -259,7 +297,8 @@ describe("StrategyTestingPanel", () => {
     expect(screen.queryByLabelText("Large run confirmation")).not.toBeInTheDocument();
   });
 
-  it("renders missing market data estimate warnings as severe", () => {
+  it("renders missing market data estimate warnings as severe", async () => {
+    const user = userEvent.setup();
     const warningMessage = "bybit:ETHUSDT:1m is missing market data.";
     mocks.estimate = strategyTestEstimate({
       scenario_count: 1,
@@ -294,8 +333,11 @@ describe("StrategyTestingPanel", () => {
       availablePairs: [marketPair("ETHUSDT", "ETH")]
     });
 
+    await user.click(screen.getByRole("button", { name: "Check data" }));
+
     const estimate = screen.getByLabelText("Strategy test run estimate");
-    const warningRow = within(estimate).getByText(warningMessage).closest("div");
+    const warningText = await within(estimate).findByText(warningMessage);
+    const warningRow = warningText.closest("div");
     if (!warningRow) throw new Error("Missing-data warning row was not rendered.");
     expect(warningRow).toHaveClass("strategy-test-estimate-warning-red");
   });
@@ -765,6 +807,85 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("checkbox", { name: /ETHUSDT/u })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /SOLUSDT/u })).not.toBeChecked();
     expect(screen.queryByRole("checkbox", { name: /DELISTEDUSDT/u })).not.toBeInTheDocument();
+  });
+
+  it("keeps persisted selection intact while catalogs are not loaded", async () => {
+    const persistedForm = {
+      selectedPairIds: ["bybit:BTCUSDT", "bybit:ETHUSDT"],
+      selectedStrategyCodes: ["trend_pullback_continuation"],
+      selectedTimeframes: ["1m"]
+    };
+    window.localStorage.setItem(STRATEGY_TEST_FORM_STORAGE_KEY, JSON.stringify(persistedForm));
+
+    renderPanel({
+      availablePairs: [],
+      pairsLoadedSuccessfully: false,
+      pairsLoading: true,
+      strategiesLoadedSuccessfully: false,
+      strategiesLoading: true,
+      strategyConfigs: []
+    });
+
+    expect(screen.getAllByText("Loading strategy and pair catalogs.")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
+    await waitFor(() => expect(storedStrategyTestForm()).toEqual(persistedForm));
+  });
+
+  it("hydrates persisted selection after catalogs load successfully", async () => {
+    window.localStorage.setItem(STRATEGY_TEST_FORM_STORAGE_KEY, JSON.stringify({
+      selectedPairIds: ["bybit:ETHUSDT"],
+      selectedStrategyCodes: ["trend_pullback_continuation"],
+      selectedTimeframes: ["5m"]
+    }));
+    const availablePairs = [marketPair("BTCUSDT", "BTC"), marketPair("ETHUSDT", "ETH")];
+    const strategyConfigs = [strategyConfig({ timeframes: ["1m", "5m"] })];
+    const view = renderPanel({
+      availablePairs: [],
+      pairsLoadedSuccessfully: false,
+      pairsLoading: true,
+      strategiesLoadedSuccessfully: false,
+      strategiesLoading: true,
+      strategyConfigs: []
+    });
+
+    expect(screen.queryByRole("checkbox", { name: /ETHUSDT/u })).not.toBeInTheDocument();
+
+    view.rerender(
+      <StrategyTestingPanel
+        availablePairs={availablePairs}
+        pairsLoadedSuccessfully
+        strategyConfigs={strategyConfigs}
+        strategiesLoadedSuccessfully
+      />
+    );
+
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /ETHUSDT/u })).toBeChecked());
+    expect(screen.getByRole("checkbox", { name: "5m" })).toBeChecked();
+  });
+
+  it("offers catalog retry actions when catalogs fail before first success", async () => {
+    const user = userEvent.setup();
+    const onRetryPairs = vi.fn();
+    const onRetryStrategies = vi.fn();
+    renderPanel({
+      availablePairs: [],
+      pairsError: new Error("pairs unavailable"),
+      pairsLoadedSuccessfully: false,
+      strategiesError: new Error("strategies unavailable"),
+      strategiesLoadedSuccessfully: false,
+      strategyConfigs: [],
+      onRetryPairs,
+      onRetryStrategies
+    });
+
+    expect(screen.getByText(/Strategies: strategies unavailable/u)).toBeInTheDocument();
+    expect(screen.getByText(/Pairs: pairs unavailable/u)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Retry strategies/u }));
+    await user.click(screen.getByRole("button", { name: /Retry pairs/u }));
+
+    expect(onRetryStrategies).toHaveBeenCalledTimes(1);
+    expect(onRetryPairs).toHaveBeenCalledTimes(1);
   });
 
   it("renders and recovers persistence when localStorage contains broken JSON", async () => {
@@ -1237,12 +1358,41 @@ describe("StrategyTestingPanel", () => {
 
 function renderPanel({
   availablePairs = [marketPair()],
-  strategyConfigs = [strategyConfig()]
+  pairsError = null,
+  pairsLoadedSuccessfully = true,
+  pairsLoading = false,
+  strategiesError = null,
+  strategiesLoadedSuccessfully = true,
+  strategiesLoading = false,
+  strategyConfigs = [strategyConfig()],
+  onRetryPairs,
+  onRetryStrategies
 }: {
   availablePairs?: MarketPairOption[];
+  pairsError?: unknown;
+  pairsLoadedSuccessfully?: boolean;
+  pairsLoading?: boolean;
+  strategiesError?: unknown;
+  strategiesLoadedSuccessfully?: boolean;
+  strategiesLoading?: boolean;
   strategyConfigs?: StrategyConfig[];
+  onRetryPairs?: () => void;
+  onRetryStrategies?: () => void;
 } = {}) {
-  return render(<StrategyTestingPanel availablePairs={availablePairs} strategyConfigs={strategyConfigs} />);
+  return render(
+    <StrategyTestingPanel
+      availablePairs={availablePairs}
+      pairsError={pairsError}
+      pairsLoadedSuccessfully={pairsLoadedSuccessfully}
+      pairsLoading={pairsLoading}
+      strategiesError={strategiesError}
+      strategiesLoadedSuccessfully={strategiesLoadedSuccessfully}
+      strategiesLoading={strategiesLoading}
+      strategyConfigs={strategyConfigs}
+      onRetryPairs={onRetryPairs}
+      onRetryStrategies={onRetryStrategies}
+    />
+  );
 }
 
 function storedStrategyTestForm(): Record<string, unknown> {

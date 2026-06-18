@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable, Protocol
@@ -11,6 +12,8 @@ from app.exchanges.bybit import fetch_bybit_klines_range
 from app.schemas.candle import OHLCVCandle
 from app.services.candle_service import TIMEFRAME_MS
 from app.services.market_persistence import OHLCV_TABLES_BY_TIMEFRAME, market_data_persistence_service
+
+logger = logging.getLogger(__name__)
 
 
 class HistoricalCandleProvider(Protocol):
@@ -354,9 +357,44 @@ class BackfillingHistoricalCandleProvider:
             start_at=start_at,
             end_at=end_at,
         )
+        coverage = actual_count / expected_count
         if actual_count >= expected_count * self._coverage_ratio:
+            logger.info(
+                "Historical candle cache hit exchange=%s symbol=%s timeframe=%s candles=%s expected=%s coverage=%.4f",
+                exchange,
+                symbol,
+                timeframe,
+                actual_count,
+                expected_count,
+                coverage,
+                extra={
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "candles_count": actual_count,
+                    "expected_candles": expected_count,
+                    "coverage": coverage,
+                },
+            )
             return
 
+        logger.info(
+            "Historical candle cache miss exchange=%s symbol=%s timeframe=%s candles=%s expected=%s coverage=%.4f",
+            exchange,
+            symbol,
+            timeframe,
+            actual_count,
+            expected_count,
+            coverage,
+            extra={
+                "exchange": exchange,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "candles_count": actual_count,
+                "expected_candles": expected_count,
+                "coverage": coverage,
+            },
+        )
         try:
             candles = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -383,7 +421,38 @@ class BackfillingHistoricalCandleProvider:
                 end_at=end_at,
             )
             if closed_candles:
-                await asyncio.to_thread(self._persistence_service.persist_candles, closed_candles)
+                rows_written = await asyncio.to_thread(self._persistence_service.persist_candles, closed_candles)
+                logger.info(
+                    "Historical candle backfill persisted exchange=%s symbol=%s timeframe=%s fetched=%s closed=%s rows_written=%s",
+                    exchange,
+                    symbol,
+                    timeframe,
+                    len(candles),
+                    len(closed_candles),
+                    rows_written,
+                    extra={
+                        "exchange": exchange,
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "fetched_candles": len(candles),
+                        "closed_candles": len(closed_candles),
+                        "rows_written": rows_written,
+                    },
+                )
+            else:
+                logger.warning(
+                    "Historical candle backfill returned no closed candles exchange=%s symbol=%s timeframe=%s fetched=%s",
+                    exchange,
+                    symbol,
+                    timeframe,
+                    len(candles),
+                    extra={
+                        "exchange": exchange,
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "fetched_candles": len(candles),
+                    },
+                )
         except (TimeoutError, asyncio.TimeoutError) as exc:
             timeout = float(getattr(self._settings, "strategy_test_historical_backfill_timeout_seconds", 30.0))
             raise RuntimeError(

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from typing import AsyncIterator
 
@@ -13,6 +13,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from app.api.v1.router import api_router
 from app.core.clickhouse_client import close_clickhouse_client
 from app.core.database import dispose_database_engine
+from app.core.event_loop_monitor import monitor_event_loop_lag
 from app.core.health import get_storage_health, get_strategy_test_worker_lease_state
 from app.core.migrations import warn_if_migrations_outdated
 from app.core.redis_client import close_redis_client
@@ -71,6 +72,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client=BybitRealPositionSyncClient(),
         interval_seconds=settings.real_position_sync_interval_seconds,
     )
+    event_loop_lag_task = (
+        asyncio.create_task(monitor_event_loop_lag(), name="event-loop-lag-monitor")
+        if settings.event_loop_lag_monitor_enabled
+        else None
+    )
     scanner_autostart_enabled = _scanner_enabled()
     instrument_rule_sync_enabled = _instrument_rule_sync_enabled()
     derivative_snapshot_sync_enabled = _derivative_snapshot_sync_enabled()
@@ -84,6 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.real_position_sync_worker = real_position_sync_worker
     app.state.forward_strategy_test_runtime = forward_strategy_test_runtime
     app.state.forward_strategy_test_worker = None
+    app.state.event_loop_lag_monitor_task = event_loop_lag_task
     app.state.scanner_autostart_enabled = scanner_autostart_enabled
     app.state.exchange_instrument_rule_sync_enabled = instrument_rule_sync_enabled
     app.state.derivative_snapshot_sync_enabled = derivative_snapshot_sync_enabled
@@ -131,6 +138,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await derivative_snapshot_runner.stop()
         await instrument_rule_runner.stop()
         await realtime_gateway.stop_broker_bridge()
+        if event_loop_lag_task is not None:
+            event_loop_lag_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await event_loop_lag_task
         close_clickhouse_client()
         close_redis_client()
         dispose_database_engine()

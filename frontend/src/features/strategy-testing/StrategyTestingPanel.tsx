@@ -37,7 +37,15 @@ import type {
 
 interface StrategyTestingPanelProps {
   availablePairs: MarketPairOption[];
+  pairsError?: unknown;
+  pairsLoadedSuccessfully?: boolean;
+  pairsLoading?: boolean;
   strategyConfigs: StrategyConfig[];
+  strategiesError?: unknown;
+  strategiesLoadedSuccessfully?: boolean;
+  strategiesLoading?: boolean;
+  onRetryPairs?: () => void;
+  onRetryStrategies?: () => void;
 }
 
 const STRATEGY_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
@@ -76,12 +84,34 @@ const ACTIVE_RUN_STATUSES = new Set<StrategyTestRunStatus>(["queued", "running",
 const STRATEGY_TEST_RUN_POLL_MS = 2_500;
 const LARGE_MATRIX_WARNING_SCENARIO_COUNT = 100;
 const MATRIX_SELECTION_ERROR = "Select at least one strategy, pair, and timeframe.";
+const DEFAULT_WARMUP_BARS = 200;
+const ESTIMATE_MEDIUM_BARS = 50_000;
+const ESTIMATE_LARGE_BARS = 250_000;
+const ESTIMATE_MEDIUM_SCENARIOS = 8;
+const ESTIMATE_LARGE_SCENARIOS = 24;
+const TIMEFRAME_MS: Record<string, number> = {
+  "1m": 60_000,
+  "5m": 5 * 60_000,
+  "15m": 15 * 60_000,
+  "1h": 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+  "1d": 24 * 60 * 60_000
+};
 
 export function StrategyTestingPanel({
   availablePairs,
-  strategyConfigs
+  pairsError = null,
+  pairsLoadedSuccessfully = true,
+  pairsLoading = false,
+  strategyConfigs,
+  strategiesError = null,
+  strategiesLoadedSuccessfully = true,
+  strategiesLoading = false,
+  onRetryPairs,
+  onRetryStrategies
 }: StrategyTestingPanelProps) {
   const dateDefaults = useMemo(() => defaultDateRange(), []);
+  const catalogsLoadedSuccessfully = pairsLoadedSuccessfully && strategiesLoadedSuccessfully;
   const strategyOptions = useMemo(() => enabledStrategyOptions(strategyConfigs), [strategyConfigs]);
   const pairOptions = useMemo(() => availablePairs, [availablePairs]);
   const timeframeOptions = useMemo(() => availableTimeframes(strategyOptions), [strategyOptions]);
@@ -114,6 +144,7 @@ export function StrategyTestingPanel({
   });
   const [formStorageHydrated, setFormStorageHydrated] = useState(false);
   const [storageResetVersion, setStorageResetVersion] = useState(0);
+  const [estimateCheckKey, setEstimateCheckKey] = useState<string | null>(null);
   const skipNextPersistRef = useRef(false);
   const defaultStrategySelection = useMemo(() => defaultStrategyCodes(strategyOptions), [strategyOptions]);
   const defaultPairSelection = useMemo(() => defaultPairIds(pairOptions), [pairOptions]);
@@ -124,12 +155,16 @@ export function StrategyTestingPanel({
   const strategyOptionCodes = useMemo(() => strategyOptions.map((strategy) => strategy.strategy_code), [strategyOptions]);
   const pairOptionIds = useMemo(() => pairOptions.map(pairKey), [pairOptions]);
   const storableStrategyCodes = useMemo(
-    () => filterKnownValues(effectiveStrategyCodes, strategyOptionCodes),
-    [effectiveStrategyCodes, strategyOptionCodes]
+    () => strategiesLoadedSuccessfully
+      ? filterKnownValues(effectiveStrategyCodes, strategyOptionCodes)
+      : dedupeValues(effectiveStrategyCodes),
+    [effectiveStrategyCodes, strategiesLoadedSuccessfully, strategyOptionCodes]
   );
   const storablePairIds = useMemo(
-    () => filterKnownValues(effectivePairIds, pairOptionIds),
-    [effectivePairIds, pairOptionIds]
+    () => pairsLoadedSuccessfully
+      ? filterKnownValues(effectivePairIds, pairOptionIds)
+      : dedupeValues(effectivePairIds),
+    [effectivePairIds, pairOptionIds, pairsLoadedSuccessfully]
   );
   const visiblePairOptions = useMemo(() => filterPairOptions(pairOptions, pairFilter), [pairFilter, pairOptions]);
   const visiblePairIds = useMemo(() => visiblePairOptions.map(pairKey), [visiblePairOptions]);
@@ -152,6 +187,7 @@ export function StrategyTestingPanel({
 
   /* eslint-disable react-hooks/set-state-in-effect -- Browser-only localStorage hydration has to update form state after mount. */
   useEffect(() => {
+    if (!catalogsLoadedSuccessfully) return;
     skipNextPersistRef.current = true;
     const storedForm = readStrategyTestForm(formStorageKey);
     if (!storedForm) {
@@ -201,6 +237,7 @@ export function StrategyTestingPanel({
   }, [
     dateDefaults.endAt,
     dateDefaults.startAt,
+    catalogsLoadedSuccessfully,
     defaultPairSelection,
     defaultStrategySelection,
     defaultTimeframeSelection,
@@ -213,6 +250,7 @@ export function StrategyTestingPanel({
 
   useEffect(() => {
     if (!formStorageHydrated) return;
+    if (!catalogsLoadedSuccessfully) return;
     if (skipNextPersistRef.current) {
       skipNextPersistRef.current = false;
       return;
@@ -236,6 +274,7 @@ export function StrategyTestingPanel({
   }, [
     endAt,
     feeRate,
+    catalogsLoadedSuccessfully,
     formStorageHydrated,
     formStorageKey,
     historicalPendingEntriesEnabled,
@@ -291,12 +330,35 @@ export function StrategyTestingPanel({
     testType,
     validTimeframes
   ]);
+  const catalogSelectionError = catalogsLoadedSuccessfully
+    ? null
+    : pairsError || strategiesError
+      ? "Catalog refresh failed. Retry before running a strategy test."
+      : "Loading strategy and pair catalogs.";
+  const estimateRequestKey = useMemo(() => estimateRequest ? strategyTestRequestKey(estimateRequest) : null, [estimateRequest]);
+  const estimateCheckIsCurrent = Boolean(estimateRequestKey && estimateCheckKey === estimateRequestKey);
   const estimateQuery = useStrategyTestEstimate(estimateRequest, {
-    enabled: Boolean(estimateRequest && testType === "historical_backtest")
+    enabled: Boolean(estimateRequest && testType === "historical_backtest" && estimateCheckIsCurrent)
   });
-  const runEstimate = testType === "historical_backtest" && estimateRequest ? estimateQuery.data ?? null : null;
-  const scenarioEstimate = runEstimate?.scenario_count ?? localScenarioCount;
-  const requiresLargeRunConfirmation = runEstimate?.size_level === "large";
+  const runEstimate = testType === "historical_backtest" && estimateCheckIsCurrent ? estimateQuery.data ?? null : null;
+  const scenarioEstimate = localScenarioCount;
+  const localTotalBars = useMemo(
+    () => estimateLocalTotalBars({
+      endAt,
+      pairCount: selectedPairCount,
+      startAt,
+      strategyCount: selectedStrategyCount,
+      timeframes: validTimeframes,
+      warmupBars: DEFAULT_WARMUP_BARS
+    }),
+    [endAt, selectedPairCount, selectedStrategyCount, startAt, validTimeframes]
+  );
+  const localAverageBarsPerScenario = localScenarioCount > 0 && localTotalBars != null
+    ? Math.round(localTotalBars / localScenarioCount)
+    : null;
+  const localEstimateLevel = estimateLevel(localScenarioCount, localTotalBars ?? 0);
+  const displayedEstimateLevel = runEstimate?.size_level ?? localEstimateLevel;
+  const requiresLargeRunConfirmation = displayedEstimateLevel === "large";
   const runConfirmationKey = [
     effectiveStrategyCodes.join(","),
     effectivePairIds.join(","),
@@ -342,6 +404,7 @@ export function StrategyTestingPanel({
   const canRun = localScenarioCount > 0 &&
     !dateError &&
     !numberError &&
+    !catalogSelectionError &&
     !runMutation.isPending &&
     !cancelRunMutation.isPending &&
     !activeRunBlocksRun;
@@ -359,6 +422,7 @@ export function StrategyTestingPanel({
       setFormError(
         dateError ??
         numberError ??
+        catalogSelectionError ??
         activeRunState?.disabled_reason ??
         (activeRunBlocksRun ? "A strategy test run is already in progress." : MATRIX_SELECTION_ERROR)
       );
@@ -419,6 +483,11 @@ export function StrategyTestingPanel({
     setMode("research_virtual");
     setTestType("historical_backtest");
     setHistoricalPendingEntriesEnabled(true);
+  }
+
+  function handleCheckData() {
+    if (!estimateRequestKey) return;
+    setEstimateCheckKey(estimateRequestKey);
   }
 
   function handleResetForm() {
@@ -483,9 +552,24 @@ export function StrategyTestingPanel({
         <Badge tone="purple">{`${runs.length} recent runs`}</Badge>
         {runsQuery.isLoading ? <Badge tone="yellow">Loading runs</Badge> : null}
         {activeRunQuery.isLoading ? <Badge tone="yellow">Loading active run</Badge> : null}
+        {strategiesLoading ? <Badge tone="yellow">Loading strategies</Badge> : null}
+        {pairsLoading ? <Badge tone="yellow">Loading pairs</Badge> : null}
+        {strategiesError ? <Badge tone="yellow">Strategies retrying</Badge> : null}
+        {pairsError ? <Badge tone="yellow">Pairs retrying</Badge> : null}
         {showRunInProgress ? <Badge tone="yellow">Run in progress</Badge> : null}
         {activeRunIsStale ? <Badge tone="yellow">Stale active run</Badge> : null}
       </div>
+
+      {catalogSelectionError ? (
+        <CatalogStatusNotice
+          pairsError={pairsError}
+          pairsLoading={pairsLoading}
+          strategiesError={strategiesError}
+          strategiesLoading={strategiesLoading}
+          onRetryPairs={onRetryPairs}
+          onRetryStrategies={onRetryStrategies}
+        />
+      ) : null}
 
       <FunnelSummaryStrip run={funnelSummaryRun} />
 
@@ -755,12 +839,18 @@ export function StrategyTestingPanel({
       <RunEstimatePanel
         confirmed={largeRunConfirmed}
         estimate={runEstimate}
-        loading={testType === "historical_backtest" && (estimateQuery.isLoading || estimateQuery.isFetching)}
+        level={displayedEstimateLevel}
+        loading={testType === "historical_backtest" && estimateCheckIsCurrent && (estimateQuery.isLoading || estimateQuery.isFetching)}
+        onCheckData={handleCheckData}
+        remoteCheckDisabled={!estimateRequest || testType !== "historical_backtest"}
+        remoteCheckPending={testType === "historical_backtest" && estimateCheckIsCurrent && estimateQuery.isFetching}
+        averageBarsPerScenario={localAverageBarsPerScenario}
         scenarioCount={scenarioEstimate}
+        totalBars={localTotalBars}
       />
 
-      {dateError || numberError || matrixSelectionError || formError || apiError ? (
-        <p className="form-error">{formError ?? dateError ?? numberError ?? matrixSelectionError ?? apiError}</p>
+      {dateError || numberError || catalogSelectionError || matrixSelectionError || formError || apiError ? (
+        <p className="form-error">{formError ?? dateError ?? numberError ?? catalogSelectionError ?? matrixSelectionError ?? apiError}</p>
       ) : null}
 
       <div className="strategy-test-actions">
@@ -826,17 +916,28 @@ function SelectionGroup({
 }
 
 function RunEstimatePanel({
+  averageBarsPerScenario,
   confirmed,
   estimate,
+  level,
   loading,
+  onCheckData,
+  remoteCheckDisabled,
+  remoteCheckPending,
+  totalBars,
   scenarioCount
 }: {
+  averageBarsPerScenario: number | null;
   confirmed: boolean;
   estimate: StrategyTestEstimateResponse | null;
+  level: RunEstimateLevel;
   loading: boolean;
+  onCheckData: () => void;
+  remoteCheckDisabled: boolean;
+  remoteCheckPending: boolean;
+  totalBars: number | null;
   scenarioCount: number;
 }) {
-  const level = estimate?.size_level ?? "small";
   const tone = level === "large" ? "red" : level === "medium" ? "yellow" : "green";
   const scenarios = estimate?.scenarios ?? [];
   const warnings = estimate?.warnings ?? [];
@@ -850,12 +951,23 @@ function RunEstimatePanel({
           <strong>Run estimate</strong>
           <span>{loading ? "Loading market-data estimate..." : estimateWarningText(level, warnings.length)}</span>
         </div>
-        <Badge tone={tone}>{runLevelLabel(level)}</Badge>
+        <div className="strategy-test-estimate-actions">
+          <Badge tone={tone}>{runLevelLabel(level)}</Badge>
+          <button
+            className="secondary-action"
+            disabled={remoteCheckDisabled || remoteCheckPending}
+            onClick={onCheckData}
+            type="button"
+          >
+            <RefreshCw size={16} />
+            {remoteCheckPending ? "Checking..." : "Check data"}
+          </button>
+        </div>
       </div>
       <div className="strategy-test-estimate-grid">
-        {estimateItem("Scenario count", estimate?.scenario_count ?? scenarioCount)}
-        {estimateItem("Bars / scenario", formatBarsPerScenario(estimate?.average_bars_per_scenario ?? null))}
-        {estimateItem("Total bars", formatTotalBars(estimate?.total_bars ?? null))}
+        {estimateItem("Scenario count", scenarioCount)}
+        {estimateItem("Bars / scenario", formatBarsPerScenario(estimate?.average_bars_per_scenario ?? averageBarsPerScenario))}
+        {estimateItem("Total bars", formatTotalBars(estimate?.total_bars ?? totalBars))}
         {estimateItem("Scenario bars", formatScenarioBars(scenarios))}
       </div>
       {warnings.length ? (
@@ -954,6 +1066,56 @@ type StrategyTestEstimateWarning = NonNullable<StrategyTestEstimateResponse["war
 type EstimateWarningTone = "red" | "yellow";
 type RunEstimateLevel = "small" | "medium" | "large";
 
+function strategyTestRequestKey(request: StrategyTestRunRequest): string {
+  return JSON.stringify(request);
+}
+
+function estimateLocalTotalBars({
+  endAt,
+  pairCount,
+  startAt,
+  strategyCount,
+  timeframes,
+  warmupBars
+}: {
+  endAt: string;
+  pairCount: number;
+  startAt: string;
+  strategyCount: number;
+  timeframes: string[];
+  warmupBars: number;
+}): number | null {
+  const startMs = Date.parse(startAt);
+  const endMs = Date.parse(endAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+  let barsPerPair = 0;
+  for (const timeframe of timeframes) {
+    const closedCandles = theoreticalClosedCandleCount(startMs, endMs, timeframe);
+    if (closedCandles == null) return null;
+    barsPerPair += Math.max(0, closedCandles - warmupBars);
+  }
+  return strategyCount * pairCount * barsPerPair;
+}
+
+function theoreticalClosedCandleCount(startMs: number, endMs: number, timeframe: string): number | null {
+  const timeframeMs = TIMEFRAME_MS[timeframe];
+  if (!timeframeMs) return null;
+  const firstOpenMs = ceilToTimeframeMs(startMs, timeframeMs);
+  const lastOpenMs = Math.floor((endMs - timeframeMs + 1) / timeframeMs) * timeframeMs;
+  if (lastOpenMs < firstOpenMs) return 0;
+  return Math.floor((lastOpenMs - firstOpenMs) / timeframeMs) + 1;
+}
+
+function ceilToTimeframeMs(valueMs: number, timeframeMs: number): number {
+  return Math.floor((valueMs + timeframeMs - 1) / timeframeMs) * timeframeMs;
+}
+
+function estimateLevel(scenarioCount: number, totalBars: number): RunEstimateLevel {
+  if (totalBars >= ESTIMATE_LARGE_BARS || scenarioCount >= ESTIMATE_LARGE_SCENARIOS) return "large";
+  if (totalBars >= ESTIMATE_MEDIUM_BARS || scenarioCount >= ESTIMATE_MEDIUM_SCENARIOS) return "medium";
+  return "small";
+}
+
 function firstConfiguredUserId(strategyConfigs: StrategyConfig[]): string | null {
   const config = strategyConfigs.find((strategy) => typeof strategy.user_id === "string" && strategy.user_id.trim());
   return config?.user_id.trim() ?? null;
@@ -1009,6 +1171,10 @@ function filterKnownValues(values: string[], availableValues: string[]): string[
     seen.add(value);
     return true;
   });
+}
+
+function dedupeValues(values: string[]): string[] {
+  return Array.from(new Set(values));
 }
 
 function filterPairOptions(pairOptions: MarketPairOption[], filterText: string): MarketPairOption[] {
@@ -1167,6 +1333,49 @@ function toStrategyTestPair(pair: MarketPairOption): StrategyTestPair {
 
 function errorMessage(error: unknown): string | null {
   return error instanceof Error ? error.message : null;
+}
+
+function CatalogStatusNotice({
+  pairsError,
+  pairsLoading,
+  strategiesError,
+  strategiesLoading,
+  onRetryPairs,
+  onRetryStrategies
+}: {
+  pairsError: unknown;
+  pairsLoading: boolean;
+  strategiesError: unknown;
+  strategiesLoading: boolean;
+  onRetryPairs?: () => void;
+  onRetryStrategies?: () => void;
+}) {
+  const pairErrorMessage = errorMessage(pairsError);
+  const strategyErrorMessage = errorMessage(strategiesError);
+  const message = pairErrorMessage || strategyErrorMessage
+    ? [strategyErrorMessage ? `Strategies: ${strategyErrorMessage}` : null, pairErrorMessage ? `Pairs: ${pairErrorMessage}` : null]
+        .filter(Boolean)
+        .join(" ")
+    : "Loading strategy and pair catalogs.";
+  return (
+    <div className="strategy-test-catalog-status" role="status">
+      <span>{message}</span>
+      <div className="strategy-test-catalog-actions">
+        {onRetryStrategies && strategyErrorMessage ? (
+          <button className="secondary-action compact-action" disabled={strategiesLoading} onClick={onRetryStrategies} type="button">
+            <RefreshCw size={15} />
+            Retry strategies
+          </button>
+        ) : null}
+        {onRetryPairs && pairErrorMessage ? (
+          <button className="secondary-action compact-action" disabled={pairsLoading} onClick={onRetryPairs} type="button">
+            <RefreshCw size={15} />
+            Retry pairs
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function ActiveRunNotice({

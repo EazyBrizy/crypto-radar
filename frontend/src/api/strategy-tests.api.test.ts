@@ -63,6 +63,26 @@ describe("strategyTestsApi identity contract", () => {
     expect(String(fetchSpy.mock.calls[0][0])).toContain("/api/v1/strategy-tests/runs/active?user_id=usr_debug");
     expect(currentUserId).not.toHaveBeenCalled();
   });
+
+  it("links estimate AbortSignal to the fetch request", async () => {
+    const controller = new AbortController();
+    let fetchSignal: AbortSignal | undefined;
+    let resolveFetch: ((response: Response) => void) | undefined;
+    const fetchSpy = vi.fn<typeof fetch>(async (_input, init) => {
+      fetchSignal = init?.signal ?? undefined;
+      return await new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const estimatePromise = strategyTestsApi.estimate(strategyTestRunRequest(), { signal: controller.signal });
+    controller.abort();
+
+    expect(fetchSignal?.aborted).toBe(true);
+    resolveFetch?.(jsonResponse(strategyTestEstimate()));
+    await expect(estimatePromise).resolves.toEqual(strategyTestEstimate());
+  });
 });
 
 function jsonResponse(payload: unknown): Response {
@@ -113,5 +133,16 @@ function activeRunState() {
     disabled_reason_code: null,
     is_stale: false,
     stale_threshold_seconds: 900
+  };
+}
+
+function strategyTestEstimate() {
+  return {
+    average_bars_per_scenario: 0,
+    scenario_count: 1,
+    scenarios: [],
+    size_level: "small",
+    total_bars: 0,
+    warnings: []
   };
 }

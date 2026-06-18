@@ -148,6 +148,16 @@ class StrategyTestingApiContractTest(unittest.TestCase):
             can_publish_calibration=False,
             calibration_disabled_reason_code="report_not_complete",
             calibration_disabled_reason="Strategy test report is still partial.",
+            scenario_summaries=[
+                {
+                    "strategy": "s1",
+                    "exchange": "bybit",
+                    "symbol": "BTCUSDT",
+                    "timeframe": "15m",
+                    "status": "completed",
+                    "signals_count": 0,
+                }
+            ],
         )
         payload = report.model_dump(mode="json")
         schema_properties = StrategyTestReport.model_json_schema()["properties"]
@@ -155,9 +165,11 @@ class StrategyTestingApiContractTest(unittest.TestCase):
         self.assertFalse(payload["can_publish_calibration"])
         self.assertEqual(payload["calibration_disabled_reason_code"], "report_not_complete")
         self.assertEqual(payload["calibration_disabled_reason"], "Strategy test report is still partial.")
+        self.assertEqual(payload["scenario_summaries"][0]["status"], "completed")
         self.assertIn("can_publish_calibration", schema_properties)
         self.assertIn("calibration_disabled_reason_code", schema_properties)
         self.assertIn("calibration_disabled_reason", schema_properties)
+        self.assertIn("scenario_summaries", schema_properties)
 
     def test_end_at_must_be_after_start_at(self) -> None:
         request = _request()

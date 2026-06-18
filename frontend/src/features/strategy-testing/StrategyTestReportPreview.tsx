@@ -21,6 +21,7 @@ export function StrategyTestReportPreview({
   run
 }: StrategyTestReportPreviewProps) {
   const metrics = report?.summary_metrics ?? summaryMetricsFromRun(run);
+  const summary = { ...summaryFromRun(run), ...(report?.summary ?? {}) };
   const partial = Boolean(report?.is_partial || report?.data_completeness === "partial" || (run && ["queued", "running", "stopping"].includes(run.status)));
   return (
     <section className="strategy-test-report-panel" aria-live="polite">
@@ -42,8 +43,15 @@ export function StrategyTestReportPreview({
       {!loading && !error ? (
         <>
           <div className="strategy-test-report-strip">
+            <Badge tone="purple">{scenarioCompleted(summary)} / {scenarioTotal(summary, run)} scenarios</Badge>
+            <Badge tone={metricNumber(summary.failed_scenarios ?? summary.scenarios_failed) ? "red" : "green"}>
+              {metricNumber(summary.failed_scenarios ?? summary.scenarios_failed)} failed
+            </Badge>
+            <Badge tone={metricNumber(summary.errors_count) ? "red" : "green"}>{metricNumber(summary.errors_count)} errors</Badge>
             <Badge tone="blue">{report?.trades_count ?? metricNumber(run?.summary.trades_count)} trades</Badge>
-            <Badge tone={report?.warnings.length ? "yellow" : "green"}>{report?.warnings.length ?? 0} warnings</Badge>
+            <Badge tone={metricNumber(summary.warnings_count) || report?.warnings.length ? "yellow" : "green"}>
+              {metricNumber(summary.warnings_count) || report?.warnings.length || 0} warnings
+            </Badge>
             <Badge tone={report?.rejections.length ? "red" : "neutral"}>{report?.rejections.length ?? 0} rejections</Badge>
             {partial ? <Badge tone="yellow">Partial report</Badge> : null}
           </div>
@@ -75,6 +83,15 @@ function summaryMetricsFromRun(run: StrategyTestRunResponse | null): StrategyTes
     .map(([name, value]) => ({ name, value }));
 }
 
+function summaryFromRun(run: StrategyTestRunResponse | null): Record<string, unknown> {
+  if (!run) return {};
+  const partial = run.runtime_state.partial_summary;
+  return {
+    ...(partial && typeof partial === "object" && !Array.isArray(partial) ? partial : {}),
+    ...run.summary
+  };
+}
+
 function isMetricValue(value: unknown): value is StrategyTestMetricValue {
   return value == null || typeof value === "number" || typeof value === "string" || typeof value === "boolean";
 }
@@ -83,6 +100,14 @@ function scenarioLabel(run: StrategyTestRunResponse): string {
   const count = run.requested_matrix.scenario_count;
   if (typeof count === "number") return `${count} scenarios`;
   return "matrix run";
+}
+
+function scenarioTotal(summary: Record<string, unknown>, run: StrategyTestRunResponse | null): number {
+  return metricNumber(summary.scenarios_total ?? summary.scenario_count ?? run?.requested_matrix.scenario_count);
+}
+
+function scenarioCompleted(summary: Record<string, unknown>): number {
+  return metricNumber(summary.scenarios_completed ?? summary.completed_scenarios);
 }
 
 function metricNumber(value: unknown): number {

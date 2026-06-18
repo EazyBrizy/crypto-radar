@@ -508,6 +508,7 @@ class StrategyTestReport(BaseModel):
     assumptions: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] = Field(default_factory=dict)
     sections: list[StrategyTestReportSection] = Field(default_factory=list)
+    scenario_summaries: list[dict[str, Any]] = Field(default_factory=list)
     metrics: list[dict[str, Any]] = Field(default_factory=list)
     candidate_adjustments: list[StrategyTestCandidateAdjustment] = Field(default_factory=list)
     generated_at: datetime
@@ -541,6 +542,7 @@ class StrategyTestReportResponse(BaseModel):
     assumptions: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] = Field(default_factory=dict)
     sections: list[StrategyTestReportSection] = Field(default_factory=list)
+    scenario_summaries: list[dict[str, Any]] = Field(default_factory=list)
     metrics: list[dict[str, Any]] = Field(default_factory=list)
     candidate_adjustments: list[StrategyTestCandidateAdjustment] = Field(default_factory=list)
     generated_at: datetime | None = None

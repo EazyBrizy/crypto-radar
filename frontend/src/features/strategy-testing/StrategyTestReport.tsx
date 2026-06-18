@@ -1,7 +1,7 @@
 "use client";
 
 import { LoaderCircle, ShieldCheck, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 
 import { Badge } from "@/components/Badge";
 import { StrategyTestMetricGrid, formatMetricValue } from "./StrategyTestMetricGrid";
@@ -13,6 +13,7 @@ import type {
   StrategyTestMetric,
   StrategyTestMetricValue,
   StrategyTestReport as StrategyTestReportData,
+  StrategyTestScenarioSummary,
   StrategyTestReportSection,
   StrategyTestRunResponse,
   StrategyTestRunSummary
@@ -52,7 +53,8 @@ export function StrategyTestReport({
   report,
   run
 }: StrategyTestReportProps) {
-  const fallbackSummary = report?.summary ?? summaryFromRun(run);
+  const runSummary = summaryFromRun(run);
+  const fallbackSummary = report ? mergeSummaries(runSummary, report.summary) : runSummary;
   const summaryMetrics = report?.summary_metrics?.length ? report.summary_metrics : summaryMetricsFromSummary(fallbackSummary);
   const adjustments = report?.candidate_adjustments ?? [];
   const calibrationRunId = report?.run_id ?? run?.run_id ?? null;
@@ -66,6 +68,7 @@ export function StrategyTestReport({
     : null;
   const activeRunWithoutReport = Boolean(run && ACTIVE_RUN_STATUSES.has(run.status) && !report);
   const selectedRunWithoutReport = Boolean(run && !report && !activeRunWithoutReport);
+  const scenarioCounts = scenarioDiagnosticCounts(fallbackSummary, report);
 
   return (
     <section className="strategy-test-report-panel strategy-test-report-full" aria-live="polite">
@@ -104,9 +107,16 @@ export function StrategyTestReport({
       {!loading && !error ? (
         <>
           <div className="strategy-test-report-strip">
+            <Badge tone="purple">{scenarioCounts.completed} / {scenarioCounts.total} scenarios</Badge>
+            <Badge tone={scenarioCounts.failed ? "red" : "green"}>{scenarioCounts.failed} failed</Badge>
+            <Badge tone={scenarioCounts.skipped ? "yellow" : "neutral"}>{scenarioCounts.skipped} skipped</Badge>
+            <Badge tone="blue">{scenarioCounts.pairs} pairs</Badge>
+            <Badge tone="blue">{scenarioCounts.strategies} strategies</Badge>
+            <Badge tone="blue">{scenarioCounts.timeframes} timeframes</Badge>
             <Badge tone="blue">{metricNumber(fallbackSummary.signals_count ?? fallbackSummary.signals_seen)} signals</Badge>
             <Badge tone="blue">{report?.trades_count ?? metricNumber(fallbackSummary.trades_count)} trades</Badge>
-            <Badge tone={report?.warnings?.length ? "yellow" : "green"}>{report?.warnings?.length ?? 0} warnings</Badge>
+            <Badge tone={scenarioCounts.errors ? "red" : "green"}>{scenarioCounts.errors} errors</Badge>
+            <Badge tone={scenarioCounts.warnings ? "yellow" : "green"}>{scenarioCounts.warnings} warnings</Badge>
             <Badge tone={report?.rejections?.length ? "red" : "neutral"}>{report?.rejections?.length ?? 0} rejections</Badge>
             {reportIsPartial ? <Badge tone="yellow">Partial report</Badge> : null}
             {report ? <Badge tone="purple">{report.sections.length} sections</Badge> : null}
@@ -127,12 +137,14 @@ export function StrategyTestReport({
             <div className="strategy-test-report-sections">
               {reportIsPartial ? (
                 <>
-                  <ReportSummarySection report={report} />
+                  <ReportSummarySection report={report} summaryOverride={fallbackSummary} />
+                  <ScenarioDiagnosticsSection report={report} run={run} summary={fallbackSummary} />
                   <SignalFunnelSection report={report} />
                 </>
               ) : (
                 <>
-                  <ReportSummarySection report={report} />
+                  <ReportSummarySection report={report} summaryOverride={fallbackSummary} />
+                  <ScenarioDiagnosticsSection report={report} run={run} summary={fallbackSummary} />
                   <SignalFunnelSection report={report} />
                   <MetricSection report={report} sectionCode="strategy_comparison" />
                   <MetricSection report={report} sectionCode="pair_timeframe_breakdown" />
@@ -189,6 +201,7 @@ function RunSummaryFallback({
           {summaryItem("Execution rejections", summaryNumberValue(summary, "execution_rejections") ?? 0)}
         </div>
       </ReportSection>
+      <ScenarioDiagnosticsSection report={null} run={run} summary={summary} />
     </div>
   );
 }
@@ -241,13 +254,26 @@ function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
   );
 }
 
-function ReportSummarySection({ report }: { report: StrategyTestReportData }) {
+function ReportSummarySection({
+  report,
+  summaryOverride
+}: {
+  report: StrategyTestReportData;
+  summaryOverride?: StrategyTestRunSummary;
+}) {
   const section = findSection(report, "summary");
-  const summary = section?.summary ?? report.summary;
+  const summary = summaryOverride ?? section?.summary ?? report.summary;
   return (
     <ReportSection name="Summary">
       <div className="strategy-test-summary-grid">
-        {summaryItem("Scenarios", summary.scenario_count)}
+        {summaryItem("Scenarios", scenarioCountLabel(summary))}
+        {summaryItem("Failed scenarios", summaryNumberValue(summary, "failed_scenarios") ?? summaryNumberValue(summary, "scenarios_failed") ?? 0)}
+        {summaryItem("Skipped scenarios", summaryNumberValue(summary, "skipped_scenarios") ?? summaryNumberValue(summary, "scenarios_skipped") ?? 0)}
+        {summaryItem("Pairs processed", summaryNumberValue(summary, "pairs_processed") ?? 0)}
+        {summaryItem("Strategies processed", summaryNumberValue(summary, "strategies_processed") ?? 0)}
+        {summaryItem("Timeframes processed", summaryNumberValue(summary, "timeframes_processed") ?? 0)}
+        {summaryItem("Errors", summaryNumberValue(summary, "errors_count") ?? summaryArrayCount(summary.errors) ?? 0)}
+        {summaryItem("Warnings", summaryNumberValue(summary, "warnings_count") ?? summaryArrayCount(summary.warnings) ?? 0)}
         {summaryItem("Signals", summary.signals_count)}
         {summaryItem("Entry touch rate", summary.entry_touch_rate)}
         {summaryItem("No-entry rate", summary.no_entry_rate)}
@@ -261,6 +287,97 @@ function ReportSummarySection({ report }: { report: StrategyTestReportData }) {
       </div>
     </ReportSection>
   );
+}
+
+const SCENARIO_DIAGNOSTIC_COLUMNS = [
+  "strategy",
+  "exchange",
+  "symbol",
+  "timeframe",
+  "status",
+  "bars_total",
+  "signals_seen",
+  "signals_count",
+  "execution_candidates",
+  "entry_touched",
+  "filled",
+  "closed",
+  "trades_count",
+  "wins",
+  "losses",
+  "no_entry",
+  "risk_rejections",
+  "execution_rejections",
+  "winrate",
+  "expectancy_r",
+  "error"
+];
+
+function ScenarioDiagnosticsSection({
+  report,
+  run,
+  summary
+}: {
+  report: StrategyTestReportData | null;
+  run: StrategyTestRunResponse | null;
+  summary: StrategyTestRunSummary;
+}) {
+  const [filter, setFilter] = useState("");
+  const rows = useMemo(() => scenarioDiagnosticRows(report, run, summary), [report, run, summary]);
+  const query = filter.trim().toLowerCase();
+  const visibleRows = query
+    ? rows.filter((row) => SCENARIO_DIAGNOSTIC_COLUMNS.some((column) => formatCell(row[column]).toLowerCase().includes(query)))
+    : rows;
+
+  return (
+    <ReportSection name="Scenario diagnostics">
+      <div className="strategy-test-report-strip">
+        <Badge tone="purple">{rows.length} rows</Badge>
+        <Badge tone="green">{rows.filter((row) => row.status === "completed").length} completed</Badge>
+        <Badge tone={rows.some((row) => row.status === "failed") ? "red" : "neutral"}>
+          {rows.filter((row) => row.status === "failed").length} failed
+        </Badge>
+        <Badge tone={rows.some((row) => row.signals_count === 0 || row.signals_seen === 0) ? "yellow" : "neutral"}>
+          {rows.filter((row) => row.signals_count === 0 || row.signals_seen === 0).length} zero signals
+        </Badge>
+      </div>
+      <input
+        aria-label="Filter scenario diagnostics"
+        className="strategy-test-filter-input"
+        onChange={(event) => setFilter(event.target.value)}
+        placeholder="Filter rows"
+        type="search"
+        value={filter}
+      />
+      {visibleRows.length ? (
+        <div className="strategy-test-table-wrap">
+          <table className="strategy-test-simple-table">
+            <thead>
+              <tr>
+                {SCENARIO_DIAGNOSTIC_COLUMNS.map((column) => <th key={column}>{columnLabel(column)}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((row, index) => (
+                <tr key={`${row.strategy}:${row.exchange}:${row.symbol}:${row.timeframe}:${index}`}>
+                  {SCENARIO_DIAGNOSTIC_COLUMNS.map((column) => (
+                    <td key={column}>{column === "status" ? <StatusBadge status={row.status} /> : formatCell(row[column])}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="empty-state compact-empty">{rows.length ? "No matching scenarios" : "No scenario diagnostics"}</div>
+      )}
+    </ReportSection>
+  );
+}
+
+function StatusBadge({ status }: { status: unknown }) {
+  const label = String(status || "skipped");
+  return <Badge tone={statusTone(label)}>{label}</Badge>;
 }
 
 function CalibrationPublicationResult({ result }: { result: StrategyTestCalibrationResponse }) {
@@ -399,7 +516,7 @@ function CandidateAdjustmentsSection({
 
 function ReportSection({ children, name }: { children: ReactNode; name: string }) {
   return (
-    <section className="strategy-test-report-section">
+    <section aria-label={name} className="strategy-test-report-section">
       <h5>{name}</h5>
       {children}
     </section>
@@ -488,6 +605,142 @@ function summaryFromRun(run: StrategyTestRunResponse | null): StrategyTestRunSum
   } as StrategyTestRunSummary;
 }
 
+function mergeSummaries(runSummary: StrategyTestRunSummary, reportSummary: StrategyTestRunSummary): StrategyTestRunSummary {
+  return {
+    ...runSummary,
+    ...reportSummary,
+    scenario_summaries: scenarioSummaryList(reportSummary.scenario_summaries).length
+      ? reportSummary.scenario_summaries
+      : runSummary.scenario_summaries,
+    scenarios: scenarioSummaryList(reportSummary.scenarios).length ? reportSummary.scenarios : runSummary.scenarios
+  };
+}
+
+function scenarioDiagnosticRows(
+  report: StrategyTestReportData | null,
+  run: StrategyTestRunResponse | null,
+  summary: StrategyTestRunSummary
+): StrategyTestScenarioSummary[] {
+  const reportRows = scenarioSummaryList(report?.scenario_summaries);
+  if (reportRows.length) return reportRows;
+  const sectionRows = report ? scenarioSummaryList(findSection(report, "scenario_diagnostics")?.rows) : [];
+  if (sectionRows.length) return sectionRows;
+  const summaryRows = scenarioSummaryList(summary.scenario_summaries).length
+    ? scenarioSummaryList(summary.scenario_summaries)
+    : scenarioSummaryList(summary.scenarios);
+  if (summaryRows.length) return summaryRows;
+  const partialSummary = run?.runtime_state.partial_summary;
+  if (isRecord(partialSummary)) {
+    const partialRows = scenarioSummaryList(partialSummary.scenario_summaries).length
+      ? scenarioSummaryList(partialSummary.scenario_summaries)
+      : scenarioSummaryList(partialSummary.scenarios);
+    if (partialRows.length) return partialRows;
+  }
+  return [];
+}
+
+function scenarioSummaryList(value: unknown): StrategyTestScenarioSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map(normalizeScenarioRow);
+}
+
+function normalizeScenarioRow(row: Record<string, unknown>): StrategyTestScenarioSummary {
+  const normalized: StrategyTestScenarioSummary = {
+    strategy: textValue(row.strategy ?? row.strategy_code),
+    exchange: textValue(row.exchange),
+    symbol: textValue(row.symbol),
+    timeframe: textValue(row.timeframe),
+    status: scenarioStatus(row.status, row.error),
+    bars_total: numberValue(row.bars_total),
+    signals_seen: numberValue(row.signals_seen ?? row.signals_count),
+    signals_count: numberValue(row.signals_count ?? row.signals_seen),
+    execution_candidates: numberValue(row.execution_candidates),
+    entry_touched: numberValue(row.entry_touched ?? row.touched),
+    filled: numberValue(row.filled),
+    closed: numberValue(row.closed),
+    trades_count: numberValue(row.trades_count),
+    wins: numberValue(row.wins),
+    losses: numberValue(row.losses),
+    no_entry: numberValue(row.no_entry),
+    risk_rejections: numberValue(row.risk_rejections),
+    execution_rejections: numberValue(row.execution_rejections),
+    winrate: nullableNumberValue(row.winrate),
+    expectancy_r: nullableNumberValue(row.expectancy_r)
+  };
+  if (typeof row.error === "string" && row.error.trim()) normalized.error = row.error;
+  return normalized;
+}
+
+function scenarioStatus(status: unknown, error: unknown): string {
+  const value = typeof status === "string" ? status.trim().toLowerCase() : "";
+  if (value === "completed" || value === "failed" || value === "skipped") return value;
+  return error ? "failed" : "completed";
+}
+
+function scenarioDiagnosticCounts(summary: StrategyTestRunSummary, report: StrategyTestReportData | null) {
+  const rows = scenarioDiagnosticRows(report, null, summary);
+  const total = summaryNumberValue(summary, "scenarios_total") ?? summaryNumberValue(summary, "scenario_count") ?? rows.length;
+  const completed = summaryNumberValue(summary, "scenarios_completed") ?? summaryNumberValue(summary, "completed_scenarios") ?? rows.filter((row) => row.status === "completed").length;
+  const failed = summaryNumberValue(summary, "scenarios_failed") ?? summaryNumberValue(summary, "failed_scenarios") ?? rows.filter((row) => row.status === "failed").length;
+  const skipped = summaryNumberValue(summary, "scenarios_skipped") ?? summaryNumberValue(summary, "skipped_scenarios") ?? rows.filter((row) => row.status === "skipped").length;
+  return {
+    completed,
+    errors: summaryNumberValue(summary, "errors_count") ?? summaryArrayCount(summary.errors) ?? rows.filter((row) => row.error).length,
+    failed,
+    pairs: summaryNumberValue(summary, "pairs_processed") ?? uniqueScenarioCount(rows, ["exchange", "symbol"]),
+    skipped,
+    strategies: summaryNumberValue(summary, "strategies_processed") ?? uniqueScenarioCount(rows, ["strategy"]),
+    timeframes: summaryNumberValue(summary, "timeframes_processed") ?? uniqueScenarioCount(rows, ["timeframe"]),
+    total,
+    warnings: summaryNumberValue(summary, "warnings_count") ?? summaryArrayCount(summary.warnings) ?? report?.warnings?.length ?? 0
+  };
+}
+
+function uniqueScenarioCount(rows: StrategyTestScenarioSummary[], keys: Array<keyof StrategyTestScenarioSummary>): number {
+  return new Set(
+    rows
+      .map((row) => keys.map((key) => String(row[key] ?? "").trim()).join(":"))
+      .filter((value) => value.replaceAll(":", ""))
+  ).size;
+}
+
+function scenarioCountLabel(summary: StrategyTestRunSummary): string | number | null {
+  const total = summaryNumberValue(summary, "scenarios_total") ?? summaryNumberValue(summary, "scenario_count");
+  const completed = summaryNumberValue(summary, "scenarios_completed") ?? summaryNumberValue(summary, "completed_scenarios");
+  if (total != null && completed != null) return `${completed} / ${total}`;
+  return total ?? completed;
+}
+
+function statusTone(status: string): "green" | "red" | "yellow" | "neutral" {
+  if (status === "completed") return "green";
+  if (status === "failed") return "red";
+  if (status === "skipped") return "yellow";
+  return "neutral";
+}
+
+function textValue(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value : "-";
+}
+
+function numberValue(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function nullableNumberValue(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 function summaryMetricsFromSummary(summary: StrategyTestRunSummary): StrategyTestMetric[] {
   return Object.entries(summary)
     .filter((entry): entry is [string, StrategyTestMetricValue] => isMetricValue(entry[1]))
@@ -507,6 +760,10 @@ function fallbackReportMessage(run: StrategyTestRunResponse, summary: StrategyTe
 function summaryNumberValue(summary: StrategyTestRunSummary, key: keyof StrategyTestRunSummary): number | null {
   const value = summary[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function summaryArrayCount(value: unknown): number | null {
+  return Array.isArray(value) ? value.length : null;
 }
 
 function findSection(report: StrategyTestReportData, code: string): StrategyTestReportSection | null {

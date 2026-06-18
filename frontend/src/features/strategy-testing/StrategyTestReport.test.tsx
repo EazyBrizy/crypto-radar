@@ -213,8 +213,224 @@ describe("StrategyTestReport", () => {
 
     expect(screen.getByText("Partial report")).toBeInTheDocument();
     expect(screen.getByText("Run is still running; aggregate metrics may change.")).toBeInTheDocument();
+    expect(screen.getByText("Scenario diagnostics")).toBeInTheDocument();
     expect(screen.queryByText("Strategy comparison")).not.toBeInTheDocument();
     expect(screen.queryByText("Recommended strategy adjustments")).not.toBeInTheDocument();
+  });
+
+  it("renders failed scenario error in diagnostics", () => {
+    render(
+      <StrategyTestReport
+        report={report({
+          summary: {
+            completed_scenarios: 0,
+            errors_count: 1,
+            failed_scenarios: 1,
+            scenario_count: 1,
+            scenario_summaries: [
+              {
+                bars_total: 0,
+                error: "no_historical_data",
+                exchange: "bybit",
+                signals_count: 0,
+                status: "failed",
+                strategy: "mean_reversion",
+                symbol: "ETHUSDT",
+                timeframe: "15m",
+                trades_count: 0
+              }
+            ],
+            scenarios_completed: 0,
+            scenarios_failed: 1,
+            scenarios_total: 1,
+            signals_count: 0,
+            trades_count: 0
+          }
+        })}
+        run={null}
+      />
+    );
+
+    const diagnostics = screen.getByLabelText("Scenario diagnostics");
+    expect(within(diagnostics).getByText("mean_reversion")).toBeInTheDocument();
+    expect(within(diagnostics).getByText("failed")).toBeInTheDocument();
+    expect(within(diagnostics).getByText("no_historical_data")).toBeInTheDocument();
+  });
+
+  it("renders completed scenario with zero signals in diagnostics", () => {
+    render(
+      <StrategyTestReport
+        report={report({
+          summary: {
+            completed_scenarios: 1,
+            failed_scenarios: 0,
+            scenario_count: 1,
+            scenario_summaries: [
+              {
+                bars_total: 1200,
+                exchange: "bybit",
+                signals_count: 0,
+                signals_seen: 0,
+                status: "completed",
+                strategy: "quiet_breakout",
+                symbol: "BTCUSDT",
+                timeframe: "1h",
+                trades_count: 0
+              }
+            ],
+            signals_count: 0,
+            trades_count: 0
+          }
+        })}
+        run={null}
+      />
+    );
+
+    const diagnostics = screen.getByLabelText("Scenario diagnostics");
+    expect(within(diagnostics).getByText("quiet_breakout")).toBeInTheDocument();
+    expect(within(diagnostics).getByText("completed")).toBeInTheDocument();
+    expect(within(diagnostics).getAllByText("0").length).toBeGreaterThan(0);
+  });
+
+  it("renders scenario with trades in diagnostics", () => {
+    render(
+      <StrategyTestReport
+        report={report({
+          summary: {
+            completed_scenarios: 1,
+            failed_scenarios: 0,
+            scenario_count: 1,
+            scenario_summaries: [
+              {
+                bars_total: 2000,
+                closed: 3,
+                exchange: "bybit",
+                expectancy_r: 0.42,
+                filled: 3,
+                losses: 1,
+                signals_count: 5,
+                signals_seen: 5,
+                status: "completed",
+                strategy: "trade_strategy",
+                symbol: "BTCUSDT",
+                timeframe: "4h",
+                trades_count: 3,
+                winrate: 0.667,
+                wins: 2
+              }
+            ],
+            signals_count: 5,
+            trades_count: 3
+          }
+        })}
+        run={null}
+      />
+    );
+
+    const diagnostics = screen.getByLabelText("Scenario diagnostics");
+    expect(within(diagnostics).getByText("trade_strategy")).toBeInTheDocument();
+    expect(within(diagnostics).getAllByText("3").length).toBeGreaterThan(0);
+    expect(within(diagnostics).getByText("0.667")).toBeInTheDocument();
+    expect(within(diagnostics).getByText("0.420")).toBeInTheDocument();
+  });
+
+  it("filters scenario diagnostics rows", () => {
+    render(
+      <StrategyTestReport
+        report={report({
+          summary: {
+            completed_scenarios: 2,
+            failed_scenarios: 0,
+            scenario_count: 2,
+            scenario_summaries: [
+              {
+                bars_total: 1200,
+                exchange: "bybit",
+                signals_count: 0,
+                status: "completed",
+                strategy: "visible_strategy",
+                symbol: "BTCUSDT",
+                timeframe: "1h",
+                trades_count: 0
+              },
+              {
+                bars_total: 800,
+                exchange: "bybit",
+                signals_count: 2,
+                status: "completed",
+                strategy: "hidden_strategy",
+                symbol: "ETHUSDT",
+                timeframe: "15m",
+                trades_count: 0
+              }
+            ],
+            signals_count: 2,
+            trades_count: 0
+          }
+        })}
+        run={null}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Filter scenario diagnostics"), { target: { value: "BTC" } });
+
+    const diagnostics = screen.getByLabelText("Scenario diagnostics");
+    expect(within(diagnostics).getByText("visible_strategy")).toBeInTheDocument();
+    expect(within(diagnostics).queryByText("hidden_strategy")).not.toBeInTheDocument();
+  });
+
+  it("renders partial scenario diagnostics from runtime partial summary when report metrics are missing", () => {
+    render(
+      <StrategyTestReport
+        report={report({
+          data_completeness: "partial",
+          is_partial: true,
+          status: "running",
+          summary: {}
+        })}
+        run={run({
+          runtime_state: {
+            partial_summary: {
+              completed_scenarios: 1,
+              failed_scenarios: 1,
+              scenario_count: 2,
+              scenario_summaries: [
+                {
+                  bars_total: 900,
+                  exchange: "bybit",
+                  signals_count: 0,
+                  status: "completed",
+                  strategy: "partial_zero",
+                  symbol: "BTCUSDT",
+                  timeframe: "15m",
+                  trades_count: 0
+                },
+                {
+                  bars_total: 0,
+                  error: "not_enough_data",
+                  exchange: "bybit",
+                  signals_count: 0,
+                  status: "failed",
+                  strategy: "partial_failed",
+                  symbol: "ETHUSDT",
+                  timeframe: "15m",
+                  trades_count: 0
+                }
+              ],
+              signals_count: 0,
+              trades_count: 0
+            }
+          },
+          status: "running",
+          summary: {}
+        })}
+      />
+    );
+
+    const diagnostics = screen.getByLabelText("Scenario diagnostics");
+    expect(within(diagnostics).getByText("partial_zero")).toBeInTheDocument();
+    expect(within(diagnostics).getByText("partial_failed")).toBeInTheDocument();
+    expect(within(diagnostics).getByText("not_enough_data")).toBeInTheDocument();
   });
 
   it("shows calibration publication result", () => {

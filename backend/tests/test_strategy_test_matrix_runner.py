@@ -167,6 +167,26 @@ class StrategyTestMatrixRunnerTest(unittest.TestCase):
         self.assertEqual({error["strategy"] for error in result.errors}, {"s1", "s2"})
         self.assertTrue(all("market data prepare failed" in error["error"] for error in result.errors))
 
+    def test_matrix_records_failed_scenarios_in_diagnostics_summary(self) -> None:
+        request = _matrix_request(
+            strategies=["s1", "s2"],
+            pairs=[StrategyTestPair(exchange="bybit", symbol="ETHUSDT")],
+            timeframes=["15m"],
+        )
+        scenario_runner = _RecordingScenarioRunner(prepare_fail_on={("bybit", "ETHUSDT", "15m")})
+        matrix_runner = StrategyTestMatrixRunner(scenario_runner)
+
+        result = matrix_runner.run_matrix(request=request, run_id=RUN_ID, user_uuid=USER_ID)
+
+        self.assertEqual(result.completed_scenarios, 0)
+        self.assertEqual(result.failed_scenarios, 2)
+        self.assertEqual(len(result.scenario_summaries), 2)
+        self.assertEqual({row["status"] for row in result.scenario_summaries}, {"failed"})
+        self.assertEqual({row["strategy"] for row in result.scenario_summaries}, {"s1", "s2"})
+        self.assertTrue(all(row["bars_total"] == 0 for row in result.scenario_summaries))
+        self.assertTrue(all("market data prepare failed" in row["error"] for row in result.scenario_summaries))
+        self.assertEqual(result.summary()["scenario_summaries"], result.scenario_summaries)
+
     def test_matrix_reports_market_data_prefetch_progress(self) -> None:
         request = _matrix_request(
             strategies=["s1"],

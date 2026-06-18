@@ -6530,6 +6530,10 @@ export interface components {
             };
             /** Sections */
             sections?: components["schemas"]["StrategyTestReportSection"][];
+            /** Scenario Summaries */
+            scenario_summaries?: {
+                [key: string]: unknown;
+            }[];
             /** Metrics */
             metrics?: {
                 [key: string]: unknown;

@@ -61,6 +61,18 @@ export interface StrategyTestRunSummary {
   scenario_count?: number;
   completed_scenarios?: number;
   failed_scenarios?: number;
+  skipped_scenarios?: number;
+  scenarios_total?: number;
+  scenarios_completed?: number;
+  scenarios_failed?: number;
+  scenarios_skipped?: number;
+  pairs_processed?: number;
+  strategies_processed?: number;
+  timeframes_processed?: number;
+  errors_count?: number;
+  warnings_count?: number;
+  scenario_summaries?: StrategyTestScenarioSummary[];
+  scenarios?: StrategyTestScenarioSummary[];
   trades_count?: number;
   signals_seen?: number;
   signals_count?: number;
@@ -77,6 +89,31 @@ export interface StrategyTestRunSummary {
   risk_rejections?: number;
   execution_rejections?: number;
   signal_funnel?: StrategyTestFunnelResponseDto;
+  [key: string]: unknown;
+}
+
+export interface StrategyTestScenarioSummary {
+  strategy?: string;
+  exchange?: string;
+  symbol?: string;
+  timeframe?: string;
+  status?: "completed" | "failed" | "skipped" | string;
+  error?: string;
+  bars_total?: number;
+  signals_count?: number;
+  signals_seen?: number;
+  execution_candidates?: number;
+  entry_touched?: number;
+  filled?: number;
+  closed?: number;
+  trades_count?: number;
+  wins?: number;
+  losses?: number;
+  no_entry?: number;
+  risk_rejections?: number;
+  execution_rejections?: number;
+  winrate?: number | null;
+  expectancy_r?: number | null;
   [key: string]: unknown;
 }
 
@@ -222,6 +259,7 @@ export interface StrategyTestReport {
   assumptions: Record<string, unknown>;
   summary: StrategyTestRunSummary;
   sections: StrategyTestReportSection[];
+  scenario_summaries?: StrategyTestScenarioSummary[];
   metrics: StrategyTestMetric[];
   candidate_adjustments: StrategyTestCandidateAdjustment[];
   generated_at: string;

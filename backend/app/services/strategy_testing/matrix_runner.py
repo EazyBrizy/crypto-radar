@@ -190,6 +190,7 @@ class StrategyTestMatrixResult:
             "risk_rejections": risk_rejections,
             "execution_rejections": execution_rejections,
             "errors": list(self.errors),
+            "scenario_summaries": list(self.scenario_summaries),
             "scenarios": list(self.scenario_summaries),
             "slowest_scenarios": _slowest_scenarios(self.scenario_summaries),
             **metric_sections,
@@ -407,15 +408,9 @@ class StrategyTestMatrixRunner:
         def record_scenario_failure(context: StrategyTestScenarioContext, exc: Exception) -> None:
             nonlocal failed
             failed += 1
-            errors.append(
-                {
-                    "strategy": context.strategy,
-                    "exchange": context.exchange,
-                    "symbol": context.symbol,
-                    "timeframe": context.timeframe,
-                    "error": str(exc),
-                }
-            )
+            failed_summary = _failed_scenario_summary(context, exc)
+            scenario_summaries.append(failed_summary)
+            errors.append({key: failed_summary[key] for key in ("strategy", "exchange", "symbol", "timeframe", "error")})
             summary = build_partial_summary()
             if on_scenario_failed is not None:
                 on_scenario_failed(context, exc, summary)
@@ -658,6 +653,7 @@ def _progress_partial_summary(
         "risk_rejections": sum(_int_from_summary(item, "risk_rejections") for item in scenario_summaries),
         "execution_rejections": sum(_int_from_summary(item, "execution_rejections") for item in scenario_summaries),
         "errors": list(errors),
+        "scenario_summaries": list(scenario_summaries),
         "scenarios": list(scenario_summaries),
     }
 
@@ -777,7 +773,8 @@ def _checkpoint_summary_for_context(
     updated = _scenario_identity_summary(context)
     updated.update(dict(summary))
     updated.setdefault("scenario_key", _scenario_key(context))
-    return updated
+    updated.setdefault("status", "completed")
+    return _canonical_scenario_summary(updated)
 
 
 def _scenario_result_summary(
@@ -806,7 +803,54 @@ def _scenario_result_summary(
         summary["trades_count"] = len(result.trades)
     else:
         summary.setdefault("trades_count", 0)
-    return summary
+    summary["status"] = "completed"
+    return _canonical_scenario_summary(summary)
+
+
+def _failed_scenario_summary(context: StrategyTestScenarioContext, exc: Exception) -> dict[str, Any]:
+    summary = _scenario_identity_summary(context)
+    summary.update(
+        {
+            "scenario_key": _scenario_key(context),
+            "status": "failed",
+            "error": str(exc),
+        }
+    )
+    return _canonical_scenario_summary(summary)
+
+
+def _canonical_scenario_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
+    updated = dict(summary)
+    timings = updated.get("timings")
+    timings_summary = timings if isinstance(timings, dict) else {}
+    if "signals_count" not in updated and "signals_seen" in updated:
+        updated["signals_count"] = updated["signals_seen"]
+    if "signals_seen" not in updated and "signals_count" in updated:
+        updated["signals_seen"] = updated["signals_count"]
+    if "entry_touched" not in updated and "touched" in updated:
+        updated["entry_touched"] = updated["touched"]
+    if "touched" not in updated and "entry_touched" in updated:
+        updated["touched"] = updated["entry_touched"]
+    if "bars_total" not in updated:
+        updated["bars_total"] = _int_from_summary(timings_summary, "bars_total")
+    for key in (
+        "bars_total",
+        "signals_count",
+        "signals_seen",
+        "execution_candidates",
+        "entry_touched",
+        "filled",
+        "closed",
+        "trades_count",
+        "wins",
+        "losses",
+        "no_entry",
+        "risk_rejections",
+        "execution_rejections",
+    ):
+        updated[key] = _int_from_summary(updated, key)
+    updated.setdefault("status", "completed")
+    return updated
 
 
 def _scenario_identity_summary(context: StrategyTestScenarioContext) -> dict[str, Any]:

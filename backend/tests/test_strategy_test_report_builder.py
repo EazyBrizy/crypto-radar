@@ -32,6 +32,7 @@ NOW = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
 
 REQUIRED_SECTION_NAMES = {
     "Summary",
+    "Scenario diagnostics",
     "Signal funnel",
     "Strategy comparison",
     "Pair/timeframe breakdown",
@@ -167,6 +168,103 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertEqual(report.summary["completed_scenarios"], 1)
         self.assertEqual(report.summary["failed_scenarios"], 1)
         self.assertEqual(report.summary["signals_count"], 5)
+
+    def test_report_exposes_scenario_diagnostics_from_summary(self) -> None:
+        report = _builder(
+            [],
+            summary={
+                "scenario_count": 3,
+                "completed_scenarios": 2,
+                "failed_scenarios": 1,
+                "errors": [{"strategy": "s3", "exchange": "bybit", "symbol": "ETHUSDT", "timeframe": "1h", "error": "no_historical_data"}],
+                "scenarios": [
+                    {
+                        "strategy": "s1",
+                        "exchange": "bybit",
+                        "symbol": "BTCUSDT",
+                        "timeframe": "1h",
+                        "status": "completed",
+                        "bars_total": 1500,
+                        "signals_seen": 0,
+                        "signals_count": 0,
+                        "trades_count": 0,
+                    },
+                    {
+                        "strategy": "s2",
+                        "exchange": "bybit",
+                        "symbol": "BTCUSDT",
+                        "timeframe": "1h",
+                        "status": "completed",
+                        "bars_total": 1500,
+                        "signals_seen": 4,
+                        "signals_count": 4,
+                        "execution_candidates": 3,
+                        "entry_touched": 2,
+                        "filled": 2,
+                        "closed": 2,
+                        "trades_count": 2,
+                        "wins": 1,
+                        "losses": 1,
+                        "expectancy_r": 0.15,
+                    },
+                ],
+            },
+        ).build_report(RUN_ID)
+
+        diagnostics = _section(report, "Scenario diagnostics")
+
+        self.assertEqual(report.scenario_summaries, report.summary["scenario_summaries"])
+        self.assertEqual(report.summary["scenarios_total"], 3)
+        self.assertEqual(report.summary["scenarios_completed"], 2)
+        self.assertEqual(report.summary["scenarios_failed"], 1)
+        self.assertEqual(report.summary["errors_count"], 1)
+        self.assertEqual(len(diagnostics.rows), 3)
+        self.assertEqual([row["status"] for row in diagnostics.rows], ["completed", "completed", "failed"])
+        self.assertEqual(diagnostics.rows[0]["signals_count"], 0)
+        self.assertEqual(diagnostics.rows[2]["error"], "no_historical_data")
+
+    def test_partial_report_uses_runtime_partial_scenario_diagnostics(self) -> None:
+        report = _builder(
+            [],
+            status="running",
+            runtime_state={
+                "partial_summary": {
+                    "scenario_count": 2,
+                    "completed_scenarios": 1,
+                    "failed_scenarios": 1,
+                    "signals_count": 0,
+                    "trades_count": 0,
+                    "scenarios": [
+                        {
+                            "strategy": "s1",
+                            "exchange": "bybit",
+                            "symbol": "BTCUSDT",
+                            "timeframe": "15m",
+                            "status": "completed",
+                            "bars_total": 900,
+                            "signals_count": 0,
+                            "trades_count": 0,
+                        }
+                    ],
+                    "errors": [
+                        {
+                            "strategy": "s2",
+                            "exchange": "bybit",
+                            "symbol": "ETHUSDT",
+                            "timeframe": "15m",
+                            "error": "not_enough_data",
+                        }
+                    ],
+                }
+            },
+        ).build_report(RUN_ID)
+
+        diagnostics = _section(report, "Scenario diagnostics")
+
+        self.assertTrue(report.is_partial)
+        self.assertEqual(report.summary["scenario_summaries"][0]["status"], "completed")
+        self.assertEqual(report.summary["scenario_summaries"][1]["status"], "failed")
+        self.assertEqual(diagnostics.rows[1]["error"], "not_enough_data")
 
     def test_running_report_infers_completed_scenarios_from_written_rows(self) -> None:
         report = _builder(

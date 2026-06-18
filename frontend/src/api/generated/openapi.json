@@ -19721,6 +19721,14 @@
             "type": "array",
             "title": "Sections"
           },
+          "scenario_summaries": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Scenario Summaries"
+          },
           "metrics": {
             "items": {
               "additionalProperties": true,

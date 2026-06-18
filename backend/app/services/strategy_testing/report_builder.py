@@ -45,6 +45,7 @@ REPORT_EXTRA_GROUPINGS: tuple[tuple[str, ...], ...] = (
 
 SECTION_NAMES: tuple[tuple[str, str], ...] = (
     ("summary", "Summary"),
+    ("scenario_diagnostics", "Scenario diagnostics"),
     ("signal_funnel", "Signal funnel"),
     ("strategy_comparison", "Strategy comparison"),
     ("pair_timeframe_breakdown", "Pair/timeframe breakdown"),
@@ -252,6 +253,7 @@ class StrategyTestReportBuilder:
             signal_events,
             source_summary=source_summary,
             analytics_warnings=analytics_warnings,
+            report_warnings=warnings,
             funnel_override=aggregate_funnel,
             data_completeness=data_completeness,
             is_partial=is_partial,
@@ -280,6 +282,7 @@ class StrategyTestReportBuilder:
             assumptions=_assumptions_from_run(run_detail),
             summary=summary,
             sections=sections,
+            scenario_summaries=list(summary.get("scenario_summaries") or []),
             metrics=[metric_result_to_dict(result) for result in metric_results],
             candidate_adjustments=candidate_adjustments,
             generated_at=datetime.now(timezone.utc),
@@ -828,6 +831,7 @@ def _build_summary(
     *,
     source_summary: dict[str, Any] | None = None,
     analytics_warnings: Sequence[str] = (),
+    report_warnings: Sequence[str] = (),
     funnel_override: StrategyTestFunnelResponse | None = None,
     data_completeness: str = "complete",
     is_partial: bool = False,
@@ -836,9 +840,21 @@ def _build_summary(
     requested = run.requested_matrix
     all_metrics = _metric_map_for_group(metrics, {"all": "all"})
     source = source_summary or {}
+    scenario_summaries = _scenario_summaries_from_source(source)
     completed_scenarios = _summary_int(source, "completed_scenarios", 0)
     if completed_scenarios <= 0:
+        completed_scenarios = _scenario_status_count(scenario_summaries, "completed")
+    if completed_scenarios <= 0:
         completed_scenarios = _completed_scenario_count_from_rows(trades, signal_events)
+    failed_scenarios = _summary_int(source, "failed_scenarios", 0)
+    if failed_scenarios <= 0:
+        failed_scenarios = _scenario_status_count(scenario_summaries, "failed")
+    skipped_scenarios = _summary_int(source, "skipped_scenarios", 0)
+    if skipped_scenarios <= 0:
+        skipped_scenarios = _scenario_status_count(scenario_summaries, "skipped")
+    scenario_count = _summary_value(source, "scenario_count", requested.get("scenario_count"))
+    if scenario_count is None and scenario_summaries:
+        scenario_count = len(scenario_summaries)
     funnel = funnel_override or (
         build_signal_funnel_response(run.run_id, signal_events)
         if signal_events
@@ -861,9 +877,21 @@ def _build_summary(
         "mode": _run_mode(requested),
         "is_partial": is_partial,
         "data_completeness": data_completeness,
-        "scenario_count": _summary_value(source, "scenario_count", requested.get("scenario_count")),
+        "scenario_count": scenario_count,
+        "scenarios_total": _summary_int({"scenario_count": scenario_count}, "scenario_count", len(scenario_summaries)),
         "completed_scenarios": completed_scenarios,
-        "failed_scenarios": _summary_int(source, "failed_scenarios", 0),
+        "scenarios_completed": completed_scenarios,
+        "failed_scenarios": failed_scenarios,
+        "scenarios_failed": failed_scenarios,
+        "skipped_scenarios": skipped_scenarios,
+        "scenarios_skipped": skipped_scenarios,
+        "scenario_summaries": scenario_summaries,
+        "scenarios": scenario_summaries,
+        "pairs_processed": _processed_dimension_count(scenario_summaries, ("exchange", "symbol")),
+        "strategies_processed": _processed_dimension_count(scenario_summaries, ("strategy",)),
+        "timeframes_processed": _processed_dimension_count(scenario_summaries, ("timeframe",)),
+        "errors_count": _scenario_errors_count(source, scenario_summaries),
+        "warnings_count": len(report_warnings),
         "strategies": list(_list_value(requested.get("strategies"))),
         "pairs": list(_list_value(requested.get("pairs"))),
         "timeframes": list(_list_value(requested.get("timeframes"))),
@@ -944,6 +972,20 @@ def _build_sections(
             summary=summary,
             metrics=_metrics_for_group(metrics, {"all": "all"}, SUMMARY_METRIC_CODES),
             warnings=list(warnings),
+        ),
+        "scenario_diagnostics": StrategyTestReportSection(
+            code="scenario_diagnostics",
+            name="Scenario diagnostics",
+            summary={
+                "scenarios_total": _summary_int(summary, "scenarios_total", _summary_int(summary, "scenario_count", 0)),
+                "scenarios_completed": _summary_int(summary, "scenarios_completed", _summary_int(summary, "completed_scenarios", 0)),
+                "scenarios_failed": _summary_int(summary, "scenarios_failed", _summary_int(summary, "failed_scenarios", 0)),
+                "scenarios_skipped": _summary_int(summary, "scenarios_skipped", _summary_int(summary, "skipped_scenarios", 0)),
+                "errors_count": _summary_int(summary, "errors_count", 0),
+                "warnings_count": _summary_int(summary, "warnings_count", 0),
+            },
+            rows=[dict(row) for row in _scenario_summary_rows(summary)],
+            metadata={"rows_returned": len(_scenario_summary_rows(summary))},
         ),
         "signal_funnel": StrategyTestReportSection(
             code="signal_funnel",
@@ -1605,6 +1647,118 @@ def _normalize_summary_source(summary: dict[str, Any]) -> dict[str, Any]:
     errors = normalized.get("errors")
     normalized["errors"] = list(errors) if isinstance(errors, list) else []
     return normalized
+
+
+def _scenario_summaries_from_source(source: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in [*_list_records(source.get("scenario_summaries")), *_list_records(source.get("scenarios"))]:
+        row = _normalize_scenario_summary(raw)
+        key = str(row.get("scenario_key") or _analytics_scenario_key(row.get("strategy"), row.get("exchange"), row.get("symbol"), row.get("timeframe")))
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    for error in _list_records(source.get("errors")):
+        row = _normalize_scenario_summary({**error, "status": "failed"})
+        key = str(row.get("scenario_key") or _analytics_scenario_key(row.get("strategy"), row.get("exchange"), row.get("symbol"), row.get("timeframe")))
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    return rows
+
+
+def _normalize_scenario_summary(raw: dict[str, Any]) -> dict[str, Any]:
+    row = dict(raw)
+    timings = row.get("timings")
+    timings_summary = timings if isinstance(timings, dict) else {}
+    if "signals_count" not in row and "signals_seen" in row:
+        row["signals_count"] = row["signals_seen"]
+    if "signals_seen" not in row and "signals_count" in row:
+        row["signals_seen"] = row["signals_count"]
+    if "entry_touched" not in row and "touched" in row:
+        row["entry_touched"] = row["touched"]
+    if "touched" not in row and "entry_touched" in row:
+        row["touched"] = row["entry_touched"]
+    if "bars_total" not in row:
+        row["bars_total"] = _summary_int(timings_summary, "bars_total", 0)
+    status = str(row.get("status") or "").strip().lower()
+    if status not in {"completed", "failed", "skipped"}:
+        status = "failed" if row.get("error") else "completed"
+    result: dict[str, Any] = {
+        "scenario_key": row.get("scenario_key")
+        or _analytics_scenario_key(row.get("strategy"), row.get("exchange"), row.get("symbol"), row.get("timeframe")),
+        "strategy": str(row.get("strategy") or row.get("strategy_code") or "unknown"),
+        "exchange": str(row.get("exchange") or "unknown"),
+        "symbol": str(row.get("symbol") or "unknown"),
+        "timeframe": str(row.get("timeframe") or "unknown"),
+        "status": status,
+        "bars_total": _summary_int(row, "bars_total", 0),
+        "signals_count": _summary_int(row, "signals_count", 0),
+        "signals_seen": _summary_int(row, "signals_seen", _summary_int(row, "signals_count", 0)),
+        "execution_candidates": _summary_int(row, "execution_candidates", 0),
+        "entry_touched": _summary_int(row, "entry_touched", 0),
+        "filled": _summary_int(row, "filled", 0),
+        "closed": _summary_int(row, "closed", 0),
+        "trades_count": _summary_int(row, "trades_count", 0),
+        "wins": _summary_int(row, "wins", 0),
+        "losses": _summary_int(row, "losses", 0),
+        "no_entry": _summary_int(row, "no_entry", 0),
+        "risk_rejections": _summary_int(row, "risk_rejections", 0),
+        "execution_rejections": _summary_int(row, "execution_rejections", 0),
+    }
+    if row.get("error"):
+        result["error"] = str(row["error"])
+    winrate = _scenario_winrate(row, result)
+    if winrate is not None:
+        result["winrate"] = winrate
+    expectancy_r = _summary_float(row, "expectancy_r", None)
+    if expectancy_r is not None:
+        result["expectancy_r"] = expectancy_r
+    return result
+
+
+def _scenario_winrate(raw: dict[str, Any], row: dict[str, Any]) -> float | None:
+    wins = _summary_int(row, "wins", 0)
+    losses = _summary_int(row, "losses", 0)
+    sample_size = wins + losses
+    existing = _summary_float(raw, "winrate", None)
+    if existing is not None and sample_size > 0:
+        return existing
+    if sample_size <= 0:
+        return None
+    return wins / sample_size
+
+
+def _scenario_summary_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    return [dict(row) for row in _list_records(summary.get("scenario_summaries") or summary.get("scenarios"))]
+
+
+def _scenario_status_count(rows: Sequence[dict[str, Any]], status: str) -> int:
+    return sum(1 for row in rows if row.get("status") == status)
+
+
+def _scenario_errors_count(source: dict[str, Any], rows: Sequence[dict[str, Any]]) -> int:
+    errors = _list_records(source.get("errors"))
+    if errors:
+        return len(errors)
+    return sum(1 for row in rows if row.get("error"))
+
+
+def _processed_dimension_count(rows: Sequence[dict[str, Any]], keys: Sequence[str]) -> int:
+    values = {
+        tuple(str(row.get(key) or "").strip() for key in keys)
+        for row in rows
+        if all(str(row.get(key) or "").strip() for key in keys)
+    }
+    return len(values)
+
+
+def _list_records(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 def _summary_int(summary: dict[str, Any], key: str, default: int = 0) -> int:

@@ -994,8 +994,10 @@ function sanitizeStoredSelection(
   availableValues: string[],
   fallbackValues: string[]
 ): string[] {
-  if (!storedValues) return [...fallbackValues];
+  if (storedValues === undefined) return [...fallbackValues];
+  if (!availableValues.length) return [...storedValues];
   const sanitized = filterKnownValues(storedValues, availableValues);
+  if (!storedValues.length) return [];
   return sanitized.length ? sanitized : [...fallbackValues];
 }
 
@@ -1300,6 +1302,9 @@ function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
   const scenarioBarsProcessed = runtimeNumber(run, "current_scenario_bars_processed") ?? runtimeNumber(run, "scenario_bars_processed");
   const scenarioBarsTotal = runtimeNumber(run, "current_scenario_bars_total") ?? runtimeNumber(run, "scenario_bars_total");
   const barsPct = runtimeNumber(run, "bars_pct");
+  const prefetchCompleted = runtimeNumber(run, "market_data_prefetch_completed");
+  const prefetchTotal = runtimeNumber(run, "market_data_prefetch_total");
+  const prefetchFailed = runtimeNumber(run, "market_data_prefetch_failed");
   const pendingArmed = runtimeCounterNumber(run, "pending_armed") ?? runtimeNumber(run, "pending_armed") ?? runtimeNumber(run, "pending_entries_armed") ?? runSummaryNumber(run, "pending_armed") ?? 0;
   const filled = runtimeCounterNumber(run, "filled") ?? runtimeNumber(run, "filled") ?? runtimeNumber(run, "opened_trades") ?? runSummaryNumber(run, "filled") ?? 0;
   const noEntry = runtimeCounterNumber(run, "no_entry") ?? runtimeNumber(run, "no_entry") ?? runSummaryNumber(run, "no_entry") ?? 0;
@@ -1315,6 +1320,8 @@ function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
       {currentScenarioKey ? activeProgressItem("Scenario key", currentScenarioKey) : null}
       {activeProgressItem("Matrix bars", formatBarsProgress(matrixBarsProcessed, matrixBarsTotal, barsPct))}
       {activeProgressItem("Scenario bars", formatBarsCount(scenarioBarsProcessed, scenarioBarsTotal))}
+      {prefetchTotal != null ? activeProgressItem("Data prefetch", `${prefetchCompleted ?? 0} / ${prefetchTotal}`) : null}
+      {prefetchFailed ? activeProgressItem("Prefetch failed", prefetchFailed) : null}
       {activeProgressItem("Throughput", formatBarsPerSecond(runtimeNumber(run, "bars_per_second")))}
       {activeProgressItem("ETA", formatSeconds(runtimeNumber(run, "eta_seconds")))}
       {activeProgressItem("Signals", signals)}

@@ -111,6 +111,9 @@ describe("StrategyTestReport", () => {
             elapsed_ms: 5000,
             entry_touched: 3,
             eta_seconds: 15,
+            market_data_prefetch_completed: 4,
+            market_data_prefetch_failed: 1,
+            market_data_prefetch_total: 8,
             matrix_bars_processed: 149750,
             matrix_bars_total: 386597,
             not_selected: 4,
@@ -132,6 +135,8 @@ describe("StrategyTestReport", () => {
     expect(within(progress).getByText("3 / 16")).toBeInTheDocument();
     expect(within(progress).getByText("149750 / 386597 (38.74%)")).toBeInTheDocument();
     expect(within(progress).getByText("49750 / 86597")).toBeInTheDocument();
+    expect(within(progress).getByText("4 / 8")).toBeInTheDocument();
+    expect(within(progress).getByText("Prefetch failed")).toBeInTheDocument();
     expect(within(progress).getByText("50 bars/s")).toBeInTheDocument();
     expect(within(progress).getByText("15s")).toBeInTheDocument();
     expect(within(progress).getByText("Execution candidates")).toBeInTheDocument();
@@ -255,6 +260,7 @@ describe("StrategyTestReport", () => {
     expect(within(diagnostics).getByText("mean_reversion")).toBeInTheDocument();
     expect(within(diagnostics).getByText("failed")).toBeInTheDocument();
     expect(within(diagnostics).getByText("no_historical_data")).toBeInTheDocument();
+    expect(within(diagnostics).getByText("1 data gaps")).toBeInTheDocument();
   });
 
   it("renders completed scenario with zero signals in diagnostics", () => {
@@ -332,6 +338,7 @@ describe("StrategyTestReport", () => {
     expect(within(diagnostics).getAllByText("3").length).toBeGreaterThan(0);
     expect(within(diagnostics).getByText("0.667")).toBeInTheDocument();
     expect(within(diagnostics).getByText("0.420")).toBeInTheDocument();
+    expect(within(diagnostics).getByText("1 with trades")).toBeInTheDocument();
   });
 
   it("filters scenario diagnostics rows", () => {

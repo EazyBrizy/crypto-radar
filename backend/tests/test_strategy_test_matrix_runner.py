@@ -590,6 +590,20 @@ class StrategyTestScenarioRunnerTest(unittest.TestCase):
 
 
 class StrategyTestingServiceMatrixTest(unittest.TestCase):
+    def test_service_default_matrix_runner_uses_shared_historical_provider(self) -> None:
+        provider = _CountingHistoricalCandleProvider([])
+        service = StrategyTestingService(
+            run_store=_EphemeralRunStore(),
+            trade_store=_RecordingTradeStore(),
+            historical_candle_provider=provider,
+        )
+
+        scenario_runner = service._matrix_runner._scenario_runner  # type: ignore[attr-defined]
+        backtest_runner = scenario_runner._backtest_runner  # type: ignore[attr-defined]
+
+        self.assertIs(service._historical_candle_provider, provider)  # type: ignore[attr-defined]
+        self.assertIs(backtest_runner._historical_candle_provider, provider)  # type: ignore[attr-defined]
+
     def test_service_marks_run_queued_running_completed_and_writes_trades(self) -> None:
         run_store = _EphemeralRunStore()
         trade_store = _RecordingTradeStore()

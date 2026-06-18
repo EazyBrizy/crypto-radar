@@ -722,6 +722,30 @@ describe("StrategyTestingPanel", () => {
     expect(screen.getByRole("checkbox", { name: "1h" })).toBeChecked();
   });
 
+  it("restores intentionally cleared strategies, pairs, and timeframes after remount", async () => {
+    const user = userEvent.setup();
+    const availablePairs = [marketPair("BTCUSDT", "BTC"), marketPair("ETHUSDT", "ETH")];
+    const strategyConfigs = [strategyConfig({ timeframes: ["1m", "5m"] })];
+    const view = renderPanel({ availablePairs, strategyConfigs });
+
+    await user.click(screen.getByRole("button", { name: "Clear strategies" }));
+    await user.click(screen.getByRole("button", { name: "Clear pairs" }));
+    await user.click(screen.getByRole("button", { name: "Clear timeframes" }));
+    await waitFor(() => expect(storedStrategyTestForm()).toEqual(expect.objectContaining({
+      selectedPairIds: [],
+      selectedStrategyCodes: [],
+      selectedTimeframes: []
+    })));
+
+    view.unmount();
+    renderPanel({ availablePairs, strategyConfigs });
+
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /Trend Pullback/u })).not.toBeChecked());
+    expect(screen.getByRole("checkbox", { name: /BTCUSDT/u })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "1m" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /Run strategy test/u })).toBeDisabled();
+  });
+
   it("filters persisted pairs that are no longer available", async () => {
     window.localStorage.setItem(STRATEGY_TEST_FORM_STORAGE_KEY, JSON.stringify({
       selectedPairIds: ["bybit:DELISTEDUSDT", "bybit:ETHUSDT"],
@@ -926,6 +950,9 @@ describe("StrategyTestingPanel", () => {
         current_scenario_index: 3,
         current_scenario_key: "trend_pullback_continuation::bybit::BTCUSDT::15m",
         eta_seconds: 12,
+        market_data_prefetch_completed: 4,
+        market_data_prefetch_failed: 1,
+        market_data_prefetch_total: 8,
         matrix_bars_processed: 149750,
         matrix_bars_total: 386597,
         phase: "running_scenario",
@@ -950,6 +977,8 @@ describe("StrategyTestingPanel", () => {
     expect(within(progress).getByText("3 / 16")).toBeInTheDocument();
     expect(within(progress).getByText("149750 / 386597 (38.74%)")).toBeInTheDocument();
     expect(within(progress).getByText("49750 / 86597")).toBeInTheDocument();
+    expect(within(progress).getByText("4 / 8")).toBeInTheDocument();
+    expect(within(progress).getByText("Prefetch failed")).toBeInTheDocument();
     expect(within(progress).getByText("trend_pullback_continuation::bybit::BTCUSDT::15m")).toBeInTheDocument();
     expect(within(progress).getByText("40 bars/s")).toBeInTheDocument();
     expect(within(progress).getByText("12s")).toBeInTheDocument();

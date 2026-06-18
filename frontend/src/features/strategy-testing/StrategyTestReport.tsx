@@ -216,6 +216,9 @@ function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
   const scenarioBarsProcessed = runtimeNumber(run, "current_scenario_bars_processed") ?? runtimeNumber(run, "scenario_bars_processed");
   const scenarioBarsTotal = runtimeNumber(run, "current_scenario_bars_total") ?? runtimeNumber(run, "scenario_bars_total");
   const barsPct = runtimeNumber(run, "bars_pct");
+  const prefetchCompleted = runtimeNumber(run, "market_data_prefetch_completed");
+  const prefetchTotal = runtimeNumber(run, "market_data_prefetch_total");
+  const prefetchFailed = runtimeNumber(run, "market_data_prefetch_failed");
   const currentPair = currentPairLabel(run);
   const lastError = runtimeText(run, "last_error") ?? run.error;
   return (
@@ -232,6 +235,8 @@ function ActiveRunProgress({ run }: { run: StrategyTestRunResponse }) {
           {summaryItem("Timeframe", runtimeText(run, "current_timeframe") ?? "-")}
           {summaryItem("Matrix bars", formatBarsProgress(matrixBarsProcessed, matrixBarsTotal, barsPct))}
           {summaryItem("Scenario bars", formatBarsCount(scenarioBarsProcessed, scenarioBarsTotal))}
+          {prefetchTotal != null ? summaryItem("Data prefetch", `${prefetchCompleted ?? 0} / ${prefetchTotal}`) : null}
+          {prefetchFailed ? summaryItem("Prefetch failed", prefetchFailed) : null}
           {summaryItem("Throughput", formatBarsPerSecond(runtimeNumber(run, "bars_per_second")))}
           {summaryItem("ETA", formatSeconds(runtimeNumber(run, "eta_seconds")))}
           {summaryItem("Signals", runtimeCounterNumber(run, "signals") ?? runtimeNumber(run, "signals_seen") ?? summaryNumber(run, "signals_seen") ?? 0)}
@@ -328,17 +333,27 @@ function ScenarioDiagnosticsSection({
   const visibleRows = query
     ? rows.filter((row) => SCENARIO_DIAGNOSTIC_COLUMNS.some((column) => formatCell(row[column]).toLowerCase().includes(query)))
     : rows;
+  const failedRows = rows.filter((row) => row.status === "failed");
+  const zeroSignalRows = rows.filter((row) => row.signals_count === 0 || row.signals_seen === 0);
+  const dataGapRows = rows.filter((row) => isDataGapError(row.error));
+  const tradeRows = rows.filter((row) => (row.trades_count ?? 0) > 0);
 
   return (
     <ReportSection name="Scenario diagnostics">
       <div className="strategy-test-report-strip">
         <Badge tone="purple">{rows.length} rows</Badge>
         <Badge tone="green">{rows.filter((row) => row.status === "completed").length} completed</Badge>
-        <Badge tone={rows.some((row) => row.status === "failed") ? "red" : "neutral"}>
-          {rows.filter((row) => row.status === "failed").length} failed
+        <Badge tone={failedRows.length ? "red" : "neutral"}>
+          {failedRows.length} failed
         </Badge>
-        <Badge tone={rows.some((row) => row.signals_count === 0 || row.signals_seen === 0) ? "yellow" : "neutral"}>
-          {rows.filter((row) => row.signals_count === 0 || row.signals_seen === 0).length} zero signals
+        <Badge tone={dataGapRows.length ? "red" : "neutral"}>
+          {dataGapRows.length} data gaps
+        </Badge>
+        <Badge tone={zeroSignalRows.length ? "yellow" : "neutral"}>
+          {zeroSignalRows.length} zero signals
+        </Badge>
+        <Badge tone={tradeRows.length ? "green" : "neutral"}>
+          {tradeRows.length} with trades
         </Badge>
       </div>
       <input
@@ -675,6 +690,17 @@ function scenarioStatus(status: unknown, error: unknown): string {
   const value = typeof status === "string" ? status.trim().toLowerCase() : "";
   if (value === "completed" || value === "failed" || value === "skipped") return value;
   return error ? "failed" : "completed";
+}
+
+function isDataGapError(error: unknown): boolean {
+  if (typeof error !== "string") return false;
+  const value = error.toLowerCase();
+  return [
+    "no_historical_data",
+    "not_enough_data",
+    "historical_backfill_failed",
+    "market data prepare failed"
+  ].some((token) => value.includes(token));
 }
 
 function scenarioDiagnosticCounts(summary: StrategyTestRunSummary, report: StrategyTestReportData | null) {

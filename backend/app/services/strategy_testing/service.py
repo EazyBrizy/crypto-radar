@@ -7,8 +7,12 @@ from typing import Any, Protocol, Sequence
 from uuid import UUID
 
 from app.core.config import settings
-from app.services.backtest_runner import DEFAULT_WARMUP_CANDLES, _run_awaitable_sync
-from app.services.historical_candle_provider import ClickHouseHistoricalCandleProvider, HistoricalCandleProvider
+from app.services.backtest_runner import (
+    DEFAULT_WARMUP_CANDLES,
+    ProductionBacktestRunner,
+    _run_awaitable_sync,
+)
+from app.services.historical_candle_provider import BackfillingHistoricalCandleProvider, HistoricalCandleProvider
 from app.services.strategy_testing.eligibility_profiles import StrategyExecutionEligibilityProfileUpdater
 from app.services.strategy_testing.forward_runtime import ForwardStrategyTestRuntime
 from app.services.strategy_testing.matrix_runner import (
@@ -23,7 +27,11 @@ from app.services.strategy_testing.report_builder import (
     build_signal_funnel_response,
     metric_results_to_rows,
 )
-from app.services.strategy_testing.runner import StrategyTestRunCancelled, strategy_test_user_uuid
+from app.services.strategy_testing.runner import (
+    StrategyTestRunCancelled,
+    StrategyTestScenarioRunner,
+    strategy_test_user_uuid,
+)
 from app.services.strategy_testing.schemas import (
     StrategyTestCalibrationDecision,
     StrategyTestCalibrationProfile,
@@ -81,6 +89,14 @@ class StrategyExecutionEligibilityProfileUpdateService(Protocol):
         ...
 
 
+def _historical_matrix_runner(provider: HistoricalCandleProvider) -> StrategyTestMatrixRunner:
+    return StrategyTestMatrixRunner(
+        StrategyTestScenarioRunner(
+            ProductionBacktestRunner(historical_candle_provider=provider)
+        )
+    )
+
+
 class StrategyTestingService:
     def __init__(
         self,
@@ -93,13 +109,13 @@ class StrategyTestingService:
     ) -> None:
         self._run_store = run_store or PostgresStrategyTestRunStore()
         self._trade_store = trade_store or ClickHouseStrategyTestStore()
-        self._matrix_runner = matrix_runner or StrategyTestMatrixRunner()
+        self._historical_candle_provider = historical_candle_provider or BackfillingHistoricalCandleProvider()
+        self._matrix_runner = matrix_runner or _historical_matrix_runner(self._historical_candle_provider)
         self._forward_runtime = forward_runtime or ForwardStrategyTestRuntime(
             run_store=self._run_store,
             trade_store=self._trade_store,
         )
         self._eligibility_profile_updater = eligibility_profile_updater or StrategyExecutionEligibilityProfileUpdater()
-        self._historical_candle_provider = historical_candle_provider or ClickHouseHistoricalCandleProvider()
 
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunResponse:
         self._validate_synchronous_run_request(request)

@@ -114,6 +114,7 @@ export interface StrategyTestScenarioSummary {
   execution_rejections?: number;
   winrate?: number | null;
   expectancy_r?: number | null;
+  warnings?: string[];
   [key: string]: unknown;
 }
 

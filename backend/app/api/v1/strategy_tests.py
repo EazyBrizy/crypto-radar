@@ -2,7 +2,8 @@ import logging
 import time
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status as http_status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status as http_status
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.services.current_user import CurrentUserIdentity, current_user_identity_service
@@ -209,7 +210,13 @@ async def list_strategy_test_trades(
     service: StrategyTestingService = Depends(get_strategy_testing_service),
 ) -> list[StrategyTestTrade]:
     try:
-        return service.list_trades(run_id, limit=limit, offset=offset, user_id=_current_user(request).user_id)
+        return await run_in_threadpool(
+            service.list_trades,
+            run_id,
+            limit=limit,
+            offset=offset,
+            user_id=_current_user(request).user_id,
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
@@ -225,7 +232,13 @@ async def list_strategy_test_signals(
     service: StrategyTestingService = Depends(get_strategy_testing_service),
 ) -> list[StrategyTestSignalEvent]:
     try:
-        return service.list_signal_events(run_id, limit=limit, offset=offset, user_id=_current_user(request).user_id)
+        return await run_in_threadpool(
+            service.list_signal_events,
+            run_id,
+            limit=limit,
+            offset=offset,
+            user_id=_current_user(request).user_id,
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
@@ -239,7 +252,7 @@ async def get_strategy_test_funnel(
     service: StrategyTestingService = Depends(get_strategy_testing_service),
 ) -> StrategyTestFunnelResponse:
     try:
-        return service.get_funnel(run_id, user_id=_current_user(request).user_id)
+        return await run_in_threadpool(service.get_funnel, run_id, user_id=_current_user(request).user_id)
     except PermissionError as exc:
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
@@ -254,7 +267,7 @@ async def list_strategy_test_reports(
     service: StrategyTestingService = Depends(get_strategy_testing_service),
 ) -> list[StrategyTestReport]:
     try:
-        return service.list_reports(user_id=_route_user_id(request, user_id), limit=limit)
+        return await run_in_threadpool(service.list_reports, user_id=_route_user_id(request, user_id), limit=limit)
     except PermissionError as exc:
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
@@ -266,9 +279,10 @@ async def get_strategy_test_report(
     run_id: UUID,
     request: Request,
     service: StrategyTestingService = Depends(get_strategy_testing_service),
-) -> StrategyTestReport:
+) -> Response:
     try:
-        return service.build_report(run_id, user_id=_current_user(request).user_id)
+        report = await run_in_threadpool(service.build_report, run_id, user_id=_current_user(request).user_id)
+        return Response(content=report.model_dump_json(), media_type="application/json")
     except PermissionError as exc:
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:

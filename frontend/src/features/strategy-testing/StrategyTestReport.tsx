@@ -337,6 +337,7 @@ const SCENARIO_DIAGNOSTIC_COLUMNS = [
   "execution_rejections",
   "winrate",
   "expectancy_r",
+  "warnings",
   "error"
 ];
 
@@ -789,7 +790,8 @@ function normalizeScenarioRow(row: Record<string, unknown>): StrategyTestScenari
     risk_rejections: numberValue(row.risk_rejections),
     execution_rejections: numberValue(row.execution_rejections),
     winrate: nullableNumberValue(row.winrate),
-    expectancy_r: nullableNumberValue(row.expectancy_r)
+    expectancy_r: nullableNumberValue(row.expectancy_r),
+    warnings: stringListValue(row.warnings)
   };
   if (typeof row.error === "string" && row.error.trim()) normalized.error = row.error;
   return normalized;
@@ -876,6 +878,13 @@ function nullableNumberValue(value: unknown): number | null {
   return null;
 }
 
+function stringListValue(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+}
+
 function summaryMetricsFromSummary(summary: StrategyTestRunSummary): StrategyTestMetric[] {
   return Object.entries(summary)
     .filter((entry): entry is [string, StrategyTestMetricValue] => isMetricValue(entry[1]))
@@ -917,9 +926,19 @@ function inferColumns(rows: Array<Record<string, unknown>>): string[] {
 function formatCell(value: unknown): string {
   if (isMetricValue(value)) return formatMetricValue(value);
   if (value instanceof Date) return value.toLocaleString();
-  if (Array.isArray(value)) return value.length ? `${value.length}` : "-";
+  if (Array.isArray(value)) return formatArrayCell(value);
   if (isRecord(value)) return Object.keys(value).length ? JSON.stringify(value) : "-";
   return "-";
+}
+
+function formatArrayCell(value: unknown[]): string {
+  if (!value.length) return "-";
+  if (value.every((item) => ["string", "number", "boolean"].includes(typeof item))) {
+    const labels = value.map((item) => String(item));
+    const visible = labels.slice(0, 3).join("; ");
+    return labels.length > 3 ? `${visible}; +${labels.length - 3}` : visible;
+  }
+  return `${value.length}`;
 }
 
 function evidenceLabel(evidence: Record<string, unknown>): string {

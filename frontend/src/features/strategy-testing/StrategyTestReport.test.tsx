@@ -362,6 +362,44 @@ describe("StrategyTestReport", () => {
     expect(within(diagnostics).getAllByText("0").length).toBeGreaterThan(0);
   });
 
+  it("renders scenario diagnostic warnings for zero-signal runs", () => {
+    render(
+      <StrategyTestReport
+        report={report({
+          summary: {
+            completed_scenarios: 1,
+            failed_scenarios: 0,
+            scenario_count: 1,
+            scenario_summaries: [
+              {
+                bars_total: 33,
+                exchange: "bybit",
+                signals_count: 0,
+                signals_seen: 0,
+                status: "completed",
+                strategy: "trend_pullback_continuation",
+                symbol: "BTCUSDT",
+                timeframe: "5m",
+                trades_count: 0,
+                warnings: [
+                  "market_data_below_strategy_min_history: trend_pullback_continuation requires at least 200 bars; scenario has 33."
+                ]
+              }
+            ],
+            signals_count: 0,
+            trades_count: 0,
+            warnings_count: 1
+          },
+          warnings: ["market_data_below_strategy_min_history"]
+        })}
+        run={null}
+      />
+    );
+
+    const diagnostics = screen.getByLabelText("Scenario diagnostics");
+    expect(within(diagnostics).getByText(/requires at least 200 bars/u)).toBeInTheDocument();
+  });
+
   it("renders scenario with trades in diagnostics", () => {
     render(
       <StrategyTestReport

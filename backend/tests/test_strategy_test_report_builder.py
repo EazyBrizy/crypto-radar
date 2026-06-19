@@ -223,6 +223,39 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertEqual(diagnostics.rows[0]["signals_count"], 0)
         self.assertEqual(diagnostics.rows[2]["error"], "no_historical_data")
 
+    def test_report_marks_zero_signal_scenario_below_strategy_min_history(self) -> None:
+        report = _builder(
+            [],
+            summary={
+                "scenario_count": 1,
+                "completed_scenarios": 1,
+                "scenarios": [
+                    {
+                        "strategy": "trend_pullback_continuation",
+                        "exchange": "bybit",
+                        "symbol": "BTCUSDT",
+                        "timeframe": "5m",
+                        "status": "completed",
+                        "bars_total": 33,
+                        "signals_seen": 0,
+                        "signals_count": 0,
+                        "trades_count": 0,
+                    },
+                ],
+            },
+        ).build_report(RUN_ID)
+
+        diagnostics = _section(report, "Scenario diagnostics")
+
+        self.assertIn("market_data_below_strategy_min_history", report.warnings)
+        self.assertIn("warnings", diagnostics.rows[0])
+        self.assertTrue(
+            any(
+                str(warning).startswith("market_data_below_strategy_min_history")
+                for warning in diagnostics.rows[0]["warnings"]
+            )
+        )
+
     def test_partial_report_uses_runtime_partial_scenario_diagnostics(self) -> None:
         report = _builder(
             [],
@@ -339,6 +372,7 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
         self.assertEqual(report.summary["signal_funnel"]["signals_count"], 12050)
         self.assertEqual(analytics_store.list_signal_events_calls, 0)
         self.assertEqual(analytics_store.list_signal_event_samples_calls, 1)
+        self.assertEqual(analytics_store.summarize_funnel_calls, 0)
 
     def test_completed_report_uses_persisted_metric_rows(self) -> None:
         registry = _SpyMetricRegistry()
@@ -382,7 +416,8 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
 
         report = _builder([], analytics_store=analytics_store, registry=registry).build_report(RUN_ID)
 
-        self.assertEqual(analytics_store.list_metric_rows_calls, 1)
+        self.assertEqual(analytics_store.list_report_metric_rows_calls, 1)
+        self.assertEqual(analytics_store.list_metric_rows_calls, 0)
         self.assertEqual(registry.compute_calls, [])
         self.assertEqual(report.summary["signals_count"], 12050)
         self.assertEqual(report.trades_count, 40)
@@ -393,6 +428,112 @@ class StrategyTestReportBuilderTest(unittest.TestCase):
             any(
                 metric["code"] == "expectancy_after_costs_r"
                 and metric["group"].get("strategy") == "trend_pullback_continuation"
+                for metric in report.grouped_metrics
+            )
+        )
+
+    def test_completed_report_prefers_report_metric_rows_and_compacts_metric_payload(self) -> None:
+        metric_rows = [
+            _metric_row("signals_count", 12050, sample_size=12050),
+            _metric_row("trades_count", 40, sample_size=40),
+            *[
+                _metric_row(
+                    "expectancy_after_costs_r",
+                    0.1,
+                    group={
+                        "strategy": "trend_pullback_continuation",
+                        "exchange": "bybit",
+                        "symbol": f"PAIR{index}USDT",
+                        "timeframe": "1h",
+                        "regime": "trend",
+                        "score_bucket": "80-89",
+                        "direction": "long",
+                    },
+                    sample_size=1,
+                )
+                for index in range(120)
+            ],
+        ]
+        analytics_store = _AnalyticsStore(
+            [],
+            metric_rows=metric_rows,
+            signal_summary=StrategyTestSignalEventsSummary(
+                run_id=RUN_ID,
+                signals_count=12050,
+                execution_candidates=8000,
+                entry_touched=5000,
+                no_entry=3000,
+            ),
+            trade_summary=StrategyTestTradesSummary(
+                run_id=RUN_ID,
+                trades_count=40,
+                executed_trades_count=40,
+                wins=28,
+                losses=12,
+                realized_r_sum=9.6,
+                realized_r_count=40,
+            ),
+        )
+
+        report = _builder([], analytics_store=analytics_store).build_report(RUN_ID)
+
+        self.assertEqual(analytics_store.list_report_metric_rows_calls, 1)
+        self.assertEqual(analytics_store.list_metric_rows_calls, 0)
+        self.assertLess(len(report.metrics), len(metric_rows))
+        self.assertEqual(report.metrics, report.summary_metrics)
+        self.assertLessEqual(len(report.grouped_metrics), 50)
+
+    def test_completed_report_summary_prefers_aggregate_counts_over_persisted_all_metric_rows(self) -> None:
+        analytics_store = _AnalyticsStore(
+            [],
+            metric_rows=[
+                _metric_row("signals_count", 437, sample_size=437),
+                _metric_row("trades_count", 1, sample_size=1),
+                _metric_row("expectancy_r", 0.1, sample_size=1),
+                _metric_row(
+                    "expectancy_after_costs_r",
+                    0.2,
+                    group={
+                        "strategy": "trend_pullback_continuation",
+                        "symbol": "BTCUSDT",
+                        "timeframe": "1h",
+                    },
+                    sample_size=4,
+                ),
+            ],
+            signal_summary=StrategyTestSignalEventsSummary(
+                run_id=RUN_ID,
+                signals_count=4775,
+                execution_candidates=10,
+                entry_touched=8,
+                filled=6,
+                closed=5,
+                no_entry=2,
+            ),
+            trade_summary=StrategyTestTradesSummary(
+                run_id=RUN_ID,
+                trades_count=60,
+                executed_trades_count=60,
+                wins=30,
+                losses=30,
+                realized_r_sum=12.0,
+                realized_r_count=60,
+                pnl_total=100.0,
+                fees_total=2.0,
+                slippage_total=1.0,
+            ),
+        )
+
+        report = _builder([], analytics_store=analytics_store).build_report(RUN_ID)
+
+        self.assertEqual(report.summary["signals_count"], 4775)
+        self.assertEqual(report.summary["trades_count"], 60)
+        self.assertEqual(report.trades_count, 60)
+        self.assertEqual(report.summary["expectancy_r"], 0.2)
+        self.assertTrue(
+            any(
+                metric["code"] == "expectancy_after_costs_r"
+                and metric["group"].get("symbol") == "BTCUSDT"
                 for metric in report.grouped_metrics
             )
         )
@@ -570,6 +711,8 @@ class _AnalyticsStore:
         self.list_signal_events_calls = 0
         self.list_signal_event_samples_calls = 0
         self.list_metric_rows_calls = 0
+        self.list_report_metric_rows_calls = 0
+        self.summarize_funnel_calls = 0
 
     def list_trades(self, run_id: UUID) -> list[StrategyTestTrade]:
         _ = run_id
@@ -609,6 +752,11 @@ class _AnalyticsStore:
         self.list_metric_rows_calls += 1
         return list(self._metric_rows)
 
+    def list_report_metric_rows(self, run_id: UUID) -> list[StrategyTestMetricRow]:
+        _ = run_id
+        self.list_report_metric_rows_calls += 1
+        return list(self._metric_rows)
+
     def summarize_signal_events(self, run_id: UUID) -> StrategyTestSignalEventsSummary:
         _ = run_id
         if self._signal_summary is None:
@@ -622,6 +770,7 @@ class _AnalyticsStore:
         return self._trade_summary
 
     def summarize_funnel(self, run_id: UUID) -> StrategyTestFunnelResponse:
+        self.summarize_funnel_calls += 1
         summary = self.summarize_signal_events(run_id)
         return StrategyTestFunnelResponse(
             run_id=run_id,

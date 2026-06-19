@@ -190,6 +190,27 @@ STRATEGY_TEST_ANALYTICS_ALTER_DDLS = [
     "ALTER TABLE analytics.strategy_test_metrics ADD COLUMN IF NOT EXISTS run_attempt UInt32 DEFAULT 0",
 ]
 
+REPORT_METRIC_GROUPINGS: tuple[tuple[str, ...], ...] = (
+    (),
+    ("strategy",),
+    ("strategy", "symbol", "timeframe"),
+    ("strategy", "regime"),
+    ("strategy", "score_bucket"),
+    ("strategy", "timeframe"),
+    ("strategy", "score_bucket", "timeframe"),
+    ("strategy", "regime", "direction"),
+)
+
+_METRIC_GROUPING_COLUMNS = {
+    "strategy": "strategy_code",
+    "exchange": "exchange",
+    "symbol": "symbol",
+    "timeframe": "timeframe",
+    "regime": "market_regime",
+    "score_bucket": "score_bucket",
+    "direction": "direction",
+}
+
 
 class StrategyTestRunStore(Protocol):
     def create_run(self, request: StrategyTestRunRequest) -> StrategyTestRunDetailResponse:
@@ -793,6 +814,18 @@ class ClickHouseStrategyTestStore:
         return self.list_metric_rows(run_id)
 
     def list_metric_rows(self, run_id: UUID) -> list[StrategyTestMetricRow]:
+        return self._list_metric_rows(run_id)
+
+    def list_report_metric_rows(self, run_id: UUID) -> list[StrategyTestMetricRow]:
+        return self._list_metric_rows(
+            run_id,
+            where_sql=f"""
+                AND metric_code != 'scenario_summary'
+                AND ({_report_metric_group_filter_sql()})
+            """,
+        )
+
+    def _list_metric_rows(self, run_id: UUID, *, where_sql: str = "") -> list[StrategyTestMetricRow]:
         query = f"""
             SELECT
                 {_dedup_projection_columns_sql(self._metric_columns)}
@@ -801,6 +834,7 @@ class ClickHouseStrategyTestStore:
                     {_dedup_select_columns_sql(self._metric_columns, _metric_dedup_group_columns())}
                 FROM analytics.strategy_test_metrics
                 WHERE run_id = {{run_id:UUID}}
+                    {where_sql}
                 GROUP BY
                     run_id,
                     scenario_key,
@@ -1524,6 +1558,19 @@ def _metric_dedup_group_columns() -> set[str]:
         "direction",
         "metric_code",
     }
+
+
+def _report_metric_group_filter_sql() -> str:
+    columns = tuple(_METRIC_GROUPING_COLUMNS.values())
+    clauses: list[str] = []
+    for grouping in REPORT_METRIC_GROUPINGS:
+        grouping_columns = {_METRIC_GROUPING_COLUMNS[key] for key in grouping}
+        predicates = [
+            f"{column} != 'all'" if column in grouping_columns else f"{column} = 'all'"
+            for column in columns
+        ]
+        clauses.append(f"({' AND '.join(predicates)})")
+    return "\n                    OR ".join(clauses)
 
 
 def _trade_to_clickhouse(trade: StrategyTestTrade) -> list[Any]:

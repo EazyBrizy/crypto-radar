@@ -229,6 +229,24 @@ class ClickHouseStrategyTestStoreTest(unittest.TestCase):
         self.assertIn("GROUP BY", query)
         self.assertIn("metric_code", query)
 
+    def test_list_report_metric_rows_filters_to_report_group_shapes(self) -> None:
+        client = FakeClickHouseClient(rows=[_metric_row()])
+        store = ClickHouseStrategyTestStore(lambda: client)
+
+        rows = store.list_report_metric_rows(RUN_ID)
+
+        self.assertEqual(rows[0].metric_code, "winrate")
+        query, parameters = client.queries[0]
+        self.assertEqual(parameters, {"run_id": RUN_ID})
+        self.assertIn("metric_code != 'scenario_summary'", query)
+        self.assertIn("strategy_code != 'all'", query)
+        self.assertIn("exchange = 'all'", query)
+        self.assertIn("symbol != 'all'", query)
+        self.assertIn("timeframe != 'all'", query)
+        self.assertIn("market_regime != 'all'", query)
+        self.assertIn("score_bucket != 'all'", query)
+        self.assertIn("direction != 'all'", query)
+
     def test_list_signal_events_parses_json_decimal_and_flags(self) -> None:
         client = FakeClickHouseClient(rows=[_signal_event_row()])
         store = ClickHouseStrategyTestStore(lambda: client)

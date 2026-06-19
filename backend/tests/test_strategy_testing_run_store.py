@@ -337,6 +337,88 @@ class PostgresStrategyTestRunStoreTest(unittest.TestCase):
             self.assertEqual(run.worker_attempt, 2)
             self.assertIsNotNone(run.lease_expires_at)
 
+    def test_recover_expired_historical_running_lease_requeues_run_and_keeps_checkpoints(self) -> None:
+        created = self.store.create_run(_request())
+        self.store.claim_next_run(worker_id="worker-a", lease_seconds=30)
+        self.store.mark_running(created.run.run_id)
+        self.store.update_runtime_state(
+            created.run.run_id,
+            {
+                "phase": "running_scenario",
+                "partial_summary": {"scenario_count": 4, "completed_scenarios": 1},
+            },
+        )
+        self.store.mark_scenario_running(
+            created.run.run_id,
+            scenario_key="trend_pullback_continuation::bybit::BTCUSDT::1h",
+            scenario_index=1,
+            strategy_code="trend_pullback_continuation",
+            exchange="bybit",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            bars_total=250,
+        )
+        self.store.mark_scenario_completed(
+            created.run.run_id,
+            scenario_key="trend_pullback_continuation::bybit::BTCUSDT::1h",
+            summary={"trades_count": 2, "realized_r": 1.25},
+            bars_processed=250,
+        )
+        with self.SessionFactory() as session:
+            run = session.get(StrategyTestRun, created.run.run_id)
+            self.assertIsNotNone(run)
+            assert run is not None
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            session.commit()
+
+        recovered = self.store.recover_expired_leases(worker_id="worker-b")
+
+        self.assertEqual(recovered, {"failed": 0, "cancelled": 0, "requeued": 1})
+        detail = self.store.get_run(created.run.run_id)
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(detail.run.status, "queued")
+        self.assertIsNone(detail.run.worker_id)
+        self.assertIsNone(detail.run.claimed_at)
+        self.assertIsNone(detail.run.lease_expires_at)
+        self.assertIsNone(detail.run.finished_at)
+        self.assertIsNone(detail.run.error)
+        self.assertEqual(detail.run.runtime_state["phase"], "queued")
+        self.assertEqual(
+            detail.run.runtime_state["last_heartbeat_reason"],
+            "historical_lease_expired_requeued",
+        )
+        self.assertEqual(detail.run.runtime_state["partial_summary"]["completed_scenarios"], 1)
+        self.assertEqual(
+            self.store.completed_scenario_keys(created.run.run_id),
+            {"trend_pullback_continuation::bybit::BTCUSDT::1h"},
+        )
+
+    def test_recover_expired_forward_running_lease_still_fails_realtime_run(self) -> None:
+        created = self.store.create_run(_request(test_type="forward_virtual"))
+        self.store.claim_next_run(worker_id="worker-a", lease_seconds=30)
+        self.store.mark_running(created.run.run_id)
+        self.store.update_runtime_state(
+            created.run.run_id,
+            {"status": "listening", "processed_ticks": 3},
+        )
+        with self.SessionFactory() as session:
+            run = session.get(StrategyTestRun, created.run.run_id)
+            self.assertIsNotNone(run)
+            assert run is not None
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            session.commit()
+
+        recovered = self.store.recover_expired_leases(worker_id="worker-b")
+
+        self.assertEqual(recovered, {"failed": 1, "cancelled": 0, "requeued": 0})
+        detail = self.store.get_run(created.run.run_id)
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(detail.run.status, "failed")
+        self.assertEqual(detail.run.runtime_state["phase"], "failed")
+        self.assertIn("lease expired", detail.run.error or "")
+
     def test_worker_lease_state_exposes_active_forward_worker_from_db(self) -> None:
         created = self.store.create_run(_request(test_type="forward_virtual"))
         self.store.claim_next_run(worker_id="strategy-test-worker-a", lease_seconds=30)

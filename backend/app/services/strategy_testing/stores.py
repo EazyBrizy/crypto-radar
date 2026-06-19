@@ -983,6 +983,24 @@ class PostgresStrategyTestRunStore:
                     }
                     recovered["cancelled"] += 1
                     continue
+                if run.test_type == "historical_backtest":
+                    run.status = "queued"
+                    run.worker_id = None
+                    run.claimed_at = None
+                    run.lease_expires_at = None
+                    run.finished_at = None
+                    run.last_heartbeat_at = now
+                    run.error = None
+                    run.runtime_state = {
+                        **_json_object(run.runtime_state),
+                        "phase": "queued",
+                        "last_error": None,
+                        "last_heartbeat_reason": "historical_lease_expired_requeued",
+                        "recovered_by_worker_id": worker_id,
+                        "requeued_at": now.isoformat(),
+                    }
+                    recovered["requeued"] += 1
+                    continue
                 run.status = "failed"
                 run.finished_at = now
                 run.last_heartbeat_at = now

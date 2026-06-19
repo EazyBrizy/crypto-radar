@@ -389,10 +389,12 @@ try {
 
     Write-Info "Estimating historical backtest matrix"
     $estimate = Invoke-Api -Method Post -Path "/api/v1/strategy-tests/runs/estimate" -Body $historicalPayload
-    Assert-True -Condition ([int]$estimate.total_bars -eq [int]$seed.expected_bars_total) -Message "Estimate total_bars was not deduped. expected=$($seed.expected_bars_total) actual=$($estimate.total_bars)"
+    Assert-True -Condition ([int]$estimate.scenario_count -eq 2) -Message "Estimate scenario_count mismatch. expected=2 actual=$($estimate.scenario_count)"
+    Assert-True -Condition ([int]$estimate.total_bars -ge [int]$seed.expected_bars_total) -Message "Estimate total_bars should be theoretical and at least the seeded executable bars. expected_min=$($seed.expected_bars_total) actual=$($estimate.total_bars)"
     foreach ($scenario in $estimate.scenarios) {
-        Assert-True -Condition ([int]$scenario.duplicate_rows -gt 0) -Message "Estimate did not detect duplicate OHLCV rows for $($scenario.timeframe)"
-        Assert-True -Condition ([int]$scenario.raw_rows -gt [int]$scenario.candles_count) -Message "Raw row count is not greater than deduped candles for $($scenario.timeframe)"
+        Assert-True -Condition ($null -eq $scenario.raw_rows) -Message "Estimate should not query raw OHLCV rows for $($scenario.timeframe)"
+        Assert-True -Condition ($null -eq $scenario.duplicate_rows) -Message "Estimate should not query duplicate OHLCV rows for $($scenario.timeframe)"
+        Assert-True -Condition ([int]$scenario.bars_total -ge 0) -Message "Estimate scenario bars_total is negative for $($scenario.timeframe)"
     }
 
     Write-Info "Posting historical_backtest smoke run"
@@ -474,9 +476,10 @@ try {
         param($detail)
         $pending = @($detail.run.runtime_state.pending_entries)
         $filled = $pending | Where-Object { $_.status -eq "filled" }
-        return [int]$detail.run.runtime_state.opened_trades -ge 1 -and [int]$detail.run.runtime_state.trades_written -ge 1 -and @($filled).Count -ge 1
+        $positions = @($detail.run.runtime_state.forward_positions)
+        return [int]$detail.run.runtime_state.opened_trades -ge 1 -and [int]$detail.run.runtime_state.trades_written -ge 1 -and @($filled).Count -ge 1 -and @($positions).Count -ge 1
     }
-    Assert-True -Condition ([string]$afterFill.run.runtime_state.status -eq "processing") -Message "Forward fill did not move runtime to processing" -RunId $forwardRunId
+    Assert-True -Condition ([string]$afterFill.run.runtime_state.last_forward_event -eq "trade_opened") -Message "Forward fill did not open a trade" -RunId $forwardRunId
 
     Write-Info "Cancelling forward run"
     $cancel = Invoke-Api -Method Post -Path "/api/v1/strategy-tests/runs/$forwardRunId/cancel"

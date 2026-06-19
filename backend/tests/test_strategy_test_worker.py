@@ -162,7 +162,7 @@ class StrategyTestWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail.run.runtime_state["last_heartbeat_reason"], "waiting_for_market_data")
         self.assertGreater(detail.run.lease_expires_at, NOW)
 
-    async def test_run_once_recovers_expired_running_and_stopping_leases(self) -> None:
+    async def test_run_once_requeues_and_claims_expired_historical_running_lease(self) -> None:
         running = _run(
             run_id=RUN_ID,
             status="running",
@@ -176,8 +176,9 @@ class StrategyTestWorkerTest(unittest.IsolatedAsyncioTestCase):
             lease_expires_at=NOW - timedelta(seconds=1),
         )
         run_store = _WorkerRunStore([running, stopping])
+        service = _RecordingWorkerService(run_store)
         worker = StrategyTestWorker(
-            service=_RecordingWorkerService(run_store),  # type: ignore[arg-type]
+            service=service,  # type: ignore[arg-type]
             run_store=run_store,
             worker_id="worker-a",
             lease_seconds=30,
@@ -186,9 +187,13 @@ class StrategyTestWorkerTest(unittest.IsolatedAsyncioTestCase):
 
         result = await worker.run_once()
 
-        self.assertEqual(result.recovered_failed_runs, 1)
+        self.assertEqual(result.recovered_failed_runs, 0)
+        self.assertEqual(result.recovered_requeued_runs, 1)
         self.assertEqual(result.recovered_cancelled_runs, 1)
-        self.assertEqual(run_store.get_run(running.run_id).run.status, "failed")  # type: ignore[union-attr]
+        self.assertEqual(result.claimed_runs, 1)
+        self.assertEqual(service.execute_calls, [(running.run_id, None)])
+        self.assertEqual(run_store.get_run(running.run_id).run.status, "completed")  # type: ignore[union-attr]
+        self.assertIsNone(run_store.get_run(running.run_id).run.lease_expires_at)  # type: ignore[union-attr]
         self.assertEqual(run_store.get_run(stopping.run_id).run.status, "cancelled")  # type: ignore[union-attr]
 
     async def test_cancelled_historical_run_finishes_when_worker_sees_stopping_status(self) -> None:
@@ -321,7 +326,23 @@ class _WorkerRunStore:
             lease_expires_at = getattr(detail.run, "lease_expires_at", None)
             if not isinstance(lease_expires_at, datetime) or lease_expires_at >= NOW:
                 continue
-            if detail.run.status == "running":
+            if detail.run.status == "running" and detail.run.test_type == "historical_backtest":
+                updated = detail.run.model_copy(
+                    update={
+                        "status": "queued",
+                        "worker_id": None,
+                        "claimed_at": None,
+                        "lease_expires_at": None,
+                        "runtime_state": {
+                            **detail.run.runtime_state,
+                            "phase": "queued",
+                            "last_heartbeat_reason": "historical_lease_expired_requeued",
+                        },
+                    }
+                )
+                self._runs[detail.run.run_id] = StrategyTestRunDetailResponse(run=updated)
+                recovered["requeued"] += 1
+            elif detail.run.status == "running":
                 self.mark_failed(detail.run.run_id, "Strategy test worker lease expired")
                 recovered["failed"] += 1
             elif detail.run.status == "stopping":
@@ -352,7 +373,13 @@ class _WorkerRunStore:
         run_id: UUID,
         summary: dict[str, Any] | None = None,
     ) -> StrategyTestRunDetailResponse:
-        return self._mark(run_id, "completed", summary=dict(summary or {}), finished_at=NOW)
+        return self._mark(
+            run_id,
+            "completed",
+            summary=dict(summary or {}),
+            finished_at=NOW,
+            lease_expires_at=None,
+        )
 
     def mark_failed(
         self,

@@ -1,10 +1,22 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StrategyTestReport } from "./StrategyTestReport";
 import type { StrategyTestReport as StrategyTestReportData, StrategyTestRunResponse } from "./types";
 
+vi.mock("@/components/charts/ChartPanel", () => ({
+  ChartPanel: ({ priceLines }: { priceLines?: Array<{ title: string }> }) => (
+    <div data-testid="strategy-test-trade-chart">
+      {(priceLines ?? []).map((line) => <span key={line.title}>{line.title}</span>)}
+    </div>
+  )
+}));
+
 describe("StrategyTestReport", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("renders Strategy Test Report", () => {
     render(<StrategyTestReport report={report()} run={null} />);
 
@@ -153,6 +165,58 @@ describe("StrategyTestReport", () => {
     expect(screen.getByText("No entry")).toBeInTheDocument();
     expect(screen.getByText("signal-1")).toBeInTheDocument();
     expect(screen.getByText("not_selected")).toBeInTheDocument();
+  });
+
+  it("opens an executed trade with chart levels and market context", () => {
+    render(<StrategyTestReport report={report()} run={run()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View trade trade-1" }));
+
+    const detail = screen.getByLabelText("Selected strategy test trade");
+    expect(screen.getByTestId("strategy-test-trade-chart")).toBeInTheDocument();
+    expect(within(detail).getByText("BTCUSDT / 1h")).toBeInTheDocument();
+    expect(within(detail).getByText("win / take_profit")).toBeInTheDocument();
+    expect(within(detail).getByText("Entry price")).toBeInTheDocument();
+    expect(within(detail).getByText("100")).toBeInTheDocument();
+    expect(within(detail).getByText("Exit price")).toBeInTheDocument();
+    expect(within(detail).getByText("112.5")).toBeInTheDocument();
+    expect(within(detail).getByText("PnL")).toBeInTheDocument();
+    expect(within(detail).getByText("12.5")).toBeInTheDocument();
+    expect(within(detail).getByText("trend")).toBeInTheDocument();
+    expect(within(detail).getByText("80-89")).toBeInTheDocument();
+    expect(within(detail).getByText(/atr_pct/u)).toBeInTheDocument();
+    expect(within(detail).getByText(/pullback/u)).toBeInTheDocument();
+    expect(within(screen.getByTestId("strategy-test-trade-chart")).getByText("Entry")).toBeInTheDocument();
+    expect(within(screen.getByTestId("strategy-test-trade-chart")).getByText("Exit")).toBeInTheDocument();
+    expect(within(screen.getByTestId("strategy-test-trade-chart")).getByText("Stop")).toBeInTheDocument();
+  });
+
+  it("downloads the full report as JSON and trades as CSV", async () => {
+    const createObjectUrl = vi.fn<(blob: Blob) => string>(() => "blob:strategy-test-report");
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectUrl
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectUrl
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    render(<StrategyTestReport report={report()} run={run()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Download JSON report" }));
+    fireEvent.click(screen.getByRole("button", { name: "Download trades CSV" }));
+
+    expect(click).toHaveBeenCalledTimes(2);
+    expect(createObjectUrl).toHaveBeenCalledTimes(2);
+    expect(revokeObjectUrl).toHaveBeenCalledTimes(2);
+    const jsonBlob = createObjectUrl.mock.calls[0]?.[0] as Blob;
+    const csvBlob = createObjectUrl.mock.calls[1]?.[0] as Blob;
+    await expect(jsonBlob.text()).resolves.toContain('"run_id": "11111111-1111-4111-8111-111111111111"');
+    await expect(csvBlob.text()).resolves.toContain("trade_id,strategy_code,exchange,symbol,timeframe");
+    await expect(csvBlob.text()).resolves.toContain("trade-1,trend_pullback_continuation,bybit,BTCUSDT,1h");
   });
 
   it("publishes a completed run for calibration", () => {
@@ -597,7 +661,38 @@ function report(overrides: Partial<StrategyTestReportData> = {}): StrategyTestRe
         metadata: {},
         metrics: [],
         name: "Trade list",
-        rows: [{ direction: "long", realized_r: -1, strategy_code: "trend_pullback_continuation", symbol: "BTCUSDT", trade_id: "trade-1" }],
+        rows: [
+          {
+            bars_in_trade: 8,
+            bars_to_entry: 2,
+            close_reason: "take_profit",
+            direction: "long",
+            entry_price: "100",
+            entry_time: "2026-06-02T00:05:00.000Z",
+            exchange: "bybit",
+            exit_price: "112.5",
+            exit_time: "2026-06-02T02:05:00.000Z",
+            features_snapshot: { atr_pct: 0.012, volume_z: 1.4 },
+            fees: "0.08",
+            mae_r: -0.2,
+            market_regime: "trend",
+            mfe_r: 1.7,
+            outcome: "win",
+            pnl: "12.5",
+            pnl_pct: 0.125,
+            realized_r: 1.25,
+            score_bucket: "80-89",
+            signal_score: 87,
+            slippage: "0.01",
+            stop_loss: "95",
+            strategy_code: "trend_pullback_continuation",
+            symbol: "BTCUSDT",
+            targets: [{ label: "TP1", price: "110", rr: 1 }, { label: "TP2", price: "112.5", rr: 1.25 }],
+            timeframe: "1h",
+            trade_id: "trade-1",
+            trade_plan: { setup: "pullback", invalidation: "close_below_ema" }
+          }
+        ],
         summary: {},
         warnings: []
       }

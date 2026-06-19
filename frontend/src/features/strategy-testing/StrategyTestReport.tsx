@@ -1,6 +1,6 @@
 "use client";
 
-import { LoaderCircle, ShieldCheck, X } from "lucide-react";
+import { Download, LoaderCircle, ShieldCheck, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 
 import { Badge } from "@/components/Badge";
@@ -69,6 +69,7 @@ export function StrategyTestReport({
   const activeRunWithoutReport = Boolean(run && ACTIVE_RUN_STATUSES.has(run.status) && !report);
   const selectedRunWithoutReport = Boolean(run && !report && !activeRunWithoutReport);
   const scenarioCounts = scenarioDiagnosticCounts(fallbackSummary, report);
+  const tradeRows = report ? tradeRowsFromReport(report) : [];
 
   return (
     <section className="strategy-test-report-panel strategy-test-report-full" aria-live="polite">
@@ -78,6 +79,27 @@ export function StrategyTestReport({
           <span>{report ? `${shortRunId(report.run_id)} / ${report.status} / ${report.mode}` : reportFallbackLabel(run)}</span>
         </div>
         <div className="strategy-test-panel-actions">
+          {report ? (
+            <>
+              <button
+                className="secondary-action compact-action"
+                onClick={() => downloadReportJson(report, run, tradeRows)}
+                type="button"
+              >
+                <Download size={16} />
+                Download JSON report
+              </button>
+              <button
+                className="secondary-action compact-action"
+                disabled={!tradeRows.length}
+                onClick={() => downloadTradesCsv(report, tradeRows)}
+                type="button"
+              >
+                <Download size={16} />
+                Download trades CSV
+              </button>
+            </>
+          ) : null}
           {showCalibrationAction ? (
             <button
               className="secondary-action compact-action"
@@ -498,6 +520,93 @@ function TradeListSection({ report }: { report: StrategyTestReportData }) {
       <StrategyTestTradeList trades={section.rows} />
     </ReportSection>
   );
+}
+
+function tradeRowsFromReport(report: StrategyTestReportData): Array<Record<string, unknown>> {
+  return findSection(report, "trade_list")?.rows ?? [];
+}
+
+function downloadReportJson(
+  report: StrategyTestReportData,
+  run: StrategyTestRunResponse | null,
+  trades: Array<Record<string, unknown>>
+) {
+  const payload = {
+    generated_by: "crypto-radar-strategy-test-report",
+    exported_at: new Date().toISOString(),
+    run,
+    report,
+    trades
+  };
+  downloadBlob(
+    new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" }),
+    `strategy-test-${shortRunId(report.run_id)}-report.json`
+  );
+}
+
+const TRADE_CSV_COLUMNS = [
+  "trade_id",
+  "strategy_code",
+  "exchange",
+  "symbol",
+  "timeframe",
+  "direction",
+  "entry_time",
+  "exit_time",
+  "entry_price",
+  "exit_price",
+  "stop_loss",
+  "targets",
+  "selected_rr",
+  "realized_r",
+  "pnl",
+  "pnl_pct",
+  "fees",
+  "slippage",
+  "mfe_r",
+  "mae_r",
+  "bars_to_entry",
+  "bars_in_trade",
+  "close_reason",
+  "outcome",
+  "signal_score",
+  "market_regime",
+  "score_bucket",
+  "risk_rejected",
+  "execution_rejected",
+  "warnings",
+  "features_snapshot",
+  "trade_plan",
+  "tags"
+];
+
+function downloadTradesCsv(report: StrategyTestReportData, trades: Array<Record<string, unknown>>) {
+  const rows = [
+    TRADE_CSV_COLUMNS.join(","),
+    ...trades.map((trade) => TRADE_CSV_COLUMNS.map((column) => csvCell(trade[column])).join(","))
+  ];
+  downloadBlob(
+    new Blob([`${rows.join("\n")}\n`], { type: "text/csv;charset=utf-8" }),
+    `strategy-test-${shortRunId(report.run_id)}-trades.csv`
+  );
+}
+
+function csvCell(value: unknown): string {
+  if (value == null) return "";
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return /[",\r\n]/u.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 function CandidateAdjustmentsSection({

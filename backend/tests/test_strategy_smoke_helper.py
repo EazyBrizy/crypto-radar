@@ -33,15 +33,16 @@ class StrategySmokeHelperTest(unittest.TestCase):
             warmup_candles=3,
         )
 
-        self.assertEqual(plan.rows_total, 18)
-        self.assertEqual(plan.deduped_candles_total, 16)
-        self.assertEqual(plan.expected_bars_total, 10)
+        self.assertEqual(plan.rows_total, 34)
+        self.assertEqual(plan.deduped_candles_total, 32)
+        self.assertEqual(plan.expected_bars_total, 26)
         self.assertEqual(plan.duplicate_rows_total, 2)
+        self.assertEqual(plan.deduped_candles_by_timeframe, {"5m": 24, "15m": 8})
         self.assertEqual({candle.timeframe for candle in plan.candles}, {"5m", "15m"})
-        for timeframe in ("5m", "15m"):
+        for timeframe, expected_count in (("5m", 24), ("15m", 8)):
             candles = [candle for candle in plan.candles if candle.timeframe == timeframe]
-            self.assertEqual(len(candles), 9)
-            self.assertEqual(len({candle.open_time for candle in candles}), 8)
+            self.assertEqual(len(candles), expected_count + 1)
+            self.assertEqual(len({candle.open_time for candle in candles}), expected_count)
             self.assertTrue(all(candle.is_closed for candle in candles))
 
     def test_forward_pending_signal_matches_smoke_matrix(self) -> None:

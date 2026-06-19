@@ -145,13 +145,16 @@ def build_candle_seed_plan(
     candles: list[OHLCVCandle] = []
     deduped: dict[str, int] = {}
     duplicate_rows: dict[str, int] = {}
+    base_candles = max(0, int(candles_per_timeframe))
+    max_timeframe_ms = max(_TIMEFRAME_MS[timeframe] for timeframe in SMOKE_TIMEFRAMES)
     for timeframe in SMOKE_TIMEFRAMES:
         timeframe_ms = _TIMEFRAME_MS[timeframe]
-        deduped[timeframe] = max(0, int(candles_per_timeframe))
-        duplicate_rows[timeframe] = 1 if candles_per_timeframe > 2 else 0
-        for index in range(candles_per_timeframe):
+        timeframe_candles = (base_candles * max_timeframe_ms) // timeframe_ms
+        deduped[timeframe] = timeframe_candles
+        duplicate_rows[timeframe] = 1 if timeframe_candles > 2 else 0
+        for index in range(timeframe_candles):
             candles.append(_candle(timeframe=timeframe, start_at=start_at, index=index, timeframe_ms=timeframe_ms))
-        if candles_per_timeframe > 2:
+        if timeframe_candles > 2:
             candles.append(
                 _candle(
                     timeframe=timeframe,
